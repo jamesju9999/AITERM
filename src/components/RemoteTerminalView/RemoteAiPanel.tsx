@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { invokeAiChatCtx, formatAiError, type AiError, type ChatMessage as AiChatMessage, type RemoteCtx } from "../../ipc/ai";
 import { contentToDisplayString } from "../../types/attachment";
 import { languageDirective } from "../../lib/i18n";
+import { toModelHistory } from "../../lib/chatHistory";
 import { useLocale } from "../../contexts/LocaleContext";
 import { useRemoteAiChat } from "../../hooks/useRemoteAiChat";
 import { useProviderQuota } from "../../hooks/useProviderQuota";
@@ -124,6 +125,7 @@ Rules:
         chat.addMessage({
           role: "assistant",
           content: t.term_agent_max_steps(maxSteps),
+          notice: true,
         });
       }
       setAgentRunning(false);
@@ -149,6 +151,7 @@ Rules:
         content: locale === "zh-TW"
           ? `（Agent 呼叫 AI 失敗，已停止：${errText}）`
           : `(Agent failed to call the AI and stopped: ${errText})`,
+        notice: true,
       });
       setAgentRunning(false);
       return;
@@ -195,6 +198,7 @@ Rules:
         chat.addMessage({
           role: "assistant",
           content: t.remote_agent_no_shell_integration,
+          notice: true,
         });
         setAgentRunning(false);
         finish();
@@ -240,14 +244,12 @@ Rules:
     // true，那次事件描述的狀態都已經不是現在了，重置是安全的。
     sharedAbortRef.current = false;
 
-    const priorHistory: AgentHistoryMsg[] = chat.messages
-      .filter((m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant")
-      .map((m) => ({ role: m.role, content: contentToDisplayString(m.content) }));
+    const history: AgentHistoryMsg[] = toModelHistory([...chat.messages, { role: "user", content: text }])
+      .map((m) => ({ role: m.role as "user" | "assistant", content: contentToDisplayString(m.content ?? "") }));
 
     chat.addMessage({ role: "user", content: text });
 
     const systemPrompt = buildAgentSystemPrompt();
-    const history: AgentHistoryMsg[] = [...priorHistory, { role: "user", content: text }];
     void runAgentLoop(history, systemPrompt, 0);
   }, [isControl, chat, buildAgentSystemPrompt, runAgentLoop, sharedAbortRef]);
 
@@ -264,7 +266,7 @@ Rules:
     // 生效後再讀：這個 callback 本身就會在 agentRunning 改變時被
     // useCallback 重新建立，這裡讀到的一定是呼叫當下最新的值。
     if (reason && agentRunning) {
-      chat.addMessage({ role: "assistant", content: reason });
+      chat.addMessage({ role: "assistant", content: reason, notice: true });
     }
     setAgentRunning(false);
   }, [chat, agentRunning]);

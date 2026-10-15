@@ -3,7 +3,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { unlistenOnCleanup } from "../lib/eventSubscription";
 import { invokeAiChatCtx, formatAiError, type AiError, type RemoteCtx } from "../ipc/ai";
-import type { ChatMessage } from "../ipc/ai";
+import { toModelHistory } from "../lib/chatHistory";
 import { useLocale } from "../contexts/LocaleContext";
 import type { McpChatMessage, McpChatSession } from "../types/chat";
 
@@ -110,16 +110,7 @@ export function useRemoteAiChat(connId: string, buildCtx: () => RemoteCtx, provi
     setIsLoading(true);
     setError(null);
 
-    // Build the message history for the AI (user/assistant only)
-    const baseMessages = existingMessages ?? messages;
-    const historySnapshot = baseMessages
-      .filter(m => m.role === "user" || m.role === "assistant")
-      .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
-
-    const history: ChatMessage[] = [
-      ...historySnapshot,
-      { role: "user", content: text },
-    ];
+    const history = toModelHistory([...(existingMessages ?? messages), { role: "user", content: text }]);
 
     try {
       const reply = await invokeAiChatCtx(history, buildCtx(), connId, providerId, locale, true);

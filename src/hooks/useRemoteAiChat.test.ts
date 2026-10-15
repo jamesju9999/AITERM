@@ -29,6 +29,17 @@ describe("useRemoteAiChat", () => {
     expect(result.current.messages.map(m => m.content)).toContain("answer");
   });
 
+  // App 的說明（notice）是給使用者看的，不是 AI 說的話：不送回模型；拿掉後相鄰的 user 併成一則。
+  it("send() leaves app notices out of the history and merges the adjacent user turns", async () => {
+    const { result } = renderHook(() => useRemoteAiChat("conn-1", () => CTX));
+    act(() => {
+      result.current.addMessage({ role: "user", content: "A" });
+      result.current.addMessage({ role: "assistant", content: "stopped", notice: true });
+    });
+    await act(async () => { await result.current.send("B"); });
+    expect(invokeChatCtx.mock.calls[0][0]).toEqual([{ role: "user", content: "A\n\nB" }]);
+  });
+
   it("passes providerId through to invokeAiChatCtx when given", async () => {
     const { result } = renderHook(() => useRemoteAiChat("conn-1", () => CTX, "openai"));
     await act(async () => { await result.current.send("hi"); });

@@ -21,7 +21,7 @@ vi.mock("../../ipc/ai", async (importOriginal) => {
 // 重新被呼叫、讀到最新的陣列內容，不需要額外的 useState 讓它「有反應」。
 const chatMock = vi.hoisted(() => {
   const state = {
-    messages: [] as { role: string; content: unknown }[],
+    messages: [] as { role: string; content: unknown; notice?: boolean }[],
     error: null as string | null,
     isStreaming: false,
     streamBuf: "",
@@ -240,7 +240,37 @@ describe("RemoteAiPanel", () => {
     });
 
     const lastCall = chatMock.addMessage.mock.calls[chatMock.addMessage.mock.calls.length - 1];
-    expect(lastCall[0]).toEqual({ role: "assistant", content: "connection resynced" });
+    expect(lastCall[0]).toEqual({ role: "assistant", content: "connection resynced", notice: true });
+  });
+
+  // App 的說明不是 AI 說的話：要帶 notice，之後才不會隨歷史送回模型。
+  it("the agent's own notices (AI call failed, step limit) are marked as notices", async () => {
+    mockInvokeAiChatCtx.mockRejectedValueOnce(new Error("boom"));
+    const { ref } = renderPanel();
+    await act(async () => {
+      ref.current!.submitAgent("goal");
+      await flushMicrotasks();
+    });
+    expect(chatMock.addMessage.mock.calls.at(-1)![0]).toMatchObject({ role: "assistant", notice: true });
+
+    chatMock.reset();
+    renderPanel({ maxSteps: 0 }).ref.current!.submitAgent("goal");
+    expect(chatMock.addMessage.mock.calls.at(-1)![0]).toMatchObject({ role: "assistant", content: t.term_agent_max_steps(0), notice: true });
+  });
+
+  it("submitAgent leaves earlier notices out of the history it sends", async () => {
+    chatMock.state.messages = [
+      { role: "user", content: "A" },
+      { role: "assistant", content: "stopped", notice: true },
+    ];
+    mockInvokeAiChatCtx.mockResolvedValueOnce(aiReply("done"));
+    const { ref } = renderPanel();
+    await act(async () => {
+      ref.current!.submitAgent("goal");
+      await flushMicrotasks();
+    });
+    const sent = mockInvokeAiChatCtx.mock.calls[0][0] as { role: string; content: unknown }[];
+    expect(sent.slice(1)).toEqual([{ role: "user", content: "A\n\ngoal" }]);
   });
 
   it("abort() with no reason adds no chat message — the user-pressed-Stop case stays silent", async () => {
@@ -335,7 +365,7 @@ describe("RemoteAiPanel", () => {
     });
 
     const lastCall = chatMock.addMessage.mock.calls[chatMock.addMessage.mock.calls.length - 1];
-    expect(lastCall[0]).toEqual({ role: "assistant", content: t.remote_agent_no_shell_integration });
+    expect(lastCall[0]).toEqual({ role: "assistant", content: t.remote_agent_no_shell_integration, notice: true });
     expect(placeholder()).not.toMatch(/執行中/);
   });
 
