@@ -3,6 +3,7 @@
 
 pub mod parse;
 pub mod queue;
+pub mod service;
 
 pub use parse::{args_from_file_urls, parse_args, LaunchRequest};
 pub use queue::LaunchQueue;
@@ -43,7 +44,7 @@ fn invoking_cwd(cwd: &str) -> Option<&std::path::Path> {
 }
 
 /// 把主視窗拉到前景（還原最小化、顯示、取得焦點）。
-fn raise_main_window(app: &AppHandle) {
+pub(crate) fn raise_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();

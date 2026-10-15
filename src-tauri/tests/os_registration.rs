@@ -521,3 +521,57 @@ fn hooks_never_touch_the_shared_nsis_registers() {
     }
     assert!(hits.is_empty(), "hook 動用了共用暫存器（改用自己的 Var 與堆疊）:\n{}", hits.join("\n"));
 }
+
+// ── macOS Finder 服務「在 AITerm 開啟」（NSServices）──────────────────────
+
+/// Info.plist 的服務宣告要和 Rust 端接收的 selector 對得上，否則選單點了沒反應、
+/// 而且不會有任何錯誤訊息（macOS 只在 Console 記一行）。
+#[cfg(target_os = "macos")]
+#[test]
+fn info_plist_declares_the_finder_service_matching_the_rust_receiver() {
+    use serde_json::Value;
+    let _lock = process_lock();
+    let out = std::process::Command::new("plutil")
+        .args(["-convert", "json", "-o", "-", "Info.plist"])
+        .current_dir(root())
+        .output()
+        .expect("執行不了 plutil");
+    assert!(out.status.success(), "plutil 拒絕 Info.plist: {}", String::from_utf8_lossy(&out.stderr));
+    let plist: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let services = plist["NSServices"].as_array().expect("Info.plist 缺 NSServices");
+    assert_eq!(services.len(), 1);
+    let s = &services[0];
+    assert_eq!(s["NSMessage"], aiterm_lib::launch::service::SERVICE_MESSAGE);
+    assert_eq!(s["NSMenuItem"]["default"], "Open in AITerm");
+    assert!(s["NSRequiredContext"].is_object(), "沒有 NSRequiredContext 時服務預設是停用的");
+    assert_eq!(s["NSSendFileTypes"], serde_json::json!(["public.item"]));
+    assert!(s["NSPortName"].is_string());
+}
+
+/// 中文選單名稱：檔案要存在、格式要合法、鍵要等於 NSMenuItem.default，
+/// 而且 macOS 打包設定要把它放進 Contents/Resources/zh-Hant.lproj/。
+#[test]
+fn finder_service_menu_title_is_localized_and_bundled() {
+    let strings = read("resources/macos/zh-Hant.lproj/ServicesMenu.strings");
+    assert!(
+        strings.contains("\"Open in AITerm\" = \"在 AITerm 開啟\";"),
+        "ServicesMenu.strings 內容不對：{strings}"
+    );
+    let conf: serde_json::Value = serde_json::from_str(&read("tauri.macos.conf.json")).unwrap();
+    assert_eq!(
+        conf["bundle"]["resources"]["resources/macos/zh-Hant.lproj/ServicesMenu.strings"],
+        "zh-Hant.lproj/ServicesMenu.strings"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn finder_service_strings_file_is_valid() {
+    let _lock = process_lock();
+    let out = std::process::Command::new("plutil")
+        .args(["-lint", "resources/macos/zh-Hant.lproj/ServicesMenu.strings"])
+        .current_dir(root())
+        .output()
+        .expect("執行不了 plutil");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+}

@@ -30,5 +30,27 @@
       </array>
     </dict>
   </array>
+  <!-- Finder 右鍵「服務 → 在 AITerm 開啟」。接收端是 src/launch/service.rs；
+       NSRequiredContext 讓服務預設啟用；中文名稱在 zh-Hant.lproj/ServicesMenu.strings。 -->
+  <key>NSServices</key>
+  <array>
+    <dict>
+      <key>NSMenuItem</key>
+      <dict>
+        <key>default</key>
+        <string>Open in AITerm</string>
+      </dict>
+      <key>NSMessage</key>
+      <string>openInAITerm</string>
+      <key>NSPortName</key>
+      <string>AITerm</string>
+      <key>NSRequiredContext</key>
+      <dict/>
+      <key>NSSendFileTypes</key>
+      <array>
+        <string>public.item</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>

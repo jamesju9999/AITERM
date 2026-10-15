@@ -343,6 +343,10 @@ pub fn run() {
                     std::env::current_dir().ok().as_deref(),
                 ),
             );
+            // Finder 右鍵「服務 → 在 AITerm 開啟」的接收端；要在事件迴圈開始前註冊，
+            // 冷啟動時 macOS 送來的服務請求才接得到。
+            #[cfg(target_os = "macos")]
+            launch::service::register(app.handle());
             telegram::init(app.handle());
             mail::poller::init(app.handle());
             enterprise::agent::init(app.handle());

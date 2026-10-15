@@ -131,7 +131,7 @@ core-foundation-sys = "0.8"
 core-graphics = { version = "0.25", features = ["highsierra"] }
 # 列出執行中的 App（約 1 秒的 osascript 換成幾毫秒的原生呼叫）。
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSWorkspace", "NSRunningApplication"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSWorkspace", "NSRunningApplication", "NSApplication", "NSResponder", "NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSArray", "NSURL", "NSDictionary", "NSError", "NSValue"] }
 # 螢幕文字辨識（OCR）：不提供無障礙資訊的 App（例如視窗被關掉的 LINE）靠它看得見畫面上的字。
 objc2-vision = { version = "0.3", default-features = false, features = ["std", "alloc", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "VNObservation", "VNTypes", "VNGeometry", "objc2-core-foundation"] }

@@ -22,7 +22,8 @@
       "../tools/ApiDocFetcher/strategies/*.py": "ApiDocFetcher/strategies/",
       "../tools/ApiDocFetcher/requirements.txt": "ApiDocFetcher/requirements.txt",
       "../tools/MarkItDown/converter.py": "MarkItDown/converter.py",
-      "../tools/MarkItDown/requirements.txt": "MarkItDown/requirements.txt"
+      "../tools/MarkItDown/requirements.txt": "MarkItDown/requirements.txt",
+      "resources/macos/zh-Hant.lproj/ServicesMenu.strings": "zh-Hant.lproj/ServicesMenu.strings"
     }
   }
 }

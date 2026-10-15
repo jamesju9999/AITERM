@@ -1,0 +1,2 @@
+/* Finder 右鍵「服務」選單裡的名稱（鍵是 Info.plist 的 NSMenuItem.default）。 */
+"Open in AITerm" = "在 AITerm 開啟";
