@@ -528,6 +528,11 @@ const zhTW = {
     ac_repo_initing: "處理中…",
     ac_repo_init_confirm: (path: string) => `在 ${path} 執行 git init，並把資料夾裡現有的檔案建成第一個 commit？\n\n（不會改動任何檔案內容；需要排除的檔案請先放進 .gitignore。）`,
     ac_repo_first_commit_confirm: (path: string) => `把 ${path} 裡現有的檔案建成第一個 commit？\n\n（需要排除的檔案請先放進 .gitignore。）`,
+    ac_title_review: (module: string, spec: boolean, afterFix: boolean) =>
+      `${spec ? "審查規格" : "審查"}：${module}${afterFix ? "（修正後）" : ""}`,
+    ac_title_fix: (module: string, round: number) => `修正：${module}（第 ${round} 輪）`,
+    ac_title_plan: (module: string) => `拆解規格：${module}`,
+    ac_title_merge: (n: number) => `合併 ${n} 個工程師分支`,
     ac_role_name: "角色名稱",
     ac_role_presets: "從預設角色帶入",
     ac_role_builtin: "內建角色",
@@ -2467,6 +2472,11 @@ const enRaw = {
     ac_repo_initing: "Working…",
     ac_repo_init_confirm: (path: string) => `Run git init in ${path} and commit the files that are already there as the first commit?\n\n(No file contents change; put anything you want excluded in .gitignore first.)`,
     ac_repo_first_commit_confirm: (path: string) => `Commit the files already in ${path} as the first commit?\n\n(Put anything you want excluded in .gitignore first.)`,
+    ac_title_review: (module: string, spec: boolean, afterFix: boolean) =>
+      `${spec ? "Spec review" : "Review"}: ${module}${afterFix ? " (after fix)" : ""}`,
+    ac_title_fix: (module: string, round: number) => `Fix: ${module} (round ${round})`,
+    ac_title_plan: (module: string) => `Split spec: ${module}`,
+    ac_title_merge: (n: number) => `Merge ${n} engineer branches`,
     ac_role_name: "Role name",
     ac_role_presets: "Start from a preset",
     ac_role_builtin: "Built-in roles",

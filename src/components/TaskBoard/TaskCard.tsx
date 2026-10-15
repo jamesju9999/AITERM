@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import type { Translations } from "../../lib/i18n";
 import { useLocale } from "../../contexts/LocaleContext";
+import { localizedCardTitle } from "../AgentCanvas/cardTitle";
 import { abortMerge, archiveTask, cloneTask, deleteTask, markTaskDone, mergeTaskWorktree, stopTask, type MergeOutcome, type TaskWithAttachments } from "../../ipc/tasks";
 import { formatCreatedAt } from "./cardSort";
 import { formatDuration, taskDurationSecs } from "./duration";
@@ -199,7 +200,7 @@ export function TaskCard({
     <div className="task-card" data-task-status={cardStatus}>
       <div className="task-card-top-row">
         <div className="task-card-info">
-          <div className="task-card-title">{card.title}</div>
+          <div className="task-card-title">{localizedCardTitle(card, t)}</div>
           <div className="task-card-meta">
             <span className="task-card-meta-icon">📁</span>
             <span className="task-card-meta-text">{card.project_dir}</span>

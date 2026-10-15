@@ -30,6 +30,7 @@ import { TranscriptDialog } from "../TaskBoard/TranscriptDialog";
 import "../TaskBoard/index.css";
 import { AgentConfigDialog, type AgentConfigValues } from "./AgentConfigDialog";
 import { AgentNode } from "./AgentNode";
+import { localizedCardTitle } from "./cardTitle";
 import { deriveAgentStatus } from "./deriveAgentStatus";
 import { deriveModuleState } from "./deriveModuleState";
 import { EdgeLayer } from "./EdgeLayer";
@@ -220,12 +221,13 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
     for (const c of tasks) {
       if (!c.agent_id) continue;
       const who = agentName(c.agent_id);
-      if (c.dispatched_at) ev.push({ at: c.dispatched_at, text: t.ac_log_started(who, c.title), kind: "start" });
+      const title = localizedCardTitle(c, t);
+      if (c.dispatched_at) ev.push({ at: c.dispatched_at, text: t.ac_log_started(who, title), kind: "start" });
       if (c.finished_at)
         ev.push(
           c.outcome === "success"
-            ? { at: c.finished_at, text: t.ac_log_finished(who, c.title), kind: "ok" }
-            : { at: c.finished_at, text: t.ac_log_failed(who, c.title), kind: "bad" },
+            ? { at: c.finished_at, text: t.ac_log_finished(who, title), kind: "ok" }
+            : { at: c.finished_at, text: t.ac_log_failed(who, title), kind: "bad" },
         );
     }
     return ev.sort((a, b) => b.at - a.at).slice(0, 40);

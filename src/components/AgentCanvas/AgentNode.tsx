@@ -5,6 +5,7 @@ import type { AgentRow } from "../../ipc/agents";
 import type { TaskRow } from "../../ipc/tasks";
 import type { AgentStatus } from "./deriveAgentStatus";
 import { deriveModuleState, type ModuleState } from "./deriveModuleState";
+import { localizedCardTitle } from "./cardTitle";
 import { formatElapsed } from "./formatElapsed";
 
 const KIND_ICON: Record<AgentRow["kind"], string> = { coder: "</>", reviewer: "✓?", orchestrator: "⑂" };
@@ -127,7 +128,7 @@ export function AgentNode({
 
   const runningLine = () => {
     if (!running) return null;
-    let title = running.title;
+    let title = localizedCardTitle(running, t);
     let snip: string | null = null;
     if (agent.kind === "reviewer") {
       const module = byId(running.module_id);
@@ -219,7 +220,7 @@ export function AgentNode({
         {failed ? (
           <div className="ac-attention" role="alert">
             <div className="ac-attention-title">{t.ac_failed_title}</div>
-            <div className="ac-attention-card">✗ {failed.title}</div>
+            <div className="ac-attention-card">✗ {localizedCardTitle(failed, t)}</div>
             {failed.error_message && <div className="ac-attention-msg">{failed.error_message}</div>}
             <div className="ac-attention-actions">
               <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={onRetry}>
@@ -265,7 +266,7 @@ export function AgentNode({
         {agent.kind === "reviewer" && queued.length > 0 && (
           <div className="ac-chips">
             {queued.map((c) => (
-              <span key={c.id} className="ac-chip ac-chip--review" title={c.title}>
+              <span key={c.id} className="ac-chip ac-chip--review" title={localizedCardTitle(c, t)}>
                 ⧗ {byId(c.module_id)?.title ?? c.title}
               </span>
             ))}
