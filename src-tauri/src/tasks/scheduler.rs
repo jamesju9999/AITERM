@@ -158,6 +158,106 @@ async fn prepare_worktree(
     }
 }
 
+/// 角色前綴＋卡片提示詞。前綴全空白就原樣回傳，不留多餘的空行。
+pub fn with_role_prefix(prefix: &str, prompt: &str) -> String {
+    let p = prefix.trim();
+    if p.is_empty() {
+        prompt.to_string()
+    } else {
+        format!("{p}\n\n{prompt}")
+    }
+}
+
+/// Agent 的 worktree：已經有就沿用，沒有就在 `<專案>/agents/<id>/worktree`
+/// 以 `aiterm-agent/<id>` 從 `agent.project_dir` 目前的 HEAD 建立，並寫回
+/// agents 表。
+///
+/// **失敗就回 Err，不退回原資料夾。** 一般卡片的 `prepare_worktree` 會退回
+/// 直接在 `project_dir` 跑，但 Agent 不行：兩個 Coder 會同時改同一個資料夾，
+/// 而且之後的 `start_sha..end_sha` 範圍也就失去意義。
+///
+/// worktree 資料夾不見了但分支還在（使用者手動刪了資料夾）時，重新接上
+/// 既有分支——之前的 commit 一個都不能丟。
+pub(crate) async fn prepare_agent_worktree(
+    pool: &sqlx::SqlitePool,
+    project_storage_path: &std::path::Path,
+    agent: &crate::tasks::agents::AgentRow,
+) -> Result<std::path::PathBuf, String> {
+    if let Some(p) = &agent.worktree_path {
+        let pb = std::path::PathBuf::from(p);
+        if pb.is_dir() {
+            return Ok(pb);
+        }
+    }
+    match VcsManager::detect_repo(&agent.project_dir).await {
+        Ok(info) if info.vcs_type == VcsType::Git => {}
+        _ => return Err(format!("Agent 的程式庫不是 git repo：{}", agent.project_dir)),
+    }
+    let path = crate::tasks::agents::agent_dir(project_storage_path, &agent.id).join("worktree");
+    let path_str = path.to_string_lossy().into_owned();
+    let branch = crate::tasks::agents::branch_name(&agent.id);
+    let client = crate::vcs::git::GitClient::new(agent.project_dir.clone(), None);
+    if let Err(create_err) = client.create_worktree(&path_str, &branch).await {
+        // 最常見的原因是分支已經存在（資料夾被刪、分支還在）。先 prune 掉
+        // 指向不存在資料夾的登記，再接上既有分支。
+        let _ = client.prune_worktrees().await;
+        if let Err(attach_err) = client.attach_worktree(&path_str, &branch).await {
+            return Err(format!("建立 Agent worktree 失敗：{create_err}；{attach_err}"));
+        }
+    }
+    crate::tasks::agents::set_agent_worktree(pool, &agent.id, &path_str, &branch)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// Agent 卡片的 watch 結束後、`finish_task` 之前呼叫。
+///
+/// - 成功：worktree 有未提交改動就 `Module: <標題>` commit 掉，記下 `end_sha`。
+///   沒有改動仍算成功（`end_sha` 會等於 `start_sha`）。commit 失敗（例如
+///   pre-commit hook 擋下）→ 改判失敗，錯誤訊息帶 git 的輸出。
+/// - 失敗／取消（含卡住、手動停止）：暫停 Agent，讓使用者決定重試或跳過——
+///   不能讓下一張卡建立在半成品上。
+///
+/// 回傳最終要寫進資料庫的結果。
+pub(crate) async fn finalize_agent_card(
+    pool: &sqlx::SqlitePool,
+    agent_id: &str,
+    task_id: &str,
+    title: &str,
+    worktree: &std::path::Path,
+    outcome: monitor::TaskOutcome,
+) -> monitor::TaskOutcome {
+    let pause = || async {
+        if let Err(e) = crate::tasks::agents::set_paused(pool, agent_id, Some(task_id)).await {
+            eprintln!("pause agent {agent_id}: {e}");
+        }
+    };
+    if !matches!(outcome, monitor::TaskOutcome::Success) {
+        pause().await;
+        return outcome;
+    }
+    let client = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
+    let commit = async {
+        if client.has_uncommitted_changes().await? {
+            client.commit_all(&format!("Module: {title}")).await?;
+        }
+        client.head_sha().await
+    };
+    match commit.await {
+        Ok(sha) => {
+            if let Err(e) = store::set_end_sha(pool, task_id, &sha).await {
+                eprintln!("set_end_sha {task_id}: {e}");
+            }
+            monitor::TaskOutcome::Success
+        }
+        Err(e) => {
+            pause().await;
+            monitor::TaskOutcome::Failed(format!("自動 commit 失敗：{e}"))
+        }
+    }
+}
+
 /// `task-finished` 的酬載：明確指出剛到達終局的是哪個專案的哪張卡片、
 /// 用的是哪個分頁。前端靠它把對話記錄換成 xterm 序列化出來的乾淨版本
 /// （那需要活著的 xterm 實例，只有前端有）。
@@ -206,7 +306,7 @@ impl Dispatcher for RealDispatcher {
                     .into_owned()
             })
             .collect::<Vec<_>>();
-        let prompt = dispatch::build_prompt(&task.body, &attachments);
+        let mut prompt = dispatch::build_prompt(&task.body, &attachments);
         let claude_cmd = self.config.get().task_board.claude_command;
         // 只有指令確實是 claude 時才給 session id——別的指令接上這個旗標
         // 會直接啟動失敗（見 dispatch::looks_like_claude）。
@@ -219,12 +319,38 @@ impl Dispatcher for RealDispatcher {
             self.bridge.port(),
             self.secrets.get(crate::bridge::auth::BRIDGE_TOKEN_KEY).ok().flatten(),
         );
-        let isolate = resolve_isolation(
-            task.isolate_worktree,
-            self.config.get().task_board.isolate_with_worktree,
-        );
-        let (effective_dir, worktree_info) =
-            prepare_worktree(&project.path, &task.id, &task.project_dir, isolate).await;
+        // Agent 卡片：在 Agent 自己的 worktree 跑、提示詞加角色前綴，並且
+        // **不**寫卡片的 worktree 欄位——那兩欄是每卡隔離用的，有值會讓
+        // 看板顯示「合併回原分支」，而 Agent 的成果是整個分支一起合併。
+        let agent = match &task.agent_id {
+            Some(aid) => Some(
+                crate::tasks::agents::get_agent(&project.pool, aid)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("找不到指派的 Agent：{aid}"))?,
+            ),
+            None => None,
+        };
+        let (effective_dir, worktree_info) = if let Some(agent) = &agent {
+            let wt = prepare_agent_worktree(&project.pool, &project.path, agent).await?;
+            match crate::vcs::git::GitClient::new(wt.to_string_lossy().into_owned(), None).head_sha().await {
+                Ok(sha) => {
+                    if let Err(e) = store::set_start_sha(&project.pool, &task.id, &sha).await {
+                        eprintln!("set_start_sha {}: {e}", task.id);
+                    }
+                }
+                Err(e) => eprintln!("head_sha for agent card {}: {e}", task.id),
+            }
+            prompt = with_role_prefix(&agent.prompt_prefix, &prompt);
+            (wt, None)
+        } else {
+            let isolate = resolve_isolation(
+                task.isolate_worktree,
+                self.config.get().task_board.isolate_with_worktree,
+            );
+            prepare_worktree(&project.path, &task.id, &task.project_dir, isolate).await
+        };
+        let agent_ctx = agent.map(|a| (a.id, effective_dir.clone()));
         let effective_dir_str = effective_dir.to_string_lossy().into_owned();
         let (tab_id, disp) = dispatch::spawn_and_run(
             &self.app,
@@ -292,6 +418,12 @@ impl Dispatcher for RealDispatcher {
             let outcome = monitor::watch(
                 &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode,
             ).await;
+            let outcome = match &agent_ctx {
+                Some((agent_id, worktree)) => {
+                    finalize_agent_card(&pool, agent_id, &task_id, &task_title, worktree, outcome).await
+                }
+                None => outcome,
+            };
             let transcript = write_transcript(&pty, &project_path, &task_id, &tab_id);
             persist_outcome(
                 &pool,
@@ -590,6 +722,11 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
             let reg = app.state::<ProjectRegistry>();
             let mut total = 0u64;
             for project in reg.all() {
+                // 必須在 recover 之前：recover 之後就分不出哪些卡片是「被重啟
+                // 中斷的執行中」了。見 agents::pause_agents_of_orphaned_cards。
+                if let Err(e) = crate::tasks::agents::pause_agents_of_orphaned_cards(&project.pool).await {
+                    eprintln!("agent pause on recovery ({}): {e}", project.name);
+                }
                 match store::recover_orphaned_running(&project.pool).await {
                     Ok(n) => total += n,
                     Err(e) => eprintln!("task board recovery scan ({}): {e}", project.name),
@@ -1581,5 +1718,180 @@ mod prepare_worktree_tests {
         assert_eq!(wt_branch, "aiterm-task/t2");
         assert!(effective_dir.join("a.txt").exists());
         assert_ne!(effective_dir, project_dir.path(), "隔離後不該還是原本的資料夾");
+    }
+}
+
+#[cfg(test)]
+mod agent_dispatch_tests {
+    use super::*;
+    use crate::tasks::agents;
+    use std::fs;
+    use std::process::Command as StdCommand;
+
+    fn init_repo(dir: &std::path::Path) {
+        StdCommand::new("git").args(["init", "-q"]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["config", "user.email", "test@test.com"]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["config", "user.name", "Test"]).current_dir(dir).status().unwrap();
+        fs::write(dir.join("a.txt"), "hello\n").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "init"]).current_dir(dir).status().unwrap();
+    }
+
+    async fn mem_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    async fn agent_for(pool: &sqlx::SqlitePool, repo: &std::path::Path) -> agents::AgentRow {
+        let id = agents::create_agent(
+            pool,
+            &agents::NewAgent {
+                kind: "coder", name: "C1", role: "r", prompt_prefix: "p",
+                project_dir: &repo.to_string_lossy(), canvas_x: 0.0, canvas_y: 0.0,
+            },
+        )
+        .await
+        .unwrap();
+        agents::get_agent(pool, &id).await.unwrap().unwrap()
+    }
+
+    fn head(dir: &std::path::Path) -> String {
+        let out = StdCommand::new("git").args(["rev-parse", "HEAD"]).current_dir(dir).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn role_prefix_goes_first_and_an_empty_one_adds_nothing() {
+        assert_eq!(with_role_prefix("  ", "做 A"), "做 A");
+        assert_eq!(with_role_prefix("你是資深工程師", "做 A"), "你是資深工程師\n\n做 A");
+    }
+
+    #[tokio::test]
+    async fn the_agent_worktree_is_created_once_then_reused() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let agent = agent_for(&pool, repo.path()).await;
+
+        let first = prepare_agent_worktree(&pool, storage.path(), &agent).await.unwrap();
+        assert!(first.join("a.txt").exists());
+        let stored = agents::get_agent(&pool, &agent.id).await.unwrap().unwrap();
+        assert_eq!(stored.branch.as_deref(), Some(agents::branch_name(&agent.id).as_str()));
+
+        // 在 worktree 裡留一個標記：第二次如果重建，標記就會不見。
+        fs::write(first.join("marker.txt"), "x").unwrap();
+        let second = prepare_agent_worktree(&pool, storage.path(), &stored).await.unwrap();
+        assert_eq!(second, first);
+        assert!(second.join("marker.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn a_deleted_worktree_folder_is_reattached_to_the_existing_branch() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let agent = agent_for(&pool, repo.path()).await;
+        let wt = prepare_agent_worktree(&pool, storage.path(), &agent).await.unwrap();
+        fs::write(wt.join("b.txt"), "work").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(&wt).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "work"]).current_dir(&wt).status().unwrap();
+        let work_sha = head(&wt);
+        fs::remove_dir_all(&wt).unwrap();
+
+        let stored = agents::get_agent(&pool, &agent.id).await.unwrap().unwrap();
+        let again = prepare_agent_worktree(&pool, storage.path(), &stored).await.unwrap();
+        assert_eq!(head(&again), work_sha, "重新接上後要回到原本分支的最新 commit");
+    }
+
+    #[tokio::test]
+    async fn a_non_git_project_dir_is_an_error_not_a_fallback() {
+        let not_repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let agent = agent_for(&pool, not_repo.path()).await;
+        assert!(prepare_agent_worktree(&pool, storage.path(), &agent).await.is_err());
+    }
+
+    async fn card(pool: &sqlx::SqlitePool) -> String {
+        store::create_task(pool, "A 模組", "", "/r", true, false).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn success_commits_leftover_changes_and_records_end_sha() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let pool = mem_pool().await;
+        let agent = agent_for(&pool, repo.path()).await;
+        let task = card(&pool).await;
+        let start = head(repo.path());
+        fs::write(repo.path().join("new.txt"), "module A").unwrap();
+
+        let out = finalize_agent_card(&pool, &agent.id, &task, "A 模組", repo.path(), monitor::TaskOutcome::Success).await;
+
+        assert!(matches!(out, monitor::TaskOutcome::Success));
+        let end = head(repo.path());
+        assert_ne!(end, start);
+        let log = StdCommand::new("git").args(["log", "-1", "--format=%s"]).current_dir(repo.path()).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Module: A 模組");
+        assert_eq!(store::get_task(&pool, &task).await.unwrap().unwrap().end_sha.as_deref(), Some(end.as_str()));
+        assert_eq!(agents::get_agent(&pool, &agent.id).await.unwrap().unwrap().paused_task_id, None);
+    }
+
+    #[tokio::test]
+    async fn success_without_changes_keeps_end_equal_to_head() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let pool = mem_pool().await;
+        let agent = agent_for(&pool, repo.path()).await;
+        let task = card(&pool).await;
+        let start = head(repo.path());
+
+        let out = finalize_agent_card(&pool, &agent.id, &task, "A", repo.path(), monitor::TaskOutcome::Success).await;
+
+        assert!(matches!(out, monitor::TaskOutcome::Success));
+        assert_eq!(store::get_task(&pool, &task).await.unwrap().unwrap().end_sha.as_deref(), Some(start.as_str()));
+    }
+
+    #[tokio::test]
+    async fn failure_pauses_the_agent_and_keeps_the_outcome() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let pool = mem_pool().await;
+        let agent = agent_for(&pool, repo.path()).await;
+        let task = card(&pool).await;
+        fs::write(repo.path().join("half.txt"), "half done").unwrap();
+
+        let out = finalize_agent_card(&pool, &agent.id, &task, "A", repo.path(), monitor::TaskOutcome::Cancelled).await;
+
+        assert!(matches!(out, monitor::TaskOutcome::Cancelled));
+        assert_eq!(agents::get_agent(&pool, &agent.id).await.unwrap().unwrap().paused_task_id.as_deref(), Some(task.as_str()));
+        assert!(repo.path().join("half.txt").exists(), "半成品要留著讓使用者決定");
+        assert_eq!(store::get_task(&pool, &task).await.unwrap().unwrap().end_sha, None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_rejecting_commit_hook_turns_success_into_failure_and_pauses() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let hook = repo.path().join(".git/hooks/pre-commit");
+        fs::write(&hook, "#!/bin/sh\necho lint failed >&2\nexit 1\n").unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        let pool = mem_pool().await;
+        let agent = agent_for(&pool, repo.path()).await;
+        let task = card(&pool).await;
+        fs::write(repo.path().join("new.txt"), "x").unwrap();
+
+        let out = finalize_agent_card(&pool, &agent.id, &task, "A", repo.path(), monitor::TaskOutcome::Success).await;
+
+        match out {
+            monitor::TaskOutcome::Failed(msg) => assert!(msg.contains("自動 commit 失敗"), "{msg}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert!(agents::get_agent(&pool, &agent.id).await.unwrap().unwrap().paused_task_id.is_some());
     }
 }

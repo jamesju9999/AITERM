@@ -278,6 +278,20 @@ impl GitClient {
         })
     }
 
+    /// `git worktree add <path> <branch>`——分支**已經存在**時用（不加 `-b`）。
+    /// Agent 的 worktree 資料夾被使用者刪掉、但分支還在時，靠它重新接上，
+    /// 之前的 commit 一個都不會丟。
+    pub async fn attach_worktree(&self, path: &str, branch_name: &str) -> Result<VcsResult, String> {
+        self.git(&[
+            "worktree".to_string(), "add".to_string(),
+            path.to_string(), branch_name.to_string(),
+        ]).await?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "attach_worktree".to_string(),
+            detail: format!("Attached worktree at '{path}' to existing branch '{branch_name}'"),
+        })
+    }
+
     /// `git worktree remove <path>`——只有在該 worktree 乾淨（沒有未提交
     /// 變更）時才會成功；呼叫端應該在確定所有變更都已經 commit 之後才
     /// 呼叫這個方法。
