@@ -12,6 +12,7 @@ pub mod session_log;
 pub mod dispatch;
 pub mod monitor;
 pub mod scheduler;
+pub mod agents;
 
 use std::path::{Path, PathBuf};
 
