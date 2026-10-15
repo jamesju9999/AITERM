@@ -177,6 +177,15 @@ pub async fn delete_agent(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error
         return Err(sqlx::Error::Protocol("這個 Agent 還有工作在執行，不能刪除".into()));
     }
     let mut tx = pool.begin().await?;
+    // 自動產生的審查／合併卡沒有「退回計畫中」的意義（它們不是使用者的模組），
+    // 排隊中的直接刪掉。
+    sqlx::query(
+        "DELETE FROM tasks WHERE agent_id = ? AND status = ? AND card_kind IN ('review', 'merge')",
+    )
+    .bind(id)
+    .bind(STATUS_QUEUED)
+    .execute(&mut *tx)
+    .await?;
     let base: f64 = sqlx::query_scalar(
         "SELECT CAST(COALESCE(MAX(sort_order), 0) AS REAL) FROM tasks WHERE status = ?",
     )
@@ -455,6 +464,18 @@ mod tests {
         }).await.unwrap();
         let tid = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
         assert!(assign_task(&pool, &tid, Some(&rid)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn deleting_a_reviewer_drops_its_queued_review_cards() {
+        let pool = mem_pool().await;
+        let rid = create_agent(&pool, &NewAgent {
+            kind: "reviewer", name: "R", role: "r", prompt_prefix: "", project_dir: "/r", canvas_x: 0.0, canvas_y: 0.0,
+        }).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, title, project_dir, status, agent_id, card_kind) VALUES ('rv', '審查', '/r', 'queued', ?, 'review')")
+            .bind(&rid).execute(&pool).await.unwrap();
+        delete_agent(&pool, &rid).await.unwrap();
+        assert!(store::get_task(&pool, "rv").await.unwrap().is_none());
     }
 
     #[tokio::test]
