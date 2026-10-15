@@ -394,6 +394,41 @@ impl GitClient {
         self.git(&["show".to_string(), format!("{sha}:{path}")]).await
     }
 
+    /// `git init`（在 `self.repo_root`）。
+    pub async fn init(&self) -> Result<(), String> {
+        self.git(&["init".to_string()]).await.map(|_| ())
+    }
+
+    /// 把目前所有檔案建成一個 commit；沒有檔案時建空 commit。使用者沒設定
+    /// `user.email`／`user.name` 時，只對這一個 commit 用 AITerm 的身分
+    /// （`-c`），不寫進任何 git 設定。
+    pub async fn initial_commit(&self, message: &str) -> Result<(), String> {
+        self.git(&["add".to_string(), "-A".to_string()]).await?;
+        let mut args: Vec<String> = Vec::new();
+        let has = |key: &str| {
+            let key = key.to_string();
+            let root = self.repo_root.clone();
+            async move {
+                GitClient::new(root, None)
+                    .git(&["config".to_string(), key])
+                    .await
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false)
+            }
+        };
+        if !has("user.email").await {
+            args.extend(["-c".to_string(), "user.email=aiterm@localhost".to_string()]);
+        }
+        if !has("user.name").await {
+            args.extend(["-c".to_string(), "user.name=AITerm".to_string()]);
+        }
+        args.extend([
+            "commit".to_string(), "--allow-empty".to_string(), "-q".to_string(),
+            "-m".to_string(), message.to_string(),
+        ]);
+        self.git(&args).await.map(|_| ())
+    }
+
     /// `git merge <branch>`——在 `self.repo_root` 執行（呼叫端應該傳原本
     /// 的 `project_dir`，不是 worktree 路徑）。衝突或該路徑本身有未提交
     /// 變更擋著都會讓這裡回傳 Err，錯誤訊息直接是 git 自己的輸出。

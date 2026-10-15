@@ -6,13 +6,11 @@
 use serde::Deserialize;
 use tauri::{AppHandle, State};
 
-use crate::config::types::VcsType;
 use crate::projects::ProjectRegistry;
 use crate::tasks::agents::{self, AgentRow, NewAgent};
 use crate::tasks::scheduler::SchedulerHandle;
 use crate::tasks::store;
 use crate::vcs::git::GitClient;
-use crate::vcs::VcsManager;
 
 use super::tasks::{emit_updated, project, BlockedReason, MergeOutcome};
 
@@ -54,9 +52,17 @@ pub async fn agents_create(
     // 不是 git repo 就擋下：Agent 的隔離、依序累積與合併都建立在分支上。
     // 一般卡片「不是 repo 就退回原資料夾」的做法在這裡會讓兩個 Coder 同時
     // 改同一個資料夾。
-    match VcsManager::detect_repo(&args.project_dir).await {
-        Ok(info) if info.vcs_type == VcsType::Git => {}
-        _ => return Err(format!("Agent 的程式庫必須是 git repo：{}", args.project_dir)),
+    match crate::tasks::repo_check::check_repo(&args.project_dir).await {
+        crate::tasks::repo_check::RepoCheck::Ok { .. } => {}
+        crate::tasks::repo_check::RepoCheck::Missing => {
+            return Err(format!("資料夾不存在：{}", args.project_dir))
+        }
+        crate::tasks::repo_check::RepoCheck::NotRepo => {
+            return Err(format!("Agent 的程式庫必須是 git repo：{}", args.project_dir))
+        }
+        crate::tasks::repo_check::RepoCheck::NoCommits => {
+            return Err(format!("這個 git repo 還沒有任何 commit：{}", args.project_dir))
+        }
     }
     let id = agents::create_agent(
         &p.pool,
@@ -276,4 +282,16 @@ pub async fn agents_override_module(
     emit_updated(&app);
     scheduler.poke();
     Ok(())
+}
+
+/// 對話框選資料夾時呼叫：是不是可以用的 git repo。
+#[tauri::command]
+pub async fn agents_check_repo(path: String) -> Result<crate::tasks::repo_check::RepoCheck, String> {
+    Ok(crate::tasks::repo_check::check_repo(&path).await)
+}
+
+/// 一鍵把資料夾變成可用的 git repo（git init＋第一個 commit）。
+#[tauri::command]
+pub async fn agents_init_repo(path: String) -> Result<(), String> {
+    crate::tasks::repo_check::init_repo(&path).await
 }

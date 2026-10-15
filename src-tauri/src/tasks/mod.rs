@@ -14,6 +14,7 @@ pub mod monitor;
 pub mod scheduler;
 pub mod agents;
 pub mod workflow;
+pub mod repo_check;
 
 use std::path::{Path, PathBuf};
 
