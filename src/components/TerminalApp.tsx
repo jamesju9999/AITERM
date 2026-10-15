@@ -306,6 +306,10 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         // dispatched. (Real bug found live: dragging a card to 待執行 dispatches
         // it, which spawns this event, which switched the user off the board.)
         const viewingOverlay = homeActiveRef.current || boardActiveRef.current;
+        // Agent 協作頁同理：把模組拖給 Agent 就會派工，派工開出的分頁不能
+        // 把使用者拉走（實機抓到：之後的拖曳全打在終端機上）。它是一般分頁
+        // 不是覆蓋畫面，所以要另外看目前分頁的型別。
+        const viewingAgentCanvas = !viewingOverlay && activeTab?.type === "agent-canvas";
         setTabs((prev) => [...prev, {
           id: newId,
           title: payload.command ? `Agent: ${payload.command}` : t.terminal_tab,
@@ -313,7 +317,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           ptySessionId: payload.session_id,
           spawnedByAgent: true,
         }]);
-        if (!activeIsBusy && !viewingOverlay) {
+        if (!activeIsBusy && !viewingOverlay && !viewingAgentCanvas) {
           selectTab(newId);
         }
       }), "mcp-coordination-tab-spawned"),

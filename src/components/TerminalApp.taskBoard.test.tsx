@@ -106,6 +106,11 @@ type HomeViewProps = {
   onSelectTab: (id: string) => void;
   onAiRouted: (tabId: string, route: { type: string; userText: string; fallback: boolean }) => void;
 };
+// Agent 協作頁本身不是這裡要測的東西，換成一個可辨識的替身。
+vi.mock("./AgentCanvas", () => ({
+  AgentCanvasView: () => <div>agent-canvas-stub</div>,
+}));
+
 vi.mock("./HomeView", () => ({
   HomeView: ({ tabs, onSelectTab, onAiRouted }: HomeViewProps) => (
     <div>
@@ -201,6 +206,7 @@ vi.mock("../ipc/projects", () => ({
 }));
 
 import { TerminalApp } from "./TerminalApp";
+import { SESSION_TABS_KEY } from "../lib/sessionTabs";
 import { LocaleProvider } from "../contexts/LocaleContext";
 import type { TaskReadyPayload } from "../ipc/enterprise";
 
@@ -278,6 +284,22 @@ describe("TerminalApp: Task Board view slot (Task 4)", () => {
 
     // Still on the board — not yanked to the newly spawned terminal tab.
     expect(await screen.findByText(/計畫中|Planned/)).toBeInTheDocument();
+  });
+
+  // 同一個 bug 在 Agent 協作頁又出現一次（實機抓到）：把模組拖給 Agent 就會
+  // 派工，派工開出的分頁把使用者從協作頁拉走，接下來的拖曳全打在終端機上。
+  // 協作頁是一般分頁不是覆蓋畫面，所以上面那條 overlay 判斷擋不到。
+  it("does not switch away from the Agent Canvas tab when a coordination tab spawns", async () => {
+    localStorage.setItem(SESSION_TABS_KEY, JSON.stringify([{ title: "Agent 協作", type: "agent-canvas" }]));
+    renderApp();
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("select-first-tab"));
+    expect(await screen.findByText("agent-canvas-stub")).toBeVisible();
+
+    capturedCoordinationSpawn!({ session_id: "spawned-from-canvas", command: "claude" });
+
+    await waitFor(() => expect(screen.getAllByText(/Agent: claude/).length).toBeGreaterThan(0));
+    expect(screen.getByText("agent-canvas-stub")).toBeVisible();
   });
 
   // Regression test for a real bug caught on video: dispatching ONE card put
