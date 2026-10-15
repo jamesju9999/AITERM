@@ -709,3 +709,16 @@ export function TableIcon({ size = 16, ...props }: IconProps) {
     </svg>
   );
 }
+
+// Agent Canvas：三個節點連成的流程圖
+export function WorkflowIcon({ size = 16, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="2" y="3" width="7" height="6" rx="1.5" />
+      <rect x="2" y="15" width="7" height="6" rx="1.5" />
+      <rect x="15" y="9" width="7" height="6" rx="1.5" />
+      <path d="M9 6h2.5a1.5 1.5 0 0 1 1.5 1.5V12h2" />
+      <path d="M9 18h2.5a1.5 1.5 0 0 0 1.5-1.5V12" />
+    </svg>
+  );
+}

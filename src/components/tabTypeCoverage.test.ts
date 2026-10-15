@@ -50,3 +50,22 @@ describe("remote-terminal tab type coverage", () => {
     expect(terminalAppSrc).toContain("RemoteTerminalView");
   });
 });
+
+describe("agent-canvas tab type coverage", () => {
+  it("is a member of the TabType union", () => {
+    expect(tabBarSrc).toMatch(/export type TabType =[^;]*"agent-canvas"/s);
+  });
+
+  it("has an icon in the tab bar", () => {
+    const iconFn = tabBarSrc.slice(tabBarSrc.indexOf("function getTabIcon"));
+    expect(iconFn).toContain('case "agent-canvas"');
+  });
+
+  it("gets a title from the picker", () => {
+    expect(terminalAppSrc).toContain('if (type === "agent-canvas") title = t.agent_canvas_tab;');
+  });
+
+  it("renders AgentCanvasView", () => {
+    expect(terminalAppSrc).toMatch(/tab\.type === "agent-canvas" \? \(\s*<AgentCanvasView/);
+  });
+});

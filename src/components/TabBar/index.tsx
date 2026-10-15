@@ -22,11 +22,12 @@ import {
   RobotIcon,
   HomeIcon,
   EyeIcon,
-  ClipboardListIcon
+  ClipboardListIcon,
+  WorkflowIcon,
 } from "../Icons";
 import "./index.css";
 
-export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base" | "mail" | "remote-terminal";
+export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base" | "mail" | "remote-terminal" | "agent-canvas";
 
 import type { MilestoneState } from "../../lib/milestones";
 
@@ -142,6 +143,7 @@ function getTabIcon(type: TabType, claudeBridge?: Tab["claudeBridge"], spawnedBy
     case "knowledge-base": return <LibraryIcon size={18} />;
     case "mail": return <MailIcon size={18} />;
     case "remote-terminal": return <EyeIcon size={18} />;
+    case "agent-canvas": return <WorkflowIcon size={18} />;
     default: return <FileTextIcon size={18} />;
   }
 }

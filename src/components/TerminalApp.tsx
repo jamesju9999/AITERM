@@ -28,6 +28,7 @@ import { onFocusInput, onTrayNewTab } from "../ipc/resident";
 import { ComputerApprovalDialog } from "./ComputerApproval";
 import { useTrayLabels } from "../hooks/useTrayLabels";
 import { KnowledgeBaseView } from "./KnowledgeBaseView";
+import { AgentCanvasView } from "./AgentCanvas";
 import { MailView } from "./MailView";
 import { RemoteTerminalView } from "./RemoteTerminalView";
 import { HomeView } from "./HomeView";
@@ -360,6 +361,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     if (type === "code-assistant") title = t.code_assistant_tab;
     if (type === "knowledge-base") title = t.knowledge_base_tab;
     if (type === "mail") title = t.mail_tab;
+    if (type === "agent-canvas") title = t.agent_canvas_tab;
     // 兩種來源要分得出來：選單挑「Claude Code」是使用者當下的意圖，換整顆圖示
     // 與標題才不會跟一般終端機混淆；設定的「新分頁預設啟用」則是背景行為，使用者
     // 點的是「終端機」，把它改名成 Claude Code 會讓人以為點錯了——那一種只在終端機
@@ -897,6 +899,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                 />
               ) : tab.type === "knowledge-base" ? (
                 <KnowledgeBaseView isActive={isActive} />
+              ) : tab.type === "agent-canvas" ? (
+                <AgentCanvasView isActive={isActive} />
               ) : tab.type === "mail" ? (
                 <MailView isActive={isActive} onMessageRead={refreshMailUnread} />
               ) : tab.type === "remote-terminal" ? (
