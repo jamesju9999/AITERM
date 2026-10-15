@@ -594,6 +594,29 @@ pub async fn finish_task(
     Ok(())
 }
 
+/// Agent 的「重試」：把一張失敗／取消的卡片原地排回佇列（`sort_order` 由
+/// 呼叫端給，通常是該 Agent 佇列的最前面）。
+///
+/// 刻意不複製成新卡：審查／修正鏈靠 `review_of` 串成一條直線（見
+/// `tasks::workflow`），複製會讓同一個節點出現兩個後繼。上一次的執行紀錄
+/// 欄位一併清掉，結案後會重新寫入。
+pub async fn requeue_failed(pool: &SqlitePool, id: &str, sort_order: f64) -> Result<(), sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE tasks SET status = 'queued', outcome = NULL, error_message = NULL, tab_id = NULL,
+             transcript_path = NULL, session_id = NULL, session_path = NULL, dispatched_at = NULL,
+             finished_at = NULL, verdict = NULL, review_reasons = NULL, end_sha = NULL, sort_order = ?
+         WHERE id = ? AND status = 'done' AND COALESCE(outcome, '') <> 'success'",
+    )
+    .bind(sort_order)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Err(sqlx::Error::Protocol(format!("只有失敗或已取消的卡片可以重試：{id}")));
+    }
+    Ok(())
+}
+
 /// Startup recovery: any card still `running` was orphaned when the app last
 /// exited (its PTY died with the process). Returns how many were recovered.
 pub async fn recover_orphaned_running(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
@@ -1614,6 +1637,30 @@ mod session_column_tests {
         let row = get_task(&pool, "old1").await.unwrap().unwrap();
         assert_eq!(row.worktree_path, None);
         assert_eq!(row.worktree_branch, None);
+    }
+
+    #[tokio::test]
+    async fn requeue_failed_puts_the_same_card_back_and_clears_the_last_run() {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        let id = create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        move_task(&pool, &id, STATUS_QUEUED, 5.0).await.unwrap();
+        dispatch_for_test(&pool, &id, "tab").await;
+        finish_task(&pool, &id, "failed", Some("boom"), Some("/x")).await.unwrap();
+
+        requeue_failed(&pool, &id, -1.0).await.unwrap();
+
+        let row = get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.status, STATUS_QUEUED);
+        assert_eq!((row.outcome, row.error_message, row.tab_id), (None, None, None));
+        assert_eq!(row.sort_order, -1.0);
+        assert!(requeue_failed(&pool, &id, 0.0).await.is_err(), "不是 done 的卡片不能重試");
+
+        let ok = create_task(&pool, "ok", "", "/r", true, false).await.unwrap();
+        move_task(&pool, &ok, STATUS_QUEUED, 1.0).await.unwrap();
+        dispatch_for_test(&pool, &ok, "tab2").await;
+        finish_task(&pool, &ok, "success", None, None).await.unwrap();
+        assert!(requeue_failed(&pool, &ok, 0.0).await.is_err(), "成功的卡片不能重試");
     }
 
     /// Agent 協作之前的資料庫：沒有 `agents` 表、也沒有 `agent_id`/

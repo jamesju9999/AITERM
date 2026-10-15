@@ -14,7 +14,7 @@ use crate::tasks::store;
 use crate::vcs::git::GitClient;
 use crate::vcs::VcsManager;
 
-use super::tasks::{clone_with_attachments, emit_updated, project, BlockedReason, MergeOutcome};
+use super::tasks::{emit_updated, project, BlockedReason, MergeOutcome};
 
 fn agent_or_err(row: Option<AgentRow>) -> Result<AgentRow, String> {
     row.ok_or_else(|| "找不到這個 Agent".to_string())
@@ -134,8 +134,8 @@ pub async fn tasks_assign_agent(
 
 /// 處理暫停中的 Agent：`retry` 或 `skip`。
 ///
-/// - `retry`：複製失敗的卡片（含附件）、指派給同一個 Agent、插到它佇列
-///   最前面。worktree 原樣保留，新的那次在半成品上繼續。
+/// - `retry`：把失敗的那張卡原地排回這個 Agent 佇列的最前面。worktree 原樣
+///   保留，新的那次在半成品上繼續。
 /// - `skip`：worktree 有未提交改動就 `git stash`（訊息標記卡片 id，不會
 ///   遺失），從乾淨狀態接著做下一張。
 #[tauri::command]
@@ -152,14 +152,12 @@ pub async fn agents_resolve(
     let failed_id = agent.paused_task_id.clone().ok_or_else(|| "這個 Agent 沒有暫停".to_string())?;
     match action.as_str() {
         "retry" => {
-            let new_id = clone_with_attachments(&p, &failed_id).await?;
-            agents::assign_task(&p.pool, &new_id, Some(&agent.id)).await.map_err(|e| e.to_string())?;
-            if let Some(first) = agents::first_queued_order(&p.pool, &agent.id).await.map_err(|e| e.to_string())? {
-                // assign_task 把它排在最後；改成插到這個 Agent 的佇列最前面。
-                store::move_task(&p.pool, &new_id, store::STATUS_QUEUED, first - 1.0)
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
+            // 原地排回這個 Agent 佇列的最前面（不複製新卡，見 store::requeue_failed）。
+            let order = match agents::first_queued_order(&p.pool, &agent.id).await.map_err(|e| e.to_string())? {
+                Some(first) => first - 1.0,
+                None => 0.0,
+            };
+            store::requeue_failed(&p.pool, &failed_id, order).await.map_err(|e| e.to_string())?;
         }
         "skip" => {
             if let Some(wt) = &agent.worktree_path {

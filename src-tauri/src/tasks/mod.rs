@@ -13,6 +13,7 @@ pub mod dispatch;
 pub mod monitor;
 pub mod scheduler;
 pub mod agents;
+pub mod workflow;
 
 use std::path::{Path, PathBuf};
 
