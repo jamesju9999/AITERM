@@ -322,6 +322,25 @@ impl GitClient {
         })
     }
 
+    /// `git rev-parse HEAD`。Agent 卡片用它記錄這個模組的 commit 範圍。
+    pub async fn head_sha(&self) -> Result<String, String> {
+        let out = self.git(&["rev-parse".to_string(), "HEAD".to_string()]).await?;
+        Ok(out.trim().to_string())
+    }
+
+    /// `git stash push -u -m <message>`——連未追蹤檔一起收起來。Agent 選
+    /// 「跳過」失敗的卡片時用：半成品不遺失，下一張卡從乾淨狀態開始。
+    pub async fn stash_push(&self, message: &str) -> Result<VcsResult, String> {
+        self.git(&[
+            "stash".to_string(), "push".to_string(), "-u".to_string(),
+            "-m".to_string(), message.to_string(),
+        ]).await?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "stash_push".to_string(),
+            detail: format!("Stashed changes: {message}"),
+        })
+    }
+
     /// `git merge <branch>`——在 `self.repo_root` 執行（呼叫端應該傳原本
     /// 的 `project_dir`，不是 worktree 路徑）。衝突或該路徑本身有未提交
     /// 變更擋著都會讓這裡回傳 Err，錯誤訊息直接是 git 自己的輸出。
@@ -1174,6 +1193,42 @@ mod block_info_tests {
         StdCommand::new("git").args(["init", "-q"]).current_dir(dir).status().unwrap();
         StdCommand::new("git").args(["config", "user.email", "test@test.com"]).current_dir(dir).status().unwrap();
         StdCommand::new("git").args(["config", "user.name", "Test"]).current_dir(dir).status().unwrap();
+    }
+
+    fn commit_file(dir: &std::path::Path, name: &str, body: &str) {
+        fs::write(dir.join(name), body).unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", name]).current_dir(dir).status().unwrap();
+    }
+
+    #[tokio::test]
+    async fn head_sha_matches_rev_parse_and_moves_with_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        commit_file(dir.path(), "a.txt", "1");
+        let client = GitClient::new(dir.path().to_string_lossy().into_owned(), None);
+        let first = client.head_sha().await.unwrap();
+        let expected = StdCommand::new("git").args(["rev-parse", "HEAD"]).current_dir(dir.path()).output().unwrap();
+        assert_eq!(first, String::from_utf8_lossy(&expected.stdout).trim());
+        commit_file(dir.path(), "b.txt", "2");
+        assert_ne!(client.head_sha().await.unwrap(), first);
+    }
+
+    #[tokio::test]
+    async fn stash_push_takes_tracked_and_untracked_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        commit_file(dir.path(), "a.txt", "1");
+        fs::write(dir.path().join("a.txt"), "changed").unwrap();
+        fs::write(dir.path().join("new.txt"), "untracked").unwrap();
+        let client = GitClient::new(dir.path().to_string_lossy().into_owned(), None);
+        assert!(client.has_uncommitted_changes().await.unwrap());
+
+        client.stash_push("aiterm skipped t1").await.unwrap();
+
+        assert!(!client.has_uncommitted_changes().await.unwrap());
+        let list = StdCommand::new("git").args(["stash", "list"]).current_dir(dir.path()).output().unwrap();
+        assert!(String::from_utf8_lossy(&list.stdout).contains("aiterm skipped t1"));
     }
 
     #[tokio::test]
