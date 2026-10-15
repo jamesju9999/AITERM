@@ -537,11 +537,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true
+    # 用 npm trusted publishing（OIDC）發佈，不用 NPM_TOKEN：npm 2027-01 起停用
+    # 「略過雙重驗證」token 的直接發佈。六個套件（aiterm-host 與五個
+    # @jamesju/aiterm-host-*）都要在 npmjs.com 各自登記這個 repo 與
+    # release-host.yml 為 trusted publisher，任何一欄對不上都會回 E404。
+    # job 層的 permissions 會整組取代 workflow 層的，所以 contents 要照寫。
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # trusted publishing 要 npm 11.5.1 以上；Node 24 內建的 npm 就符合。
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Download and unpack every CLI artifact
@@ -564,16 +573,8 @@ jobs:
         run: node npm/build-packages.mjs "$VERSION" artifacts npm-dist
 
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "沒有設定 NPM_TOKEN，跳過發佈。"
-            echo "（secret 若設在 environment 而不是 repo 層，這裡會展開成空字串——"
-            echo "  用 gh secret list 確認它在 repo 層。）"
-            exit 0
-          fi
           # 已經發過的版本就跳過，讓這一步可以安全重跑。
           #
           # 實際遇過的狀況：v1.25.0 發佈時五個子套件發到第五個才被 npm 的
