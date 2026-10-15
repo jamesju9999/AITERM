@@ -11,6 +11,14 @@
 時，workflow 會退回用 commit 標題產生草稿（那份草稿長得像開發者日誌，通常需要
 手動改寫）。
 
+## v0.2.3
+
+**修正：在 QNAP 等 NAS 上，桌面版的 AI agent 跑完指令後一直停在「執行中」**
+有些 NAS（例如 QNAP）把預設 shell 設成 `sh`。以前 `aiterm-host` 在這種 shell 裡沒辦法回報「指令跑完了」，桌面版的 AI agent 就一直等不到結果、不會往下一步走。現在只要主機上有 bash，就會改用 bash 開終端機，agent 能正常接續。主機上沒有 bash 時維持原本的行為。這項修正之前以 0.2.2-qnap1 測試版提供過。
+
+**npm 安裝**
+從這一版起，npm 上的 `aiterm-host` 由 GitHub Actions 直接發佈並附上來源證明（provenance），安裝方式不變。
+
 ## v0.2.2
 
 **修正：已經有人連著的時候，第二個連線會永遠卡在「等待對方同意」**
