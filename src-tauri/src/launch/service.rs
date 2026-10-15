@@ -42,7 +42,7 @@ mod macos {
     use objc2::runtime::NSObject;
     use objc2::{define_class, msg_send, ClassType, MainThreadMarker};
     use objc2_app_kit::{NSApplication, NSPasteboard, NSPasteboardTypeFileURL, NSUpdateDynamicServices};
-    use objc2_foundation::NSString;
+    use objc2_foundation::{NSString, NSURL};
     use tauri::AppHandle;
 
     use super::service_requests;
@@ -65,7 +65,7 @@ mod macos {
                     for item in items.iter() {
                         // SAFETY: AppKit 匯出的常數字串，整個行程期間都有效。
                         let Some(raw) = item.stringForType(unsafe { NSPasteboardTypeFileURL }) else { continue };
-                        if let Some(path) = url::Url::parse(&raw.to_string()).ok().and_then(|u| u.to_file_path().ok()) {
+                        if let Some(path) = resolve_file_url(&raw.to_string()) {
                             paths.push(path);
                         }
                     }
@@ -79,6 +79,44 @@ mod macos {
             }
         }
     );
+
+    /// 剪貼簿上的 `public.file-url` 字串 → 路徑。Finder 給的是檔案參照網址
+    /// （`file:///.file/id=…`），不能直接當路徑用，要交給 NSURL 解析成真正的檔案路徑；
+    /// 一般的 `file://` 網址走同一條路也沒問題。
+    pub(super) fn resolve_file_url(raw: &str) -> Option<std::path::PathBuf> {
+        let url = NSURL::URLWithString(&NSString::from_str(raw))?;
+        let path = url.filePathURL()?.path()?;
+        Some(std::path::PathBuf::from(path.to_string()))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::resolve_file_url;
+        use objc2_foundation::{NSString, NSURL};
+
+        /// Finder 放到剪貼簿的是「檔案參照網址」（file:///.file/id=…），不是一般路徑。
+        /// 2026-10-15 v1.41.1 實測：服務收到 1 個項目、開出 0 個分頁。
+        #[test]
+        fn a_finder_file_reference_url_resolves_to_the_real_folder() {
+            let dir = tempfile::tempdir().unwrap();
+            let real = dir.path().canonicalize().unwrap();
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&real.to_string_lossy()));
+            let reference = url.fileReferenceURL().expect("拿不到檔案參照網址");
+            let raw = reference.absoluteString().unwrap().to_string();
+            assert!(raw.starts_with("file:///.file/id="), "前提不成立，參照網址長這樣：{raw}");
+            let got = resolve_file_url(&raw).expect("解析不出路徑");
+            assert_eq!(got.canonicalize().unwrap(), real);
+        }
+
+        #[test]
+        fn a_plain_file_url_with_spaces_still_works() {
+            let dir = tempfile::tempdir().unwrap();
+            let sub = dir.path().join("BenQ Installer");
+            std::fs::create_dir(&sub).unwrap();
+            let raw = NSURL::fileURLWithPath(&NSString::from_str(&sub.to_string_lossy())).absoluteString().unwrap().to_string();
+            assert_eq!(resolve_file_url(&raw).unwrap().canonicalize().unwrap(), sub.canonicalize().unwrap());
+        }
+    }
 
     /// 在主執行緒（Tauri `setup`）呼叫：把 provider 掛到 NSApp 並請系統更新服務清單。
     pub fn register(app: &AppHandle) {

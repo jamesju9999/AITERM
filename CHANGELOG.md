@@ -8,6 +8,10 @@
 時，workflow 會退回用 commit 標題產生草稿（那份草稿長得像開發者日誌，通常需要
 手動改寫）。
 
+## v1.41.2
+
+- 修正：macOS Finder 右鍵「服務 → 在 AITerm 開啟」點了沒反應（AITerm 沒開著時只會打開 AITerm，不會切到那個資料夾）。現在會在選取的資料夾開新分頁。
+
 ## v1.41.1
 
 **macOS：Finder 右鍵「在 AITerm 開啟」**
