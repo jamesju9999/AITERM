@@ -48,6 +48,19 @@ describe("deriveAgentStatus", () => {
     expect(deriveAgentStatus(agent({ kind: "orchestrator" }), [card("running")])).toBe("merging");
   });
 
+  it("有模組狀態時以模組為準：還在等審查不算完成，卡住的模組亮紅燈", () => {
+    const done = [card("done", "success")];
+    expect(deriveAgentStatus(agent(), done, ["passed", "awaiting_review"])).toBe("idle");
+    expect(deriveAgentStatus(agent(), done, ["passed", "attention"])).toBe("attention");
+    expect(deriveAgentStatus(agent(), done, ["passed", "passed"])).toBe("done");
+  });
+
+  it("Orchestrator：有模組沒通過就不是完成，但也不亮紅燈", () => {
+    const o = agent({ kind: "orchestrator" });
+    expect(deriveAgentStatus(o, [card("done", "success")], ["passed", "attention"])).toBe("idle");
+    expect(deriveAgentStatus(o, [card("done", "success")], ["passed"])).toBe("done");
+  });
+
   it("暫停優先於一切", () => {
     expect(deriveAgentStatus(agent({ paused_task_id: "x" }), [card("queued")])).toBe("attention");
   });

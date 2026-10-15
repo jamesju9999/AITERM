@@ -153,7 +153,12 @@ export function AgentNode({
   const idleLine = () => {
     if (agent.kind === "coder") {
       if (status === "done") return <span><span className="ac-check">✓</span> {t.ac_all_passed}</span>;
-      return queued.length ? t.ac_waiting_slot : t.ac_no_work;
+      if (queued.length) return t.ac_waiting_slot;
+      if (moduleStates.some(({ s }) => s === "awaiting_review" || s === "reviewing")) return t.ac_ms_awaiting_review;
+      if (moduleStates.some(({ s }) => s === "attention" || s === "review_failed")) {
+        return <span className="ac-bad-text">{t.ac_release_hint}</span>;
+      }
+      return t.ac_no_work;
     }
     if (agent.kind === "reviewer") return queued.length ? t.ac_review_queue(queued.length) : t.ac_waiting_handoff;
     if (lastMerge && lastMerge.outcome === "success" && allPassed === allStates.length && queued.length === 0) {

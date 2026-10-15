@@ -209,7 +209,9 @@ describe("AgentCanvasView", () => {
     vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "Code Reviewer" })]);
     vi.mocked(listTasks).mockResolvedValue([]);
     view();
-    const pool = await screen.findByTestId("pool-reviewer");
+    // 池在資料載入前就渲染了——要等 Agent 出現，停用狀態才會反映出來。
+    await screen.findByTestId("agent-r1");
+    const pool = screen.getByTestId("pool-reviewer");
     expect(pool.getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByTestId("pool-orchestrator").getAttribute("aria-disabled")).toBe("false");
     drag(pool, document.querySelector('[data-drop="canvas"]') as Element);

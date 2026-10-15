@@ -31,6 +31,7 @@ import "../TaskBoard/index.css";
 import { AgentConfigDialog, type AgentConfigValues } from "./AgentConfigDialog";
 import { AgentNode } from "./AgentNode";
 import { deriveAgentStatus } from "./deriveAgentStatus";
+import { deriveModuleState } from "./deriveModuleState";
 import { EdgeLayer } from "./EdgeLayer";
 import { computeEdges, diffPulses, edgeActivity, type Pulse } from "./edges";
 import "./index.css";
@@ -506,7 +507,17 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
                 agentName={agentName}
                 coderIds={coderIds}
                 hasReviewer={hasReviewer}
-                status={deriveAgentStatus(a, cardsOf(a.id))}
+                status={deriveAgentStatus(
+                  a,
+                  cardsOf(a.id),
+                  a.kind === "coder"
+                    ? cardsOf(a.id).filter((c) => c.card_kind === "work").map((m) => deriveModuleState(m, tasks, hasReviewer))
+                    : a.kind === "orchestrator"
+                      ? tasks
+                          .filter((c) => c.card_kind === "work" && c.agent_id && coderIds.has(c.agent_id))
+                          .map((m) => deriveModuleState(m, tasks, hasReviewer))
+                      : undefined,
+                )}
                 nowSecs={nowSecs}
                 dropState={dropStateFor(a)}
                 mergeMessage={merge[a.id]?.text ?? null}
