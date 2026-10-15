@@ -224,7 +224,7 @@ pub(crate) async fn finalize_agent_card(
     pool: &sqlx::SqlitePool,
     agent_id: &str,
     task_id: &str,
-    title: &str,
+    commit_message: &str,
     worktree: &std::path::Path,
     outcome: monitor::TaskOutcome,
 ) -> monitor::TaskOutcome {
@@ -240,7 +240,7 @@ pub(crate) async fn finalize_agent_card(
     let client = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
     let commit = async {
         if client.has_uncommitted_changes().await? {
-            client.commit_all(&format!("Module: {title}")).await?;
+            client.commit_all(commit_message).await?;
         }
         client.head_sha().await
     };
@@ -256,6 +256,89 @@ pub(crate) async fn finalize_agent_card(
             monitor::TaskOutcome::Failed(format!("自動 commit 失敗：{e}"))
         }
     }
+}
+
+/// Agent 卡片的自動 commit 訊息：模組、修正、整合各一種前綴，git log 才分得出來。
+pub(crate) fn commit_message_for(card_kind: &str, title: &str) -> String {
+    match card_kind {
+        crate::tasks::workflow::KIND_FIX => format!("Fix: {title}"),
+        crate::tasks::workflow::KIND_MERGE => format!("Integrate: {title}"),
+        _ => format!("Module: {title}"),
+    }
+}
+
+/// Reviewer 的受審目錄：`<專案>/agents/<reviewer>/reviews/<review_id>`，以
+/// detached worktree 指向被審版本（`task.end_sha`）。重試時舊的目錄先清掉。
+pub(crate) async fn prepare_review_worktree(
+    project_storage_path: &std::path::Path,
+    reviewer_id: &str,
+    task: &TaskRow,
+) -> Result<std::path::PathBuf, String> {
+    let sha = task.end_sha.as_deref().ok_or_else(|| "審查卡沒有受審版本（end_sha）".to_string())?;
+    let path = crate::tasks::agents::agent_dir(project_storage_path, reviewer_id).join("reviews").join(&task.id);
+    let path_str = path.to_string_lossy().into_owned();
+    let repo = crate::vcs::git::GitClient::new(task.project_dir.clone(), None);
+    if path.exists() {
+        let _ = repo.remove_worktree_force(&path_str).await;
+        let _ = std::fs::remove_dir_all(&path);
+        let _ = repo.prune_worktrees().await;
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    repo.add_detached_worktree(&path_str, sha).await.map_err(|e| format!("建立審查目錄失敗：{e}"))?;
+    // review.json 寫在卡片資料夾，先確保它存在。
+    let _ = std::fs::create_dir_all(crate::tasks::task_dir(project_storage_path, &task.id));
+    Ok(path)
+}
+
+/// Reviewer 卡片結案（`finish_task` 之前）：讀 review.json 寫入判定，失敗就
+/// 暫停 Reviewer，最後清掉受審目錄。回傳最終結果。
+pub(crate) async fn finalize_review_card(
+    pool: &sqlx::SqlitePool,
+    project_storage_path: &std::path::Path,
+    reviewer_id: &str,
+    task_id: &str,
+    repo_dir: &str,
+    worktree: &std::path::Path,
+    outcome: monitor::TaskOutcome,
+) -> monitor::TaskOutcome {
+    let outcome = if matches!(outcome, monitor::TaskOutcome::Success) {
+        let path = crate::tasks::workflow::review_json_path(project_storage_path, task_id);
+        match std::fs::read_to_string(&path)
+            .map_err(|e| format!("找不到 {}：{e}", path.display()))
+            .and_then(|t| crate::tasks::workflow::parse_review_json(&t))
+        {
+            Ok(v) => match crate::tasks::workflow::set_verdict(pool, task_id, &v).await {
+                Ok(()) => monitor::TaskOutcome::Success,
+                Err(e) => monitor::TaskOutcome::Failed(format!("寫入審查結果失敗：{e}")),
+            },
+            Err(e) => monitor::TaskOutcome::Failed(format!("審查沒有產出有效的 review.json：{e}")),
+        }
+    } else {
+        outcome
+    };
+    if !matches!(outcome, monitor::TaskOutcome::Success) {
+        if let Err(e) = crate::tasks::agents::set_paused(pool, reviewer_id, Some(task_id)).await {
+            eprintln!("pause reviewer {reviewer_id}: {e}");
+        }
+    }
+    let repo = crate::vcs::git::GitClient::new(repo_dir.to_string(), None);
+    if let Err(e) = repo.remove_worktree_force(&worktree.to_string_lossy()).await {
+        eprintln!("remove review worktree {}: {e}", worktree.display());
+        let _ = std::fs::remove_dir_all(worktree);
+        let _ = repo.prune_worktrees().await;
+    }
+    outcome
+}
+
+/// 審查不通過超過上限時送給前端的通知。
+#[derive(Clone, serde::Serialize)]
+struct ModuleAttentionEvent {
+    project_id: String,
+    project_name: String,
+    module_id: String,
+    module_title: String,
 }
 
 /// `task-finished` 的酬載：明確指出剛到達終局的是哪個專案的哪張卡片、
@@ -331,7 +414,12 @@ impl Dispatcher for RealDispatcher {
             ),
             None => None,
         };
-        let (effective_dir, worktree_info) = if let Some(agent) = &agent {
+        let (effective_dir, worktree_info) = if let Some(agent) = agent.as_ref().filter(|a| a.kind == "reviewer") {
+            // Reviewer：在受審版本的唯讀目錄審，不記 start_sha（那兩欄存的是受審範圍）。
+            let wt = prepare_review_worktree(&project.path, &agent.id, task).await?;
+            prompt = with_role_prefix(&agent.prompt_prefix, &prompt);
+            (wt, None)
+        } else if let Some(agent) = &agent {
             let wt = prepare_agent_worktree(&project.pool, &project.path, agent).await?;
             match crate::vcs::git::GitClient::new(wt.to_string_lossy().into_owned(), None).head_sha().await {
                 Ok(sha) => {
@@ -350,7 +438,9 @@ impl Dispatcher for RealDispatcher {
             );
             prepare_worktree(&project.path, &task.id, &task.project_dir, isolate).await
         };
-        let agent_ctx = agent.map(|a| (a.id, effective_dir.clone()));
+        let agent_ctx = agent.map(|a| (a.id, a.kind, effective_dir.clone()));
+        let card_kind = task.card_kind.clone();
+        let repo_dir = task.project_dir.clone();
         let effective_dir_str = effective_dir.to_string_lossy().into_owned();
         let (tab_id, disp) = dispatch::spawn_and_run(
             &self.app,
@@ -419,8 +509,12 @@ impl Dispatcher for RealDispatcher {
                 &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode,
             ).await;
             let outcome = match &agent_ctx {
-                Some((agent_id, worktree)) => {
-                    finalize_agent_card(&pool, agent_id, &task_id, &task_title, worktree, outcome).await
+                Some((agent_id, kind, worktree)) if kind == "reviewer" => {
+                    finalize_review_card(&pool, &project_path, agent_id, &task_id, &repo_dir, worktree, outcome).await
+                }
+                Some((agent_id, _, worktree)) => {
+                    let msg = commit_message_for(&card_kind, &task_title);
+                    finalize_agent_card(&pool, agent_id, &task_id, &msg, worktree, outcome).await
                 }
                 None => outcome,
             };
@@ -452,6 +546,27 @@ impl Dispatcher for RealDispatcher {
                     error_message: outcome.error_message().map(str::to_string),
                 },
             );
+            // Agent 協作第二期：建立後續的審查／修正／合併卡。
+            if agent_ctx.is_some() {
+                match crate::tasks::workflow::after_card_finished(&pool, &project_path, &task_id).await {
+                    Ok(events) => {
+                        for ev in events {
+                            let crate::tasks::workflow::WorkflowEvent::Attention { module_id, module_title } = ev;
+                            let _ = app.emit(
+                                "agent-module-attention",
+                                ModuleAttentionEvent {
+                                    project_id: project_id.clone(),
+                                    project_name: project_name.clone(),
+                                    module_id,
+                                    module_title,
+                                },
+                            );
+                        }
+                    }
+                    Err(e) => eprintln!("workflow after {task_id}: {e}"),
+                }
+                let _ = app.emit("tasks-updated", ());
+            }
             wake.notify_one();
         });
         Ok(())
@@ -1841,7 +1956,7 @@ mod agent_dispatch_tests {
         let start = head(repo.path());
         fs::write(repo.path().join("new.txt"), "module A").unwrap();
 
-        let out = finalize_agent_card(&pool, &agent.id, &task, "A 模組", repo.path(), monitor::TaskOutcome::Success).await;
+        let out = finalize_agent_card(&pool, &agent.id, &task, "Module: A 模組", repo.path(), monitor::TaskOutcome::Success).await;
 
         assert!(matches!(out, monitor::TaskOutcome::Success));
         let end = head(repo.path());
@@ -1905,5 +2020,82 @@ mod agent_dispatch_tests {
             other => panic!("expected Failed, got {other:?}"),
         }
         assert!(agents::get_agent(&pool, &agent.id).await.unwrap().unwrap().paused_task_id.is_some());
+    }
+
+    #[test]
+    fn commit_messages_tell_module_fix_and_integration_apart() {
+        assert_eq!(commit_message_for("work", "A"), "Module: A");
+        assert_eq!(commit_message_for("fix", "修正：A"), "Fix: 修正：A");
+        assert_eq!(commit_message_for("merge", "合併"), "Integrate: 合併");
+    }
+
+    async fn review_card(pool: &sqlx::SqlitePool, repo: &std::path::Path, end: &str) -> TaskRow {
+        let id = store::create_task(pool, "審查：A", "", &repo.to_string_lossy(), true, false).await.unwrap();
+        store::set_end_sha(pool, &id, end).await.unwrap();
+        store::get_task(pool, &id).await.unwrap().unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_review_worktree_is_checked_out_at_the_reviewed_version_and_removed_after() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let reviewed = head(repo.path());
+        fs::write(repo.path().join("later.txt"), "newer work").unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(repo.path()).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", "later"]).current_dir(repo.path()).status().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let reviewer = agent_for(&pool, repo.path()).await;
+        let card = review_card(&pool, repo.path(), &reviewed).await;
+
+        let wt = prepare_review_worktree(storage.path(), &reviewer.id, &card).await.unwrap();
+        assert_eq!(head(&wt), reviewed, "要停在受審版本，不是 Coder 之後的 commit");
+        assert!(!wt.join("later.txt").exists());
+
+        // 審查寫了判定 → 成功並寫入 verdict，目錄被清掉。
+        let json = crate::tasks::workflow::review_json_path(storage.path(), &card.id);
+        fs::write(&json, r#"{"verdict":"fail","reasons":["少了權限檢查"]}"#).unwrap();
+        let out = finalize_review_card(&pool, storage.path(), &reviewer.id, &card.id, &repo.path().to_string_lossy(), &wt, monitor::TaskOutcome::Success).await;
+        assert!(matches!(out, monitor::TaskOutcome::Success));
+        let row = store::get_task(&pool, &card.id).await.unwrap().unwrap();
+        assert_eq!(row.verdict.as_deref(), Some("fail"));
+        assert_eq!(row.review_reasons.as_deref(), Some(r#"["少了權限檢查"]"#));
+        assert!(!wt.exists(), "審查目錄要清掉");
+        assert_eq!(agents::get_agent(&pool, &reviewer.id).await.unwrap().unwrap().paused_task_id, None);
+    }
+
+    #[tokio::test]
+    async fn a_review_without_review_json_fails_and_pauses_the_reviewer() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let reviewer = agent_for(&pool, repo.path()).await;
+        let card = review_card(&pool, repo.path(), &head(repo.path())).await;
+        let wt = prepare_review_worktree(storage.path(), &reviewer.id, &card).await.unwrap();
+
+        let out = finalize_review_card(&pool, storage.path(), &reviewer.id, &card.id, &repo.path().to_string_lossy(), &wt, monitor::TaskOutcome::Success).await;
+
+        match out {
+            monitor::TaskOutcome::Failed(m) => assert!(m.contains("review.json"), "{m}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(agents::get_agent(&pool, &reviewer.id).await.unwrap().unwrap().paused_task_id.as_deref(), Some(card.id.as_str()));
+        assert_eq!(store::get_task(&pool, &card.id).await.unwrap().unwrap().verdict, None);
+    }
+
+    #[tokio::test]
+    async fn retrying_a_review_rebuilds_its_worktree() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let reviewer = agent_for(&pool, repo.path()).await;
+        let card = review_card(&pool, repo.path(), &head(repo.path())).await;
+        let first = prepare_review_worktree(storage.path(), &reviewer.id, &card).await.unwrap();
+        fs::write(first.join("scribble.txt"), "x").unwrap();
+        let again = prepare_review_worktree(storage.path(), &reviewer.id, &card).await.unwrap();
+        assert_eq!(again, first);
+        assert!(!again.join("scribble.txt").exists(), "重試要從乾淨的受審版本開始");
     }
 }

@@ -126,7 +126,7 @@ use commands::{
     task_board_config::{task_board_get_config, task_board_set_config},
     agents::{
         agents_list, agents_create, agents_update, agents_delete, agents_resolve,
-        agents_merge, agents_abort_merge, tasks_assign_agent,
+        agents_merge, agents_abort_merge, tasks_assign_agent, agents_override_module,
     },
     tasks::{
         tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
@@ -775,6 +775,7 @@ pub fn run() {
             agents_merge,
             agents_abort_merge,
             tasks_assign_agent,
+            agents_override_module,
             // 專案
             projects_list,
             projects_create,

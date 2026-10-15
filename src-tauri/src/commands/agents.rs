@@ -48,9 +48,6 @@ pub async fn agents_create(
     app: AppHandle,
 ) -> Result<String, String> {
     let p = project(&reg, &project_id)?;
-    if args.kind != "coder" {
-        return Err("目前只能建立 Coder Agent".to_string());
-    }
     // 不是 git repo 就擋下：Agent 的隔離、依序累積與合併都建立在分支上。
     // 一般卡片「不是 repo 就退回原資料夾」的做法在這裡會讓兩個 Coder 同時
     // 改同一個資料夾。
@@ -248,5 +245,23 @@ pub async fn agents_abort_merge(
     let p = project(&reg, &project_id)?;
     let agent = agent_or_err(agents::get_agent(&p.pool, &id).await.map_err(|e| e.to_string())?)?;
     GitClient::new(agent.project_dir, None).merge_abort().await?;
+    Ok(())
+}
+
+/// 手動放行一個卡住的模組（審查不通過超過上限，或審查卡本身失敗）。放行後
+/// 若所有模組都通過，會立即替 Orchestrator 建合併卡。
+#[tauri::command]
+pub async fn agents_override_module(
+    project_id: String,
+    task_id: String,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+    scheduler: State<'_, SchedulerHandle>,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::workflow::override_module(&p.pool, &task_id).await.map_err(|e| e.to_string())?;
+    crate::tasks::workflow::maybe_enqueue_merge(&p.pool).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    scheduler.poke();
     Ok(())
 }

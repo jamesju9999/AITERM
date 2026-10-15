@@ -55,7 +55,22 @@ pub fn branch_name(agent_id: &str) -> String {
     format!("aiterm-agent/{agent_id}")
 }
 
+/// 建立 Agent。Reviewer 與 Orchestrator 每個專案最多一個——連線是自動
+/// 建立的（所有 Coder → 唯一的 Reviewer → 唯一的 Orchestrator）。
 pub async fn create_agent(pool: &SqlitePool, a: &NewAgent<'_>) -> Result<String, sqlx::Error> {
+    match a.kind {
+        "coder" => {}
+        "reviewer" | "orchestrator" => {
+            let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents WHERE kind = ?")
+                .bind(a.kind)
+                .fetch_one(pool)
+                .await?;
+            if n > 0 {
+                return Err(sqlx::Error::Protocol(format!("每個專案最多一個 {}", a.kind)));
+            }
+        }
+        other => return Err(sqlx::Error::Protocol(format!("未知的 Agent 種類：{other}"))),
+    }
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO agents (id, kind, name, role, prompt_prefix, project_dir, canvas_x, canvas_y)
@@ -213,6 +228,9 @@ pub async fn assign_task(
                 return Err(sqlx::Error::Protocol("只有計畫中或待執行的卡片可以指派".into()));
             }
             let agent = get_agent(pool, aid).await?.ok_or(sqlx::Error::RowNotFound)?;
+            if agent.kind != "coder" {
+                return Err(sqlx::Error::Protocol("模組只能指派給 Coder Agent".into()));
+            }
             let order = max_order(pool, STATUS_QUEUED).await? + 1.0;
             sqlx::query(
                 "UPDATE tasks SET agent_id = ?, project_dir = ?, status = ?, sort_order = ? WHERE id = ?",
@@ -412,6 +430,31 @@ mod tests {
         assert_eq!(pause_agents_of_orphaned_cards(&pool).await.unwrap(), 1);
         assert_eq!(get_agent(&pool, &busy).await.unwrap().unwrap().paused_task_id.as_deref(), Some(t.as_str()));
         assert_eq!(get_agent(&pool, &idle).await.unwrap().unwrap().paused_task_id, None);
+    }
+
+    #[tokio::test]
+    async fn only_one_reviewer_and_one_orchestrator_per_project() {
+        let pool = mem_pool().await;
+        let mk = |kind: &'static str| NewAgent {
+            kind, name: kind, role: "r", prompt_prefix: "", project_dir: "/r", canvas_x: 0.0, canvas_y: 0.0,
+        };
+        create_agent(&pool, &mk("reviewer")).await.unwrap();
+        assert!(create_agent(&pool, &mk("reviewer")).await.is_err());
+        create_agent(&pool, &mk("orchestrator")).await.unwrap();
+        assert!(create_agent(&pool, &mk("orchestrator")).await.is_err());
+        create_agent(&pool, &mk("coder")).await.unwrap();
+        create_agent(&pool, &mk("coder")).await.unwrap();
+        assert!(create_agent(&pool, &mk("pilot")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn modules_cannot_be_assigned_to_a_reviewer() {
+        let pool = mem_pool().await;
+        let rid = create_agent(&pool, &NewAgent {
+            kind: "reviewer", name: "R", role: "r", prompt_prefix: "", project_dir: "/r", canvas_x: 0.0, canvas_y: 0.0,
+        }).await.unwrap();
+        let tid = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        assert!(assign_task(&pool, &tid, Some(&rid)).await.is_err());
     }
 
     #[tokio::test]

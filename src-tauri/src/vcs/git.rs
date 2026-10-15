@@ -292,6 +292,31 @@ impl GitClient {
         })
     }
 
+    /// `git worktree add --detach <path> <sha>`——不建分支、指向某個版本。
+    /// Reviewer 用它在受審版本上看程式碼，不會碰到 Coder 正在工作的目錄。
+    pub async fn add_detached_worktree(&self, path: &str, sha: &str) -> Result<VcsResult, String> {
+        self.git(&[
+            "worktree".to_string(), "add".to_string(), "--detach".to_string(),
+            path.to_string(), sha.to_string(),
+        ]).await?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "add_detached_worktree".to_string(),
+            detail: format!("Added detached worktree at '{path}' ({sha})"),
+        })
+    }
+
+    /// `git worktree remove --force <path>`——審查用的暫時目錄，裡面就算有
+    /// Reviewer 違規留下的改動也不要。
+    pub async fn remove_worktree_force(&self, path: &str) -> Result<VcsResult, String> {
+        self.git(&[
+            "worktree".to_string(), "remove".to_string(), "--force".to_string(), path.to_string(),
+        ]).await?;
+        Ok(VcsResult::WriteSuccess {
+            operation: "remove_worktree_force".to_string(),
+            detail: format!("Removed worktree at '{path}'"),
+        })
+    }
+
     /// `git worktree remove <path>`——只有在該 worktree 乾淨（沒有未提交
     /// 變更）時才會成功；呼叫端應該在確定所有變更都已經 commit 之後才
     /// 呼叫這個方法。
