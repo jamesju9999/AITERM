@@ -320,6 +320,7 @@ describe("AgentCanvasView", () => {
     view();
     expect((await screen.findByTestId("chip-S")).getAttribute("data-state")).toBe("dispatching");
     expect(within(screen.getByTestId("agent-o1")).getByText(/拆解規格：A 規格|Splitting spec: A 規格/)).toBeTruthy();
+    expect(within(screen.getByTestId("agent-o1")).getByText(/^拆解中$|^Splitting$/)).toBeTruthy();
     expect(within(screen.getByTestId("agent-a1")).getByLabelText(/產出規格|Produces specs/)).toBeTruthy();
   });
 });

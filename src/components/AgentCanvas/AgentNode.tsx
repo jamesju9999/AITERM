@@ -83,7 +83,8 @@ export function AgentNode({
     attention: t.ac_status_attention,
     coding: t.ac_status_coding,
     reviewing: t.ac_status_reviewing,
-    merging: t.ac_status_merging,
+    // 同樣是 Orchestrator 在跑，拆解規格與合併分支是兩回事。
+    merging: running?.card_kind === "plan" ? t.ac_status_splitting : t.ac_status_merging,
     waiting: t.ac_status_waiting,
     done: t.ac_status_done,
     idle: t.ac_status_idle,
