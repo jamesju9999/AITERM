@@ -156,8 +156,10 @@ fn reasons_list(review: &TaskRow) -> Vec<String> {
 }
 
 pub fn review_body(module: &TaskRow, reviewed: &TaskRow, json_path: &Path, previous: Option<&TaskRow>) -> String {
+    // 規格與程式碼要看的東西不同：同一位檢核人，依交件種類換檢核重點。
+    let what = if module.is_spec { "規格文件" } else { "程式碼變更" };
     let mut s = format!(
-        "請審查模組「{title}」的程式碼變更。\n\
+        "請審查模組「{title}」的{what}。\n\
          - 目前目錄已切到受審的版本 {end}（唯讀用途，不要修改任何檔案）\n\
          - 變更範圍：請先執行 git diff {start}..{end} 看完整 diff\n\
          \n模組需求：\n{req}\n",
@@ -172,13 +174,33 @@ pub fn review_body(module: &TaskRow, reviewed: &TaskRow, json_path: &Path, previ
             s.push_str(&format!("- {r}\n"));
         }
     }
+    let rule = if module.is_spec {
+        "檢核重點：\n\
+         - 需求是否都有涵蓋，範圍與不做的事是否寫清楚\n\
+         - 資料模型、API 與介面、畫面流程是否定義到可以直接實作\n\
+         - 驗收條件是否具體、可以測試\n\
+         - 有沒有前後矛盾，或模糊到會擋住實作的地方（待確認事項有列出就不算）\n\
+         判定規則：缺少關鍵內容、出現矛盾、或模糊到無法實作才判定 fail；用詞與排版建議寫進 reasons，但仍判定 pass。"
+    } else {
+        "判定規則：只有正確性錯誤或與需求不符才判定 fail；風格建議寫進 reasons，但仍判定 pass。"
+    };
     s.push_str(&format!(
-        "\n判定規則：只有正確性錯誤或與需求不符才判定 fail；風格建議寫進 reasons，但仍判定 pass。\n\
+        "\n{rule}\n\
          審查完成後，把結果寫成 JSON 檔到：{path}\n\
          格式：{{\"verdict\": \"pass\" 或 \"fail\", \"reasons\": [\"…\"]}}\n",
         path = json_path.display(),
     ));
     s
+}
+
+/// 審查卡標題：規格與程式碼分開標示，看板與桌布上一眼看得出在審什麼。
+fn review_title(module: &TaskRow, after_fix: bool) -> String {
+    let what = if module.is_spec { "審查規格" } else { "審查" };
+    if after_fix {
+        format!("{what}：{}（修正後）", module.title)
+    } else {
+        format!("{what}：{}", module.title)
+    }
 }
 
 pub fn fix_body(module: &TaskRow, review: &TaskRow, round: usize) -> String {
@@ -521,11 +543,7 @@ pub async fn after_card_finished(
                     None => None,
                 };
                 // 先插入拿到 id，才知道 review.json 放哪；body 隨後補上。
-                let title = if task.card_kind == KIND_FIX {
-                    format!("審查：{}（修正後）", module.title)
-                } else {
-                    format!("審查：{}", module.title)
-                };
+                let title = review_title(&module, task.card_kind == KIND_FIX);
                 let id = insert_card(
                     pool,
                     &NewCard {
@@ -1202,5 +1220,32 @@ mod tests {
         let many = format!(r#"{{"tasks":[{}]}}"#, vec![r#"{"title":"x"}"#; MAX_PLAN_TASKS + 1].join(","));
         assert!(parse_plan_json(&many).is_err());
         assert!(parse_plan_json("nope").is_err());
+    }
+
+    #[test]
+    fn spec_modules_get_a_spec_review_checklist_code_modules_do_not() {
+        let mut m = TaskRow { ..test_row("M") };
+        let reviewed = TaskRow { start_sha: Some("a".into()), end_sha: Some("b".into()), ..test_row("W") };
+        let code = review_body(&m, &reviewed, Path::new("/p/review.json"), None);
+        assert!(code.contains("程式碼變更") && !code.contains("驗收條件是否具體"));
+        assert_eq!(review_title(&m, false), "審查：M");
+        m.is_spec = true;
+        let spec = review_body(&m, &reviewed, Path::new("/p/review.json"), None);
+        assert!(spec.contains("規格文件") && spec.contains("驗收條件是否具體") && spec.contains("git diff a..b"));
+        assert!(spec.contains("請審查模組「M」"), "保留同一個開頭，代理（含驗收用的假 claude）才認得出是審查");
+        assert_eq!(review_title(&m, true), "審查規格：M（修正後）");
+    }
+
+    fn test_row(id: &str) -> TaskRow {
+        TaskRow {
+            id: id.into(), title: id.into(), body: "需求".into(), project_dir: "/r".into(), status: "done".into(),
+            parallel_ok: true, interactive: false, sort_order: 0.0, outcome: Some("success".into()), tab_id: None,
+            transcript_path: None, error_message: None, created_at: String::new(), dispatched_at: None,
+            finished_at: None, ai_summary: None, archived_at: None, session_id: None, session_path: None,
+            use_bridge: false, bridge_tiers: None, label: None, worktree_path: None, worktree_branch: None,
+            isolate_worktree: None, agent_id: None, start_sha: None, end_sha: None, card_kind: "work".into(),
+            module_id: None, review_of: None, verdict: None, review_reasons: None, module_override: false,
+            is_spec: false, from_spec: None,
+        }
     }
 }

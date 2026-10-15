@@ -17,6 +17,7 @@ export interface RolePreset {
 export function builtinRoles(kind: AgentKind, t: Translations): RolePreset[] {
   if (kind === "reviewer") {
     return [
+      { name: t.ac_role_general_reviewer, emoji: "✅", prefix: t.ac_role_general_reviewer_desc },
       { name: t.ls_preset_reviewer, emoji: "🔍", prefix: t.ac_role_code_reviewer_desc },
       { name: t.ls_preset_security, emoji: "🛡️", prefix: t.ac_role_security_reviewer_desc },
     ];
