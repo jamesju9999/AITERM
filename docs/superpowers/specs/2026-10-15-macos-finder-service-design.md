@@ -50,3 +50,12 @@ v1.30.0 讓 AITerm 能被「打開方式」叫起來，但 Finder 對一般資�
 - Finder 預設把服務放在「服務」子選單；要放到最上層需使用者到「系統設定 → 鍵盤 → 鍵盤快速鍵 → 服務」調整。
 - `tauri dev` 不會登記服務（不是 .app）。
 - 剛安裝或更新後，系統可能要重新登入或執行 `/System/Library/CoreServices/pbs -update` 才會出現（啟動時已呼叫 `NSUpdateDynamicServices()` 降低這個情況）。
+
+## 實作後驗證（2026-10-15，隔離的打包版 `com.aiterm.servicetest`）
+
+- 打包產物：`Contents/Info.plist` 有 `NSServices`；`Contents/Resources/zh-Hant.lproj/ServicesMenu.strings` 有打包進去。
+- `lsregister -f` ＋ `pbs -update` 後，`pbs -dump` 列出這個服務（NSMessage `openInAITerm`）。
+- App 執行中：用 `NSPerformService` 送「一個資料夾＋另一個資料夾裡的 `run.sh`」→ 回傳 true，多出兩個分頁，cwd 分別是該資料夾與 `run.sh` 所在資料夾；`run.sh` 沒有被執行。
+- 冷啟動（App 沒開）：macOS 啟動 App 並把請求送到 provider（log：`Finder service: 2 item(s) -> 2 tab(s)`），證明在 `setup` 註冊夠早。分頁的 cwd 沒有觀察到：測試版 Info.plist 加的 `LSEnvironment` HOME **沒有生效**，被服務叫起來的 App 用的是真正的 HOME（讀到使用者設定、啟動了 MCP 伺服器、Telegram 撞到 409），所以立刻關掉。冷啟動排空佇列沿用 v1.30.0 已驗證的路徑。
+- 測試時 NSPortName 改成測試版名稱，避免請求送到使用者那份 AITerm；正式版維持 `AITerm`。
+- 還沒在 Finder 畫面上點過（要等正式打包版）。
