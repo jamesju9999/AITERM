@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import type { AgentKind, AgentRow } from "../../ipc/agents";
+import { checkRepo, initRepo, type AgentKind, type AgentRow, type RepoCheck } from "../../ipc/agents";
 import { usedDirs } from "../../ipc/projects";
 import { deleteCustomRole, loadCustomRoles, saveCustomRole, type CustomRole } from "./customRoles";
 import { builtinRoles, type RolePreset } from "./roles";
@@ -51,6 +51,10 @@ export function AgentConfigDialog({
   const [producesSpec, setProducesSpec] = useState(agent?.produces_spec ?? false);
   const [dirs, setDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  /** 程式庫檢查結果。null = 還沒查完（或欄位是空的）。 */
+  const [repo, setRepo] = useState<RepoCheck | null>(null);
+  const [repoBusy, setRepoBusy] = useState(false);
+  const [repoRev, setRepoRev] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -67,6 +71,40 @@ export function AgentConfigDialog({
       alive = false;
     };
   }, [isNew, projectId]);
+
+  // 選／輸入資料夾就檢查（打字時等 300ms 再查），不讓問題拖到按「放上桌布」才出現。
+  useEffect(() => {
+    if (!isNew) return;
+    const path = dir.trim();
+    if (!path) return;
+    let alive = true;
+    const h = window.setTimeout(() => {
+      checkRepo(path)
+        .then((r) => alive && setRepo(r))
+        .catch(() => alive && setRepo(null));
+    }, 300);
+    return () => {
+      alive = false;
+      window.clearTimeout(h);
+    };
+  }, [isNew, dir, repoRev]);
+
+  const fixRepo = async () => {
+    const path = dir.trim();
+    const msg = repo?.status === "no_commits" ? t.ac_repo_first_commit_confirm(path) : t.ac_repo_init_confirm(path);
+    if (!(await confirm(msg, { kind: "info" }))) return;
+    setRepoBusy(true);
+    setError(null);
+    try {
+      await initRepo(path);
+    } catch (e) {
+      setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+    }
+    setRepoBusy(false);
+    setRepoRev((n) => n + 1);
+  };
+
+  const repoReady = !isNew || repo?.status === "ok";
 
   const pickRole = (r: Pick<RolePreset, "name" | "prefix">) => {
     setRole(r.name);
@@ -234,7 +272,10 @@ export function AgentConfigDialog({
                 <input
                   className="task-field-input task-field-input--mono"
                   value={dir}
-                  onChange={(e) => setDir(e.target.value)}
+                  onChange={(e) => {
+                    setDir(e.target.value);
+                    setRepo(null);
+                  }}
                   aria-label={t.ac_repo}
                 />
                 <button type="button" className="aiterm-btn aiterm-btn--secondary" onClick={() => void browse()}>
@@ -244,10 +285,37 @@ export function AgentConfigDialog({
               {dirs.length > 1 && (
                 <div className="ac-roles">
                   {dirs.map((d) => (
-                    <button key={d} type="button" className={`ac-role ac-role--mono${d === dir ? " ac-role--on" : ""}`} onClick={() => setDir(d)}>
+                    <button
+                      key={d}
+                      type="button"
+                      className={`ac-role ac-role--mono${d === dir ? " ac-role--on" : ""}`}
+                      onClick={() => {
+                        setDir(d);
+                        setRepo(null);
+                      }}
+                    >
                       {d}
                     </button>
                   ))}
+                </div>
+              )}
+              {dir.trim() && repo && (
+                <div className={`ac-repo-status ac-repo-status--${repo.status}`} data-testid="repo-status" role="status">
+                  {repo.status === "ok" && <span>✓ {t.ac_repo_ok(repo.branch)}</span>}
+                  {repo.status === "missing" && <span>✗ {t.ac_repo_missing}</span>}
+                  {(repo.status === "not_repo" || repo.status === "no_commits") && (
+                    <>
+                      <span>⚠ {repo.status === "not_repo" ? t.ac_repo_not_repo : t.ac_repo_no_commits}</span>
+                      <button
+                        type="button"
+                        className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                        disabled={repoBusy}
+                        onClick={() => void fixRepo()}
+                      >
+                        {repoBusy ? t.ac_repo_initing : repo.status === "not_repo" ? t.ac_repo_init : t.ac_repo_first_commit}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </>
@@ -267,7 +335,7 @@ export function AgentConfigDialog({
           <button className="aiterm-btn aiterm-btn--secondary" disabled={busy} onClick={onCancel}>
             {t.ac_cancel}
           </button>
-          <button className="aiterm-btn aiterm-btn--primary" disabled={busy || (isNew && !dir.trim())} onClick={() => void submit()}>
+          <button className="aiterm-btn aiterm-btn--primary" disabled={busy || (isNew && !dir.trim()) || !repoReady} onClick={() => void submit()}>
             {isNew ? t.ac_place : t.ac_save}
           </button>
         </div>

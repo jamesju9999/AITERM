@@ -29,6 +29,8 @@ vi.mock("../../ipc/agents", () => ({
   abortAgentMerge: vi.fn().mockResolvedValue(undefined),
   assignAgent: vi.fn().mockResolvedValue(undefined),
   overrideModule: vi.fn().mockResolvedValue(undefined),
+  checkRepo: vi.fn().mockResolvedValue({ status: "ok", branch: "main" }),
+  initRepo: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../ipc/projects", () => ({
   listProjects: vi.fn().mockResolvedValue([
@@ -43,7 +45,7 @@ vi.mock("../../ipc/bridge", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
 
-import { assignAgent, createAgent, listAgents, mergeAgent, overrideModule, resolveAgent, type AgentRow } from "../../ipc/agents";
+import { assignAgent, checkRepo, createAgent, initRepo, listAgents, mergeAgent, overrideModule, resolveAgent, type AgentRow } from "../../ipc/agents";
 import { listTasks, type TaskWithAttachments } from "../../ipc/tasks";
 import { AgentCanvasView } from "./index";
 
@@ -79,6 +81,12 @@ function drag(from: Element, dropOn: Element) {
   } finally {
     document.elementFromPoint = original;
   }
+}
+
+/** 等程式庫檢查通過（按鈕才會啟用）再按「放上桌布」。 */
+async function placeOnCanvas(dlg: HTMLElement) {
+  await within(dlg).findByText(/^✓/);
+  fireEvent.click(within(dlg).getByText(/放上桌布|Place on canvas/));
 }
 
 beforeEach(() => {
@@ -139,7 +147,7 @@ describe("AgentCanvasView", () => {
     fireEvent.click(within(dlg).getByRole("button", { name: /從預設角色帶入|Start from a preset/ }));
     fireEvent.click(within(dlg).getByRole("menuitem", { name: /規格撰寫師|Spec Writer/ }));
     expect((within(dlg).getByLabelText(/^角色名稱$|^Role name$/) as HTMLInputElement).value).toMatch(/規格撰寫師|Spec Writer/);
-    fireEvent.click(within(dlg).getByText(/放上桌布|Place on canvas/));
+    await placeOnCanvas(dlg);
     await waitFor(() =>
       expect(createAgent).toHaveBeenCalledWith(
         "p1",
@@ -182,7 +190,7 @@ describe("AgentCanvasView", () => {
     drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
     const dlg = await screen.findByRole("dialog");
     await waitFor(() => expect((within(dlg).getByLabelText(/程式庫|Repository/) as HTMLInputElement).value).not.toBe(""));
-    fireEvent.click(within(dlg).getByText(/放上桌布|Place on canvas/));
+    await placeOnCanvas(dlg);
     expect(await within(dlg).findByRole("alert")).toHaveTextContent("必須是 git repo");
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
@@ -304,7 +312,7 @@ describe("AgentCanvasView", () => {
     fireEvent.click(within(dlg).getByRole("menuitem", { name: /規格撰寫師|Spec Writer/ }));
     expect(box.checked).toBe(true);
     await waitFor(() => expect((within(dlg).getByLabelText(/程式庫|Repository/) as HTMLInputElement).value).not.toBe(""));
-    fireEvent.click(within(dlg).getByText(/放上桌布|Place on canvas/));
+    await placeOnCanvas(dlg);
     await waitFor(() => expect(createAgent).toHaveBeenCalledWith("p1", expect.objectContaining({ produces_spec: true })));
   });
 
@@ -322,5 +330,23 @@ describe("AgentCanvasView", () => {
     expect(within(screen.getByTestId("agent-o1")).getByText(/拆解規格：A 規格|Splitting spec: A 規格/)).toBeTruthy();
     expect(within(screen.getByTestId("agent-o1")).getByText(/^拆解中$|^Splitting$/)).toBeTruthy();
     expect(within(screen.getByTestId("agent-a1")).getByLabelText(/產出規格|Produces specs/)).toBeTruthy();
+  });
+
+  it("選到不是 git repo 的資料夾：當場提示，一鍵初始化後才能放上桌布", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "not_repo" }).mockResolvedValue({ status: "ok", branch: "main" });
+    view();
+    drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
+    const dlg = await screen.findByRole("dialog");
+    const status = await within(dlg).findByTestId("repo-status");
+    expect(status).toHaveTextContent(/不是 git repo|isn't a git repo/);
+    const place = within(dlg).getByText(/放上桌布|Place on canvas/) as HTMLButtonElement;
+    expect(place.disabled).toBe(true);
+
+    fireEvent.click(within(status).getByRole("button", { name: /初始化為 git repo|Initialize as a git repo/ }));
+    await waitFor(() => expect(initRepo).toHaveBeenCalledWith("/repo/htbktw"));
+    await waitFor(() => expect(within(dlg).getByTestId("repo-status")).toHaveTextContent(/main/));
+    expect(place.disabled).toBe(false);
   });
 });

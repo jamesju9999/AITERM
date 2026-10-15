@@ -414,3 +414,10 @@
 
 /* 協調者 → 工程師（規格先行的派工）：虛線，跟實線的交件流程分開 */
 .ac-edge-base--dispatch { stroke: #6d28d9; stroke-dasharray: 5 6; opacity: 0.7; }
+
+/* 程式庫狀態：選完資料夾立刻告訴使用者能不能用，不能用就給一鍵修正 */
+.ac-repo-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; margin-top: 2px; }
+.ac-repo-status--ok { color: #86efac; }
+.ac-repo-status--missing { color: #fca5a5; }
+.ac-repo-status--not_repo,
+.ac-repo-status--no_commits { color: #fde68a; }

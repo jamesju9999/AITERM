@@ -82,3 +82,15 @@ export const assignAgent = (projectId: string, taskId: string, agentId: string |
 /** 手動放行卡住的模組（審查不通過超過上限，或審查卡本身失敗）。 */
 export const overrideModule = (projectId: string, taskId: string): Promise<void> =>
   invoke("agents_override_module", { projectId, taskId });
+
+/** 程式庫可不可以給 Agent 用（見 tasks/repo_check.rs）。 */
+export type RepoCheck =
+  | { status: "ok"; branch: string | null }
+  | { status: "missing" }
+  | { status: "not_repo" }
+  | { status: "no_commits" };
+
+export const checkRepo = (path: string): Promise<RepoCheck> => invoke("agents_check_repo", { path });
+
+/** git init（必要時）＋把現有檔案建成第一個 commit。 */
+export const initRepo = (path: string): Promise<void> => invoke("agents_init_repo", { path });
