@@ -119,6 +119,56 @@ describe("PromptSuggestions", () => {
     expect(screen.getByText("把它重構得更簡潔")).toBeTruthy();
   });
 
+  describe("send button (no double-click needed)", () => {
+    it("each card has its own labelled send button that fills then submits once", async () => {
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      const send = screen.getByRole("button", { name: "送出：重構" });
+      expect(screen.getAllByRole("button", { name: /^送出：/ })).toHaveLength(2);
+      fireEvent.click(send);
+      await flush();
+      expect(fillTerminalInput).toHaveBeenCalledTimes(1);
+      expect(fillTerminalInput).toHaveBeenCalledWith("s1", "把它重構得更簡潔");
+      expect(submitTerminalInput).toHaveBeenCalledTimes(1);
+      expect(fillTerminalInput.mock.invocationCallOrder[0]).toBeLessThan(submitTerminalInput.mock.invocationCallOrder[0]);
+      expect(screen.getByText("已送出")).toBeTruthy();
+    });
+
+    it("does not press Enter when the fill failed (terminal gone)", async () => {
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      fillTerminalInput.mockResolvedValueOnce(false);
+      fireEvent.click(screen.getByRole("button", { name: "送出：補測試" }));
+      await flush();
+      expect(submitTerminalInput).not.toHaveBeenCalled();
+    });
+
+    it("a rapid second press on the send button does not paste twice", async () => {
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      const send = screen.getByRole("button", { name: "送出：補測試" });
+      fireEvent.click(send, { detail: 1 });
+      fireEvent.click(send, { detail: 2 });
+      await flush();
+      expect(fillTerminalInput).toHaveBeenCalledTimes(1);
+      expect(submitTerminalInput).toHaveBeenCalledTimes(1);
+    });
+
+    it("the footer mentions the send button", async () => {
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(screen.getByText(/按 ➤ 送出/)).toBeTruthy();
+    });
+  });
+
   describe("recommended", () => {
     const R = [
       { title: "補測試", prompt: "幫剛才的函式補單元測試" },

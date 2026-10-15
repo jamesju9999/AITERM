@@ -214,6 +214,39 @@
   scrollbar-width: thin;
   scrollbar-color: rgba(127, 127, 127, 0.45) transparent;
 }
+.aiterm-suggest__item {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+.aiterm-suggest__item > .aiterm-suggest__card {
+  flex: 1;
+  min-width: 0;
+}
+/* 送出鈕：夠大好點（行動不便的使用者不必連點兩下）。 */
+.aiterm-suggest__send {
+  flex-shrink: 0;
+  width: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.06);
+  color: var(--accent, #c084fc);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.aiterm-suggest__send:hover {
+  background: var(--accent-bg, rgba(192, 132, 252, 0.15));
+  border-color: var(--accent-border, rgba(192, 132, 252, 0.5));
+}
+.aiterm-suggest__send:focus-visible {
+  outline: 2px solid var(--accent, #c084fc);
+  outline-offset: 1px;
+}
 .aiterm-suggest__card {
   position: relative;
   width: 100%;

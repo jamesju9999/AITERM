@@ -230,6 +230,16 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     flashTimerRef.current = setTimeout(() => setFlash(null), FLASH_MS);
   };
 
+  // 送出鈕：不必連點兩下就能送出（行動不便、觸控板、鍵盤操作）。雙擊這顆鈕的第二下
+  // （detail>=2）直接忽略，否則會貼兩遍；鍵盤觸發的 detail 是 0，不受影響。
+  const onSendClick = async (e: React.MouseEvent, prompt: string) => {
+    if (e.detail >= 2) return;
+    const ok = await fillTerminalInput(sessionId, prompt);
+    if (!ok) return;
+    await submitTerminalInput(sessionId);
+    showFlash(prompt, "sent");
+  };
+
   // 單擊＝填入供編輯；雙擊＝送出。雙擊會先觸發一次單擊（detail=1），
   // 文字那時已經填好了，所以第二下（detail>=2）只補一個 Enter——
   // 再填一次就會貼兩遍。
@@ -347,7 +357,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
             <>
               <ul className="aiterm-suggest__list">
                 {items.map((s) => (
-                  <li key={s.prompt}>
+                  <li key={s.prompt} className="aiterm-suggest__item">
                     <button
                       type="button"
                       className={`aiterm-suggest__card${s.recommended ? " aiterm-suggest__card--recommended" : ""}`}
@@ -373,6 +383,15 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
                       </span>
                       {s.reason && <span className="aiterm-suggest__card-reason">{s.reason}</span>}
                       <span className="aiterm-suggest__card-prompt">{s.prompt}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="aiterm-suggest__send"
+                      aria-label={t.suggest_send_label(s.title)}
+                      title={t.suggest_send_label(s.title)}
+                      onClick={(e) => void onSendClick(e, s.prompt)}
+                    >
+                      <span aria-hidden="true">➤</span>
                     </button>
                   </li>
                 ))}
