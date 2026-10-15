@@ -107,7 +107,10 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             label           TEXT,
             worktree_path   TEXT,
             worktree_branch TEXT,
-            isolate_worktree INTEGER
+            isolate_worktree INTEGER,
+            agent_id        TEXT,
+            start_sha       TEXT,
+            end_sha         TEXT
         )",
     )
     .execute(pool)
@@ -160,6 +163,35 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN isolate_worktree INTEGER")
         .execute(pool)
         .await;
+    // Migration: existing databases created before Agent Canvas existed.
+    // 見 docs/superpowers/specs/2026-10-15-agent-canvas-design.md §1。
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN agent_id TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN start_sha TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN end_sha TEXT")
+        .execute(pool)
+        .await;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS agents (
+            id              TEXT PRIMARY KEY NOT NULL,
+            kind            TEXT NOT NULL DEFAULT 'coder',
+            name            TEXT NOT NULL,
+            role            TEXT NOT NULL,
+            prompt_prefix   TEXT NOT NULL DEFAULT '',
+            project_dir     TEXT NOT NULL,
+            canvas_x        REAL NOT NULL DEFAULT 0,
+            canvas_y        REAL NOT NULL DEFAULT 0,
+            worktree_path   TEXT,
+            branch          TEXT,
+            paused_task_id  TEXT,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")
         .execute(pool)
         .await?;

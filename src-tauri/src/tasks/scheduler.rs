@@ -586,6 +586,9 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             isolate_worktree: None,
+            agent_id: None,
+            start_sha: None,
+            end_sha: None,
         }
     }
 
@@ -677,6 +680,9 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             isolate_worktree: None,
+            agent_id: None,
+            start_sha: None,
+            end_sha: None,
         }
     }
 

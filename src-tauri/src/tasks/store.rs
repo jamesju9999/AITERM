@@ -66,6 +66,14 @@ pub struct TaskRow {
     pub isolate_worktree: Option<bool>,
     /// 跟 `worktree_path` 同進退——一個有值另一個必然也有值。
     pub worktree_branch: Option<String>,
+    /// 指派給哪個 Agent（`agents.id`）。`None` = 一般卡片，排程與派工完全照舊。
+    pub agent_id: Option<String>,
+    /// Agent 卡片派工當下 Agent worktree 的 HEAD。與 `end_sha` 構成這個模組
+    /// 在 Agent 分支上的 commit 範圍（第二期審查用 `start..end` 取 diff）。
+    /// 只記 `end_sha` 不夠：Claude 執行期間可能自己 commit。
+    pub start_sha: Option<String>,
+    /// 成功結束、自動 commit 之後的 HEAD。沒有任何改動時等於 `start_sha`。
+    pub end_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -493,6 +501,24 @@ pub async fn set_worktree(pool: &SqlitePool, id: &str, path: &str, branch: &str)
     sqlx::query("UPDATE tasks SET worktree_path = ?, worktree_branch = ? WHERE id = ?")
         .bind(path)
         .bind(branch)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_start_sha(pool: &SqlitePool, id: &str, sha: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET start_sha = ?, end_sha = NULL WHERE id = ?")
+        .bind(sha)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_end_sha(pool: &SqlitePool, id: &str, sha: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET end_sha = ? WHERE id = ?")
+        .bind(sha)
         .bind(id)
         .execute(pool)
         .await?;
@@ -1575,6 +1601,66 @@ mod session_column_tests {
         let row = get_task(&pool, "old1").await.unwrap().unwrap();
         assert_eq!(row.worktree_path, None);
         assert_eq!(row.worktree_branch, None);
+    }
+
+    /// Agent 協作之前的資料庫：沒有 `agents` 表、也沒有 `agent_id`/
+    /// `start_sha`/`end_sha`。`ALTER TABLE` 的失敗會被吞掉，欄位名打錯
+    /// 不會有任何訊號，所以要實際讀寫一次。
+    #[tokio::test]
+    async fn init_schema_migrates_a_database_that_predates_agents() {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE tasks (
+                id              TEXT PRIMARY KEY NOT NULL,
+                title           TEXT NOT NULL,
+                body            TEXT NOT NULL DEFAULT '',
+                project_dir     TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'planning',
+                parallel_ok     INTEGER NOT NULL DEFAULT 1,
+                interactive     INTEGER NOT NULL DEFAULT 0,
+                sort_order      REAL NOT NULL DEFAULT 0,
+                outcome         TEXT,
+                tab_id          TEXT,
+                transcript_path TEXT,
+                error_message   TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                dispatched_at   INTEGER,
+                finished_at     INTEGER,
+                ai_summary      TEXT,
+                archived_at     INTEGER,
+                session_id      TEXT,
+                session_path    TEXT,
+                use_bridge      INTEGER NOT NULL DEFAULT 0,
+                bridge_tiers    TEXT,
+                label           TEXT,
+                worktree_path   TEXT,
+                worktree_branch TEXT,
+                isolate_worktree INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO tasks (id, title, body, project_dir) VALUES ('old1', 't', 'b', '/work/repo')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        crate::tasks::init_schema(&pool).await.unwrap();
+
+        let row = get_task(&pool, "old1").await.unwrap().unwrap();
+        assert_eq!(row.agent_id, None);
+        assert_eq!(row.start_sha, None);
+        assert_eq!(row.end_sha, None);
+
+        set_start_sha(&pool, "old1", "aaa").await.unwrap();
+        set_end_sha(&pool, "old1", "bbb").await.unwrap();
+        let row = get_task(&pool, "old1").await.unwrap().unwrap();
+        assert_eq!(row.start_sha.as_deref(), Some("aaa"));
+        assert_eq!(row.end_sha.as_deref(), Some("bbb"));
+
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents").fetch_one(&pool).await.unwrap();
+        assert_eq!(n, 0);
     }
 
     /// 舊資料庫（沒有 `label` 欄位）跑過 `init_schema` 之後必須能補上這個
