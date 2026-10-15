@@ -165,7 +165,7 @@ export function useMcpChat(
     // Build the message history for the AI (user/assistant only)
     const baseMessages = existingMessages ?? messages;
     const historySnapshot = baseMessages
-      .filter(m => m.role === "user" || m.role === "assistant")
+      .filter(m => (m.role === "user" || m.role === "assistant") && !m.notice)
       .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
 
     const history: ChatMessage[] = [
@@ -203,7 +203,7 @@ export function useMcpChat(
 
         if (reply.images_dropped && !imagesDroppedNoticed) {
           imagesDroppedNoticed = true;
-          setMessages(prev => [...prev, { role: "assistant" as const, content: t.ai_images_dropped }]);
+          setMessages(prev => [...prev, { role: "assistant" as const, content: t.ai_images_dropped, notice: true }]);
         }
 
         // Handle tool calls

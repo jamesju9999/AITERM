@@ -587,6 +587,20 @@ describe("useMcpChat", () => {
       expect(result.current.messages.at(-1)?.content).toBe("看完了");
     });
 
+    it("提示只給使用者看：下一次送出時不會隨歷史送回模型", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(aiChat)
+        .mockResolvedValueOnce({ content: "看不到圖", tool_calls: [], tool_calling_unsupported: false, images_dropped: true })
+        .mockResolvedValueOnce({ content: "好", tool_calls: [], tool_calling_unsupported: false });
+      const { result } = renderHook(() => useMcpChat("s-img-history"), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("看這張圖", "none"); });
+      expect(countNotices(result.current.messages)).toBe(1);
+
+      await act(async () => { await result.current.sendMessage("那算了", "none"); });
+      const sent = vi.mocked(aiChat).mock.calls[1][0] as { role: string; content: unknown }[];
+      expect(sent.map((m) => m.content)).toEqual(["看這張圖", "看不到圖", "那算了"]);
+    });
+
     it("沒有 images_dropped：不提示", async () => {
       vi.mocked(aiChat).mockReset();
       vi.mocked(aiChat).mockResolvedValueOnce({ content: "好", tool_calls: [], tool_calling_unsupported: false });
