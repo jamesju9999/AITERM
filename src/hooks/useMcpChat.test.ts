@@ -562,6 +562,79 @@ describe("useMcpChat", () => {
     });
   });
 
+  // 「已停止」「已達上限」「模型沒有回應」是 App 給使用者的說明，不是 AI 說的話：
+  // 下一次送出時不可以隨歷史送回模型；拿掉之後相鄰的兩則 user 要併成一則（部分供應商會拒絕連續 user）。
+  describe("App 的說明不隨歷史送回模型", () => {
+    const say = (content: string) => ({ content, tool_calls: [], tool_calling_unsupported: false });
+    const sentContents = (call: number) =>
+      (vi.mocked(aiChat).mock.calls[call][0] as { role: string; content: unknown }[]).map((m) => [m.role, m.content]);
+
+    it("已停止", async () => {
+      vi.mocked(aiChat).mockReset();
+      let reject!: (e: unknown) => void;
+      vi.mocked(aiChat)
+        .mockReturnValueOnce(new Promise((_, rej) => { reject = rej; }) as never)
+        .mockResolvedValueOnce(say("好"));
+      const { result } = renderHook(() => useMcpChat("s-notice-stop"), { wrapper: LocaleProvider });
+      let first!: Promise<void>;
+      await act(async () => { first = result.current.sendMessage("做 A", "none"); });
+      await act(async () => { result.current.stop(); });
+      await act(async () => { reject(new Error("aborted")); await first; });
+      expect(String(result.current.messages.at(-1)?.content)).toMatch(/已停止/);
+
+      await act(async () => { await result.current.sendMessage("改做 B", "none"); });
+      expect(sentContents(1)).toEqual([["user", "做 A\n\n改做 B"]]);
+    });
+
+    it("已達工具呼叫上限", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(executeMcpTool).mockResolvedValue({ content: "ok", is_error: false });
+      vi.mocked(aiChat)
+        .mockResolvedValueOnce({ content: null, tool_calls: [{ id: "c", tool_name: "x__t", server_id: "x", args: {} }], tool_calling_unsupported: false })
+        .mockResolvedValueOnce(say("好"));
+      const { result } = renderHook(() => useMcpChat("s-notice-limit", 1), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("做 A", "all"); });
+      expect(String(result.current.messages.at(-1)?.content)).toMatch(/上限/);
+
+      await act(async () => { await result.current.sendMessage("繼續", "all"); });
+      expect(sentContents(1)).toEqual([["user", "做 A\n\n繼續"]]);
+    });
+
+    it("模型沒有回應", async () => {
+      vi.mocked(aiChat).mockReset();
+      vi.mocked(aiChat)
+        .mockResolvedValueOnce(say("")).mockResolvedValueOnce(say("")).mockResolvedValueOnce(say(""))
+        .mockResolvedValueOnce(say("好"));
+      const { result } = renderHook(() => useMcpChat("s-notice-empty"), { wrapper: LocaleProvider });
+      await act(async () => { await result.current.sendMessage("做 A", "all"); });
+      expect(String(result.current.messages.at(-1)?.content)).toMatch(/沒有回應/);
+
+      await act(async () => { await result.current.sendMessage("再試", "all"); });
+      expect(sentContents(3)).toEqual([["user", "做 A\n\n再試"]]);
+    });
+
+    it("圖片和文字相鄰合併時兩邊的內容都保留", async () => {
+      vi.mocked(aiChat).mockReset();
+      let reject!: (e: unknown) => void;
+      vi.mocked(aiChat)
+        .mockReturnValueOnce(new Promise((_, rej) => { reject = rej; }) as never)
+        .mockResolvedValueOnce(say("好"));
+      const { result } = renderHook(() => useMcpChat("s-notice-parts"), { wrapper: LocaleProvider });
+      const img = { id: "i", kind: "image" as const, name: "a.png", mimeType: "image/png", data: "data:image/png;base64,AA" };
+      let first!: Promise<void>;
+      await act(async () => { first = result.current.sendMessage("看圖", "none", undefined, [img]); });
+      await act(async () => { result.current.stop(); });
+      await act(async () => { reject(new Error("aborted")); await first; });
+
+      await act(async () => { await result.current.sendMessage("說明", "none"); });
+      expect(sentContents(1)).toEqual([["user", [
+        { type: "text", text: "看圖" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AA" } },
+        { type: "text", text: "說明" },
+      ]]]);
+    });
+  });
+
   // 供應商讀不了圖（後端回 images_dropped）時要告訴使用者，否則 AI 會假裝看過圖。
   describe("供應商把圖片丟掉時提示使用者", () => {
     const DROPPED = /不支援看圖|can't read images/;
