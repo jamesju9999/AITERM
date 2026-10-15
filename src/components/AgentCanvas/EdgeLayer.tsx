@@ -56,6 +56,9 @@ export function EdgeLayer({
         <marker id="ac-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" fill="#4b5563" />
         </marker>
+        <marker id="ac-arrow-dispatch" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#7c3aed" />
+        </marker>
       </defs>
       {edges.map((e) => {
         const a = box(e.from);
@@ -64,8 +67,12 @@ export function EdgeLayer({
         const d = edgePath(a, b);
         const color = active.get(`${e.from}>${e.to}`);
         return (
-          <g key={`${e.from}>${e.to}`} data-testid={`edge-${e.from}-${e.to}`} data-active={color ?? ""}>
-            <path className="ac-edge-base" d={d} markerEnd="url(#ac-arrow)" />
+          <g key={`${e.from}>${e.to}`} data-testid={`edge-${e.from}-${e.to}`} data-active={color ?? ""} data-kind={e.kind ?? "flow"}>
+            <path
+              className={`ac-edge-base${e.kind === "dispatch" ? " ac-edge-base--dispatch" : ""}`}
+              d={d}
+              markerEnd={e.kind === "dispatch" ? "url(#ac-arrow-dispatch)" : "url(#ac-arrow)"}
+            />
             {color && (
               <>
                 <path className="ac-edge-glow" d={d} stroke={color} />

@@ -5,6 +5,8 @@ import type { TaskRow } from "../../ipc/tasks";
 export interface Edge {
   from: string;
   to: string;
+  /** `dispatch` = 協調者把拆好的實作卡派給工程師（規格先行），畫成虛線。 */
+  kind?: "dispatch";
 }
 
 /**
@@ -20,6 +22,12 @@ export function computeEdges(agents: AgentRow[]): Edge[] {
     else if (orch) out.push({ from: c.id, to: orch.id });
   }
   if (reviewer && orch) out.push({ from: reviewer.id, to: orch.id });
+  // 規格先行：有產出規格的工程師時，協調者會把拆出來的實作卡派給其他工程師。
+  if (orch && agents.some((a) => a.kind === "coder" && a.produces_spec)) {
+    for (const c of agents.filter((a) => a.kind === "coder" && !a.produces_spec)) {
+      out.push({ from: orch.id, to: c.id, kind: "dispatch" });
+    }
+  }
   return out;
 }
 
@@ -53,6 +61,13 @@ export function edgeActivity(edges: Edge[], agents: AgentRow[], tasks: TaskRow[]
   for (const e of edges) {
     const key = `${e.from}>${e.to}`;
     const downstream = tasks.filter((t) => t.agent_id === e.to);
+    if (e.kind === "dispatch") {
+      // 工程師手上還有從規格拆出來、沒做完的實作卡。
+      if (downstream.some((t) => t.from_spec && (t.status === "queued" || t.status === "running"))) {
+        out.set(key, EDGE_COLORS.dispatch);
+      }
+      continue;
+    }
     if (kind.get(e.to) === "orchestrator") {
       if (downstream.some((t) => t.status === "running")) out.set(key, EDGE_COLORS.pass);
       continue;

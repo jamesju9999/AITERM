@@ -32,6 +32,13 @@ describe("computeEdges", () => {
   it("沒有 Reviewer 時 Coder 直接接 Orchestrator", () => {
     expect(computeEdges([C1, O])).toEqual([{ from: "c1", to: "o" }]);
   });
+  it("有產出規格的工程師時，協調者派工給其他工程師（虛線）", () => {
+    const spec = { ...C1, produces_spec: true };
+    expect(computeEdges([spec, C2, R, O])).toEqual([
+      { from: "c1", to: "r" }, { from: "c2", to: "r" }, { from: "r", to: "o" },
+      { from: "o", to: "c2", kind: "dispatch" },
+    ]);
+  });
   it("只有 Coder 沒有連線", () => {
     expect(computeEdges([C1, C2])).toEqual([]);
   });
@@ -88,5 +95,15 @@ describe("diffPulses", () => {
     expect(diffPulses([spec, plan], [spec, plan, impl], agents)).toEqual([
       { key: "I:dispatch", from: "o", to: "c1", color: EDGE_COLORS.dispatch, reverse: false },
     ]);
+  });
+
+  it("派工線：工程師手上有規格拆出來、還沒做完的卡就亮紫色", () => {
+    const spec = { ...C1, produces_spec: true };
+    const agents = [spec, C2, O];
+    const edges = computeEdges(agents);
+    const impl = card({ id: "I", agent_id: "c2", from_spec: "S", status: "running" });
+    expect(edgeActivity(edges, agents, [impl]).get("o>c2")).toBe(EDGE_COLORS.dispatch);
+    expect(edgeActivity(edges, agents, [{ ...impl, status: "done" }]).has("o>c2")).toBe(false);
+    expect(edgeActivity(edges, agents, [{ ...impl, from_spec: null }]).has("o>c2")).toBe(false);
   });
 });
