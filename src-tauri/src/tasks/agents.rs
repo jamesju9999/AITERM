@@ -413,6 +413,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clear_agent_only_drops_the_assignment() {
+        let pool = mem_pool().await;
+        let aid = coder(&pool, "C1").await;
+        let tid = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        assign_task(&pool, &tid, Some(&aid)).await.unwrap();
+        clear_agent(&pool, &tid).await.unwrap();
+        let t = store::get_task(&pool, &tid).await.unwrap().unwrap();
+        assert_eq!(t.agent_id, None);
+        assert_eq!(t.status, store::STATUS_QUEUED, "狀態由 move_task 負責，這裡不能動");
+    }
+
+    #[tokio::test]
     async fn first_queued_order_is_the_agents_head() {
         let pool = mem_pool().await;
         let aid = coder(&pool, "C1").await;

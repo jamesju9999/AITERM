@@ -124,6 +124,10 @@ use commands::{
     },
     reports::{reports_delete, reports_list, reports_read, reports_save},
     task_board_config::{task_board_get_config, task_board_set_config},
+    agents::{
+        agents_list, agents_create, agents_update, agents_delete, agents_resolve,
+        agents_merge, agents_abort_merge, tasks_assign_agent,
+    },
     tasks::{
         tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
         tasks_add_attachment, tasks_remove_attachment, tasks_clone, tasks_read_transcript,
@@ -762,6 +766,15 @@ pub fn run() {
             tasks_unarchive,
             tasks_archive_done,
             tasks_list_archived,
+            // Agent 協作
+            agents_list,
+            agents_create,
+            agents_update,
+            agents_delete,
+            agents_resolve,
+            agents_merge,
+            agents_abort_merge,
+            tasks_assign_agent,
             // 專案
             projects_list,
             projects_create,

@@ -19,7 +19,7 @@ pub(crate) fn edit_allowed(status: &str) -> bool {
     status == store::STATUS_PLANNING
 }
 
-fn emit_updated(app: &AppHandle) {
+pub(crate) fn emit_updated(app: &AppHandle) {
     let _ = app.emit("tasks-updated", ());
 }
 
@@ -44,7 +44,7 @@ fn emit_merge_step(app: &AppHandle, task_id: &str, step: &'static str) {
 /// 從 registry 取出專案。找不到時回傳給前端的錯誤訊息——
 /// 這在正常使用下不會發生（前端只會送出 `projects_list` 給過的 id），
 /// 會發生代表專案在操作進行中被移除了。
-fn project(reg: &ProjectRegistry, id: &str) -> Result<ProjectHandle, String> {
+pub(crate) fn project(reg: &ProjectRegistry, id: &str) -> Result<ProjectHandle, String> {
     reg.get(id).ok_or_else(|| format!("專案不存在或已關閉：{id}"))
 }
 
@@ -199,6 +199,12 @@ pub async fn tasks_move(
     store::move_task(&p.pool, &args.id, &args.to_status, args.sort_order)
         .await
         .map_err(|e| e.to_string())?;
+    // 把 Agent 的卡片拖回「計畫中」等同取消指派（Agent 協作 spec §1）。
+    if args.to_status == store::STATUS_PLANNING {
+        crate::tasks::agents::clear_agent(&p.pool, &args.id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     emit_updated(&app);
     if args.to_status == store::STATUS_QUEUED {
         scheduler.poke();
@@ -564,7 +570,15 @@ pub async fn tasks_clone(
     app: AppHandle,
 ) -> Result<String, String> {
     let p = project(&reg, &project_id)?;
-    let src = store::get_task(&p.pool, &id)
+    let new_id = clone_with_attachments(&p, &id).await?;
+    emit_updated(&app);
+    Ok(new_id)
+}
+
+/// 複製一張卡片（標題、內文、設定、Label）成新的「計畫中」卡片，連附件檔
+/// 一起複製。看板的「重新派工」與 Agent 的「重試」共用。
+pub(crate) async fn clone_with_attachments(p: &ProjectHandle, id: &str) -> Result<String, String> {
+    let src = store::get_task(&p.pool, id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "task not found".to_string())?;
@@ -575,7 +589,7 @@ pub async fn tasks_clone(
     // Copy each attachment file into the new card's dir; skip any whose
     // source file is gone (best effort — a missing file must not fail the clone).
     let dir = task_dir(&p.path, &new_id).join("attachments");
-    for att in store::list_attachments(&p.pool, &id)
+    for att in store::list_attachments(&p.pool, id)
         .await
         .map_err(|e| e.to_string())?
     {
@@ -593,7 +607,6 @@ pub async fn tasks_clone(
         }
         let _ = store::add_attachment(&p.pool, &new_id, &att.filename, &dest.to_string_lossy()).await;
     }
-    emit_updated(&app);
     Ok(new_id)
 }
 
