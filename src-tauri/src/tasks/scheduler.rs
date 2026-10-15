@@ -799,6 +799,12 @@ mod tests {
             agent_id: None,
             start_sha: None,
             end_sha: None,
+            card_kind: "work".into(),
+            module_id: None,
+            review_of: None,
+            verdict: None,
+            review_reasons: None,
+            module_override: false,
         }
     }
 
@@ -943,6 +949,12 @@ mod tests {
             agent_id: None,
             start_sha: None,
             end_sha: None,
+            card_kind: "work".into(),
+            module_id: None,
+            review_of: None,
+            verdict: None,
+            review_reasons: None,
+            module_override: false,
         }
     }
 

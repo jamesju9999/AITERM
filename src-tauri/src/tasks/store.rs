@@ -74,6 +74,19 @@ pub struct TaskRow {
     pub start_sha: Option<String>,
     /// 成功結束、自動 commit 之後的 HEAD。沒有任何改動時等於 `start_sha`。
     pub end_sha: Option<String>,
+    /// `work`（使用者的模組／一般卡片）| `review` | `fix` | `merge`。後三種由
+    /// `tasks::workflow` 自動建立。
+    pub card_kind: String,
+    /// review／fix 卡指向它所屬的模組（一張 work 卡）。
+    pub module_id: Option<String>,
+    /// review 卡：被審的那張 work／fix 卡。
+    pub review_of: Option<String>,
+    /// review 卡：`pass` | `fail`，由 review.json 寫入。
+    pub verdict: Option<String>,
+    /// review 卡：reasons 的 JSON 陣列字串。
+    pub review_reasons: Option<String>,
+    /// 模組卡：使用者手動放行（審查不通過超過上限之後）。
+    pub module_override: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -1661,6 +1674,11 @@ mod session_column_tests {
 
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents").fetch_one(&pool).await.unwrap();
         assert_eq!(n, 0);
+
+        // 第二期欄位
+        assert_eq!(row.card_kind, "work");
+        assert_eq!((row.module_id, row.review_of, row.verdict), (None, None, None));
+        assert!(!row.module_override);
     }
 
     /// 舊資料庫（沒有 `label` 欄位）跑過 `init_schema` 之後必須能補上這個

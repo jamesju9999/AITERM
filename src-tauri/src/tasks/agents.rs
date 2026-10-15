@@ -29,6 +29,8 @@ pub struct AgentRow {
     /// 非 `None` = 暫停中，指向造成暫停的那張卡。排程器跳過暫停中的 Agent。
     pub paused_task_id: Option<String>,
     pub created_at: String,
+    /// Orchestrator：上一次為哪一組模組版本建立過合併卡（見 workflow::maybe_enqueue_merge）。
+    pub last_merge_signature: Option<String>,
 }
 
 pub struct NewAgent<'a> {

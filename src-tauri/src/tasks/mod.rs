@@ -111,7 +111,13 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             isolate_worktree INTEGER,
             agent_id        TEXT,
             start_sha       TEXT,
-            end_sha         TEXT
+            end_sha         TEXT,
+            card_kind       TEXT NOT NULL DEFAULT 'work',
+            module_id       TEXT,
+            review_of       TEXT,
+            verdict         TEXT,
+            review_reasons  TEXT,
+            module_override INTEGER NOT NULL DEFAULT 0
         )",
     )
     .execute(pool)
@@ -175,6 +181,18 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN end_sha TEXT")
         .execute(pool)
         .await;
+    // Agent Canvas 第二期（審查與合併），見
+    // docs/superpowers/specs/2026-10-15-agent-canvas-phase2-design.md。
+    for ddl in [
+        "ALTER TABLE tasks ADD COLUMN card_kind TEXT NOT NULL DEFAULT 'work'",
+        "ALTER TABLE tasks ADD COLUMN module_id TEXT",
+        "ALTER TABLE tasks ADD COLUMN review_of TEXT",
+        "ALTER TABLE tasks ADD COLUMN verdict TEXT",
+        "ALTER TABLE tasks ADD COLUMN review_reasons TEXT",
+        "ALTER TABLE tasks ADD COLUMN module_override INTEGER NOT NULL DEFAULT 0",
+    ] {
+        let _ = sqlx::query(ddl).execute(pool).await;
+    }
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS agents (
             id              TEXT PRIMARY KEY NOT NULL,
@@ -188,11 +206,15 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             worktree_path   TEXT,
             branch          TEXT,
             paused_task_id  TEXT,
-            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            last_merge_signature TEXT
         )",
     )
     .execute(pool)
     .await?;
+    let _ = sqlx::query("ALTER TABLE agents ADD COLUMN last_merge_signature TEXT")
+        .execute(pool)
+        .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")
         .execute(pool)
         .await?;
