@@ -60,6 +60,7 @@ import { SuggestionSplit } from "./SuggestionSidebar/SuggestionSplit";
 import { SuggestionSidebar } from "./SuggestionSidebar/SuggestionSidebar";
 import { useSuggestionSidebar } from "./SuggestionSidebar/useSuggestionSidebar";
 import { useScreenHistory } from "./SuggestionSidebar/useScreenHistory";
+import { SCROLL_ECHO_MS } from "./SuggestionSidebar/terminalIdle";
 import { loadCustomNames, saveCustomNames } from "../lib/aiCliCommand";
 import type { MilestoneState } from "../lib/milestones";
 import { TerminalBlockCard } from "./TerminalBlockCard";
@@ -266,6 +267,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // 互動程式是完全安靜的，而跑得好好的長指令會持續有輸出——用「安靜多久」
   // 區分兩者，比固定逾時準得多，也不會誤殺跑很久但正常的工作。
   const lastPtyOutputAtRef = useRef(Date.now());
+  // 給建議側欄與畫面歷史判斷「AI 回完了沒」用：滾輪後緊接著的輸出（全螢幕程式被捲動而重畫）
+  // 不算，否則一捲動就被當成 AI 剛回完一輪，自動模式會重跑建議。
+  const lastWheelAtRef = useRef(0);
+  const lastAiOutputAtRef = useRef(0);
   // Snapshot of the rendered line (prompt + anything already typed) taken the
   // moment a fresh input line starts — see the onData handler below for why.
   // null means "no line in progress, capture a fresh snapshot on next input".
@@ -500,7 +505,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const screenHistory = useScreenHistory(
     sessionId,
     suggestionSidebar.aiCliRunning,
-    () => Date.now() - lastPtyOutputAtRef.current,
+    () => Date.now() - lastAiOutputAtRef.current,
   );
 
   useEffect(() => {
@@ -1330,6 +1335,8 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     // Chromium treats wheel listeners as passive by default.
     hostRef.current.addEventListener("wheel", onLiveWheel, { passive: false, capture: true });
     const liveWheelHost = hostRef.current;
+    const markWheel = () => { lastWheelAtRef.current = Date.now(); };
+    liveWheelHost.addEventListener("wheel", markWheel, { passive: true, capture: true });
 
     // 注音/中文組字進行中就不要強制重繪（見下方寫入路徑的 isWindows 分支）。
     //
@@ -1444,6 +1451,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
         const unlisten = await onPtyData(id, (bytes) => {
           lastPtyOutputAtRef.current = Date.now();
+          if (lastPtyOutputAtRef.current - lastWheelAtRef.current >= SCROLL_ECHO_MS) {
+            lastAiOutputAtRef.current = lastPtyOutputAtRef.current;
+          }
           const text = decoder.decode(bytes, { stream: true });
           startupRef.current?.feed(text);
           hasReceivedLiveChunk = true;
@@ -1897,6 +1907,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
       dprMediaQuery?.removeEventListener("change", onDprChange);
       liveFrame?.removeEventListener("scroll", pinLiveFrameScroll);
       liveWheelHost.removeEventListener("wheel", onLiveWheel, { capture: true });
+      liveWheelHost.removeEventListener("wheel", markWheel, { capture: true });
       ta?.removeEventListener("compositionstart", onCompositionStart);
       ta?.removeEventListener("compositionend", onCompositionEnd);
       decSet.dispose();
@@ -2014,7 +2025,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           sessionId={sessionId}
           providerId={activeProviderId || undefined}
           disabled={false}
-          getIdleMs={() => Date.now() - lastPtyOutputAtRef.current}
+          getIdleMs={() => Date.now() - lastAiOutputAtRef.current}
           getHistory={screenHistory.getHistory}
           aiCliRunning={suggestionSidebar.aiCliRunning}
           customNames={customAiCliNames}
