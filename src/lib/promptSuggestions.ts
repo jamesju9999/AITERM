@@ -1,6 +1,10 @@
 export interface PromptSuggestion {
   title: string;
   prompt: string;
+  /** AI 挑出的最推薦一張；只有 AI 明確標了才有，不會自己補。 */
+  recommended?: true;
+  /** 推薦理由，只會出現在推薦的那張上。 */
+  reason?: string;
 }
 
 /**
@@ -12,6 +16,8 @@ export const PLAIN_COMPLETION_SYSTEM_PROMPT =
 
 export const MAX_SUGGESTIONS = 5;
 export const MAX_PROMPT_CHARS = 500;
+/** 推薦理由上限（字元）。請求裡要 20 字內，這裡留餘裕只防失控。 */
+export const MAX_REASON_CHARS = 40;
 /** 使用者設定的大目標上限（字元）。夠寫一段話，又不會把請求撐大。 */
 export const MAX_GOAL_CHARS = 500;
 /** 送給 AI 的畫面內容上限（字元）。只留尾端——最新的對話才決定下一步。 */
@@ -36,18 +42,28 @@ export function parseSuggestions(raw: string | null | undefined): PromptSuggesti
 
   const seen = new Set<string>();
   const out: PromptSuggestion[] = [];
+  let pick: PromptSuggestion | null = null;
   for (const item of data) {
     if (!item || typeof item !== "object") continue;
-    const { title, prompt } = item as Record<string, unknown>;
+    const { title, prompt, recommended, reason } = item as Record<string, unknown>;
     if (typeof title !== "string" || typeof prompt !== "string") continue;
     const t = title.trim();
     const p = prompt.trim().slice(0, MAX_PROMPT_CHARS);
     if (!t || !p || seen.has(p)) continue;
     seen.add(p);
-    out.push({ title: t, prompt: p });
+    const s: PromptSuggestion = { title: t, prompt: p };
+    // 只認第一個字面 true；其他張就算也標了或帶了理由都丟掉。
+    if (recommended === true && !pick) {
+      s.recommended = true;
+      const r = typeof reason === "string" ? reason.trim().slice(0, MAX_REASON_CHARS) : "";
+      if (r) s.reason = r;
+      pick = s;
+    }
+    out.push(s);
     if (out.length >= MAX_SUGGESTIONS) break;
   }
-  return out;
+  // 推薦的那張移到最上面，其餘維持 AI 給的順序。
+  return pick ? [pick, ...out.filter((s) => s !== pick)] : out;
 }
 
 /**
@@ -76,7 +92,8 @@ export function buildSuggestionRequest(
     ...(milestones ? [milestones] : []),
     `請依內容判斷使用者接下來最可能想做的事，提出 3 到 ${MAX_SUGGESTIONS} 個「下一步提示詞」。`,
     "每個提示詞要能直接貼給 AI 命令列工具當下一個指令，具體、可執行，不要建議破壞性操作。",
-    `只回傳 JSON 陣列，格式：[{"title":"12 字內的短標題","prompt":"完整提示詞"}]，不要其他文字。`,
+    "從中挑出剛好一個你最推薦的（最能推進目前工作的那一步），在那一項加上 \"recommended\":true 和 20 字內的 \"reason\" 說明為什麼；其他項不要加這兩個欄位。",
+    `只回傳 JSON 陣列，格式：[{"title":"12 字內的短標題","prompt":"完整提示詞"},{"title":"…","prompt":"…","recommended":true,"reason":"推薦理由"}]，不要其他文字。`,
     languageDirective,
     "",
     ...(history

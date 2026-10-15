@@ -248,6 +248,35 @@
   justify-content: space-between;
   gap: 8px;
 }
+.aiterm-suggest__card--recommended {
+  border-color: var(--accent-border, rgba(192, 132, 252, 0.5));
+  border-left-color: var(--accent, #c084fc);
+  background: var(--accent-bg, rgba(192, 132, 252, 0.1));
+}
+.aiterm-suggest__card-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.aiterm-suggest__rec {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--accent, #c084fc);
+  color: #1d0b33;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+}
+.aiterm-suggest__card-reason {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--accent, #c084fc);
+}
 .aiterm-suggest__card-title {
   font-size: 12px;
   font-weight: 600;

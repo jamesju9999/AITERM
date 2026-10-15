@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSuggestions, buildSuggestionRequest, buildGoalPolishRequest, cleanPolishedGoal, buildPromptAssistRequest, cleanGeneratedText, PLAIN_COMPLETION_SYSTEM_PROMPT, MAX_ASSIST_PROMPT_CHARS, MAX_ASSIST_REQUEST_CHARS, MAX_ASSIST_SCREEN_CHARS, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS } from "./promptSuggestions";
+import { parseSuggestions, buildSuggestionRequest, buildGoalPolishRequest, cleanPolishedGoal, buildPromptAssistRequest, cleanGeneratedText, PLAIN_COMPLETION_SYSTEM_PROMPT, MAX_ASSIST_PROMPT_CHARS, MAX_ASSIST_REQUEST_CHARS, MAX_ASSIST_SCREEN_CHARS, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS, MAX_REASON_CHARS } from "./promptSuggestions";
 
 describe("parseSuggestions", () => {
   it("parses a plain JSON array", () => {
@@ -43,6 +43,60 @@ describe("parseSuggestions", () => {
     const [s] = parseSuggestions(JSON.stringify([{ title: "t", prompt: long }]));
     expect(s.prompt.length).toBe(MAX_PROMPT_CHARS);
   });
+
+  describe("recommended", () => {
+    it("keeps the AI's pick with its reason and moves it to the top", () => {
+      const r = parseSuggestions(JSON.stringify([
+        { title: "A", prompt: "a" },
+        { title: "B", prompt: "b" },
+        { title: "C", prompt: "c", recommended: true, reason: "  修完還沒驗證  " },
+      ]));
+      expect(r.map((s) => s.title)).toEqual(["C", "A", "B"]);
+      expect(r[0]).toEqual({ title: "C", prompt: "c", recommended: true, reason: "修完還沒驗證" });
+      expect(r[1]).toEqual({ title: "A", prompt: "a" });
+    });
+
+    it("keeps only the first pick when several are marked", () => {
+      const r = parseSuggestions(JSON.stringify([
+        { title: "A", prompt: "a" },
+        { title: "B", prompt: "b", recommended: true, reason: "rb" },
+        { title: "C", prompt: "c", recommended: true, reason: "rc" },
+      ]));
+      expect(r.filter((s) => s.recommended).map((s) => s.title)).toEqual(["B"]);
+      expect(r.find((s) => s.title === "C")).toEqual({ title: "C", prompt: "c" });
+    });
+
+    it("never invents a pick when the AI marked none", () => {
+      const r = parseSuggestions(JSON.stringify([{ title: "A", prompt: "a" }, { title: "B", prompt: "b", reason: "x" }]));
+      expect(r).toEqual([{ title: "A", prompt: "a" }, { title: "B", prompt: "b" }]);
+    });
+
+    it("only accepts a literal true, and drops a reason that is not a non-empty string", () => {
+      const r = parseSuggestions(JSON.stringify([
+        { title: "A", prompt: "a", recommended: "true", reason: "r" },
+        { title: "B", prompt: "b", recommended: true, reason: 42 },
+      ]));
+      expect(r[0]).toEqual({ title: "B", prompt: "b", recommended: true });
+      expect(r[1]).toEqual({ title: "A", prompt: "a" });
+    });
+
+    it("truncates an over-long reason", () => {
+      const [s] = parseSuggestions(JSON.stringify([
+        { title: "A", prompt: "a", recommended: true, reason: "x".repeat(MAX_REASON_CHARS + 20) },
+      ]));
+      expect(s.reason?.length).toBe(MAX_REASON_CHARS);
+    });
+
+    it("a pick that is dropped as a duplicate does not count", () => {
+      const r = parseSuggestions(JSON.stringify([
+        { title: "A", prompt: "a" },
+        { title: "A2", prompt: "a", recommended: true, reason: "dup" },
+        { title: "B", prompt: "b", recommended: true, reason: "rb" },
+      ]));
+      expect(r.map((s) => s.title)).toEqual(["B", "A"]);
+      expect(r[0].reason).toBe("rb");
+    });
+  });
 });
 
 describe("buildSuggestionRequest", () => {
@@ -51,6 +105,13 @@ describe("buildSuggestionRequest", () => {
     expect(msg).toContain("SCREEN-TEXT");
     expect(msg).toContain("請使用繁體中文");
     expect(msg).toContain("JSON");
+  });
+
+  it("asks the AI to mark exactly one recommended suggestion with a short reason", () => {
+    const msg = buildSuggestionRequest("SCREEN", "");
+    expect(msg).toContain('"recommended":true');
+    expect(msg).toContain('"reason"');
+    expect(msg).toContain("剛好一個");
   });
 
   it("keeps only the tail of very long screens", () => {

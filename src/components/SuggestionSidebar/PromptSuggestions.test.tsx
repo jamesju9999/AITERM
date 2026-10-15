@@ -111,6 +111,50 @@ describe("PromptSuggestions", () => {
     expect(screen.getByText("把它重構得更簡潔")).toBeTruthy();
   });
 
+  describe("recommended", () => {
+    const R = [
+      { title: "補測試", prompt: "幫剛才的函式補單元測試" },
+      { title: "跑測試", prompt: "執行全部測試確認修正", recommended: true, reason: "修完還沒驗證" },
+      { title: "重構", prompt: "把它重構得更簡潔" },
+    ];
+    const cardTitles = () =>
+      Array.from(document.querySelectorAll(".aiterm-suggest__card-title")).map((e) => e.textContent);
+
+    it("shows the AI's pick first with a badge and its reason", async () => {
+      invokeAiComplete.mockResolvedValue({ content: JSON.stringify(R), tool_calls: [], tool_calling_unsupported: false });
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(cardTitles()).toEqual(["跑測試", "補測試", "重構"]);
+      const cards = document.querySelectorAll(".aiterm-suggest__card");
+      expect(cards[0].classList.contains("aiterm-suggest__card--recommended")).toBe(true);
+      expect(cards[0].textContent).toContain("推薦");
+      expect(cards[0].textContent).toContain("修完還沒驗證");
+      expect(cards[1].classList.contains("aiterm-suggest__card--recommended")).toBe(false);
+      expect(document.querySelectorAll(".aiterm-suggest__rec").length).toBe(1);
+    });
+
+    it("shows no badge when the AI picked none", async () => {
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(document.querySelectorAll(".aiterm-suggest__rec").length).toBe(0);
+      expect(document.querySelectorAll(".aiterm-suggest__card-reason").length).toBe(0);
+    });
+
+    it("clicking the recommended card fills only its prompt, not the reason", async () => {
+      invokeAiComplete.mockResolvedValue({ content: JSON.stringify(R), tool_calls: [], tool_calling_unsupported: false });
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      fireEvent.click(screen.getByText("跑測試"), { detail: 1 });
+      await flush();
+      expect(fillTerminalInput).toHaveBeenCalledWith("s1", "執行全部測試確認修正");
+      expect(submitTerminalInput).not.toHaveBeenCalled();
+    });
+  });
+
   it("explains itself before the first run, including that screens are sent to the AI provider", () => {
     setup();
     expect(screen.getByText(/依目前終端機畫面/)).toBeTruthy();

@@ -332,12 +332,20 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
                   <li key={s.prompt}>
                     <button
                       type="button"
-                      className="aiterm-suggest__card"
+                      className={`aiterm-suggest__card${s.recommended ? " aiterm-suggest__card--recommended" : ""}`}
                       title={`${t.suggest_fill_title}\n\n${s.prompt}`}
                       onClick={(e) => onCardClick(e, s.prompt)}
                     >
                       <span className="aiterm-suggest__card-top">
-                        <span className="aiterm-suggest__card-title">{s.title}</span>
+                        <span className="aiterm-suggest__card-head">
+                          {s.recommended && (
+                            <span className="aiterm-suggest__rec">
+                              <span aria-hidden="true">★</span>
+                              <span>{t.suggest_recommended}</span>
+                            </span>
+                          )}
+                          <span className="aiterm-suggest__card-title">{s.title}</span>
+                        </span>
                         {flash?.prompt === s.prompt && (
                           <span className="aiterm-suggest__badge">
                             <span aria-hidden="true">✓</span>
@@ -345,6 +353,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
                           </span>
                         )}
                       </span>
+                      {s.reason && <span className="aiterm-suggest__card-reason">{s.reason}</span>}
                       <span className="aiterm-suggest__card-prompt">{s.prompt}</span>
                     </button>
                   </li>
