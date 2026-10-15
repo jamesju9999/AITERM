@@ -49,6 +49,18 @@ export function serializeTerminal(id: string): string | null {
   return entry.serializeAddon.serialize({ scrollback: 0 });
 }
 
+/** 下一步建議讀的捲動緩衝區列數。 */
+export const SUGGEST_SCROLLBACK_ROWS = 300;
+
+/** 給下一步建議用：目前畫面再加上往上 SUGGEST_SCROLLBACK_ROWS 列——一輪回覆比一屏長時，
+ * 捲出畫面的部分還在捲動緩衝區裡。上面說的重畫中間畫面也會一起進來，呼叫端要用
+ * squeezeRepeatedLines 壓掉。alternate buffer 沒有捲動緩衝區，結果與 serializeTerminal 相同。 */
+export function serializeTerminalForAi(id: string): string | null {
+  const entry = registry.get(id);
+  if (!entry) return null;
+  return entry.serializeAddon.serialize({ scrollback: SUGGEST_SCROLLBACK_ROWS });
+}
+
 /** 把文字填進該終端機目前的輸入位置，**不送 Enter**。
  *
  * 程式有開 bracketed paste（Claude Code 會開）就包成貼上序列，讓它當成一整塊

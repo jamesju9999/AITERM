@@ -334,6 +334,11 @@
   overflow-wrap: anywhere;
 }
 
+.aiterm-suggest__source {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--text-muted, #9aa0b4);
+}
 .aiterm-suggest__redacted {
   color: var(--success, #34d399);
   font-size: 10.5px;

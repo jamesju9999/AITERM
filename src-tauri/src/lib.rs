@@ -1,3 +1,4 @@
+pub mod agent_transcript;
 pub mod ai;
 pub use aiterm_core::appimage_env;
 pub mod bridge;
@@ -481,6 +482,7 @@ pub fn run() {
         })
         .on_menu_event(quit::on_menu_event)
         .invoke_handler(tauri::generate_handler![
+            agent_transcript::agent_transcript_context,
             // 用量／配額
             commands::usage::usage_quota,
             commands::usage::usage_quota_all,

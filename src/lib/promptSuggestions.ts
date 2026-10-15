@@ -22,6 +22,24 @@ export const MAX_REASON_CHARS = 40;
 export const MAX_GOAL_CHARS = 500;
 /** 送給 AI 的畫面內容上限（字元）。只留尾端——最新的對話才決定下一步。 */
 export const MAX_SCREEN_CHARS = 8000;
+/** 有 AI 工具對話記錄時，畫面只留這麼多——完整內容已經在對話記錄裡。 */
+export const MAX_SCREEN_WITH_TRANSCRIPT_CHARS = 3000;
+
+/**
+ * 捲動緩衝區裡會有 TUI 重畫留下的中間畫面（spinner、重複的提示列）。同一行出現多次只留
+ * 最後一次；連續空行壓成一行；去掉行尾空白。
+ */
+export function squeezeRepeatedLines(text: string): string {
+  const lines = text.split(/\r?\n/).map((l) => l.trimEnd());
+  const lastIndex = new Map<string, number>();
+  lines.forEach((l, i) => { if (l) lastIndex.set(l, i); });
+  const out: string[] = [];
+  lines.forEach((l, i) => {
+    if (l) { if (lastIndex.get(l) === i) out.push(l); }
+    else if (out.length > 0 && out[out.length - 1] !== "") out.push("");
+  });
+  return out.join("\n");
+}
 
 /**
  * 解析 AI 回的建議。模型常把 JSON 包在 code fence 或前後加說明，所以只抓
@@ -78,8 +96,11 @@ export function buildSuggestionRequest(
   history?: string,
   /** 已經 formatMilestonesForPrompt 整理過的里程碑一節；空字串或沒給＝不加。 */
   milestones?: string,
+  /** AI 工具自己的對話記錄（最近兩輪，已遮罩）；空字串或沒給＝不加，畫面照舊。 */
+  transcript?: string,
 ): string {
-  const tail = screen.length > MAX_SCREEN_CHARS ? screen.slice(-MAX_SCREEN_CHARS) : screen;
+  const maxScreen = transcript ? MAX_SCREEN_WITH_TRANSCRIPT_CHARS : MAX_SCREEN_CHARS;
+  const tail = screen.length > maxScreen ? screen.slice(-maxScreen) : screen;
   const g = goal?.trim().slice(0, MAX_GOAL_CHARS) ?? "";
   return [
     "以下是使用者終端機目前的畫面內容（可能是 AI 命令列工具的對話）。",
@@ -101,6 +122,15 @@ export function buildSuggestionRequest(
           "較早的畫面（舊→新，用來判斷已經做過什麼；已完成的事不要再建議）：",
           "```",
           history,
+          "```",
+          "",
+        ]
+      : []),
+    ...(transcript
+      ? [
+          "AI 工具的對話記錄（最近兩輪，完整內容；畫面可能只顯示其中一部分）：",
+          "```",
+          transcript,
           "```",
           "",
         ]

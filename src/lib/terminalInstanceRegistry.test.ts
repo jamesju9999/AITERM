@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Terminal } from "@xterm/xterm";
-import { registerTerminal, serializeTerminal, unregisterTerminal } from "./terminalInstanceRegistry";
+import { registerTerminal, serializeTerminal, serializeTerminalForAi, SUGGEST_SCROLLBACK_ROWS, unregisterTerminal } from "./terminalInstanceRegistry";
 
 const fakeTerm = {} as Terminal;
 
@@ -48,5 +48,15 @@ describe("terminalInstanceRegistry", () => {
     registerTerminal(id, fakeTerm, { serialize });
     serializeTerminal(id);
     expect(serialize).toHaveBeenCalledWith({ scrollback: 0 });
+  });
+
+  it("serializeTerminalForAi also reads a bounded slice of scrollback (content that scrolled off the top)", () => {
+    const id = "tab-5";
+    const serialize = vi.fn(() => "content");
+    registerTerminal(id, fakeTerm, { serialize });
+    expect(serializeTerminalForAi(id)).toBe("content");
+    expect(serialize).toHaveBeenCalledWith({ scrollback: SUGGEST_SCROLLBACK_ROWS });
+    expect(SUGGEST_SCROLLBACK_ROWS).toBeGreaterThan(0);
+    expect(serializeTerminalForAi("never-registered")).toBeNull();
   });
 });

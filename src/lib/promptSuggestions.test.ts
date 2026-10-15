@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSuggestions, buildSuggestionRequest, buildGoalPolishRequest, cleanPolishedGoal, buildPromptAssistRequest, cleanGeneratedText, PLAIN_COMPLETION_SYSTEM_PROMPT, MAX_ASSIST_PROMPT_CHARS, MAX_ASSIST_REQUEST_CHARS, MAX_ASSIST_SCREEN_CHARS, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS, MAX_REASON_CHARS } from "./promptSuggestions";
+import { parseSuggestions, buildSuggestionRequest, buildGoalPolishRequest, cleanPolishedGoal, buildPromptAssistRequest, cleanGeneratedText, PLAIN_COMPLETION_SYSTEM_PROMPT, MAX_ASSIST_PROMPT_CHARS, MAX_ASSIST_REQUEST_CHARS, MAX_ASSIST_SCREEN_CHARS, MAX_SUGGESTIONS, MAX_PROMPT_CHARS, MAX_GOAL_CHARS, MAX_REASON_CHARS, MAX_SCREEN_WITH_TRANSCRIPT_CHARS, squeezeRepeatedLines } from "./promptSuggestions";
 
 describe("parseSuggestions", () => {
   it("parses a plain JSON array", () => {
@@ -119,6 +119,34 @@ describe("buildSuggestionRequest", () => {
     const msg = buildSuggestionRequest(screen, "");
     expect(msg).toContain("TAIL");
     expect(msg.length).toBeLessThan(12000);
+  });
+});
+
+describe("buildSuggestionRequest with a transcript", () => {
+  it("adds the transcript section before the screen and trims the screen harder", () => {
+    const screen = "S".repeat(MAX_SCREEN_WITH_TRANSCRIPT_CHARS + 500) + "END";
+    const msg = buildSuggestionRequest(screen, "", undefined, undefined, undefined, "使用者：修排序\nAI：已修正");
+    expect(msg).toContain("對話記錄");
+    expect(msg).toContain("AI：已修正");
+    expect(msg.indexOf("AI：已修正")).toBeLessThan(msg.indexOf("END"));
+    expect(msg).not.toContain("S".repeat(MAX_SCREEN_WITH_TRANSCRIPT_CHARS + 1));
+  });
+
+  it("is byte-identical to before when there is no transcript", () => {
+    const base = buildSuggestionRequest("SCREEN", "LANG", "G", "H", "M");
+    expect(buildSuggestionRequest("SCREEN", "LANG", "G", "H", "M", "")).toBe(base);
+    expect(buildSuggestionRequest("SCREEN", "LANG", "G", "H", "M", undefined)).toBe(base);
+  });
+});
+
+describe("squeezeRepeatedLines", () => {
+  it("keeps only the last copy of a repeated line, so redraw frames in scrollback do not eat the budget", () => {
+    const raw = ["⠋ Thinking…", "> prompt", "real line 1", "⠋ Thinking…", "> prompt", "real line 2", "> prompt"].join("\n");
+    expect(squeezeRepeatedLines(raw)).toBe(["real line 1", "⠋ Thinking…", "real line 2", "> prompt"].join("\n"));
+  });
+
+  it("collapses runs of blank lines to one and trims trailing spaces", () => {
+    expect(squeezeRepeatedLines("a  \n\n\n\nb\n  \nc")).toBe("a\n\nb\n\nc");
   });
 });
 

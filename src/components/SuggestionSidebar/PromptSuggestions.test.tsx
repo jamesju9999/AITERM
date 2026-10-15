@@ -12,8 +12,14 @@ vi.mock("../../ipc/ai", () => ({
 let screenText: string | null = "\x1b[32m❯ 幫我寫一個函式\x1b[0m\nClaude: 完成了";
 const fillTerminalInput = vi.fn().mockResolvedValue(true);
 const submitTerminalInput = vi.fn().mockResolvedValue(true);
+const agentTranscriptContext = vi.fn();
+vi.mock("../../ipc/agentTranscript", () => ({
+  agentTranscriptContext: (...a: unknown[]) => agentTranscriptContext(...a),
+}));
+
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
   serializeTerminal: () => screenText,
+  serializeTerminalForAi: () => screenText,
   fillTerminalInput: (...a: unknown[]) => fillTerminalInput(...a),
   submitTerminalInput: (...a: unknown[]) => submitTerminalInput(...a),
 }));
@@ -40,6 +46,8 @@ const setup = (p: Partial<React.ComponentProps<typeof PromptSuggestions>> = {}) 
 beforeEach(() => {
   vi.useFakeTimers();
   invokeAiComplete.mockReset();
+  agentTranscriptContext.mockReset();
+  agentTranscriptContext.mockResolvedValue(null);
   abortAi.mockClear();
   fillTerminalInput.mockClear();
   submitTerminalInput.mockClear();
@@ -431,6 +439,75 @@ describe("PromptSuggestions", () => {
     it("reserves a fixed height for the slot even when it is empty", () => {
       const { container } = setup();
       expect(statusSlot(container)!.style.minHeight).toBe("16px");
+    });
+  });
+
+  describe("AI tool transcript", () => {
+    const sent = () => invokeAiComplete.mock.calls[0][0][0].content as string;
+    const TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+
+    it("asks for the transcript with the raw screen, sends it instead of older screens, and says where it came from", async () => {
+      agentTranscriptContext.mockResolvedValue({ tool: "claude", text: "使用者：修排序\nAI：上方才看得到的長回覆" });
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup({ getHistory: () => ["舊畫面一\n舊畫面二\n舊畫面三\n舊畫面四\n舊畫面五"] });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(agentTranscriptContext).toHaveBeenCalledTimes(1);
+      expect(agentTranscriptContext.mock.calls[0][0]).toContain("Claude: 完成了");
+      expect(agentTranscriptContext.mock.calls[0][0]).not.toContain("\x1b[");
+      expect(sent()).toContain("上方才看得到的長回覆");
+      expect(sent()).not.toContain("較早的畫面");
+      expect(sent()).toContain("Claude: 完成了");
+      expect(screen.getByText("已讀取 Claude Code 對話記錄")).toBeTruthy();
+    });
+
+    it("names Codex when the transcript came from Codex", async () => {
+      agentTranscriptContext.mockResolvedValue({ tool: "codex", text: "AI：x" });
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(screen.getByText("已讀取 Codex 對話記錄")).toBeTruthy();
+    });
+
+    it("masks secrets in the transcript and counts them", async () => {
+      agentTranscriptContext.mockResolvedValue({ tool: "claude", text: `AI：export GITHUB_TOKEN=${TOKEN}` });
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(sent()).not.toContain(TOKEN);
+      expect(screen.getByText("已在送出前遮罩 1 處疑似敏感資訊")).toBeTruthy();
+    });
+
+    it("falls back to the screen (with older screens) when there is no transcript or the lookup fails", async () => {
+      agentTranscriptContext.mockRejectedValue(new Error("boom"));
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup({ getHistory: () => ["舊畫面一\n舊畫面二\n舊畫面三\n舊畫面四\n舊畫面五"] });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(sent()).toContain("較早的畫面");
+      expect(sent()).not.toContain("對話記錄");
+      expect(screen.queryByText(/對話記錄$/)).toBeNull();
+      expect(screen.getByText("補測試")).toBeTruthy();
+    });
+
+    it("does not look for a transcript when no AI tool is running", async () => {
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup({ aiCliRunning: false });
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(agentTranscriptContext).not.toHaveBeenCalled();
+    });
+
+    it("squeezes repeated redraw lines out of the screen before sending", async () => {
+      screenText = "⠋ Thinking…\n真正的內容一\n⠋ Thinking…\n真正的內容二";
+      invokeAiComplete.mockResolvedValue(reply(A));
+      setup();
+      fireEvent.click(screen.getByText("產生建議"));
+      await flush();
+      expect(sent().match(/Thinking/g)).toHaveLength(1);
+      expect(sent()).toContain("真正的內容一");
     });
   });
 

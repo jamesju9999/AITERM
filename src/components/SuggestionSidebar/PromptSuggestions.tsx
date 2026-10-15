@@ -3,8 +3,9 @@ import { abortAi, invokeAiComplete } from "../../ipc/ai";
 import { describeError } from "./describeError";
 import { useLocale } from "../../contexts/LocaleContext";
 import { languageDirective } from "../../lib/i18n";
-import { fillTerminalInput, serializeTerminal, submitTerminalInput } from "../../lib/terminalInstanceRegistry";
-import { PLAIN_COMPLETION_SYSTEM_PROMPT, buildSuggestionRequest, parseSuggestions, type PromptSuggestion } from "../../lib/promptSuggestions";
+import { fillTerminalInput, serializeTerminalForAi, submitTerminalInput } from "../../lib/terminalInstanceRegistry";
+import { PLAIN_COMPLETION_SYSTEM_PROMPT, buildSuggestionRequest, parseSuggestions, squeezeRepeatedLines, type PromptSuggestion } from "../../lib/promptSuggestions";
+import { agentTranscriptContext, type TranscriptTool } from "../../ipc/agentTranscript";
 import { PROMPT_HISTORY_BUDGET, formatHistoryForPrompt } from "../../lib/screenHistory";
 import { redactSecrets } from "../../lib/redact";
 import { stripAnsiCodes } from "../TaskBoard/transcriptUtils";
@@ -21,6 +22,8 @@ const STORAGE_COLLAPSED_KEY = "aiterm-suggest-collapsed";
 const FLASH_MS = 1_500;
 
 type Status = "idle" | "loading" | "ok" | "none" | "empty" | "error";
+
+const TRANSCRIPT_TOOL_NAMES: Record<TranscriptTool, string> = { claude: "Claude Code", codex: "Codex" };
 
 function loadAuto(): boolean {
   try { return localStorage.getItem(STORAGE_AUTO_KEY) === "true"; } catch { return false; }
@@ -62,6 +65,8 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
   const [errorMsg, setErrorMsg] = useState("");
   /** 最近一次請求在送出前遮了幾處；0＝沒遮或沒開。 */
   const [redactedCount, setRedactedCount] = useState(0);
+  /** 最近一次請求用了哪個 AI 工具的對話記錄；null＝只有畫面。 */
+  const [transcriptTool, setTranscriptTool] = useState<TranscriptTool | null>(null);
   const [auto, setAuto] = useState(loadAuto);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
   const [flash, setFlash] = useState<{ prompt: string; kind: "filled" | "sent" } | null>(null);
@@ -97,7 +102,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
   }, []);
 
   const generate = useCallback(async (isAuto: boolean) => {
-    const screen = stripAnsiCodes(serializeTerminal(sessionId) ?? "");
+    const screen = squeezeRepeatedLines(stripAnsiCodes(serializeTerminalForAi(sessionId) ?? ""));
     if (!screen.trim()) {
       if (!isAuto) { setItems([]); setStatus("empty"); }
       return;
@@ -116,16 +121,28 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
       return r.text;
     };
     const aiScreen = mask(screen);
-    const history = formatHistoryForPrompt((getHistory?.() ?? []).map(mask), aiScreen, PROMPT_HISTORY_BUDGET);
 
     if (loadingRef.current) abortAi(connId).catch(() => {});
     const myReq = ++reqRef.current;
     loadingRef.current = true;
     setStatus("loading");
-    setRedactedCount(maskedCount);
+    setTranscriptTool(null);
     try {
+      // 全螢幕工具捲出畫面的內容只在它自己的對話記錄裡。比對用原始畫面（只在本機），
+      // 送出去的記錄一樣先遮罩。找不到或失敗就只用畫面。
+      const found = aiCliRunning
+        ? await Promise.resolve().then(() => agentTranscriptContext(screen)).catch(() => null)
+        : null;
+      if (!mountedRef.current || myReq !== reqRef.current) return;
+      const transcript = found?.text.trim() ? mask(found.text) : "";
+      // 對話記錄已涵蓋先前幾輪，不再附較早的畫面。
+      const history = transcript
+        ? ""
+        : formatHistoryForPrompt((getHistory?.() ?? []).map(mask), aiScreen, PROMPT_HISTORY_BUDGET);
+      setRedactedCount(maskedCount);
+      setTranscriptTool(transcript && found ? found.tool : null);
       const reply = await invokeAiComplete(
-        [{ role: "user", content: buildSuggestionRequest(aiScreen, languageDirective(locale), goal, history, milestoneContext) }],
+        [{ role: "user", content: buildSuggestionRequest(aiScreen, languageDirective(locale), goal, history, milestoneContext, transcript) }],
         PLAIN_COMPLETION_SYSTEM_PROMPT,
         connId,
         providerId,
@@ -142,7 +159,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     } finally {
       if (myReq === reqRef.current) loadingRef.current = false;
     }
-  }, [sessionId, connId, providerId, locale, goal, getHistory, milestoneContext, redact]);
+  }, [sessionId, connId, providerId, locale, goal, getHistory, milestoneContext, redact, aiCliRunning]);
 
   // 目標或里程碑焦點一改，之前產生的建議就是針對舊情況的：丟掉卡片、取消還在跑的請求、
   // 回到起點，並讓自動模式對同一份畫面也能重新產生。第一次掛載不算「改」。
@@ -158,6 +175,7 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
     setStatus("idle");
     setErrorMsg("");
     setRedactedCount(0);
+    setTranscriptTool(null);
   }, [contextKey, connId]);
 
   // 自動產生的條件，缺一不可：
@@ -361,6 +379,9 @@ export function PromptSuggestions({ sessionId, providerId, disabled, getIdleMs, 
               </ul>
               <div className="aiterm-suggest__footer">{t.suggest_footer_hint}</div>
             </>
+          )}
+          {transcriptTool && status === "ok" && (
+            <div className="aiterm-suggest__source">{t.suggest_source_transcript(TRANSCRIPT_TOOL_NAMES[transcriptTool])}</div>
           )}
           {redactedCount > 0 && (
             <div className="aiterm-suggest__redacted">{t.suggest_redacted(redactedCount)}</div>

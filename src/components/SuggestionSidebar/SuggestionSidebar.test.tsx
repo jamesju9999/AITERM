@@ -9,8 +9,10 @@ vi.mock("../../ipc/ai", () => ({
   formatAiError: () => "err",
 }));
 let screenText = "screen";
+vi.mock("../../ipc/agentTranscript", () => ({ agentTranscriptContext: () => Promise.resolve(null) }));
 vi.mock("../../lib/terminalInstanceRegistry", () => ({
   serializeTerminal: () => screenText,
+  serializeTerminalForAi: () => screenText,
   fillTerminalInput: vi.fn().mockResolvedValue(true),
   submitTerminalInput: vi.fn().mockResolvedValue(true),
 }));
