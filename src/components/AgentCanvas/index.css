@@ -366,3 +366,43 @@
 @keyframes ac-flow { to { stroke-dashoffset: -16; } }
 .ac-pulse { filter: drop-shadow(0 0 4px currentColor); }
 .ac-agent { z-index: 1; }
+
+/* 角色：名稱可輸入＋預設角色選單＋存成我的角色 */
+.ac-role-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ac-role-menu-wrap { position: relative; }
+.ac-role-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 70;
+  min-width: 240px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
+}
+.ac-role-menu-label { font-size: 10.5px; color: var(--text-muted); letter-spacing: 0.06em; padding: 6px 8px 3px; }
+.ac-role-menu-row { display: flex; align-items: center; }
+.ac-role-menu-row .ac-role-menu-item { flex: 1; }
+.ac-role-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ac-role-menu-item:hover { background: var(--bg-hover); }
+.ac-role-menu-item--muted { color: var(--text-muted); }
+.ac-role-menu-sep { height: 1px; background: var(--border-color); margin: 5px 4px; }
+.ac-role-save { display: flex; align-items: center; gap: 10px; margin-top: -6px; }
+.ac-role-notice { font-size: 11.5px; color: #86efac; }

@@ -1,49 +1,40 @@
-/** 角色預設：名稱只是顯示，派工時真正加在提示詞前面的是 prefix（可在對話框裡改）。 */
+import type { AgentKind } from "../../ipc/agents";
+import type { Translations } from "../../lib/i18n";
+
+/** 角色預設：名稱寫進 Agent 的 role，prefix 是派工時加在每張卡片前面的提示詞。 */
 export interface RolePreset {
   name: string;
+  emoji: string;
   prefix: string;
 }
 
-export const CODER_ROLES: readonly RolePreset[] = [
-  {
-    name: "Migration Engineer",
-    prefix:
-      "你負責把 Client-Server 模組移植成網頁系統：伺服端邏輯改為 REST API，用戶端畫面改為網頁頁面，保留原有商業規則，完成後自行跑測試。",
-  },
-  {
-    name: "Senior Coder",
-    prefix: "你是資深工程師。依需求完整實作此模組，遵循既有架構與命名，完成後自行跑測試。",
-  },
-  {
-    name: "Bug Fixer",
-    prefix: "你專注修正缺陷：先重現問題、找出根因，再做最小幅度修改並補上回歸測試。",
-  },
-  {
-    name: "Frontend Specialist",
-    prefix: "你專精前端：依設計實作頁面與互動，注意無障礙與響應式版面。",
-  },
-];
-
-export const REVIEWER_ROLES: readonly RolePreset[] = [
-  {
-    name: "Code Reviewer",
-    prefix:
-      "你是程式碼審查者。只看指定的 diff，判斷是否有正確性錯誤或與需求不符；風格問題寫進 reasons 但不要因此判定不通過。不要修改任何檔案。",
-  },
-  {
-    name: "Security Reviewer",
-    prefix:
-      "你是資安審查者。以注入、權限、敏感資料外洩為重點審查指定的 diff；只有實際風險才判定不通過。不要修改任何檔案。",
-  },
-];
-
-export const ORCHESTRATOR_ROLES: readonly RolePreset[] = [
-  {
-    name: "Integrator",
-    prefix: "你是統籌合併者。依序合併各 Coder 的分支，遇到衝突先理解雙方意圖再解決，合併後跑測試，不要 push。",
-  },
-];
-
-export function rolesFor(kind: "coder" | "reviewer" | "orchestrator"): readonly RolePreset[] {
-  return kind === "reviewer" ? REVIEWER_ROLES : kind === "orchestrator" ? ORCHESTRATOR_ROLES : CODER_ROLES;
+/**
+ * 內建角色。Coder 的清單沿用 Loop Studio 的預設角色（同一組 i18n 字串，
+ * 改一邊兩邊都跟著變），再加上 Agent 協作特有的幾個（規格撰寫師、C/S 移植…）。
+ * Reviewer／Orchestrator 的提示詞有工作流程上的硬性要求（不改檔、判定規則、
+ * 不 push），所以不共用 Loop Studio 的描述。
+ */
+export function builtinRoles(kind: AgentKind, t: Translations): RolePreset[] {
+  if (kind === "reviewer") {
+    return [
+      { name: t.ls_preset_reviewer, emoji: "🔍", prefix: t.ac_role_code_reviewer_desc },
+      { name: t.ls_preset_security, emoji: "🛡️", prefix: t.ac_role_security_reviewer_desc },
+    ];
+  }
+  if (kind === "orchestrator") {
+    return [{ name: t.ac_role_integrator, emoji: "⑂", prefix: t.ac_role_integrator_desc }];
+  }
+  return [
+    { name: t.ls_preset_coder, emoji: "💻", prefix: t.ls_preset_coder_desc },
+    { name: t.ac_role_spec, emoji: "📐", prefix: t.ac_role_spec_desc },
+    { name: t.ac_role_migration, emoji: "🔁", prefix: t.ac_role_migration_desc },
+    { name: t.ls_preset_tester, emoji: "🧪", prefix: t.ls_preset_tester_desc },
+    { name: t.ac_role_bugfix, emoji: "🐞", prefix: t.ac_role_bugfix_desc },
+    { name: t.ac_role_frontend, emoji: "🎨", prefix: t.ac_role_frontend_desc },
+    { name: t.ls_preset_refactorer, emoji: "🔧", prefix: t.ls_preset_refactorer_desc },
+    { name: t.ls_preset_devops, emoji: "⚙️", prefix: t.ls_preset_devops_desc },
+    { name: t.ls_preset_docs, emoji: "📝", prefix: t.ls_preset_docs_desc },
+    { name: t.ls_preset_researcher, emoji: "📊", prefix: t.ls_preset_researcher_desc },
+    { name: t.ls_preset_architect, emoji: "🏛️", prefix: t.ls_preset_architect_desc },
+  ];
 }

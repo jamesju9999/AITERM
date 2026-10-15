@@ -136,14 +136,42 @@ describe("AgentCanvasView", () => {
     await waitFor(() =>
       expect((within(dlg).getByLabelText(/程式庫|Repository/) as HTMLInputElement).value).toBe("/repo/htbktw"),
     );
-    fireEvent.click(within(dlg).getByText("Bug Fixer"));
+    fireEvent.click(within(dlg).getByRole("button", { name: /從預設角色帶入|Start from a preset/ }));
+    fireEvent.click(within(dlg).getByRole("menuitem", { name: /規格撰寫師|Spec Writer/ }));
+    expect((within(dlg).getByLabelText(/^角色名稱$|^Role name$/) as HTMLInputElement).value).toMatch(/規格撰寫師|Spec Writer/);
     fireEvent.click(within(dlg).getByText(/放上桌布|Place on canvas/));
     await waitFor(() =>
       expect(createAgent).toHaveBeenCalledWith(
         "p1",
-        expect.objectContaining({ kind: "coder", role: "Bug Fixer", project_dir: "/repo/htbktw" }),
+        expect.objectContaining({
+          kind: "coder",
+          role: expect.stringMatching(/規格撰寫師|Spec Writer/),
+          prompt_prefix: expect.stringMatching(/docs\/specs/),
+          project_dir: "/repo/htbktw",
+        }),
       ),
     );
+  });
+
+  it("可以自訂角色名稱與提示詞，存成我的角色後下次從選單帶入", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
+    let dlg = await screen.findByRole("dialog");
+    fireEvent.change(within(dlg).getByLabelText(/^角色名稱$|^Role name$/), { target: { value: "SAP 顧問" } });
+    const prefix = dlg.querySelector("textarea") as HTMLTextAreaElement;
+    fireEvent.change(prefix, { target: { value: "你熟悉 SAP 模組，負責把 ABAP 邏輯搬到網頁。" } });
+    fireEvent.click(within(dlg).getByRole("button", { name: /存成我的角色|Save as my role/ }));
+    expect(within(dlg).getByText(/已存成我的角色|Saved to my roles/)).toBeTruthy();
+    fireEvent.click(within(dlg).getByText(/取消|Cancel/));
+
+    // 重新開一次對話框：我的角色出現在選單裡，帶入名稱與提示詞
+    drag(screen.getByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
+    dlg = await screen.findByRole("dialog");
+    fireEvent.click(within(dlg).getByRole("button", { name: /從預設角色帶入|Start from a preset/ }));
+    fireEvent.click(within(dlg).getByRole("menuitem", { name: /SAP 顧問/ }));
+    expect((dlg.querySelector("textarea") as HTMLTextAreaElement).value).toContain("ABAP");
   });
 
   it("建立失敗（例如不是 git repo）錯誤留在對話框裡", async () => {

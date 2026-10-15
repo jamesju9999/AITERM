@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { useEffect, useRef, useState } from "react";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import type { AgentKind, AgentRow } from "../../ipc/agents";
 import { usedDirs } from "../../ipc/projects";
-import { rolesFor } from "./roles";
+import { deleteCustomRole, loadCustomRoles, saveCustomRole, type CustomRole } from "./customRoles";
+import { builtinRoles, type RolePreset } from "./roles";
 
 export interface AgentConfigValues {
   name: string;
@@ -36,7 +37,11 @@ export function AgentConfigDialog({
 }) {
   const { t } = useLocale();
   const isNew = agent === null;
-  const roles = rolesFor(kind);
+  const roles = builtinRoles(kind, t);
+  const [mine, setMine] = useState<CustomRole[]>(() => loadCustomRoles().filter((r) => r.kind === kind));
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [name, setName] = useState(agent?.name ?? defaultName);
   const [role, setRole] = useState(agent?.role ?? roles[0].name);
   const [prefix, setPrefix] = useState(agent?.prompt_prefix ?? roles[0].prefix);
@@ -60,9 +65,34 @@ export function AgentConfigDialog({
     };
   }, [isNew, projectId]);
 
-  const pickRole = (r: (typeof roles)[number]) => {
+  const pickRole = (r: Pick<RolePreset, "name" | "prefix">) => {
     setRole(r.name);
     setPrefix(r.prefix);
+    setMenuOpen(false);
+    setNotice(null);
+  };
+
+  // 點選單外面就關掉。
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [menuOpen]);
+
+  const saveMine = () => {
+    const n = role.trim();
+    if (!n) return;
+    setMine(saveCustomRole({ kind, name: n, prefix }).filter((r) => r.kind === kind));
+    setNotice(t.ac_role_saved(n));
+  };
+
+  const removeMine = async (r: CustomRole) => {
+    // window.confirm 在 Tauri webview 裡沒有實作，要用 plugin-dialog。
+    if (!(await confirm(t.ac_role_delete_confirm(r.name), { kind: "warning" }))) return;
+    setMine(deleteCustomRole(r.id).filter((x) => x.kind === kind));
   };
 
   const browse = async () => {
@@ -78,7 +108,7 @@ export function AgentConfigDialog({
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ name: name.trim() || defaultName, role, prompt_prefix: prefix, project_dir: dir.trim() });
+      await onSubmit({ name: name.trim() || defaultName, role: role.trim(), prompt_prefix: prefix, project_dir: dir.trim() });
     } catch (e) {
       // Tauri 的 invoke 錯誤是字串；其他情況才是 Error。
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
@@ -96,29 +126,89 @@ export function AgentConfigDialog({
           <input className="task-field-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
         </label>
         <div className="task-field">
-          <span className="task-field-label">{t.ac_role}</span>
-          <div className="ac-roles">
-            {roles.map((r) => (
+          <div className="ac-role-head">
+            <span className="task-field-label">{t.ac_role_name}</span>
+            <div className="ac-role-menu-wrap" ref={menuRef}>
               <button
-                key={r.name}
                 type="button"
-                className={`ac-role${r.name === role ? " ac-role--on" : ""}`}
-                onClick={() => pickRole(r)}
+                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                onClick={() => setMenuOpen((v) => !v)}
               >
-                {r.name}
+                {t.ac_role_presets} ▾
               </button>
-            ))}
+              {menuOpen && (
+                <div className="ac-role-menu" role="menu">
+                  <div className="ac-role-menu-label">{t.ac_role_builtin}</div>
+                  {roles.map((r) => (
+                    <button key={r.name} type="button" role="menuitem" className="ac-role-menu-item" onClick={() => pickRole(r)}>
+                      <span aria-hidden>{r.emoji}</span> {r.name}
+                    </button>
+                  ))}
+                  {mine.length > 0 && <div className="ac-role-menu-label">{t.ac_role_mine}</div>}
+                  {mine.map((r) => (
+                    <div key={r.id} className="ac-role-menu-row">
+                      <button type="button" role="menuitem" className="ac-role-menu-item" onClick={() => pickRole(r)}>
+                        <span aria-hidden>⭐</span> {r.name}
+                      </button>
+                      <button
+                        type="button"
+                        className="ac-iconbtn"
+                        title={t.ac_delete}
+                        aria-label={`${t.ac_delete} ${r.name}`}
+                        onClick={() => void removeMine(r)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <div className="ac-role-menu-sep" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="ac-role-menu-item ac-role-menu-item--muted"
+                    onClick={() => pickRole({ name: "", prefix: "" })}
+                  >
+                    <span aria-hidden>✏️</span> {t.ac_role_custom_blank}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
+          <input
+            className="task-field-input"
+            value={role}
+            onChange={(e) => {
+              setRole(e.target.value);
+              setNotice(null);
+            }}
+            aria-label={t.ac_role_name}
+          />
         </div>
         <label className="task-field">
           <span className="task-field-label">{t.ac_prefix}</span>
           <textarea
             className="task-field-input task-field-textarea"
             value={prefix}
-            onChange={(e) => setPrefix(e.target.value)}
-            rows={4}
+            onChange={(e) => {
+              setPrefix(e.target.value);
+              setNotice(null);
+            }}
+            rows={5}
           />
         </label>
+        <div className="ac-role-save">
+          <button
+            type="button"
+            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+            disabled={!role.trim() || !prefix.trim()}
+            onClick={saveMine}
+          >
+            ⭐ {t.ac_role_save}
+          </button>
+          {notice && <span className="ac-role-notice">{notice}</span>}
+        </div>
         <div className="task-field">
           <span className="task-field-label">{t.ac_repo}</span>
           {isNew ? (
