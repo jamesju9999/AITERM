@@ -45,6 +45,7 @@ export function TaskCard({
   onViewTranscript,
   onEditLabel,
   onChanged,
+  agentName,
 }: {
   projectId: string;
   card: TaskWithAttachments;
@@ -52,6 +53,8 @@ export function TaskCard({
   onViewTranscript: () => void;
   onEditLabel: () => void;
   onChanged: () => void;
+  /** 指派給哪個 Agent（Agent 協作）。有值就顯示徽章。 */
+  agentName?: string;
 }) {
   const { t } = useLocale();
   const createdLabel = formatCreatedAt(card.created_at);
@@ -231,6 +234,11 @@ export function TaskCard({
         )}
         {card.interactive && (
           <span className="task-badge task-badge--interactive">{t.board_badge_interactive}</span>
+        )}
+        {agentName && (
+          <span className="task-badge task-badge--interactive" data-testid="task-agent-badge">
+            🤖 {agentName}
+          </span>
         )}
         {card.status === "done" && card.outcome && (
           <span className={`task-badge task-badge--${card.outcome}`}>{outcomeLabel}</span>

@@ -13,6 +13,7 @@ import {
   type TaskStatus,
   type TaskWithAttachments,
 } from "../../ipc/tasks";
+import { listAgents } from "../../ipc/agents";
 import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { ArchiveDialog } from "./ArchiveDialog";
@@ -102,10 +103,18 @@ export function ProjectBoard({
    * sibling of every column has no such ancestor to be clipped by. */
   const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null);
 
+  /** agent id → 名稱，給 Agent 協作指派的卡片顯示徽章。 */
+  const [agentNames, setAgentNames] = useState<Record<string, string>>({});
   const refresh = useCallback(async () => {
     const rows = await listTasks(projectId);
     if (!mounted.current) return;
     setTasks(rows);
+    // 只有真的有卡片被指派時才去問——大部分看板不用 Agent。
+    if (rows.some((r) => r.agent_id)) {
+      const agents = await listAgents(projectId).catch(() => []);
+      if (!mounted.current) return;
+      setAgentNames(Object.fromEntries(agents.map((a) => [a.id, a.name])));
+    }
   }, [projectId]);
 
   useEffect(() => {
@@ -438,6 +447,7 @@ export function ProjectBoard({
                       onViewTranscript={() => setTranscriptFor(cardRow.id)}
                       onEditLabel={() => setLabelEditingFor(cardRow.id)}
                       onChanged={() => void refresh()}
+                      agentName={cardRow.agent_id ? agentNames[cardRow.agent_id] : undefined}
                     />
                   </div>
                 );

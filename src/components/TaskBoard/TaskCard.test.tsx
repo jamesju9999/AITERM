@@ -372,3 +372,18 @@ describe("TaskCard 的共花費時間", () => {
     expect(screen.queryByTestId("task-card-duration")).toBeNull();
   });
 });
+
+describe("TaskCard 的 Agent 徽章", () => {
+  it("指派給 Agent 的卡片顯示 Agent 名稱，沒指派的不顯示", () => {
+    const { unmount } = render(
+      <LocaleProvider>
+        <TaskCard projectId="p1" card={card({ agent_id: "a1" })} onEdit={vi.fn()} onViewTranscript={vi.fn()}
+          onEditLabel={vi.fn()} onChanged={vi.fn()} agentName="Coder Agent1" />
+      </LocaleProvider>,
+    );
+    expect(screen.getByTestId("task-agent-badge")).toHaveTextContent("Coder Agent1");
+    unmount();
+    mount();
+    expect(screen.queryByTestId("task-agent-badge")).toBeNull();
+  });
+});
