@@ -50,7 +50,7 @@ import { AgentCanvasView } from "./index";
 const agent = (over: Partial<AgentRow> = {}): AgentRow => ({
   id: "a1", kind: "coder", name: "Coder Agent1", role: "Senior Coder", prompt_prefix: "p",
   project_dir: "/repo/htbktw", canvas_x: 40, canvas_y: 40, worktree_path: null, branch: null,
-  paused_task_id: null, created_at: "", last_merge_signature: null, ...over,
+  paused_task_id: null, created_at: "", last_merge_signature: null, produces_spec: false, ...over,
 });
 
 const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
@@ -58,7 +58,7 @@ const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
   interactive: false, sort_order: 0, outcome: null, tab_id: null, transcript_path: null, error_message: null,
   created_at: "", dispatched_at: null, finished_at: null, ai_summary: null, archived_at: null, session_id: null,
   session_path: null, use_bridge: false, bridge_tiers: null, worktree_path: null, worktree_branch: null,
-  isolate_worktree: null, agent_id: null, start_sha: null, end_sha: null, card_kind: "work", module_id: null, review_of: null, verdict: null, review_reasons: null, module_override: false, attachments: [], ...over,
+  isolate_worktree: null, agent_id: null, start_sha: null, end_sha: null, card_kind: "work", module_id: null, review_of: null, verdict: null, review_reasons: null, module_override: false, is_spec: false, from_spec: null, attachments: [], ...over,
 });
 
 const view = () =>
@@ -290,5 +290,36 @@ describe("AgentCanvasView", () => {
     view();
     await screen.findByTestId("chip-A");
     expect(screen.queryByTestId("chip-F1")).toBeNull();
+  });
+
+  it("選規格撰寫師會勾起「產出規格」，建立時送出 produces_spec", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
+    const dlg = await screen.findByRole("dialog");
+    const box = within(dlg).getByRole("checkbox", { name: /產出規格|Produces specs/ }) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(within(dlg).getByRole("button", { name: /從預設角色帶入|Start from a preset/ }));
+    fireEvent.click(within(dlg).getByRole("menuitem", { name: /規格撰寫師|Spec Writer/ }));
+    expect(box.checked).toBe(true);
+    await waitFor(() => expect((within(dlg).getByLabelText(/程式庫|Repository/) as HTMLInputElement).value).not.toBe(""));
+    fireEvent.click(within(dlg).getByText(/放上桌布|Place on canvas/));
+    await waitFor(() => expect(createAgent).toHaveBeenCalledWith("p1", expect.objectContaining({ produces_spec: true })));
+  });
+
+  it("協調者拆解中：規格模組顯示 🧭，Orchestrator 顯示拆解規格", async () => {
+    vi.mocked(listAgents).mockResolvedValue([
+      agent({ produces_spec: true, name: "規格撰寫師" }),
+      agent({ id: "o1", kind: "orchestrator", name: "O" }),
+    ]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "S", title: "A 規格", status: "done", outcome: "success", agent_id: "a1", is_spec: true }),
+      card({ id: "P", title: "拆解規格：A 規格", status: "running", agent_id: "o1", card_kind: "plan", module_id: "S" }),
+    ]);
+    view();
+    expect((await screen.findByTestId("chip-S")).getAttribute("data-state")).toBe("dispatching");
+    expect(within(screen.getByTestId("agent-o1")).getByText(/拆解規格：A 規格|Splitting spec: A 規格/)).toBeTruthy();
+    expect(within(screen.getByTestId("agent-a1")).getByLabelText(/產出規格|Produces specs/)).toBeTruthy();
   });
 });

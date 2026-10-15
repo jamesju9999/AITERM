@@ -77,7 +77,7 @@ const BASE_CARD: TaskWithAttachments = {
   review_of: null,
   verdict: null,
   review_reasons: null,
-  module_override: false,
+  module_override: false, is_spec: false, from_spec: null,
   attachments: [],
 };
 

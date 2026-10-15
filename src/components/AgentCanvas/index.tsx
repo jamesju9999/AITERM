@@ -329,7 +329,15 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
     if (!projectId || !config) return;
     if (config.agent) {
       const a = config.agent;
-      await updateAgent(projectId, { id: a.id, name: v.name, role: v.role, prompt_prefix: v.prompt_prefix, canvas_x: a.canvas_x, canvas_y: a.canvas_y });
+      await updateAgent(projectId, {
+        id: a.id,
+        name: v.name,
+        role: v.role,
+        prompt_prefix: v.prompt_prefix,
+        canvas_x: a.canvas_x,
+        canvas_y: a.canvas_y,
+        produces_spec: v.produces_spec,
+      });
     } else {
       await createAgent(projectId, {
         kind: config.kind,
@@ -339,6 +347,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
         project_dir: v.project_dir,
         canvas_x: config.x,
         canvas_y: config.y,
+        produces_spec: v.produces_spec,
       });
     }
     setConfig(null);

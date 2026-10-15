@@ -20,6 +20,8 @@ const MODULE_CHIP: Record<ModuleState, { cls: string; icon: string }> = {
   attention: { cls: "ac-chip--bad ac-chip--release", icon: "⚠" },
   failed: { cls: "ac-chip--bad", icon: "✗" },
   review_failed: { cls: "ac-chip--bad ac-chip--release", icon: "⚠" },
+  dispatching: { cls: "ac-chip--plan", icon: "🧭" },
+  dispatch_failed: { cls: "ac-chip--bad", icon: "⚠" },
 };
 
 const shortSha = (s: string | null) => (s ? s.slice(0, 7) : "?");
@@ -97,6 +99,8 @@ export function AgentNode({
     attention: t.ac_ms_attention,
     failed: t.ac_ms_failed,
     review_failed: t.ac_ms_review_failed,
+    dispatching: t.ac_ms_dispatching,
+    dispatch_failed: t.ac_ms_dispatch_failed,
   };
   const canMerge = agent.kind !== "reviewer" && !!agent.branch && (status === "idle" || status === "done");
 
@@ -104,7 +108,10 @@ export function AgentNode({
   const modules = agent.kind === "coder" ? mine.filter((c) => c.card_kind === "work") : [];
   const moduleStates = modules.map((m) => ({ m, s: deriveModuleState(m, tasks, hasReviewer) }));
   const rank = (s: ModuleState) =>
-    ({ coding: 0, attention: 1, review_failed: 1, failed: 1, fix_queued: 2, reviewing: 3, awaiting_review: 3, queued: 4, planning: 4, passed: 5 })[s];
+    ({
+      coding: 0, attention: 1, review_failed: 1, failed: 1, dispatch_failed: 1, fix_queued: 2,
+      reviewing: 3, awaiting_review: 3, dispatching: 3, queued: 4, planning: 4, passed: 5,
+    })[s];
   moduleStates.sort((a, b) => rank(a.s) - rank(b.s) || a.m.sort_order - b.m.sort_order);
   const passedCount = moduleStates.filter((x) => x.s === "passed").length;
 
@@ -126,7 +133,9 @@ export function AgentNode({
       title = t.ac_reviewing_module(module?.title ?? running.title, agentName(module?.agent_id ?? null));
       snip = `git diff ${shortSha(running.start_sha)}..${shortSha(running.end_sha)}`;
     } else if (agent.kind === "orchestrator") {
-      title = t.ac_merge_running;
+      title = running.card_kind === "plan"
+        ? t.ac_splitting_spec(byId(running.module_id)?.title ?? running.title)
+        : t.ac_merge_running;
     }
     return (
       <>
@@ -184,7 +193,14 @@ export function AgentNode({
           {KIND_ICON[agent.kind]}
         </span>
         <div className="ac-agent-name">
-          <b>{agent.name}</b>
+          <b>
+            {agent.produces_spec && (
+              <span className="ac-spec-mark" title={t.ac_spec_badge} aria-label={t.ac_spec_badge}>
+                📐{" "}
+              </span>
+            )}
+            {agent.name}
+          </b>
           <span>{agent.role}</span>
         </div>
         <span className="ac-badge">

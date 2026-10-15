@@ -24,6 +24,8 @@ export interface AgentRow {
   paused_task_id: string | null;
   created_at: string;
   last_merge_signature: string | null;
+  /** Coder：產出規格。 */
+  produces_spec: boolean;
 }
 
 export interface NewAgentArgs {
@@ -34,6 +36,7 @@ export interface NewAgentArgs {
   project_dir: string;
   canvas_x: number;
   canvas_y: number;
+  produces_spec?: boolean;
 }
 
 export interface UpdateAgentArgs {
@@ -43,6 +46,8 @@ export interface UpdateAgentArgs {
   prompt_prefix: string;
   canvas_x: number;
   canvas_y: number;
+  /** 省略 = 不改（例如只是拖動位置）。 */
+  produces_spec?: boolean;
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────

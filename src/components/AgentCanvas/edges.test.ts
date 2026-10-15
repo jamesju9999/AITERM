@@ -6,7 +6,7 @@ import { computeEdges, diffPulses, EDGE_COLORS, edgeActivity } from "./edges";
 
 const ag = (id: string, kind: AgentRow["kind"]): AgentRow => ({
   id, kind, name: id, role: "", prompt_prefix: "", project_dir: "/r", canvas_x: 0, canvas_y: 0,
-  worktree_path: null, branch: null, paused_task_id: null, created_at: "", last_merge_signature: null,
+  worktree_path: null, branch: null, paused_task_id: null, created_at: "", last_merge_signature: null, produces_spec: false,
 });
 
 const card = (over: Partial<TaskRow>): TaskRow => ({
@@ -15,7 +15,7 @@ const card = (over: Partial<TaskRow>): TaskRow => ({
   created_at: "", dispatched_at: null, finished_at: null, ai_summary: null, archived_at: null, session_id: null,
   session_path: null, use_bridge: false, bridge_tiers: null, worktree_path: null, worktree_branch: null,
   isolate_worktree: null, agent_id: null, start_sha: null, end_sha: null, card_kind: "work", module_id: null,
-  review_of: null, verdict: null, review_reasons: null, module_override: false, ...over,
+  review_of: null, verdict: null, review_reasons: null, module_override: false, is_spec: false, from_spec: null, ...over,
 });
 
 const C1 = ag("c1", "coder");
@@ -77,6 +77,16 @@ describe("diffPulses", () => {
     const fx = card({ id: "FA", card_kind: "fix", module_id: "A", agent_id: "c1" });
     expect(diffPulses([modA], [modA, fx], agents)).toEqual([
       { key: "FA:fix", from: "c1", to: "r", color: EDGE_COLORS.fix, reverse: true },
+    ]);
+  });
+
+  it("拆解卡：r→o 綠；拆出的實作卡：o→Coder 紫", () => {
+    const spec = card({ id: "S", agent_id: "c1", status: "done", outcome: "success", is_spec: true });
+    const plan = card({ id: "P", card_kind: "plan", module_id: "S", agent_id: "o" });
+    expect(diffPulses([spec], [spec, plan], agents).map((p) => [p.key, p.from, p.to])).toEqual([["P:plan", "r", "o"]]);
+    const impl = card({ id: "I", agent_id: "c1", from_spec: "S" });
+    expect(diffPulses([spec, plan], [spec, plan, impl], agents)).toEqual([
+      { key: "I:dispatch", from: "o", to: "c1", color: EDGE_COLORS.dispatch, reverse: false },
     ]);
   });
 });

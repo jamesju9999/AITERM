@@ -18,7 +18,18 @@ export type ModuleState =
   | "passed"
   | "attention"
   | "failed"
-  | "review_failed";
+  | "review_failed"
+  | "dispatching"
+  | "dispatch_failed";
+
+/** 規格模組通過審查後還要等協調者拆解完成（與後端 spec_gate 相同）。 */
+function specGate(module: TaskRow, chain: TaskRow[]): ModuleState {
+  if (!module.is_spec) return "passed";
+  const plan = chain.find((c) => c.card_kind === "plan");
+  if (!plan) return "passed";
+  if (plan.status === "queued" || plan.status === "running") return "dispatching";
+  return plan.outcome === "success" ? "passed" : "dispatch_failed";
+}
 
 /** 沿著 模組 → 審查 → 修正 → 審查 … 的鏈走到尾端。 */
 function walk(module: TaskRow, chain: TaskRow[]): { tip: TaskRow; fails: number } {
@@ -54,10 +65,10 @@ export function deriveModuleState(module: TaskRow, all: TaskRow[], hasReviewer: 
   if (module.module_override) return "passed";
   if (isWork) {
     if (tip.outcome !== "success") return "failed";
-    if (tip.card_kind === "work" || !hasReviewer) return "passed";
+    if (tip.card_kind === "work" || !hasReviewer) return specGate(module, chain);
     return "awaiting_review";
   }
-  if (tip.verdict === "pass") return "passed";
+  if (tip.verdict === "pass") return specGate(module, chain);
   if (tip.verdict === "fail") return fails > MAX_FIX_ROUNDS ? "attention" : "fix_queued";
   return "review_failed";
 }

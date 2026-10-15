@@ -70,9 +70,13 @@ export interface TaskRow {
   review_reasons: string | null;
   /** 模組卡：使用者手動放行。 */
   module_override: boolean;
+  /** 模組卡：這是一份規格（審查通過後交給協調者拆解派工）。 */
+  is_spec: boolean;
+  /** 實作卡：由哪一份規格模組拆出來的。 */
+  from_spec: string | null;
 }
 
-export type CardKind = "work" | "review" | "fix" | "merge";
+export type CardKind = "work" | "review" | "fix" | "merge" | "plan";
 
 export interface TaskWithAttachments extends TaskRow {
   attachments: AttachmentRow[];

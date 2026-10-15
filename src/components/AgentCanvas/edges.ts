@@ -28,6 +28,7 @@ export const EDGE_COLORS = {
   review: "#eab308",
   pass: "#22c55e",
   fix: "#f97316",
+  dispatch: "#a855f7",
 } as const;
 
 /** 模組卡所屬的 Coder。review/fix 卡要透過 module_id 回推。 */
@@ -98,6 +99,15 @@ export function diffPulses(prev: TaskRow[] | null, next: TaskRow[], agents: Agen
     }
     if (old && t.card_kind === "review" && t.verdict === "pass" && old.verdict !== "pass" && reviewer && orch) {
       out.push({ key: `${t.id}:pass`, from: reviewer.id, to: orch.id, color: EDGE_COLORS.pass, reverse: false });
+    }
+    // 規格通過、交給協調者拆解：Reviewer（沒有 Reviewer 就是規格撰寫師）→ Orchestrator。
+    if (!old && t.card_kind === "plan" && orch) {
+      const from = reviewer?.id ?? byId.get(t.module_id ?? "")?.agent_id;
+      if (from) out.push({ key: `${t.id}:plan`, from, to: orch.id, color: EDGE_COLORS.pass, reverse: false });
+    }
+    // 協調者把拆出來的實作卡派給 Coder。
+    if (!old && t.card_kind === "work" && t.from_spec && t.agent_id && orch) {
+      out.push({ key: `${t.id}:dispatch`, from: orch.id, to: t.agent_id, color: EDGE_COLORS.dispatch, reverse: false });
     }
     if (!old && t.card_kind === "merge" && orch) {
       const sources = reviewer ? [reviewer.id] : agents.filter((a) => a.kind === "coder").map((a) => a.id);

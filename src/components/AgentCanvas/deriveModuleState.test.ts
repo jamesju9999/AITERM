@@ -10,7 +10,7 @@ const card = (over: Partial<TaskRow>): TaskRow => ({
   error_message: null, created_at: "", dispatched_at: null, finished_at: null, ai_summary: null,
   archived_at: null, session_id: null, session_path: null, use_bridge: false, bridge_tiers: null,
   worktree_path: null, worktree_branch: null, isolate_worktree: null, agent_id: "c1", start_sha: null, end_sha: null,
-  card_kind: "work", module_id: null, review_of: null, verdict: null, review_reasons: null, module_override: false,
+  card_kind: "work", module_id: null, review_of: null, verdict: null, review_reasons: null, module_override: false, is_spec: false, from_spec: null,
   ...over,
 });
 
@@ -71,5 +71,17 @@ describe("deriveModuleState", () => {
 
   it("不看別的模組的鏈", () => {
     expect(deriveModuleState(mod(), [review("M", { module_id: "OTHER", verdict: "fail" })], true)).toBe("passed");
+  });
+
+  it("規格模組：審查通過後等協調者拆解", () => {
+    const m = mod({ is_spec: true });
+    const pass = review("M", { verdict: "pass" });
+    const plan = (over: Partial<TaskRow>) => card({ card_kind: "plan", module_id: "M", agent_id: "o", ...over });
+    expect(deriveModuleState(m, [pass], true)).toBe("passed");
+    expect(deriveModuleState(m, [pass, plan({ status: "running", outcome: null })], true)).toBe("dispatching");
+    expect(deriveModuleState(m, [pass, plan({ outcome: "failed" })], true)).toBe("dispatch_failed");
+    expect(deriveModuleState(m, [pass, plan({})], true)).toBe("passed");
+    // 一般模組不受拆解卡影響
+    expect(deriveModuleState(mod(), [pass, plan({ status: "running", outcome: null })], true)).toBe("passed");
   });
 });

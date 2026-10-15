@@ -7,7 +7,7 @@ import { deriveAgentStatus } from "./deriveAgentStatus";
 const agent = (over: Partial<AgentRow> = {}): AgentRow => ({
   id: "a1", kind: "coder", name: "Coder Agent1", role: "Senior Coder", prompt_prefix: "",
   project_dir: "/r", canvas_x: 0, canvas_y: 0, worktree_path: null, branch: null,
-  paused_task_id: null, created_at: "", last_merge_signature: null, ...over,
+  paused_task_id: null, created_at: "", last_merge_signature: null, produces_spec: false, ...over,
 });
 
 const card = (status: TaskStatus, outcome: TaskRow["outcome"] = null, agent_id: string | null = "a1"): TaskRow => ({
@@ -15,7 +15,7 @@ const card = (status: TaskStatus, outcome: TaskRow["outcome"] = null, agent_id: 
   parallel_ok: true, interactive: false, sort_order: 0, outcome, tab_id: null, transcript_path: null,
   error_message: null, created_at: "", dispatched_at: null, finished_at: null, ai_summary: null,
   archived_at: null, session_id: null, session_path: null, use_bridge: false, bridge_tiers: null,
-  worktree_path: null, worktree_branch: null, isolate_worktree: null, agent_id, start_sha: null, end_sha: null, card_kind: "work", module_id: null, review_of: null, verdict: null, review_reasons: null, module_override: false,
+  worktree_path: null, worktree_branch: null, isolate_worktree: null, agent_id, start_sha: null, end_sha: null, card_kind: "work", module_id: null, review_of: null, verdict: null, review_reasons: null, module_override: false, is_spec: false, from_spec: null,
 });
 
 describe("deriveAgentStatus", () => {

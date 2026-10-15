@@ -12,6 +12,8 @@ export interface AgentConfigValues {
   role: string;
   prompt_prefix: string;
   project_dir: string;
+  /** 只對 Coder 有意義。 */
+  produces_spec: boolean;
 }
 
 /**
@@ -46,6 +48,7 @@ export function AgentConfigDialog({
   const [role, setRole] = useState(agent?.role ?? roles[0].name);
   const [prefix, setPrefix] = useState(agent?.prompt_prefix ?? roles[0].prefix);
   const [dir, setDir] = useState(agent?.project_dir ?? "");
+  const [producesSpec, setProducesSpec] = useState(agent?.produces_spec ?? false);
   const [dirs, setDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +71,8 @@ export function AgentConfigDialog({
   const pickRole = (r: Pick<RolePreset, "name" | "prefix">) => {
     setRole(r.name);
     setPrefix(r.prefix);
+    // 選「規格撰寫師」就順手勾起產出規格；選其他內建角色就取消。我的角色不動。
+    if (kind === "coder" && roles.some((b) => b.name === r.name)) setProducesSpec(r.name === t.ac_role_spec);
     setMenuOpen(false);
     setNotice(null);
   };
@@ -108,7 +113,13 @@ export function AgentConfigDialog({
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ name: name.trim() || defaultName, role: role.trim(), prompt_prefix: prefix, project_dir: dir.trim() });
+      await onSubmit({
+        name: name.trim() || defaultName,
+        role: role.trim(),
+        prompt_prefix: prefix,
+        project_dir: dir.trim(),
+        produces_spec: kind === "coder" && producesSpec,
+      });
     } catch (e) {
       // Tauri 的 invoke 錯誤是字串；其他情況才是 Error。
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
@@ -198,6 +209,12 @@ export function AgentConfigDialog({
             rows={5}
           />
         </label>
+        {kind === "coder" && (
+          <label className="ac-produces-spec">
+            <input type="checkbox" checked={producesSpec} onChange={(e) => setProducesSpec(e.target.checked)} />
+            <span>📐 {t.ac_produces_spec}</span>
+          </label>
+        )}
         <div className="ac-role-save">
           <button
             type="button"
