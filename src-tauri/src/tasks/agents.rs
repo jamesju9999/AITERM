@@ -69,7 +69,8 @@ pub async fn create_agent(pool: &SqlitePool, a: &NewAgent<'_>) -> Result<String,
                 .fetch_one(pool)
                 .await?;
             if n > 0 {
-                return Err(sqlx::Error::Protocol(format!("每個專案最多一個 {}", a.kind)));
+                let label = if a.kind == "reviewer" { "檢核人" } else { "協調者" };
+                return Err(sqlx::Error::Protocol(format!("每個專案最多一個{label}")));
             }
         }
         other => return Err(sqlx::Error::Protocol(format!("未知的 Agent 種類：{other}"))),
@@ -250,7 +251,7 @@ pub async fn assign_task(
             }
             let agent = get_agent(pool, aid).await?.ok_or(sqlx::Error::RowNotFound)?;
             if agent.kind != "coder" {
-                return Err(sqlx::Error::Protocol("模組只能指派給 Coder Agent".into()));
+                return Err(sqlx::Error::Protocol("模組只能指派給工程師".into()));
             }
             let order = max_order(pool, STATUS_QUEUED).await? + 1.0;
             sqlx::query(

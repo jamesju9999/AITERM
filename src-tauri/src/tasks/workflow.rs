@@ -200,7 +200,7 @@ pub fn fix_body(module: &TaskRow, review: &TaskRow, round: usize) -> String {
 
 pub fn merge_body(entries: &[(String, String, Vec<String>)]) -> String {
     let mut s = String::from(
-        "你是統籌合併者。請在目前目錄（整合分支）依序合併以下分支：\n",
+        "你是協調者。請在目前目錄（整合分支）依序合併以下分支：\n",
     );
     for (name, branch, modules) in entries {
         s.push_str(&format!("- {branch}（{name}：{}）\n", modules.join("、")));
@@ -224,7 +224,7 @@ pub fn plan_body(
          - 目前目錄已切到規格的版本 {end}（唯讀用途，不要修改任何檔案）\n\
          - 規格的變更範圍：請先執行 git diff {start}..{end}，讀完規格文件\n\
          \n原始需求：\n{req}\n\
-         \n可以接手實作的 Coder（任務會自動派給最閒的一位，你不用指定）：\n",
+         \n可以接手實作的工程師（任務會自動派給最閒的一位，你不用指定）：\n",
         title = module.title,
         start = start.unwrap_or("HEAD~1"),
         end = end.unwrap_or("HEAD"),
@@ -679,7 +679,7 @@ pub async fn maybe_enqueue_merge(pool: &SqlitePool) -> Result<Option<String>, sq
         return Ok(None);
     }
     let body = merge_body(&entries);
-    let title = format!("合併 {} 個 Coder 分支", entries.len());
+    let title = format!("合併 {} 個工程師分支", entries.len());
     let id = insert_card(
         pool,
         &NewCard {
