@@ -38,6 +38,9 @@ pub struct CreateAgentArgs {
     pub project_dir: String,
     pub canvas_x: f64,
     pub canvas_y: f64,
+    /// Coder：產出規格（見規格先行 spec）。舊前端不送就是 false。
+    #[serde(default)]
+    pub produces_spec: bool,
 }
 
 #[tauri::command]
@@ -69,6 +72,9 @@ pub async fn agents_create(
     )
     .await
     .map_err(|e| e.to_string())?;
+    if args.produces_spec && args.kind == "coder" {
+        agents::set_produces_spec(&p.pool, &id, true).await.map_err(|e| e.to_string())?;
+    }
     emit_updated(&app);
     Ok(id)
 }
@@ -81,6 +87,9 @@ pub struct UpdateAgentArgs {
     pub prompt_prefix: String,
     pub canvas_x: f64,
     pub canvas_y: f64,
+    /// `None` = 不改（例如只是在桌布上拖動位置）。
+    #[serde(default)]
+    pub produces_spec: Option<bool>,
 }
 
 #[tauri::command]
@@ -94,6 +103,9 @@ pub async fn agents_update(
     agents::update_agent(&p.pool, &args.id, &args.name, &args.role, &args.prompt_prefix, args.canvas_x, args.canvas_y)
         .await
         .map_err(|e| e.to_string())?;
+    if let Some(v) = args.produces_spec {
+        agents::set_produces_spec(&p.pool, &args.id, v).await.map_err(|e| e.to_string())?;
+    }
     emit_updated(&app);
     Ok(())
 }

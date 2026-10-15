@@ -332,6 +332,43 @@ pub(crate) async fn finalize_review_card(
     outcome
 }
 
+/// 拆解卡結案：驗證 tasks.json（實際建卡在 workflow::after_card_finished），
+/// 不合格就判失敗並暫停 Orchestrator，最後清掉唯讀目錄。
+pub(crate) async fn finalize_plan_card(
+    pool: &sqlx::SqlitePool,
+    project_storage_path: &std::path::Path,
+    orchestrator_id: &str,
+    task_id: &str,
+    repo_dir: &str,
+    worktree: &std::path::Path,
+    outcome: monitor::TaskOutcome,
+) -> monitor::TaskOutcome {
+    let outcome = if matches!(outcome, monitor::TaskOutcome::Success) {
+        let path = crate::tasks::workflow::tasks_json_path(project_storage_path, task_id);
+        match std::fs::read_to_string(&path)
+            .map_err(|e| format!("找不到 {}：{e}", path.display()))
+            .and_then(|t| crate::tasks::workflow::parse_plan_json(&t))
+        {
+            Ok(_) => monitor::TaskOutcome::Success,
+            Err(e) => monitor::TaskOutcome::Failed(format!("拆解沒有產出有效的 tasks.json：{e}")),
+        }
+    } else {
+        outcome
+    };
+    if !matches!(outcome, monitor::TaskOutcome::Success) {
+        if let Err(e) = crate::tasks::agents::set_paused(pool, orchestrator_id, Some(task_id)).await {
+            eprintln!("pause orchestrator {orchestrator_id}: {e}");
+        }
+    }
+    let repo = crate::vcs::git::GitClient::new(repo_dir.to_string(), None);
+    if let Err(e) = repo.remove_worktree_force(&worktree.to_string_lossy()).await {
+        eprintln!("remove plan worktree {}: {e}", worktree.display());
+        let _ = std::fs::remove_dir_all(worktree);
+        let _ = repo.prune_worktrees().await;
+    }
+    outcome
+}
+
 /// 審查不通過超過上限時送給前端的通知。
 #[derive(Clone, serde::Serialize)]
 struct ModuleAttentionEvent {
@@ -414,8 +451,10 @@ impl Dispatcher for RealDispatcher {
             ),
             None => None,
         };
-        let (effective_dir, worktree_info) = if let Some(agent) = agent.as_ref().filter(|a| a.kind == "reviewer") {
-            // Reviewer：在受審版本的唯讀目錄審，不記 start_sha（那兩欄存的是受審範圍）。
+        let readonly = task.card_kind == crate::tasks::workflow::KIND_REVIEW
+            || task.card_kind == crate::tasks::workflow::KIND_PLAN;
+        let (effective_dir, worktree_info) = if let Some(agent) = agent.as_ref().filter(|_| readonly) {
+            // 審查卡、拆解卡：在受審版本的唯讀目錄跑，不記 start_sha（那兩欄存的是受審範圍）。
             let wt = prepare_review_worktree(&project.path, &agent.id, task).await?;
             prompt = with_role_prefix(&agent.prompt_prefix, &prompt);
             (wt, None)
@@ -509,8 +548,11 @@ impl Dispatcher for RealDispatcher {
                 &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode,
             ).await;
             let outcome = match &agent_ctx {
-                Some((agent_id, kind, worktree)) if kind == "reviewer" => {
+                Some((agent_id, _, worktree)) if card_kind == crate::tasks::workflow::KIND_REVIEW => {
                     finalize_review_card(&pool, &project_path, agent_id, &task_id, &repo_dir, worktree, outcome).await
+                }
+                Some((agent_id, _, worktree)) if card_kind == crate::tasks::workflow::KIND_PLAN => {
+                    finalize_plan_card(&pool, &project_path, agent_id, &task_id, &repo_dir, worktree, outcome).await
                 }
                 Some((agent_id, _, worktree)) => {
                     let msg = commit_message_for(&card_kind, &task_title);
@@ -920,6 +962,8 @@ mod tests {
             verdict: None,
             review_reasons: None,
             module_override: false,
+            is_spec: false,
+            from_spec: None,
         }
     }
 
@@ -1070,6 +1114,8 @@ mod tests {
             verdict: None,
             review_reasons: None,
             module_override: false,
+            is_spec: false,
+            from_spec: None,
         }
     }
 

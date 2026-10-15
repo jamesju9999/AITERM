@@ -31,6 +31,9 @@ pub struct AgentRow {
     pub created_at: String,
     /// Orchestrator：上一次為哪一組模組版本建立過合併卡（見 workflow::maybe_enqueue_merge）。
     pub last_merge_signature: Option<String>,
+    /// Coder：產出規格。指派給它的卡片是規格模組，審查通過後交給
+    /// Orchestrator 拆解派工；它自己也不會被挑來做拆出來的實作卡。
+    pub produces_spec: bool,
 }
 
 pub struct NewAgent<'a> {
@@ -140,6 +143,15 @@ pub async fn set_agent_worktree(
     Ok(())
 }
 
+pub async fn set_produces_spec(pool: &SqlitePool, id: &str, value: bool) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE agents SET produces_spec = ? WHERE id = ?")
+        .bind(value)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// `Some(task_id)` 暫停、`None` 解除暫停。
 pub async fn set_paused(pool: &SqlitePool, id: &str, task_id: Option<&str>) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE agents SET paused_task_id = ? WHERE id = ?")
@@ -242,12 +254,13 @@ pub async fn assign_task(
             }
             let order = max_order(pool, STATUS_QUEUED).await? + 1.0;
             sqlx::query(
-                "UPDATE tasks SET agent_id = ?, project_dir = ?, status = ?, sort_order = ? WHERE id = ?",
+                "UPDATE tasks SET agent_id = ?, project_dir = ?, status = ?, sort_order = ?, is_spec = ? WHERE id = ?",
             )
             .bind(aid)
             .bind(&agent.project_dir)
             .bind(STATUS_QUEUED)
             .bind(order)
+            .bind(agent.produces_spec)
             .bind(task_id)
             .execute(pool)
             .await?;
@@ -476,6 +489,21 @@ mod tests {
             .bind(&rid).execute(&pool).await.unwrap();
         delete_agent(&pool, &rid).await.unwrap();
         assert!(store::get_task(&pool, "rv").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn assigning_to_a_spec_writer_marks_the_card_as_a_spec() {
+        let pool = mem_pool().await;
+        let writer = coder(&pool, "Spec").await;
+        set_produces_spec(&pool, &writer, true).await.unwrap();
+        let plain = coder(&pool, "C2").await;
+        let a = store::create_task(&pool, "A", "", "/r", true, false).await.unwrap();
+        let b = store::create_task(&pool, "B", "", "/r", true, false).await.unwrap();
+        assign_task(&pool, &a, Some(&writer)).await.unwrap();
+        assign_task(&pool, &b, Some(&plain)).await.unwrap();
+        assert!(store::get_task(&pool, &a).await.unwrap().unwrap().is_spec);
+        assert!(!store::get_task(&pool, &b).await.unwrap().unwrap().is_spec);
+        assert!(get_agent(&pool, &writer).await.unwrap().unwrap().produces_spec);
     }
 
     #[tokio::test]

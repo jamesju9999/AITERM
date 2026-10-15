@@ -118,7 +118,9 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             review_of       TEXT,
             verdict         TEXT,
             review_reasons  TEXT,
-            module_override INTEGER NOT NULL DEFAULT 0
+            module_override INTEGER NOT NULL DEFAULT 0,
+            is_spec         INTEGER NOT NULL DEFAULT 0,
+            from_spec       TEXT
         )",
     )
     .execute(pool)
@@ -191,6 +193,9 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE tasks ADD COLUMN verdict TEXT",
         "ALTER TABLE tasks ADD COLUMN review_reasons TEXT",
         "ALTER TABLE tasks ADD COLUMN module_override INTEGER NOT NULL DEFAULT 0",
+        // 規格先行，見 docs/superpowers/specs/2026-10-15-agent-canvas-spec-first-design.md。
+        "ALTER TABLE tasks ADD COLUMN is_spec INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN from_spec TEXT",
     ] {
         let _ = sqlx::query(ddl).execute(pool).await;
     }
@@ -208,12 +213,16 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             branch          TEXT,
             paused_task_id  TEXT,
             created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            last_merge_signature TEXT
+            last_merge_signature TEXT,
+            produces_spec   INTEGER NOT NULL DEFAULT 0
         )",
     )
     .execute(pool)
     .await?;
     let _ = sqlx::query("ALTER TABLE agents ADD COLUMN last_merge_signature TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE agents ADD COLUMN produces_spec INTEGER NOT NULL DEFAULT 0")
         .execute(pool)
         .await;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")

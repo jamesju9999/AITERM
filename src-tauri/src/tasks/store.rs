@@ -87,6 +87,11 @@ pub struct TaskRow {
     pub review_reasons: Option<String>,
     /// 模組卡：使用者手動放行（審查不通過超過上限之後）。
     pub module_override: bool,
+    /// 模組卡：這是一份規格（指派時從 Agent 的 `produces_spec` 複製）。審查
+    /// 通過後交給 Orchestrator 拆成實作卡。
+    pub is_spec: bool,
+    /// 實作卡：由哪一份規格模組拆出來的。
+    pub from_spec: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

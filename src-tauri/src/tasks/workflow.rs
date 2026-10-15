@@ -21,6 +21,12 @@ pub const KIND_WORK: &str = "work";
 pub const KIND_REVIEW: &str = "review";
 pub const KIND_FIX: &str = "fix";
 pub const KIND_MERGE: &str = "merge";
+/// Orchestrator 拆解一份通過審查的規格（見規格先行 spec）。
+pub const KIND_PLAN: &str = "plan";
+/// 一份規格最多拆成幾張實作卡。
+pub const MAX_PLAN_TASKS: usize = 20;
+/// 附在實作卡內文裡的規格全文上限（字元）。
+const SPEC_APPENDIX_LIMIT: usize = 30_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,6 +44,24 @@ pub enum ModuleState {
     Failed,
     /// 審查卡本身失敗（沒有產出 review.json、卡住…），Reviewer 已暫停。
     ReviewFailed,
+    /// 規格通過審查，Orchestrator 正在（或排隊）拆解成實作卡。
+    Dispatching,
+    /// 拆解失敗（沒有產出有效的 tasks.json…），Orchestrator 已暫停。
+    DispatchFailed,
+}
+
+/// 規格模組「通過」之前還要過拆解這一關：有拆解卡就看它的結果。沒有拆解卡
+/// （沒有 Orchestrator）就照一般模組算通過。
+fn spec_gate(module: &TaskRow, chain: &[TaskRow]) -> ModuleState {
+    if !module.is_spec {
+        return ModuleState::Passed;
+    }
+    match chain.iter().find(|c| c.card_kind == KIND_PLAN) {
+        None => ModuleState::Passed,
+        Some(p) if p.status == STATUS_QUEUED || p.status == STATUS_RUNNING => ModuleState::Dispatching,
+        Some(p) if p.outcome.as_deref() == Some("success") => ModuleState::Passed,
+        Some(_) => ModuleState::DispatchFailed,
+    }
 }
 
 /// 沿著鏈走到尾端。`chain` 是 `module_id == module.id` 的卡片（順序不拘）。
@@ -95,12 +119,12 @@ pub fn module_state(module: &TaskRow, chain: &[TaskRow], has_reviewer: bool) -> 
         }
         // 模組本身做完、從來沒有審查 → 完成時沒有 Reviewer，算通過。
         if tip.card_kind == KIND_WORK || !has_reviewer {
-            return ModuleState::Passed;
+            return spec_gate(module, chain);
         }
         return ModuleState::AwaitingReview;
     }
     match tip.verdict.as_deref() {
-        Some("pass") => ModuleState::Passed,
+        Some("pass") => spec_gate(module, chain),
         Some("fail") if fails > MAX_FIX_ROUNDS => ModuleState::Attention,
         Some("fail") => ModuleState::FixQueued,
         _ => ModuleState::ReviewFailed,
@@ -111,6 +135,11 @@ pub fn module_state(module: &TaskRow, chain: &[TaskRow], has_reviewer: bool) -> 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowEvent {
     Attention { module_id: String, module_title: String },
+}
+
+/// `<專案>/tasks/<plan_id>/tasks.json`——Orchestrator 寫拆解結果的位置。
+pub fn tasks_json_path(project_path: &Path, plan_id: &str) -> std::path::PathBuf {
+    crate::tasks::task_dir(project_path, plan_id).join("tasks.json")
 }
 
 /// `<專案>/tasks/<review_id>/review.json`——Reviewer 寫判定的位置。
@@ -183,6 +212,94 @@ pub fn merge_body(entries: &[(String, String, Vec<String>)]) -> String {
     s
 }
 
+pub fn plan_body(
+    module: &TaskRow,
+    start: Option<&str>,
+    end: Option<&str>,
+    implementers: &[(String, String)],
+    json_path: &Path,
+) -> String {
+    let mut s = format!(
+        "請把模組「{title}」已通過審查的規格拆解成可以分頭實作的任務。\n\
+         - 目前目錄已切到規格的版本 {end}（唯讀用途，不要修改任何檔案）\n\
+         - 規格的變更範圍：請先執行 git diff {start}..{end}，讀完規格文件\n\
+         \n原始需求：\n{req}\n\
+         \n可以接手實作的 Coder（任務會自動派給最閒的一位，你不用指定）：\n",
+        title = module.title,
+        start = start.unwrap_or("HEAD~1"),
+        end = end.unwrap_or("HEAD"),
+        req = module.body,
+    );
+    if implementers.is_empty() {
+        s.push_str("- （目前沒有）\n");
+    }
+    for (name, role) in implementers {
+        s.push_str(&format!("- {name}（{role}）\n"));
+    }
+    s.push_str(&format!(
+        "\n拆解原則：每個任務要能獨立實作與審查；body 要自給自足，寫清楚要做什麼、對應規格的哪個章節、驗收條件。\n\
+         最多 {max} 個任務。\n\
+         完成後把結果寫成 JSON 檔到：{path}\n\
+         格式：{{\"tasks\": [{{\"title\": \"…\", \"body\": \"…\"}}]}}\n",
+        max = MAX_PLAN_TASKS,
+        path = json_path.display(),
+    ));
+    s
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct PlanTask {
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PlanFile {
+    tasks: Vec<PlanTask>,
+}
+
+/// tasks.json：1 到 `MAX_PLAN_TASKS` 張、每張標題非空。
+pub fn parse_plan_json(text: &str) -> Result<Vec<PlanTask>, String> {
+    let f: PlanFile = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+    let tasks: Vec<PlanTask> = f
+        .tasks
+        .into_iter()
+        .map(|t| PlanTask { title: t.title.trim().to_string(), body: t.body })
+        .collect();
+    if tasks.is_empty() {
+        return Err("tasks 是空的".into());
+    }
+    if tasks.len() > MAX_PLAN_TASKS {
+        return Err(format!("最多 {MAX_PLAN_TASKS} 個任務，收到 {}", tasks.len()));
+    }
+    if tasks.iter().any(|t| t.title.is_empty()) {
+        return Err("有任務沒有標題".into());
+    }
+    Ok(tasks)
+}
+
+/// 規格範圍內新增／修改的檔案在 `end` 的內容，串成一段附在實作卡內文。
+/// 實作的 Coder 在自己的分支上，看不到規格撰寫師分支上的檔案，所以要附全文。
+async fn spec_appendix(repo_dir: &str, start: Option<&str>, end: Option<&str>) -> String {
+    let (Some(start), Some(end)) = (start, end) else { return String::new() };
+    let client = crate::vcs::git::GitClient::new(repo_dir.to_string(), None);
+    let files = match client.changed_files(start, end).await {
+        Ok(f) => f,
+        Err(e) => return format!("\n\n（讀取規格檔案失敗：{e}）\n"),
+    };
+    let mut out = String::from("\n\n## 規格全文\n");
+    for f in files {
+        let Ok(text) = client.show_file(end, &f).await else { continue };
+        out.push_str(&format!("\n### {f}\n\n{text}\n"));
+        if out.chars().count() > SPEC_APPENDIX_LIMIT {
+            let cut: String = out.chars().take(SPEC_APPENDIX_LIMIT).collect();
+            return format!("{cut}\n\n（規格太長，已截斷；完整內容在 {end} 的 {f} 等檔案）\n");
+        }
+    }
+    out
+}
+
 struct NewCard<'a> {
     title: &'a str,
     body: &'a str,
@@ -194,14 +311,15 @@ struct NewCard<'a> {
     start_sha: Option<&'a str>,
     end_sha: Option<&'a str>,
     sort_order: f64,
+    from_spec: Option<&'a str>,
 }
 
 async fn insert_card(pool: &SqlitePool, c: &NewCard<'_>) -> Result<String, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO tasks (id, title, body, project_dir, status, parallel_ok, interactive, sort_order,
-                            agent_id, card_kind, module_id, review_of, start_sha, end_sha)
-         VALUES (?, ?, ?, ?, 'queued', 1, 0, ?, ?, ?, ?, ?, ?, ?)",
+                            agent_id, card_kind, module_id, review_of, start_sha, end_sha, from_spec)
+         VALUES (?, ?, ?, ?, 'queued', 1, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(c.title)
@@ -214,9 +332,142 @@ async fn insert_card(pool: &SqlitePool, c: &NewCard<'_>) -> Result<String, sqlx:
     .bind(c.review_of)
     .bind(c.start_sha)
     .bind(c.end_sha)
+    .bind(c.from_spec)
     .execute(pool)
     .await?;
     Ok(id)
+}
+
+/// 建一張拆解卡給 Orchestrator。`start/end` 是通過審查的規格版本範圍。
+async fn create_plan_card(
+    pool: &SqlitePool,
+    project_path: &Path,
+    module: &TaskRow,
+    orch: &AgentRow,
+    all_agents: &[AgentRow],
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<String, sqlx::Error> {
+    let implementers: Vec<(String, String)> = all_agents
+        .iter()
+        .filter(|a| a.kind == "coder" && !a.produces_spec)
+        .map(|a| (a.name.clone(), a.role.clone()))
+        .collect();
+    let title = format!("拆解規格：{}", module.title);
+    let id = insert_card(
+        pool,
+        &NewCard {
+            title: &title,
+            body: "",
+            project_dir: &module.project_dir,
+            agent_id: &orch.id,
+            card_kind: KIND_PLAN,
+            module_id: Some(&module.id),
+            review_of: None,
+            start_sha: start,
+            end_sha: end,
+            sort_order: queued_tail(pool).await?,
+            from_spec: None,
+        },
+    )
+    .await?;
+    let body = plan_body(module, start, end, &implementers, &tasks_json_path(project_path, &id));
+    sqlx::query("UPDATE tasks SET body = ? WHERE id = ?").bind(&body).bind(&id).execute(pool).await?;
+    Ok(id)
+}
+
+/// 依「最閒」挑 Coder：queued+running 卡數最少，再比名下 work 卡總數，再比
+/// 建立順序。產出規格的 Coder 不參與。`load` 由呼叫端持有，每派一張就 +1，
+/// 同一次拆出的多張卡才會平均分散。
+fn pick_least_busy<'a>(
+    candidates: &'a [&'a AgentRow],
+    load: &HashMap<String, (usize, usize)>,
+) -> Option<&'a AgentRow> {
+    candidates.iter().copied().min_by(|a, b| {
+        let la = load.get(&a.id).copied().unwrap_or((0, 0));
+        let lb = load.get(&b.id).copied().unwrap_or((0, 0));
+        la.cmp(&lb).then(a.created_at.cmp(&b.created_at)).then(a.id.cmp(&b.id))
+    })
+}
+
+/// 拆解卡成功：讀 tasks.json，建實作卡並派給最閒的 Coder。沒有可實作的
+/// Coder 時建在「計畫中」並回報 Attention。
+async fn dispatch_plan(
+    pool: &SqlitePool,
+    project_path: &Path,
+    plan: &TaskRow,
+    all_agents: &[AgentRow],
+) -> Result<Vec<WorkflowEvent>, sqlx::Error> {
+    let mut events = Vec::new();
+    let Some(mid) = plan.module_id.as_deref() else { return Ok(events) };
+    let Some(module) = store::get_task(pool, mid).await? else { return Ok(events) };
+    let tasks = match std::fs::read_to_string(tasks_json_path(project_path, &plan.id))
+        .map_err(|e| e.to_string())
+        .and_then(|t| parse_plan_json(&t))
+    {
+        Ok(t) => t,
+        Err(e) => {
+            // finalize 已經驗證過；走到這裡代表檔案在中間被動過。不建卡、提醒使用者。
+            eprintln!("dispatch_plan {}: {e}", plan.id);
+            events.push(WorkflowEvent::Attention { module_id: module.id.clone(), module_title: module.title.clone() });
+            return Ok(events);
+        }
+    };
+    let appendix = spec_appendix(&module.project_dir, plan.start_sha.as_deref(), plan.end_sha.as_deref()).await;
+
+    let candidates: Vec<&AgentRow> = all_agents.iter().filter(|a| a.kind == "coder" && !a.produces_spec).collect();
+    let current = store::list_tasks(pool).await?;
+    let mut load: HashMap<String, (usize, usize)> = HashMap::new();
+    for c in &candidates {
+        let busy = current
+            .iter()
+            .filter(|t| t.agent_id.as_deref() == Some(c.id.as_str()) && (t.status == STATUS_QUEUED || t.status == STATUS_RUNNING))
+            .count();
+        let total = current
+            .iter()
+            .filter(|t| t.agent_id.as_deref() == Some(c.id.as_str()) && t.card_kind == KIND_WORK)
+            .count();
+        load.insert(c.id.clone(), (busy, total));
+    }
+
+    for t in tasks {
+        let body = format!(
+            "{}\n\n（這是從規格「{}」拆出來的任務；規格文件也一併附在下面。）{}",
+            t.body, module.title, appendix
+        );
+        match pick_least_busy(&candidates, &load) {
+            Some(coder) => {
+                insert_card(
+                    pool,
+                    &NewCard {
+                        title: &t.title,
+                        body: &body,
+                        project_dir: &coder.project_dir,
+                        agent_id: &coder.id,
+                        card_kind: KIND_WORK,
+                        module_id: None,
+                        review_of: None,
+                        start_sha: None,
+                        end_sha: None,
+                        sort_order: queued_tail(pool).await?,
+                        from_spec: Some(&module.id),
+                    },
+                )
+                .await?;
+                let e = load.entry(coder.id.clone()).or_insert((0, 0));
+                e.0 += 1;
+                e.1 += 1;
+            }
+            None => {
+                let id = store::create_task(pool, &t.title, &body, &module.project_dir, true, false).await?;
+                sqlx::query("UPDATE tasks SET from_spec = ? WHERE id = ?").bind(&module.id).bind(&id).execute(pool).await?;
+            }
+        }
+    }
+    if candidates.is_empty() {
+        events.push(WorkflowEvent::Attention { module_id: module.id.clone(), module_title: module.title.clone() });
+    }
+    Ok(events)
 }
 
 async fn queued_tail(pool: &SqlitePool) -> Result<f64, sqlx::Error> {
@@ -255,6 +506,15 @@ pub async fn after_card_finished(
             } else {
                 Some(task.clone())
             };
+            if let (Some(module), None, Some(orch)) =
+                (module.as_ref(), find_kind(&all_agents, "reviewer"), find_kind(&all_agents, "orchestrator"))
+            {
+                // 沒有 Reviewer：規格做完直接交給 Orchestrator 拆解。
+                if module.is_spec {
+                    create_plan_card(pool, project_path, module, orch, &all_agents, task.start_sha.as_deref(), task.end_sha.as_deref())
+                        .await?;
+                }
+            }
             if let (Some(module), Some(reviewer)) = (module, find_kind(&all_agents, "reviewer")) {
                 let previous = match task.review_of.as_deref() {
                     Some(rid) => store::get_task(pool, rid).await?,
@@ -279,12 +539,28 @@ pub async fn after_card_finished(
                         start_sha: task.start_sha.as_deref(),
                         end_sha: task.end_sha.as_deref(),
                         sort_order: queued_tail(pool).await?,
+                        from_spec: None,
                     },
                 )
                 .await?;
                 let body = review_body(&module, &task, &review_json_path(project_path, &id), previous.as_ref());
                 sqlx::query("UPDATE tasks SET body = ? WHERE id = ?").bind(&body).bind(&id).execute(pool).await?;
             }
+        }
+        KIND_REVIEW if success && task.verdict.as_deref() == Some("pass") => {
+            let module = match task.module_id.as_deref() {
+                Some(mid) => store::get_task(pool, mid).await?,
+                None => None,
+            };
+            if let (Some(module), Some(orch)) = (module, find_kind(&all_agents, "orchestrator")) {
+                if module.is_spec && !module.module_override {
+                    create_plan_card(pool, project_path, &module, orch, &all_agents, task.start_sha.as_deref(), task.end_sha.as_deref())
+                        .await?;
+                }
+            }
+        }
+        KIND_PLAN if success => {
+            events.extend(dispatch_plan(pool, project_path, &task, &all_agents).await?);
         }
         KIND_REVIEW if success && task.verdict.as_deref() == Some("fail") => {
             let Some(mid) = task.module_id.as_deref() else { return Ok(events) };
@@ -318,6 +594,7 @@ pub async fn after_card_finished(
                         start_sha: None,
                         end_sha: None,
                         sort_order: order,
+                        from_spec: None,
                     },
                 )
                 .await?;
@@ -416,6 +693,7 @@ pub async fn maybe_enqueue_merge(pool: &SqlitePool) -> Result<Option<String>, sq
             start_sha: None,
             end_sha: None,
             sort_order: queued_tail(pool).await?,
+            from_spec: None,
         },
     )
     .await?;
@@ -729,5 +1007,200 @@ mod tests {
         let module = tasks.iter().find(|t| t.id == m).unwrap();
         assert_eq!(module_state(module, &chain, true), ModuleState::ReviewFailed);
         override_module(&pool, &m).await.unwrap();
+    }
+
+    // ── 規格先行 ─────────────────────────────────────────────────────────
+
+    async fn spec_writer(pool: &SqlitePool) -> String {
+        let id = agent(pool, "coder", "規格撰寫師").await;
+        agents::set_produces_spec(pool, &id, true).await.unwrap();
+        id
+    }
+
+    /// 一份規格模組：由規格撰寫師做完、審查通過。回傳 (模組 id, 審查卡 id)。
+    async fn passed_spec(pool: &SqlitePool, writer: &str, p: &Path, start: &str, end: &str) -> (String, String) {
+        let id = store::create_task(pool, "A 規格", "寫 A 的規格", "/repo", true, false).await.unwrap();
+        agents::assign_task(pool, &id, Some(writer)).await.unwrap();
+        store::dispatch_for_test(pool, &id, "tab").await;
+        store::set_start_sha(pool, &id, start).await.unwrap();
+        store::set_end_sha(pool, &id, end).await.unwrap();
+        store::finish_task(pool, &id, "success", None, None).await.unwrap();
+        after_card_finished(pool, p, &id).await.unwrap();
+        let review = of_kind(&all(pool).await, KIND_REVIEW)[0].id.clone();
+        finish_review(pool, &review, "pass").await;
+        (id, review)
+    }
+
+    fn chain_of(tasks: &[TaskRow], m: &str) -> Vec<TaskRow> {
+        tasks.iter().filter(|t| t.module_id.as_deref() == Some(m)).cloned().collect()
+    }
+
+    #[tokio::test]
+    async fn an_approved_spec_goes_to_the_orchestrator_for_splitting() {
+        let pool = mem_pool().await;
+        let w = spec_writer(&pool).await;
+        agent(&pool, "coder", "實作一號").await;
+        agent(&pool, "reviewer", "R").await;
+        let o = agent(&pool, "orchestrator", "O").await;
+        let p = Path::new("/proj");
+        let (m, review) = passed_spec(&pool, &w, p, "s0", "e1").await;
+
+        after_card_finished(&pool, p, &review).await.unwrap();
+
+        let tasks = all(&pool).await;
+        let plans = of_kind(&tasks, KIND_PLAN);
+        assert_eq!(plans.len(), 1);
+        let plan = plans[0];
+        assert_eq!(plan.agent_id.as_deref(), Some(o.as_str()));
+        assert_eq!(plan.module_id.as_deref(), Some(m.as_str()));
+        assert_eq!((plan.start_sha.as_deref(), plan.end_sha.as_deref()), (Some("s0"), Some("e1")));
+        assert!(plan.body.contains("實作一號"), "要列出可實作的 Coder");
+        assert!(!plan.body.contains("規格撰寫師（"), "產出規格的 Coder 不能出現在實作清單");
+        assert!(plan.body.contains(&tasks_json_path(p, &plan.id).display().to_string()));
+        assert!(of_kind(&tasks, KIND_MERGE).is_empty(), "拆解完成前不能合併");
+        let module = tasks.iter().find(|t| t.id == m).unwrap();
+        assert_eq!(module_state(module, &chain_of(&tasks, &m), true), ModuleState::Dispatching);
+    }
+
+    #[tokio::test]
+    async fn without_an_orchestrator_an_approved_spec_simply_passes() {
+        let pool = mem_pool().await;
+        let w = spec_writer(&pool).await;
+        agent(&pool, "reviewer", "R").await;
+        let p = Path::new("/proj");
+        let (m, review) = passed_spec(&pool, &w, p, "s0", "e1").await;
+        after_card_finished(&pool, p, &review).await.unwrap();
+        let tasks = all(&pool).await;
+        assert!(of_kind(&tasks, KIND_PLAN).is_empty());
+        let module = tasks.iter().find(|t| t.id == m).unwrap();
+        assert_eq!(module_state(module, &chain_of(&tasks, &m), true), ModuleState::Passed);
+    }
+
+    #[tokio::test]
+    async fn a_failed_plan_is_dispatch_failed() {
+        let pool = mem_pool().await;
+        let w = spec_writer(&pool).await;
+        agent(&pool, "reviewer", "R").await;
+        agent(&pool, "orchestrator", "O").await;
+        let p = Path::new("/proj");
+        let (m, review) = passed_spec(&pool, &w, p, "s0", "e1").await;
+        after_card_finished(&pool, p, &review).await.unwrap();
+        let plan = of_kind(&all(&pool).await, KIND_PLAN)[0].id.clone();
+        store::dispatch_for_test(&pool, &plan, "t").await;
+        store::finish_task(&pool, &plan, "failed", Some("沒有 tasks.json"), None).await.unwrap();
+        let tasks = all(&pool).await;
+        let module = tasks.iter().find(|t| t.id == m).unwrap();
+        assert_eq!(module_state(module, &chain_of(&tasks, &m), true), ModuleState::DispatchFailed);
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        assert!(std::process::Command::new("git").args(args).current_dir(dir).status().unwrap().success());
+    }
+
+    fn head(dir: &Path) -> String {
+        let out = std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(dir).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn a_finished_plan_spreads_tasks_over_the_least_busy_coders_with_the_spec_attached() {
+        // 真的 git repo：規格檔案在範圍內被新增，實作卡要附上它的全文。
+        let repo = tempfile::tempdir().unwrap();
+        git(repo.path(), &["init", "-q"]);
+        git(repo.path(), &["config", "user.email", "t@t"]);
+        git(repo.path(), &["config", "user.name", "T"]);
+        std::fs::write(repo.path().join("README.md"), "x").unwrap();
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-qm", "init"]);
+        let start = head(repo.path());
+        std::fs::create_dir_all(repo.path().join("docs/specs")).unwrap();
+        std::fs::write(repo.path().join("docs/specs/A.md"), "# A 規格\n登入要支援 SSO").unwrap();
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-qm", "spec"]);
+        let end = head(repo.path());
+        let repo_dir = repo.path().to_string_lossy().into_owned();
+
+        let pool = mem_pool().await;
+        let w = spec_writer(&pool).await;
+        // 指派時卡片的工作目錄會換成 Agent 的程式庫，所以規格撰寫師要指向真的 repo。
+        sqlx::query("UPDATE agents SET project_dir = ? WHERE id = ?").bind(&repo_dir).bind(&w).execute(&pool).await.unwrap();
+        let busy = agent(&pool, "coder", "忙碌的").await;
+        let idle = agent(&pool, "coder", "閒的").await;
+        let o = agent(&pool, "orchestrator", "O").await;
+        // 「忙碌的」手上已經有一張排隊的卡。
+        let other = store::create_task(&pool, "其他", "", &repo_dir, true, false).await.unwrap();
+        agents::assign_task(&pool, &other, Some(&busy)).await.unwrap();
+
+        let project = tempfile::tempdir().unwrap();
+        let spec = store::create_task(&pool, "A 規格", "寫 A 的規格", &repo_dir, true, false).await.unwrap();
+        agents::assign_task(&pool, &spec, Some(&w)).await.unwrap();
+        store::dispatch_for_test(&pool, &spec, "tab").await;
+        store::set_start_sha(&pool, &spec, &start).await.unwrap();
+        store::set_end_sha(&pool, &spec, &end).await.unwrap();
+        store::finish_task(&pool, &spec, "success", None, None).await.unwrap();
+        // 沒有 Reviewer：規格做完直接交給 Orchestrator。
+        after_card_finished(&pool, project.path(), &spec).await.unwrap();
+        let plan = of_kind(&all(&pool).await, KIND_PLAN)[0].clone();
+        assert_eq!(plan.agent_id.as_deref(), Some(o.as_str()));
+
+        let json = tasks_json_path(project.path(), &plan.id);
+        std::fs::create_dir_all(json.parent().unwrap()).unwrap();
+        std::fs::write(&json, r#"{"tasks":[{"title":"A-後端 API","body":"做 API"},{"title":"A-登入頁","body":"做畫面"},{"title":"A-測試","body":"補測試"}]}"#).unwrap();
+        store::dispatch_for_test(&pool, &plan.id, "t").await;
+        store::finish_task(&pool, &plan.id, "success", None, None).await.unwrap();
+        let events = after_card_finished(&pool, project.path(), &plan.id).await.unwrap();
+        assert!(events.is_empty());
+
+        let tasks = all(&pool).await;
+        let impl_cards: Vec<&TaskRow> = tasks.iter().filter(|t| t.from_spec.as_deref() == Some(spec.as_str())).collect();
+        assert_eq!(impl_cards.len(), 3);
+        let to = |title: &str| impl_cards.iter().find(|t| t.title == title).unwrap().agent_id.clone().unwrap();
+        // 閒的（0 張）先拿第一張；之後兩邊各 1 張平手，平手時誰先拿不重要，
+        // 但下一張一定給另一位——所以三張必定是 閒的 2、忙碌的 1。
+        assert_eq!(to("A-後端 API"), idle);
+        let count = |id: &str| impl_cards.iter().filter(|t| t.agent_id.as_deref() == Some(id)).count();
+        assert_eq!((count(&idle), count(&busy)), (2, 1));
+        assert!(impl_cards.iter().all(|t| t.agent_id.as_deref() != Some(w.as_str())), "規格撰寫師不接實作");
+        assert!(impl_cards.iter().all(|t| t.card_kind == KIND_WORK && t.status == STATUS_QUEUED));
+        assert!(impl_cards[0].body.contains("登入要支援 SSO"), "要附規格全文：{}", impl_cards[0].body);
+        let module = tasks.iter().find(|t| t.id == spec).unwrap();
+        assert_eq!(module_state(module, &chain_of(&tasks, &spec), false), ModuleState::Passed);
+        assert!(of_kind(&tasks, KIND_MERGE).is_empty(), "實作卡還沒做，不能合併");
+    }
+
+    #[tokio::test]
+    async fn without_any_implementer_the_split_tasks_land_in_planning_and_raise_attention() {
+        let pool = mem_pool().await;
+        let w = spec_writer(&pool).await;
+        agent(&pool, "orchestrator", "O").await;
+        let project = tempfile::tempdir().unwrap();
+        let spec = store::create_task(&pool, "A 規格", "", "/repo", true, false).await.unwrap();
+        agents::assign_task(&pool, &spec, Some(&w)).await.unwrap();
+        store::dispatch_for_test(&pool, &spec, "tab").await;
+        store::finish_task(&pool, &spec, "success", None, None).await.unwrap();
+        after_card_finished(&pool, project.path(), &spec).await.unwrap();
+        let plan = of_kind(&all(&pool).await, KIND_PLAN)[0].id.clone();
+        let json = tasks_json_path(project.path(), &plan);
+        std::fs::create_dir_all(json.parent().unwrap()).unwrap();
+        std::fs::write(&json, r#"{"tasks":[{"title":"T1","body":"b"}]}"#).unwrap();
+        store::dispatch_for_test(&pool, &plan, "t").await;
+        store::finish_task(&pool, &plan, "success", None, None).await.unwrap();
+
+        let events = after_card_finished(&pool, project.path(), &plan).await.unwrap();
+
+        assert_eq!(events.len(), 1);
+        let t1 = all(&pool).await.into_iter().find(|t| t.title == "T1").unwrap();
+        assert_eq!((t1.status.as_str(), t1.agent_id), (STATUS_PLANNING, None));
+        assert_eq!(t1.from_spec.as_deref(), Some(spec.as_str()));
+    }
+
+    #[test]
+    fn plan_json_parsing_checks_count_and_titles() {
+        assert_eq!(parse_plan_json(r#"{"tasks":[{"title":" A ","body":"b"}]}"#).unwrap()[0].title, "A");
+        assert!(parse_plan_json(r#"{"tasks":[]}"#).is_err());
+        assert!(parse_plan_json(r#"{"tasks":[{"title":"  "}]}"#).is_err());
+        let many = format!(r#"{{"tasks":[{}]}}"#, vec![r#"{"title":"x"}"#; MAX_PLAN_TASKS + 1].join(","));
+        assert!(parse_plan_json(&many).is_err());
+        assert!(parse_plan_json("nope").is_err());
     }
 }

@@ -380,6 +380,20 @@ impl GitClient {
         })
     }
 
+    /// `git diff --name-only <from> <to>`——兩個版本之間新增或修改的檔案（不含刪除）。
+    pub async fn changed_files(&self, from: &str, to: &str) -> Result<Vec<String>, String> {
+        let out = self.git(&[
+            "diff".to_string(), "--name-only".to_string(), "--diff-filter=AM".to_string(),
+            from.to_string(), to.to_string(),
+        ]).await?;
+        Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+    }
+
+    /// `git show <sha>:<path>`——某個版本裡某個檔案的內容。
+    pub async fn show_file(&self, sha: &str, path: &str) -> Result<String, String> {
+        self.git(&["show".to_string(), format!("{sha}:{path}")]).await
+    }
+
     /// `git merge <branch>`——在 `self.repo_root` 執行（呼叫端應該傳原本
     /// 的 `project_dir`，不是 worktree 路徑）。衝突或該路徑本身有未提交
     /// 變更擋著都會讓這裡回傳 Err，錯誤訊息直接是 git 自己的輸出。
@@ -1238,6 +1252,22 @@ mod block_info_tests {
         fs::write(dir.join(name), body).unwrap();
         StdCommand::new("git").args(["add", "."]).current_dir(dir).status().unwrap();
         StdCommand::new("git").args(["commit", "-q", "-m", name]).current_dir(dir).status().unwrap();
+    }
+
+    #[tokio::test]
+    async fn changed_files_and_show_file_read_a_version_range() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        commit_file(dir.path(), "a.txt", "1");
+        let client = GitClient::new(dir.path().to_string_lossy().into_owned(), None);
+        let start = client.head_sha().await.unwrap();
+        fs::create_dir_all(dir.path().join("docs/specs")).unwrap();
+        commit_file(dir.path(), "docs/specs/A.md", "# 規格 A");
+        let end = client.head_sha().await.unwrap();
+        commit_file(dir.path(), "docs/specs/A.md", "# later edit");
+
+        assert_eq!(client.changed_files(&start, &end).await.unwrap(), vec!["docs/specs/A.md"]);
+        assert_eq!(client.show_file(&end, "docs/specs/A.md").await.unwrap(), "# 規格 A");
     }
 
     #[tokio::test]
