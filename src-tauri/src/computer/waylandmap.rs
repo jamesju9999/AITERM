@@ -258,6 +258,9 @@ mod tests {
         assert_eq!(scroll_steps(0, 9999), (0, -200));
     }
 
+    // 只在 Unix 跑：Windows 上 Url::to_file_path 要求磁碟代號，`file:///home/…` 一律回 None。
+    // 這個函式只給 Linux Wayland 後端用，Windows 上的結果不重要。
+    #[cfg(unix)]
     #[test]
     fn file_uri_decodes_percent_escapes() {
         assert_eq!(
