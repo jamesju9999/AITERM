@@ -53,6 +53,11 @@ export interface TaskRow {
   worktree_branch: string | null;
   /** `null` 代表沿用全域的 isolate_with_worktree 設定。 */
   isolate_worktree: boolean | null;
+  /** 指派給哪個 Agent（Agent 協作）。`null` = 一般卡片。 */
+  agent_id: string | null;
+  /** Agent 卡片在 Agent 分支上的 commit 範圍起點／終點。 */
+  start_sha: string | null;
+  end_sha: string | null;
 }
 
 export interface TaskWithAttachments extends TaskRow {

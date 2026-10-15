@@ -34,6 +34,9 @@ const card = (over: Partial<TaskWithAttachments> = {}): TaskWithAttachments => (
   worktree_path: null,
   worktree_branch: null,
   isolate_worktree: null,
+  agent_id: null,
+  start_sha: null,
+  end_sha: null,
   attachments: [],
   ...over,
 });

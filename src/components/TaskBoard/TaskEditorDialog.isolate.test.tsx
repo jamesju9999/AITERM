@@ -35,7 +35,7 @@ const existing = (isolate: boolean | null): TaskWithAttachments => ({
   created_at: "2026-09-11", dispatched_at: null, finished_at: null,
   ai_summary: null, archived_at: null, session_id: null, session_path: null,
   use_bridge: false, bridge_tiers: null, worktree_path: null,
-  worktree_branch: null, isolate_worktree: isolate, attachments: [],
+  worktree_branch: null, isolate_worktree: isolate, agent_id: null, start_sha: null, end_sha: null, attachments: [],
 });
 
 const mount = (card: TaskWithAttachments | null = null) =>

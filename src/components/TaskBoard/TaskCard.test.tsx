@@ -66,6 +66,9 @@ const card = (over: Partial<TaskWithAttachments> = {}): TaskWithAttachments => (
   worktree_path: "C:\\store\\t1\\worktree",
   worktree_branch: "aiterm-task/t1",
   isolate_worktree: null,
+  agent_id: null,
+  start_sha: null,
+  end_sha: null,
   attachments: [],
   ...over,
 });
