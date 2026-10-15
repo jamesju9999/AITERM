@@ -23,6 +23,7 @@ export interface AgentRow {
   /** 非 null = 暫停中，指向造成暫停的那張卡。 */
   paused_task_id: string | null;
   created_at: string;
+  last_merge_signature: string | null;
 }
 
 export interface NewAgentArgs {
@@ -72,3 +73,7 @@ export const abortAgentMerge = (projectId: string, id: string): Promise<void> =>
 /** `agentId` 為 null 時取消指派（卡片退回計畫中）。 */
 export const assignAgent = (projectId: string, taskId: string, agentId: string | null): Promise<void> =>
   invoke("tasks_assign_agent", { projectId, taskId, agentId });
+
+/** 手動放行卡住的模組（審查不通過超過上限，或審查卡本身失敗）。 */
+export const overrideModule = (projectId: string, taskId: string): Promise<void> =>
+  invoke("agents_override_module", { projectId, taskId });

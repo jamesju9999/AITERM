@@ -57,6 +57,26 @@ export function useTaskCompletionNotifications(activeIdRef: RefObject<string>): 
         }
       });
     });
-    return unlistenOnCleanup(un, "task-finished");
+    // Agent 協作：同一個模組審查不通過超過上限，流程停下來等人。
+    const unAttention = listen<{ project_name: string; module_title: string }>("agent-module-attention", (e) => {
+      const { project_name, module_title } = e.payload;
+      void getTaskBoardConfig().then((cfg) => {
+        const body = `${project_name} · 審查不通過超過上限，需要你處理`;
+        if (cfg.notify_desktop_on_finish) {
+          void ensureNotificationPermission().then((granted) => {
+            if (granted) sendNotification({ title: module_title, body });
+          });
+        }
+        if (cfg.notify_telegram_on_finish) {
+          void sendTelegramMessage(`⚠️ ${project_name} — ${module_title}\n審查不通過超過上限，需要你處理`).catch(() => {});
+        }
+      });
+    });
+    const stopFinished = unlistenOnCleanup(un, "task-finished");
+    const stopAttention = unlistenOnCleanup(unAttention, "agent-module-attention");
+    return () => {
+      stopFinished();
+      stopAttention();
+    };
   }, [activeIdRef]);
 }

@@ -23,9 +23,11 @@ vi.mock("../../lib/notifyPermission", () => ({
 }));
 
 let taskFinishedHandler: ((e: { payload: unknown }) => void) | null = null;
+let attentionHandler: ((e: { payload: unknown }) => void) | null = null;
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, handler: (e: { payload: unknown }) => void) => {
     if (event === "task-finished") taskFinishedHandler = handler;
+    if (event === "agent-module-attention") attentionHandler = handler;
     return Promise.resolve(() => {});
   }),
 }));
@@ -156,5 +158,13 @@ describe("useTaskCompletionNotifications", () => {
     taskFinishedHandler!({ payload: PAYLOAD });
 
     await waitFor(() => expect(sendNotification).toHaveBeenCalled());
+  });
+
+  it("Agent 協作的模組卡住（審查不通過超過上限）也會通知", async () => {
+    renderHook(() => useTaskCompletionNotifications(activeRef("other-tab")));
+    expect(attentionHandler).not.toBeNull();
+    attentionHandler!({ payload: { project_id: "p1", project_name: "HTBKTW", module_id: "m", module_title: "A 登入" } });
+    await waitFor(() => expect(sendNotification).toHaveBeenCalledWith(expect.objectContaining({ title: "A 登入" })));
+    expect(sendTelegramMessage).toHaveBeenCalledWith(expect.stringContaining("A 登入"));
   });
 });

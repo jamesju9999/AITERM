@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import type { AgentRow } from "../../ipc/agents";
+import type { AgentKind, AgentRow } from "../../ipc/agents";
 import { usedDirs } from "../../ipc/projects";
-import { CODER_ROLES } from "./roles";
+import { rolesFor } from "./roles";
 
 export interface AgentConfigValues {
   name: string;
@@ -20,12 +20,14 @@ export interface AgentConfigValues {
  */
 export function AgentConfigDialog({
   projectId,
+  kind,
   agent,
   defaultName,
   onCancel,
   onSubmit,
 }: {
   projectId: string;
+  kind: AgentKind;
   /** `null` = 新建。 */
   agent: AgentRow | null;
   defaultName: string;
@@ -34,9 +36,10 @@ export function AgentConfigDialog({
 }) {
   const { t } = useLocale();
   const isNew = agent === null;
+  const roles = rolesFor(kind);
   const [name, setName] = useState(agent?.name ?? defaultName);
-  const [role, setRole] = useState(agent?.role ?? CODER_ROLES[0].name);
-  const [prefix, setPrefix] = useState(agent?.prompt_prefix ?? CODER_ROLES[0].prefix);
+  const [role, setRole] = useState(agent?.role ?? roles[0].name);
+  const [prefix, setPrefix] = useState(agent?.prompt_prefix ?? roles[0].prefix);
   const [dir, setDir] = useState(agent?.project_dir ?? "");
   const [dirs, setDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -57,7 +60,7 @@ export function AgentConfigDialog({
     };
   }, [isNew, projectId]);
 
-  const pickRole = (r: (typeof CODER_ROLES)[number]) => {
+  const pickRole = (r: (typeof roles)[number]) => {
     setRole(r.name);
     setPrefix(r.prefix);
   };
@@ -95,7 +98,7 @@ export function AgentConfigDialog({
         <div className="task-field">
           <span className="task-field-label">{t.ac_role}</span>
           <div className="ac-roles">
-            {CODER_ROLES.map((r) => (
+            {roles.map((r) => (
               <button
                 key={r.name}
                 type="button"

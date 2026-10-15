@@ -28,6 +28,7 @@ vi.mock("../../ipc/agents", () => ({
   mergeAgent: vi.fn().mockResolvedValue({ status: "merged" }),
   abortAgentMerge: vi.fn().mockResolvedValue(undefined),
   assignAgent: vi.fn().mockResolvedValue(undefined),
+  overrideModule: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../ipc/projects", () => ({
   listProjects: vi.fn().mockResolvedValue([
@@ -42,14 +43,14 @@ vi.mock("../../ipc/bridge", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
 
-import { assignAgent, createAgent, listAgents, mergeAgent, resolveAgent, type AgentRow } from "../../ipc/agents";
+import { assignAgent, createAgent, listAgents, mergeAgent, overrideModule, resolveAgent, type AgentRow } from "../../ipc/agents";
 import { listTasks, type TaskWithAttachments } from "../../ipc/tasks";
 import { AgentCanvasView } from "./index";
 
 const agent = (over: Partial<AgentRow> = {}): AgentRow => ({
   id: "a1", kind: "coder", name: "Coder Agent1", role: "Senior Coder", prompt_prefix: "p",
   project_dir: "/repo/htbktw", canvas_x: 40, canvas_y: 40, worktree_path: null, branch: null,
-  paused_task_id: null, created_at: "", ...over,
+  paused_task_id: null, created_at: "", last_merge_signature: null, ...over,
 });
 
 const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
@@ -57,7 +58,7 @@ const card = (over: Partial<TaskWithAttachments>): TaskWithAttachments => ({
   interactive: false, sort_order: 0, outcome: null, tab_id: null, transcript_path: null, error_message: null,
   created_at: "", dispatched_at: null, finished_at: null, ai_summary: null, archived_at: null, session_id: null,
   session_path: null, use_bridge: false, bridge_tiers: null, worktree_path: null, worktree_branch: null,
-  isolate_worktree: null, agent_id: null, start_sha: null, end_sha: null, attachments: [], ...over,
+  isolate_worktree: null, agent_id: null, start_sha: null, end_sha: null, card_kind: "work", module_id: null, review_of: null, verdict: null, review_reasons: null, module_override: false, attachments: [], ...over,
 });
 
 const view = () =>
@@ -202,5 +203,62 @@ describe("AgentCanvasView", () => {
     const node = await screen.findByTestId("agent-a1");
     expect(node.className).toContain("ac-agent--coding");
     expect(within(node).getByText(/1:1[5-9]/)).toBeTruthy();
+  });
+
+  it("Reviewer 已在桌布上時，池裡的 Reviewer 停用；Orchestrator 仍可拖", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "Code Reviewer" })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const pool = await screen.findByTestId("pool-reviewer");
+    expect(pool.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByTestId("pool-orchestrator").getAttribute("aria-disabled")).toBe("false");
+    drag(pool, document.querySelector('[data-drop="canvas"]') as Element);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("自動連線：Coder→Reviewer→Orchestrator，審查中的那條亮起來", async () => {
+    vi.mocked(listAgents).mockResolvedValue([
+      agent(),
+      agent({ id: "r1", kind: "reviewer", name: "R" }),
+      agent({ id: "o1", kind: "orchestrator", name: "O" }),
+    ]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "A", status: "done", outcome: "success", agent_id: "a1" }),
+      card({ id: "RA", title: "審查：A", status: "running", agent_id: "r1", card_kind: "review", module_id: "A", review_of: "A" }),
+    ]);
+    view();
+    const edge = await screen.findByTestId("edge-a1-r1");
+    expect(edge.getAttribute("data-active")).not.toBe("");
+    expect(screen.getByTestId("edge-r1-o1").getAttribute("data-active")).toBe("");
+    expect(screen.getByTestId("agent-r1").className).toContain("ac-agent--reviewing");
+    expect(within(screen.getByTestId("agent-r1")).getByText(/審查 A|Reviewing A/)).toBeTruthy();
+  });
+
+  it("審查不通過超過上限的模組，點 chip 會放行", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "R" })]);
+    const rv = (id: string, of: string) =>
+      card({ id, status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "A", review_of: of, verdict: "fail" });
+    const fx = (id: string, of: string) =>
+      card({ id, status: "done", outcome: "success", agent_id: "a1", card_kind: "fix", module_id: "A", review_of: of });
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1" }),
+      rv("R1", "A"), fx("F1", "R1"), rv("R2", "F1"), fx("F2", "R2"), rv("R3", "F2"),
+    ]);
+    view();
+    const chip = await screen.findByTestId("chip-A");
+    expect(chip.getAttribute("data-state")).toBe("attention");
+    fireEvent.click(chip);
+    await waitFor(() => expect(overrideModule).toHaveBeenCalledWith("p1", "A"));
+  });
+
+  it("修正卡與審查卡不會出現在模組庫，也不會變成 Coder 上的獨立 chip", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "A", status: "done", outcome: "success", agent_id: "a1" }),
+      card({ id: "F1", title: "修正：A", status: "queued", agent_id: "a1", card_kind: "fix", module_id: "A" }),
+    ]);
+    view();
+    await screen.findByTestId("chip-A");
+    expect(screen.queryByTestId("chip-F1")).toBeNull();
   });
 });

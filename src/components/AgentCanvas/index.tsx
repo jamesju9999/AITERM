@@ -10,8 +10,10 @@ import {
   deleteAgent,
   listAgents,
   mergeAgent,
+  overrideModule,
   resolveAgent,
   updateAgent,
+  type AgentKind,
   type AgentRow,
 } from "../../ipc/agents";
 import { listProjects, type ProjectInfo } from "../../ipc/projects";
@@ -29,6 +31,8 @@ import "../TaskBoard/index.css";
 import { AgentConfigDialog, type AgentConfigValues } from "./AgentConfigDialog";
 import { AgentNode } from "./AgentNode";
 import { deriveAgentStatus } from "./deriveAgentStatus";
+import { EdgeLayer } from "./EdgeLayer";
+import { computeEdges, diffPulses, edgeActivity, type Pulse } from "./edges";
 import "./index.css";
 
 /** 跟看板、TabBar 同一個門檻：小於這個位移是點擊，不是拖曳。 */
@@ -39,7 +43,7 @@ type DragKind = "pool" | "module" | "agent";
 
 interface DragState {
   kind: DragKind;
-  /** module = 卡片 id；agent = agent id；pool 沒有。 */
+  /** module = 卡片 id；agent = agent id；pool = Agent 種類。 */
   id: string | null;
   startX: number;
   startY: number;
@@ -94,7 +98,10 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
   const [cap, setCap] = useState<number | null>(null);
   const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000));
-  const [config, setConfig] = useState<{ agent: AgentRow | null; x: number; y: number } | null>(null);
+  const [config, setConfig] = useState<{ kind: AgentKind; agent: AgentRow | null; x: number; y: number } | null>(null);
+  /** 一次性的交接光點；每顆約 1.2 秒後移除。 */
+  const [pulses, setPulses] = useState<Pulse[]>([]);
+  const prevTasks = useRef<TaskWithAttachments[] | null>(null);
   const [newModule, setNewModule] = useState(false);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -144,12 +151,19 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   useEffect(() => {
     if (!projectId) return;
     let alive = true;
+    prevTasks.current = null;
     const load = () => {
       Promise.all([listAgents(projectId), listTasks(projectId)])
         .then(([a, ts]) => {
           if (!alive) return;
+          const fresh = diffPulses(prevTasks.current, ts, a);
+          prevTasks.current = ts;
           setAgents(a);
           setTasks(ts);
+          if (fresh.length) {
+            setPulses((cur) => [...cur.filter((p) => !fresh.some((f) => f.key === p.key)), ...fresh]);
+            window.setTimeout(() => setPulses((cur) => cur.filter((p) => !fresh.includes(p))), 1300);
+          }
         })
         .catch((e) => alive && setToast(errText(e)));
     };
@@ -188,7 +202,10 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   );
 
   const library = useMemo(
-    () => tasks.filter((x) => x.status === "planning" && !x.agent_id).sort((a, b) => a.sort_order - b.sort_order),
+    () =>
+      tasks
+        .filter((x) => x.status === "planning" && !x.agent_id && x.card_kind === "work")
+        .sort((a, b) => a.sort_order - b.sort_order),
     [tasks],
   );
   const cardsOf = useCallback(
@@ -278,7 +295,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
       if (d.kind === "pool") {
         if (target?.kind !== "canvas") return;
         const p = canvasPoint(e.clientX, e.clientY);
-        setConfig({ agent: null, x: Math.max(8, p.x - 120), y: Math.max(8, p.y - 24) });
+        setConfig({ kind: (d.id ?? "coder") as AgentKind, agent: null, x: Math.max(8, p.x - 120), y: Math.max(8, p.y - 24) });
         return;
       }
       if (d.kind === "module" && d.id) {
@@ -314,7 +331,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
       await updateAgent(projectId, { id: a.id, name: v.name, role: v.role, prompt_prefix: v.prompt_prefix, canvas_x: a.canvas_x, canvas_y: a.canvas_y });
     } else {
       await createAgent(projectId, {
-        kind: "coder",
+        kind: config.kind,
         name: v.name,
         role: v.role,
         prompt_prefix: v.prompt_prefix,
@@ -380,8 +397,16 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   };
 
   const ghostCard = ghost?.kind === "module" ? tasks.find((x) => x.id === ghost.id) : undefined;
+  const coderIds = useMemo(() => new Set(agents.filter((a) => a.kind === "coder").map((a) => a.id)), [agents]);
+  const hasReviewer = agents.some((a) => a.kind === "reviewer");
+  const shownAgents = agents.map((a) => (movePos?.id === a.id ? { ...a, canvas_x: movePos.x, canvas_y: movePos.y } : a));
+  const edges = computeEdges(agents);
+  const active = edgeActivity(edges, agents, tasks);
+  const placed = (k: AgentKind) => agents.some((a) => a.kind === k);
+  const poolLabel = (k: AgentKind) => (k === "reviewer" ? t.ac_reviewer : k === "orchestrator" ? t.ac_orchestrator : t.ac_coder);
   const transcriptCard = transcriptFor ? tasks.find((x) => x.id === transcriptFor) : undefined;
-  const nextCoderName = `${t.ac_coder}${agents.filter((a) => a.kind === "coder").length + 1}`;
+  const defaultName = (k: AgentKind) =>
+    k === "coder" ? `${t.ac_coder}${agents.filter((a) => a.kind === "coder").length + 1}` : poolLabel(k);
 
   // ── 畫面 ───────────────────────────────────────────────────────────────
 
@@ -423,13 +448,25 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
 
       <div className="ac-pool">
         <span className="ac-pool-label">{t.ac_pool}</span>
-        <div className="ac-pool-item" data-testid="pool-coder" onMouseDown={(e) => beginDrag(e, "pool", null)}>
-          <span className="ac-agent-ico">{"</>"}</span>
-          <div>
-            {t.ac_coder}
-            <small>{t.ac_coder_hint}</small>
-          </div>
-        </div>
+        {(["coder", "reviewer", "orchestrator"] as const).map((k) => {
+          const disabled = k !== "coder" && placed(k);
+          return (
+            <div
+              key={k}
+              className={`ac-pool-item ac-pool-item--${k}${disabled ? " ac-pool-item--disabled" : ""}`}
+              data-testid={`pool-${k}`}
+              aria-disabled={disabled}
+              title={disabled ? t.ac_already_placed : undefined}
+              onMouseDown={disabled ? undefined : (e) => beginDrag(e, "pool", k)}
+            >
+              <span className="ac-agent-ico">{k === "coder" ? "</>" : k === "reviewer" ? "✓?" : "⑂"}</span>
+              <div>
+                {poolLabel(k)}
+                <small>{disabled ? t.ac_already_placed : k === "coder" ? t.ac_coder_hint : k === "reviewer" ? t.ac_reviewer_hint : t.ac_orchestrator_hint}</small>
+              </div>
+            </div>
+          );
+        })}
         <span className="ac-pool-hint">{t.ac_pool_hint}</span>
       </div>
 
@@ -458,15 +495,18 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
 
         <section className={`ac-canvas${hover?.kind === "canvas" && ghost?.kind === "pool" ? " ac-canvas--drop" : ""}`} data-drop="canvas" ref={canvasRef}>
           {agents.length === 0 && <div className="ac-canvas-empty">{t.ac_empty_canvas}</div>}
-          {agents.map((a) => {
-            const shown = movePos?.id === a.id ? { ...a, canvas_x: movePos.x, canvas_y: movePos.y } : a;
-            const cards = cardsOf(a.id);
+          <EdgeLayer containerRef={canvasRef} agents={shownAgents} edges={edges} active={active} pulses={pulses} revision={tasks} />
+          {shownAgents.map((shown) => {
+            const a = agents.find((x) => x.id === shown.id) as AgentRow;
             return (
               <AgentNode
                 key={a.id}
                 agent={shown}
-                cards={cards}
-                status={deriveAgentStatus(a, cards)}
+                tasks={tasks}
+                agentName={agentName}
+                coderIds={coderIds}
+                hasReviewer={hasReviewer}
+                status={deriveAgentStatus(a, cardsOf(a.id))}
                 nowSecs={nowSecs}
                 dropState={dropStateFor(a)}
                 mergeMessage={merge[a.id]?.text ?? null}
@@ -476,7 +516,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
                   e.stopPropagation();
                   beginDrag(e, "module", taskId);
                 }}
-                onEdit={() => setConfig({ agent: a, x: a.canvas_x, y: a.canvas_y })}
+                onEdit={() => setConfig({ kind: a.kind, agent: a, x: a.canvas_x, y: a.canvas_y })}
                 onDelete={() => void removeAgent(a)}
                 onRetry={() => projectId && void run(() => resolveAgent(projectId, a.id, "retry"))}
                 onSkip={() => projectId && void run(() => resolveAgent(projectId, a.id, "skip"))}
@@ -484,6 +524,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
                 onOpenTab={openTab}
                 onMerge={() => doMerge(a)}
                 onAbortMerge={() => doAbortMerge(a)}
+                onRelease={(moduleId) => projectId && void run(() => overrideModule(projectId, moduleId))}
               />
             );
           })}
@@ -512,7 +553,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
       {ghost &&
         createPortal(
           <div className="task-card-ghost ac-ghost" style={{ transform: `translate(${ghost.x + 10}px, ${ghost.y + 10}px)` }}>
-            {ghost.kind === "pool" ? t.ac_coder : (ghostCard?.title ?? "")}
+            {ghost.kind === "pool" ? poolLabel((ghost.id ?? "coder") as AgentKind) : (ghostCard?.title ?? "")}
           </div>,
           document.body,
         )}
@@ -520,8 +561,9 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
       {config && projectId && (
         <AgentConfigDialog
           projectId={projectId}
+          kind={config.kind}
           agent={config.agent}
-          defaultName={nextCoderName}
+          defaultName={defaultName(config.kind)}
           onCancel={() => setConfig(null)}
           onSubmit={submitConfig}
         />

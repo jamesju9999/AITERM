@@ -312,3 +312,57 @@
 .ac-role--mono { font-family: var(--mono); font-size: 11px; }
 .ac-readonly { font: 11.5px var(--mono); color: var(--text-muted); background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 9px; word-break: break-all; }
 .ac-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ── 第二期：Reviewer／Orchestrator、連線、模組狀態 ─────────────────── */
+.agent-canvas { --ac-review: #eab308; }
+.ac-agent--reviewing { --c: var(--ac-review); }
+.ac-agent--merging { --c: var(--ac-done); }
+.ac-agent--reviewing::before,
+.ac-agent--merging::before { opacity: 1; animation: ac-ring-generic 1.6s ease-out infinite; }
+@keyframes ac-ring-generic {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 55%, transparent); }
+  70% { box-shadow: 0 0 0 12px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.ac-agent--reviewing .ac-bar--indeterminate i { background: var(--ac-review); }
+.ac-agent--merging .ac-bar--indeterminate i { background: var(--ac-done); }
+.ac-agent--reviewer .ac-agent-ico { background: rgba(234, 179, 8, 0.15); color: #fde68a; }
+.ac-agent--orchestrator .ac-agent-ico { background: rgba(34, 197, 94, 0.15); color: #86efac; }
+.ac-pool-item--reviewer .ac-agent-ico { background: rgba(234, 179, 8, 0.15); color: #fde68a; }
+.ac-pool-item--orchestrator .ac-agent-ico { background: rgba(34, 197, 94, 0.15); color: #86efac; }
+.ac-pool-item--disabled { opacity: 0.45; cursor: not-allowed; }
+.ac-pool-item--disabled:hover { border-color: var(--border-color); }
+
+.ac-chip--fix { border-color: rgba(249, 115, 22, 0.55); color: #fdba74; }
+.ac-chip--review { border-color: rgba(234, 179, 8, 0.45); color: #fde68a; }
+.ac-chip--release { cursor: pointer; }
+.ac-chip--release:hover { background: rgba(239, 68, 68, 0.15); }
+.ac-snip {
+  font: 10.5px var(--mono);
+  color: #fde68a;
+  background: rgba(234, 179, 8, 0.06);
+  border: 1px solid rgba(234, 179, 8, 0.2);
+  border-radius: 5px;
+  padding: 3px 6px;
+  margin: 4px 0 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ac-bad-text { color: #fca5a5; }
+
+/* 連線層：在節點底下，不吃滑鼠事件 */
+.ac-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.ac-edge-base { fill: none; stroke: #3a3f4b; stroke-width: 2; }
+.ac-edge-glow { fill: none; stroke-width: 9; opacity: 0.28; filter: url(#ac-blur); }
+.ac-edge-flow { fill: none; stroke-width: 2.5; stroke-dasharray: 7 9; animation: ac-flow 0.55s linear infinite; }
+@keyframes ac-flow { to { stroke-dashoffset: -16; } }
+.ac-pulse { filter: drop-shadow(0 0 4px currentColor); }
+.ac-agent { z-index: 1; }

@@ -69,6 +69,12 @@ const card = (over: Partial<TaskWithAttachments> = {}): TaskWithAttachments => (
   agent_id: null,
   start_sha: null,
   end_sha: null,
+  card_kind: "work",
+  module_id: null,
+  review_of: null,
+  verdict: null,
+  review_reasons: null,
+  module_override: false,
   attachments: [],
   ...over,
 });

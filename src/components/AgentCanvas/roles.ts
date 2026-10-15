@@ -23,3 +23,27 @@ export const CODER_ROLES: readonly RolePreset[] = [
     prefix: "你專精前端：依設計實作頁面與互動，注意無障礙與響應式版面。",
   },
 ];
+
+export const REVIEWER_ROLES: readonly RolePreset[] = [
+  {
+    name: "Code Reviewer",
+    prefix:
+      "你是程式碼審查者。只看指定的 diff，判斷是否有正確性錯誤或與需求不符；風格問題寫進 reasons 但不要因此判定不通過。不要修改任何檔案。",
+  },
+  {
+    name: "Security Reviewer",
+    prefix:
+      "你是資安審查者。以注入、權限、敏感資料外洩為重點審查指定的 diff；只有實際風險才判定不通過。不要修改任何檔案。",
+  },
+];
+
+export const ORCHESTRATOR_ROLES: readonly RolePreset[] = [
+  {
+    name: "Integrator",
+    prefix: "你是統籌合併者。依序合併各 Coder 的分支，遇到衝突先理解雙方意圖再解決，合併後跑測試，不要 push。",
+  },
+];
+
+export function rolesFor(kind: "coder" | "reviewer" | "orchestrator"): readonly RolePreset[] {
+  return kind === "reviewer" ? REVIEWER_ROLES : kind === "orchestrator" ? ORCHESTRATOR_ROLES : CODER_ROLES;
+}

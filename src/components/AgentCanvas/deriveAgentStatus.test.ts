@@ -7,7 +7,7 @@ import { deriveAgentStatus } from "./deriveAgentStatus";
 const agent = (over: Partial<AgentRow> = {}): AgentRow => ({
   id: "a1", kind: "coder", name: "Coder Agent1", role: "Senior Coder", prompt_prefix: "",
   project_dir: "/r", canvas_x: 0, canvas_y: 0, worktree_path: null, branch: null,
-  paused_task_id: null, created_at: "", ...over,
+  paused_task_id: null, created_at: "", last_merge_signature: null, ...over,
 });
 
 const card = (status: TaskStatus, outcome: TaskRow["outcome"] = null, agent_id: string | null = "a1"): TaskRow => ({
@@ -15,7 +15,7 @@ const card = (status: TaskStatus, outcome: TaskRow["outcome"] = null, agent_id: 
   parallel_ok: true, interactive: false, sort_order: 0, outcome, tab_id: null, transcript_path: null,
   error_message: null, created_at: "", dispatched_at: null, finished_at: null, ai_summary: null,
   archived_at: null, session_id: null, session_path: null, use_bridge: false, bridge_tiers: null,
-  worktree_path: null, worktree_branch: null, isolate_worktree: null, agent_id, start_sha: null, end_sha: null,
+  worktree_path: null, worktree_branch: null, isolate_worktree: null, agent_id, start_sha: null, end_sha: null, card_kind: "work", module_id: null, review_of: null, verdict: null, review_reasons: null, module_override: false,
 });
 
 describe("deriveAgentStatus", () => {
@@ -41,6 +41,11 @@ describe("deriveAgentStatus", () => {
 
   it("完成但中間有失敗（已跳過）不是 done", () => {
     expect(deriveAgentStatus(agent(), [card("done", "success"), card("done", "failed")])).toBe("idle");
+  });
+
+  it("執行中的字依 Agent 種類", () => {
+    expect(deriveAgentStatus(agent({ kind: "reviewer" }), [card("running")])).toBe("reviewing");
+    expect(deriveAgentStatus(agent({ kind: "orchestrator" }), [card("running")])).toBe("merging");
   });
 
   it("暫停優先於一切", () => {

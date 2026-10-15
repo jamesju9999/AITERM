@@ -58,7 +58,21 @@ export interface TaskRow {
   /** Agent 卡片在 Agent 分支上的 commit 範圍起點／終點。 */
   start_sha: string | null;
   end_sha: string | null;
+  /** `work`（模組／一般卡片）| `review` | `fix` | `merge`，後三種由後端自動建立。 */
+  card_kind: CardKind;
+  /** review／fix 卡所屬的模組。 */
+  module_id: string | null;
+  /** review 卡：被審的卡；fix 卡：要它修正的那張審查。 */
+  review_of: string | null;
+  /** review 卡的判定。 */
+  verdict: "pass" | "fail" | null;
+  /** review 卡 reasons 的 JSON 陣列字串。 */
+  review_reasons: string | null;
+  /** 模組卡：使用者手動放行。 */
+  module_override: boolean;
 }
+
+export type CardKind = "work" | "review" | "fix" | "merge";
 
 export interface TaskWithAttachments extends TaskRow {
   attachments: AttachmentRow[];
