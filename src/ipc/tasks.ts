@@ -84,6 +84,8 @@ export interface TaskRow {
   assigned_at?: number | null;
   /** 開工前合併進來的前置卡 id（JSON 陣列字串）。 */
   premerged?: string | null;
+  /** 派出去的 claude 結束一輪回覆後停下來等人（unix 秒）。 */
+  reply_wait_at?: number | null;
 }
 
 export type CardKind = "work" | "review" | "fix" | "merge" | "plan";

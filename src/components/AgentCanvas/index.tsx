@@ -21,6 +21,7 @@ import { listProjects, type ProjectInfo } from "../../ipc/projects";
 import {
   getTaskBoardConfig,
   listTasks,
+  markTaskDone,
   onTasksUpdated,
   type MergeOutcome,
   type TaskWithAttachments,
@@ -470,6 +471,13 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
     });
   };
 
+  const markDone = async (taskId: string) => {
+    if (!projectId) return;
+    // window.confirm 在 Tauri webview 裡沒有實作，要用 plugin-dialog。
+    if (!(await confirm(t.board_mark_done_confirm))) return;
+    void run(() => markTaskDone(projectId, taskId));
+  };
+
   const openTab = (tabId: string) => {
     window.dispatchEvent(new CustomEvent("aiterm:focus-tab", { detail: { tabId } }));
   };
@@ -635,7 +643,12 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
       }
     }
   };
-  const sumLine = summaryLine(summary);
+  // 在等你的 Agent：停下來等回覆的、與執行中的互動卡（要你手動完成）。
+  const waitingYou = tasks.filter((c) => c.status === "running" && c.agent_id && (c.reply_wait_at || c.interactive)).length;
+  const baseLine = summaryLine(summary);
+  const sumLine = waitingYou
+    ? { text: [baseLine?.text, t.ac_sum_waiting_you(waitingYou)].filter(Boolean).join(" · "), tone: "bad" as const }
+    : baseLine;
 
   // ── 畫面 ───────────────────────────────────────────────────────────────
 
@@ -823,6 +836,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
                       onMerge={() => doMerge(a)}
                       onAbortMerge={() => doAbortMerge(a)}
                       onRelease={(moduleId) => projectId && void run(() => overrideModule(projectId, moduleId))}
+                onMarkDone={(taskId) => void markDone(taskId)}
                     />
                   );
                 })}

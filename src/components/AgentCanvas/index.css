@@ -502,3 +502,19 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-chip--waiting { border-style: dashed; color: var(--text-muted); }
 .ac-log-line--dispatch { color: #d8b4fe; }
 .ac-edge-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: help; }
+
+/* 在等你：停下來等回覆的、或互動卡要手動完成 */
+.ac-reply-wait {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #fde68a;
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  border-radius: 5px;
+  padding: 5px 7px;
+  margin-top: 6px;
+}

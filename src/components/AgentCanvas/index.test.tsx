@@ -18,6 +18,7 @@ vi.mock("../../ipc/tasks", () => ({
     return Promise.resolve(() => {});
   }),
   readTranscript: vi.fn().mockResolvedValue(""),
+  markTaskDone: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../ipc/agents", () => ({
   listAgents: vi.fn(),
@@ -47,7 +48,7 @@ vi.mock("../../ipc/bridge", () => ({
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
 
 import { assignAgent, checkRepo, createAgent, initRepo, listAgents, mergeAgent, openRepo, overrideModule, resolveAgent, type AgentRow } from "../../ipc/agents";
-import { listTasks, type TaskWithAttachments } from "../../ipc/tasks";
+import { listTasks, markTaskDone, type TaskWithAttachments } from "../../ipc/tasks";
 import { AgentCanvasView } from "./index";
 
 const agent = (over: Partial<AgentRow> = {}): AgentRow => ({
@@ -373,7 +374,7 @@ describe("AgentCanvasView", () => {
     expect(place.disabled).toBe(true);
 
     fireEvent.click(within(status).getByRole("button", { name: /初始化為 git repo|Initialize as a git repo/ }));
-    await waitFor(() => expect(initRepo).toHaveBeenCalledWith("/repo/htbktw"));
+    await waitFor(() => expect(initRepo).toHaveBeenCalledWith("/repo/htbktw", "p1"));
     await waitFor(() => expect(within(dlg).getByTestId("repo-status")).toHaveTextContent(/main/));
     expect(place.disabled).toBe(false);
   });
@@ -547,6 +548,32 @@ describe("AgentCanvasView", () => {
       view();
       const edge = await screen.findByTestId("edge-o1-a1");
       expect(edge.querySelector("title")?.textContent).toMatch(/由系統依忙碌程度與相依關係分派|assigns them by workload and dependencies/);
+    });
+  });
+
+  describe("在等你", () => {
+    it("停下來等回覆的 Agent：卡上寫在等你回覆，頂列計數", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "規格", status: "running", agent_id: "a1", dispatched_at: 1, reply_wait_at: 2, tab_id: "tab-a" }),
+      ]);
+      view();
+      const node = await screen.findByTestId("agent-a1");
+      expect(within(node).getByRole("status")).toHaveTextContent(/在等你回覆|Waiting for your reply/);
+      expect(within(node).getByText(/前往分頁|Open tab/)).toBeTruthy();
+      expect(screen.getByTestId("ac-summary")).toHaveTextContent(/1 個 Agent 在等你|1 agent\(s\) waiting for you/);
+    });
+
+    it("執行中的互動卡：說明要手動完成，按標記完成", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "規格", status: "running", agent_id: "a1", dispatched_at: 1, interactive: true }),
+      ]);
+      view();
+      const node = await screen.findByTestId("agent-a1");
+      expect(within(node).getByText(/互動卡|Interactive card/)).toBeTruthy();
+      fireEvent.click(within(node).getByRole("button", { name: /標記完成|Mark done/ }));
+      await waitFor(() => expect(markTaskDone).toHaveBeenCalledWith("p1", "A"));
     });
   });
 });

@@ -383,6 +383,12 @@ describe("TaskCard 的共花費時間", () => {
     expect(screen.getByText(/額度用完|Usage limit reached/)).toBeTruthy();
     expect(screen.queryByText(/已交給 Claude Code 執行中|Handed to Claude Code/)).toBeNull();
   });
+
+  it("停下來等回覆的執行中卡片顯示在等你回覆", () => {
+    mountCard({ status: "running", dispatched_at: 1000, reply_wait_at: 2000 });
+    expect(screen.getByText(/在等你回覆|Waiting for your reply/)).toBeTruthy();
+    expect(screen.queryByText(/已交給 Claude Code 執行中|Handed to Claude Code/)).toBeNull();
+  });
 });
 
 describe("TaskCard 的 Agent 徽章", () => {

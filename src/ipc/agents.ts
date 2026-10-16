@@ -93,7 +93,9 @@ export type RepoCheck =
 export const checkRepo = (path: string): Promise<RepoCheck> => invoke("agents_check_repo", { path });
 
 /** git init（必要時）＋把現有檔案建成第一個 commit。 */
-export const initRepo = (path: string): Promise<void> => invoke("agents_init_repo", { path });
+/** `projectId`：看板專案資料夾在這個程式庫裡面時，第一個 commit 不收進它。 */
+export const initRepo = (path: string, projectId?: string): Promise<void> =>
+  invoke("agents_init_repo", { path, projectId: projectId ?? null });
 
 /** 在系統的檔案管理員打開程式庫資料夾。 */
 export const openRepo = (path: string): Promise<void> => invoke("agents_open_repo", { path });

@@ -24,10 +24,12 @@ vi.mock("../../lib/notifyPermission", () => ({
 
 let taskFinishedHandler: ((e: { payload: unknown }) => void) | null = null;
 let attentionHandler: ((e: { payload: unknown }) => void) | null = null;
+let replyHandler: ((e: { payload: unknown }) => void) | null = null;
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, handler: (e: { payload: unknown }) => void) => {
     if (event === "task-finished") taskFinishedHandler = handler;
     if (event === "agent-module-attention") attentionHandler = handler;
+    if (event === "agent-reply-wait") replyHandler = handler;
     return Promise.resolve(() => {});
   }),
 }));
@@ -166,5 +168,15 @@ describe("useTaskCompletionNotifications", () => {
     attentionHandler!({ payload: { project_id: "p1", project_name: "HTBKTW", module_id: "m", module_title: "A 登入" } });
     await waitFor(() => expect(sendNotification).toHaveBeenCalledWith(expect.objectContaining({ title: "A 登入" })));
     expect(sendTelegramMessage).toHaveBeenCalledWith(expect.stringContaining("A 登入"));
+  });
+
+  it("Agent 停下來等你回覆時也會通知", async () => {
+    renderHook(() => useTaskCompletionNotifications(activeRef("other-tab")));
+    expect(replyHandler).not.toBeNull();
+    replyHandler!({ payload: { project_name: "Pomodoro", title: "番茄鐘網頁小工具" } });
+    await waitFor(() =>
+      expect(sendNotification).toHaveBeenCalledWith({ title: "番茄鐘網頁小工具", body: "Pomodoro · 在等你回覆" }),
+    );
+    await waitFor(() => expect(sendTelegramMessage).toHaveBeenCalledWith("💬 Pomodoro — 番茄鐘網頁小工具\n在等你回覆"));
   });
 });

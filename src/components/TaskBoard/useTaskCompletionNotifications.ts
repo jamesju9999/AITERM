@@ -72,11 +72,27 @@ export function useTaskCompletionNotifications(activeIdRef: RefObject<string>): 
         }
       });
     });
+    // 派出去的 Agent 停下來等人回覆（後端 tasks::quota 偵測）。
+    const unReply = listen<{ project_name: string; title: string }>("agent-reply-wait", (e) => {
+      const { project_name, title } = e.payload;
+      void getTaskBoardConfig().then((cfg) => {
+        if (cfg.notify_desktop_on_finish) {
+          void ensureNotificationPermission().then((granted) => {
+            if (granted) sendNotification({ title, body: `${project_name} · 在等你回覆` });
+          });
+        }
+        if (cfg.notify_telegram_on_finish) {
+          void sendTelegramMessage(`💬 ${project_name} — ${title}\n在等你回覆`).catch(() => {});
+        }
+      });
+    });
     const stopFinished = unlistenOnCleanup(un, "task-finished");
     const stopAttention = unlistenOnCleanup(unAttention, "agent-module-attention");
+    const stopReply = unlistenOnCleanup(unReply, "agent-reply-wait");
     return () => {
       stopFinished();
       stopAttention();
+      stopReply();
     };
   }, [activeIdRef]);
 }

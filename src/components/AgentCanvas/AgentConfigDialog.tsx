@@ -96,7 +96,7 @@ export function AgentConfigDialog({
     setRepoBusy(true);
     setError(null);
     try {
-      await initRepo(path);
+      await initRepo(path, projectId);
     } catch (e) {
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
     }

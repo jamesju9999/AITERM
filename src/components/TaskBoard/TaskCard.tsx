@@ -219,7 +219,7 @@ export function TaskCard({
           )}
           {!card.parallel_ok && <div className="task-card-meta"><span className="task-card-meta-icon">⚑</span>{t.board_card_solo_hint}</div>}
           {card.status === "running" && (
-            <div className="task-card-meta">{card.quota_wait_at ? t.board_quota_wait_hint : t.board_running_hint}</div>
+            <div className="task-card-meta">{card.quota_wait_at ? t.board_quota_wait_hint : card.reply_wait_at ? t.board_reply_wait_hint : t.board_running_hint}</div>
           )}
           {card.status === "done" && card.error_message && (
             <div className="task-card-meta">{card.error_message}</div>

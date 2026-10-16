@@ -52,6 +52,7 @@ export function AgentNode({
   onMerge,
   onAbortMerge,
   onRelease,
+  onMarkDone,
 }: {
   agent: AgentRow;
   /** 這個專案所有未封存的卡片（節點自己挑出跟它有關的）。 */
@@ -78,6 +79,8 @@ export function AgentNode({
   onMerge: () => void;
   onAbortMerge: () => void;
   onRelease: (moduleId: string) => void;
+  /** 執行中的互動卡：手動標記完成（互動卡不會被完成標記結案）。 */
+  onMarkDone: (taskId: string) => void;
 }) {
   const { t } = useLocale();
   const mine = tasks.filter((c) => c.agent_id === agent.id);
@@ -167,6 +170,17 @@ export function AgentNode({
         <div className="ac-now-sub">{t.ac_elapsed(formatElapsed(nowSecs - (running.dispatched_at ?? nowSecs)))}</div>
         {running.quota_wait_at ? (
           <div className="ac-quota-wait">{t.board_quota_wait_hint}</div>
+        ) : running.interactive ? (
+          <div className="ac-reply-wait">
+            <span>{t.ac_interactive_hint}</span>
+            <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={() => onMarkDone(running.id)}>
+              {t.ac_mark_done}
+            </button>
+          </div>
+        ) : running.reply_wait_at ? (
+          <div className="ac-reply-wait" role="status">
+            {t.ac_reply_wait}
+          </div>
         ) : (
           <div className="ac-bar ac-bar--indeterminate" aria-hidden>
             <i />
