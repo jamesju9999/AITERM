@@ -283,6 +283,39 @@ pub(crate) async fn finalize_agent_card(
     }
 }
 
+/// 工程師卡開工前，把協調者最後一次成功合併的結果合進來（通常是快轉）：一輪合併完、
+/// 同一個專案開新一輪時，工程師要從整合後的版本開始，而不是自己的舊分支。
+/// 回傳有沒有合進新東西。衝突：還原、回 Err（派工失敗、工程師暫停）。
+pub(crate) async fn sync_with_integration(
+    pool: &sqlx::SqlitePool,
+    task: &TaskRow,
+    worktree: &std::path::Path,
+) -> Result<bool, String> {
+    let integrated: Option<String> = sqlx::query_scalar(
+        "SELECT end_sha FROM tasks WHERE card_kind = 'merge' AND outcome = 'success' AND end_sha IS NOT NULL
+         ORDER BY finished_at DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(sha) = integrated else { return Ok(false) };
+    let _ = task;
+    let client = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
+    let before = client.head_sha().await?;
+    if let Err(e) = client.merge_rev(&sha, "Merge 整合結果（上一輪合併）").await {
+        let files = client.conflicted_files().await.unwrap_or_default();
+        if client.is_merge_in_progress().await {
+            let _ = client.merge_abort().await;
+        }
+        return Err(if files.is_empty() {
+            format!("開工前合併上一輪的整合結果失敗：{e}")
+        } else {
+            format!("開工前合併上一輪的整合結果有衝突：{}。請在工作資料夾解決後按重試", files.join("、"))
+        });
+    }
+    Ok(client.head_sha().await? != before)
+}
+
 /// 開工前把別位工程師的前置（審過的版本）合進這張卡的工作資料夾。
 /// 回傳合進來的前置卡 id。衝突或其他失敗：還原合併、回 Err（派工失敗、工程師暫停）。
 pub(crate) async fn premerge_prerequisites(
@@ -514,7 +547,11 @@ impl Dispatcher for RealDispatcher {
             (wt, None)
         } else if let Some(agent) = &agent {
             let wt = prepare_agent_worktree(&project.pool, &project.path, agent).await?;
-            // 別位工程師的前置先合進來；之後才記 start_sha，審查範圍只含這張卡自己的改動。
+            // 先跟上上一輪的整合結果、再合別位工程師的前置；之後才記 start_sha，
+            // 審查範圍只含這張卡自己的改動。
+            if task.card_kind == crate::tasks::workflow::KIND_WORK || task.card_kind == crate::tasks::workflow::KIND_FIX {
+                sync_with_integration(&project.pool, task, &wt).await?;
+            }
             let merged = premerge_prerequisites(&project.pool, task, &wt).await?;
             if !merged.is_empty() {
                 let json = serde_json::to_string(&merged).unwrap_or_default();
@@ -2259,6 +2296,39 @@ mod agent_dispatch_tests {
         assert_eq!(head(&y_wt), before, "衝突時要還原，不能停在合併一半");
         let merging = StdCommand::new("git").args(["rev-parse", "-q", "--verify", "MERGE_HEAD"]).current_dir(&y_wt).status().unwrap();
         assert!(!merging.success());
+    }
+
+    /// 一輪合併完，工程師開新卡時要從整合結果開始（不然會在舊版上做）。
+    #[tokio::test]
+    async fn a_coder_card_starts_from_the_last_integration_result() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let pool = mem_pool().await;
+        let x = coder(&pool, repo.path(), "X").await;
+        let x_wt = prepare_agent_worktree(&pool, storage.path(), &x).await.unwrap();
+        let card = store::create_task(&pool, "第二輪", "", &repo.path().to_string_lossy(), true, false).await.unwrap();
+        agents::assign_task(&pool, &card, Some(&x.id)).await.unwrap();
+        let card = store::get_task(&pool, &card).await.unwrap().unwrap();
+
+        // 還沒有任何合併：什麼都不做。
+        assert!(!sync_with_integration(&pool, &card, &x_wt).await.unwrap());
+
+        // 協調者合併出的整合結果：多了別人的檔案。
+        StdCommand::new("git").args(["checkout", "-q", "-b", "integration"]).current_dir(repo.path()).status().unwrap();
+        let integrated = commit_file(repo.path(), "other.txt", "別人的模組\n");
+        let merge = store::create_task(&pool, "合併", "", &repo.path().to_string_lossy(), true, false).await.unwrap();
+        sqlx::query("UPDATE tasks SET card_kind = 'merge', status = 'done', outcome = 'success', end_sha = ?, finished_at = 1 WHERE id = ?")
+            .bind(&integrated)
+            .bind(&merge)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(sync_with_integration(&pool, &card, &x_wt).await.unwrap());
+        assert!(x_wt.join("other.txt").exists());
+        // 已經包含：不再合。
+        assert!(!sync_with_integration(&pool, &card, &x_wt).await.unwrap());
     }
 
     #[tokio::test]

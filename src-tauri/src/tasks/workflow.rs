@@ -1457,9 +1457,13 @@ mod tests {
         // 「等 X」的前置還沒做：接過去也只能乾等，不搬。
         assert_eq!(owner(&tasks, &q2), busy);
         // X 被別張依賴也可以搬：依賴它的卡會等它審過、開工前合併進來。
-        assert_eq!(owner(&tasks, &x), idle1);
-        // 前置都已通過：接過去馬上能開工。
-        assert_eq!(owner(&tasks, &q1), idle2);
+        // 前置都已通過的「只靠骨架」也搬：接過去馬上能開工。
+        // 兩位閒置工程師同一秒建立，誰先接看 id，所以只驗兩張分別給了兩人。
+        let mut takers = vec![owner(&tasks, &x), owner(&tasks, &q1)];
+        takers.sort();
+        let mut idle = vec![idle1.clone(), idle2.clone()];
+        idle.sort();
+        assert_eq!(takers, idle);
         let moved = tasks.iter().find(|t| t.id == q1).unwrap();
         assert_eq!(moved.assigned_from.as_deref(), Some(busy.as_str()), "活動記錄要知道是從誰那裡移過來");
         assert!(moved.assigned_at.is_some());
