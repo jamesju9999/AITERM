@@ -200,6 +200,11 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE tasks ADD COLUMN from_spec TEXT",
         // 額度用完自動續跑，見 docs/superpowers/specs/2026-10-16-agent-quota-resume-design.md。
         "ALTER TABLE tasks ADD COLUMN quota_wait_at INTEGER",
+        // 相依關係，見 docs/superpowers/specs/2026-10-16-agent-task-dependencies-design.md。
+        "ALTER TABLE tasks ADD COLUMN depends_on TEXT",
+        "ALTER TABLE tasks ADD COLUMN assigned_from TEXT",
+        "ALTER TABLE tasks ADD COLUMN assigned_at INTEGER",
+        "ALTER TABLE tasks ADD COLUMN premerged TEXT",
     ] {
         let _ = sqlx::query(ddl).execute(pool).await;
     }

@@ -95,6 +95,15 @@ pub struct TaskRow {
     /// 派出去的 claude 撞到用量上限、正在等額度的起始時間（unix 秒）。見
     /// docs/superpowers/specs/2026-10-16-agent-quota-resume-design.md。
     pub quota_wait_at: Option<i64>,
+    /// 規格拆出的實作卡：依賴的前置卡 id（JSON 陣列）。見
+    /// docs/superpowers/specs/2026-10-16-agent-task-dependencies-design.md。
+    pub depends_on: Option<String>,
+    /// 閒置工程師接走這張卡時，原本的負責人（活動記錄用）。
+    pub assigned_from: Option<String>,
+    /// 上面那次重新分配的時間（unix 秒）。
+    pub assigned_at: Option<i64>,
+    /// 開工前合併進來的前置卡 id（JSON 陣列）。
+    pub premerged: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -1771,6 +1780,17 @@ mod session_column_tests {
         assert_eq!(row.card_kind, "work");
         assert_eq!((row.module_id, row.review_of, row.verdict), (None, None, None));
         assert!(!row.module_override);
+
+        // 相依關係，見 docs/superpowers/specs/2026-10-16-agent-task-dependencies-design.md。
+        assert_eq!((row.depends_on, row.assigned_from, row.assigned_at, row.premerged), (None, None, None, None));
+        sqlx::query("UPDATE tasks SET depends_on = '[\"a\"]', assigned_from = 'x', assigned_at = 5, premerged = '[\"a\"]' WHERE id = 'old1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let row = get_task(&pool, "old1").await.unwrap().unwrap();
+        assert_eq!(row.depends_on.as_deref(), Some("[\"a\"]"));
+        assert_eq!((row.assigned_from.as_deref(), row.assigned_at), (Some("x"), Some(5)));
+        assert_eq!(row.premerged.as_deref(), Some("[\"a\"]"));
     }
 
     /// 舊資料庫（沒有 `label` 欄位）跑過 `init_schema` 之後必須能補上這個
