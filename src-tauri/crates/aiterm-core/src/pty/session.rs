@@ -105,6 +105,66 @@ fn scan_for_marker(tail: &[u8], chunk: &[u8], marker: &[u8]) -> (bool, Vec<u8>) 
     (found, new_tail)
 }
 
+/// Strips whitespace and terminal escape sequences from PTY output before the
+/// done-marker scan, so `<<AITERM_DONE: id>>` (an agent copying the spacing of
+/// the instruction — seen live) or a marker a TUI drew with cursor moves,
+/// colours or a line wrap still counts. Safe against the instruction's own
+/// echo: its prefix, id and suffix are separated by non-whitespace text.
+/// Stateful so an escape sequence split across reads is still dropped whole.
+#[derive(Default)]
+struct MarkerNormalizer {
+    state: EscState,
+}
+
+#[derive(Default, Clone, Copy, PartialEq)]
+enum EscState {
+    #[default]
+    Text,
+    /// Saw ESC, waiting for the introducer byte.
+    Esc,
+    /// Inside CSI (`ESC [`), until a final byte 0x40–0x7E.
+    Csi,
+    /// Inside OSC/DCS/etc. string, until BEL or `ESC \`.
+    Str,
+    /// Saw ESC inside a string (maybe the `ESC \` terminator).
+    StrEsc,
+}
+
+impl MarkerNormalizer {
+    fn feed(&mut self, chunk: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(chunk.len());
+        for &b in chunk {
+            self.state = match self.state {
+                EscState::Text => match b {
+                    0x1b => EscState::Esc,
+                    b' ' | b'\t' | b'\r' | b'\n' => EscState::Text,
+                    _ => {
+                        out.push(b);
+                        EscState::Text
+                    }
+                },
+                EscState::Esc => match b {
+                    b'[' => EscState::Csi,
+                    b']' | b'P' | b'X' | b'^' | b'_' => EscState::Str,
+                    _ => EscState::Text,
+                },
+                EscState::Csi => {
+                    if (0x40..=0x7e).contains(&b) { EscState::Text } else { EscState::Csi }
+                }
+                EscState::Str => match b {
+                    0x07 => EscState::Text,
+                    0x1b => EscState::StrEsc,
+                    _ => EscState::Str,
+                },
+                EscState::StrEsc => {
+                    if b == b'\\' { EscState::Text } else { EscState::Str }
+                }
+            };
+        }
+        out
+    }
+}
+
 /// Raw PTY bytes retained per session. Serves two readers with different
 /// appetites: AI context (which asks for a few KB) and screen sharing (which
 /// replays this whole buffer to prime a newly connected viewer's terminal).
@@ -466,6 +526,7 @@ impl PtySession {
             .name(format!("pty-reader-{}", id))
             .spawn(move || {
                 let mut buf = [0u8; 4096];
+                let mut marker_norm = MarkerNormalizer::default();
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break, // EOF: shell exited
@@ -529,10 +590,13 @@ impl PtySession {
                             // number of chunk boundaries is still found — unlike the
                             // single-byte bell above, this marker is multiple bytes
                             // long and PTY reads are arbitrary-sized.
+                            // Scans the normalised stream (whitespace and escape
+                            // sequences removed) — see `MarkerNormalizer`.
                             {
                                 let mut tail = marker_tail_for_thread.lock();
+                                let normalized = marker_norm.feed(&chunk);
                                 let (found, new_tail) =
-                                    scan_for_marker(&tail, &chunk, &done_marker_bytes);
+                                    scan_for_marker(&tail, &normalized, &done_marker_bytes);
                                 if found {
                                     marker_count_for_thread.fetch_add(1, Ordering::SeqCst);
                                 }
@@ -2118,6 +2182,51 @@ mod tests {
         // Round 3: the remainder arrives — tail2 + third together contain it.
         let (found3, _tail3) = scan_for_marker(&tail2, third, marker);
         assert!(found3, "marker split across 3 chunks must still be found");
+    }
+
+    /// Feeds `chunks` through a fresh normalizer + scanner, exactly the way
+    /// the reader thread does, and reports whether the marker was seen.
+    fn tolerant_scan(chunks: &[&[u8]], marker: &[u8]) -> bool {
+        let mut norm = MarkerNormalizer::default();
+        let mut tail = Vec::new();
+        let mut seen = false;
+        for c in chunks {
+            let (found, t) = scan_for_marker(&tail, &norm.feed(c), marker);
+            seen |= found;
+            tail = t;
+        }
+        seen
+    }
+
+    #[test]
+    fn marker_with_a_space_after_the_prefix_is_still_found() {
+        // Seen live: Claude copied the spacing of the instruction and printed
+        // `<<AITERM_DONE: <id>>>`, so the card never finished.
+        let marker = b"<<AITERM_DONE:abc-123>>";
+        assert!(tolerant_scan(&[b"\r\n<<AITERM_DONE: abc-123>>\r\n"], marker));
+        assert!(tolerant_scan(&[b"<<AITERM_DONE:\tabc-123 >>"], marker));
+    }
+
+    #[test]
+    fn marker_broken_up_by_cursor_moves_and_colours_is_still_found() {
+        // TUIs render spaces as cursor-forward and may colour or wrap the line.
+        let marker = b"<<AITERM_DONE:abc-123>>";
+        assert!(tolerant_scan(&[b"<<AITERM_DONE:\x1b[1Cabc\x1b[38;5;2m-123\x1b[0m>>"], marker));
+        assert!(tolerant_scan(&[b"<<AITERM_DO\x1b]8;;\x07NE:abc-123>>"], marker));
+        // An escape sequence split across reads.
+        assert!(tolerant_scan(&[b"<<AITERM_DONE:\x1b[", b"1Cabc-123>>"], marker));
+    }
+
+    #[test]
+    fn instruction_echo_never_matches_even_after_normalising() {
+        let tab = "abc-123";
+        let instr = done_marker_instruction(tab);
+        assert!(!tolerant_scan(&[instr.as_bytes()], done_marker(tab).as_bytes()));
+    }
+
+    #[test]
+    fn marker_for_a_different_id_is_not_found() {
+        assert!(!tolerant_scan(&[b"<<AITERM_DONE: abc-124>>"], b"<<AITERM_DONE:abc-123>>"));
     }
 
     #[test]
