@@ -1,7 +1,7 @@
 # Agent 需要決策時找人回答：收件匣＋Telegram — 設計
 
 日期：2026-10-16
-狀態：草稿，待使用者確認
+狀態：使用者確認（沒人回答＝一直等、只提醒）；實測完成
 
 ## 目標
 
@@ -59,11 +59,20 @@ status（open／answered／cancelled）、answer、answered_via（app／telegram
 非互動 Agent 卡的自主說明改成：「需要人做決定（需求不清、取捨會影響成果）時用 `ask_human` 提問，送出後結束這一輪等答案；
 小細節自己採合理做法，記在『待確認事項』。」沒有掛上 `ask_human`（指令不是 claude、路徑有特殊字元）時維持現在的說明。
 
-## 動手前要先實測（不寫進實作前）
+## 實測結果（2026-10-16，claude 2.1.300，sonnet，假的 MCP 端點）
 
-1. Claude Code 的 `--mcp-config` 指向 HTTP 端點、工具立刻回傳的流程在真的 claude 上是否可行（用假的接收器打一次）。
-2. 「工具回傳後要它結束這一輪」是否照做；不照做時，答案送來前它會不會自己先決定。
-3. Telegram inline keyboard 與 callback_query 在現有 bot 上的實際格式。
+1. `--mcp-config` 指向 `{"type":"http","url":...}` 可用。Claude Code 會先送新版協定的 `server/discover` 探測，
+   回空結果它就改走 `initialize`（protocolVersion 2025-11-25）、`notifications/initialized`、還會開一條 GET 的 SSE 連線（回 405 即可）、
+   `tools/list`、`tools/call`。最小的 JSON 回應（不用 SSE）就夠。
+2. 提示裡說「需要人做決定時用 ask_human」：它自己判斷要問，帶了 question、options、recommended、context；
+   工具回傳後就結束這一輪，**沒有先做**（README 沒建立）。
+3. 用同一個 session 送「Q-1 的回答：中文（番茄鐘）」：它照答案做完，沒有再問。
+4. 問完後緊接著收到「完成後請印完成標記」：它回「還沒完成，先不印」。仍要防呆：問題未回答時不把完成標記當結案；
+   送答案時順便再提醒一次完成標記。
+5. 派工要加 `--allowedTools mcp__aiterm__ask_human`，否則互動介面會先跳權限確認。
+6. Telegram inline keyboard／callback_query 沒有實測（要對使用者的聊天室送訊息）；依 Bot API：`reply_markup.inline_keyboard`、
+   `callback_data` 最多 64 bytes、按下後收到 `callback_query{id,data,message{message_id,chat}}`，要 `answerCallbackQuery`，
+   標示已回答用 `editMessageText`。實作完用真的 bot 驗收。
 
 ## 不做（第一版）
 
