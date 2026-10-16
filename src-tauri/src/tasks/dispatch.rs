@@ -251,10 +251,20 @@ async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
         // 信任提示的檢查一定要排在 settled 判斷之前：那個畫面出現時 TUI
         // 已經啟動、畫面也已經安靜，兩個條件都成立，先判 settled 就會把
         // 提示詞打進信任對話框裡。
+        //
+        // 而且要等畫面安靜了才送鍵。信任畫面一畫出來 claude 還在跟終端機
+        // 問答（`ESC[c` 等查詢），接著會重畫一次、把游標拉回預設的
+        // `No, exit`——太早送的「往下」就這樣被吃掉，後面打提示詞的 Enter
+        // 選到 `No, exit`，claude 直接退出、分頁只剩空殼（實測：畫面一出現
+        // 就送必定失敗，等 0.25 秒就成功）。
         if !trust_handled {
             if let Some(keys) =
                 pty.get_recent_output(tab_id, 16 * 1024).as_deref().and_then(trust_prompt_keys)
             {
+                if pty.ms_since_output(tab_id).unwrap_or(u64::MAX) < SETTLE_QUIET_MS {
+                    tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
+                    continue;
+                }
                 let _ = pty.write(tab_id, &keys);
                 trust_handled = true;
                 // 接受之後 claude 才真正開始啟動，重新給它完整的等待預算。
@@ -839,6 +849,49 @@ Enter to confirm · Esc to cancel
 
         // ESC [ B CR — 往下一格（Yes 在 No 下面）再確認。
         assert_eq!(&hex[..4], ["1b", "5b", "42", "0d"], "送出的按鍵不對：{hex:?}");
+    }
+
+    /// 信任畫面畫出來之後 claude 還會重畫（實測會把游標拉回 `No, exit`），
+    /// 那段期間送的按鍵會被吃掉。所以要等畫面安靜了才送。
+    ///
+    /// 畫面印完信任畫面後，背景再持續輸出 1.5 秒（模擬重畫）才印 `DONE`；
+    /// 前景的 `od` 一讀到按鍵就印 `GOT`。按鍵在重畫期間送出 → `GOT` 會
+    /// 出現在 `DONE` 之前。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn waits_for_the_trust_screen_to_stop_redrawing_before_answering_it() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+
+        #[cfg(not(windows))]
+        pty.write(
+            &tab,
+            b"stty raw -echo; printf '\\033[?1049h'; \
+              printf '%s\\n' 'Quicksafetycheck:' '\xe2\x9d\xafNo,exit' 'Yes,Itrustthisfolder'; \
+              (for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do printf .; sleep 0.1; done; printf 'DO''NE') & \
+              od -An -tx1 -N 4; printf 'G''OT'\n",
+        )
+        .unwrap();
+
+        let _ = tokio::time::timeout(
+            Duration::from_millis(NO_TUI_QUIET_MS + 4_000),
+            wait_until_settled(&pty, &tab),
+        )
+        .await;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let out = loop {
+            let out = pty.get_recent_output(&tab, 16 * 1024).unwrap_or_default();
+            if out.contains("GOT") && out.contains("DONE") {
+                break out;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "沒有送出按鍵或畫面沒跑完：{out}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        assert!(
+            out.find("DONE") < out.find("GOT"),
+            "畫面還在重畫就送了按鍵，會被 claude 吃掉：{out}"
+        );
     }
 
     #[tokio::test]
