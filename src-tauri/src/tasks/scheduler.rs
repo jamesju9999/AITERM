@@ -195,13 +195,17 @@ pub fn join_args<const N: usize>(parts: [Option<String>; N]) -> Option<String> {
     (!v.is_empty()).then(|| v.join(" "))
 }
 
-/// Agent 卡的完整提示：角色前綴＋卡片內容；非互動卡最後再加 `AUTONOMY_NOTE`。
-pub fn agent_prompt(prefix: &str, prompt: &str, interactive: bool) -> String {
+/// 掛上 `ask_human` 時的版本：需要人決定的事用工具問。
+pub const AUTONOMY_NOTE_ASK: &str = "（這是自動派工，旁邊沒有人會即時回答。需要人做決定時（需求不清、取捨會影響成果），\
+用 ask_human 工具提問，送出後結束這一輪回覆等答案，不要自己先決定；小細節自己採合理做法，記在文件或交件說明的「待確認事項」。）";
+
+/// Agent 卡的完整提示：角色前綴＋卡片內容；非互動卡最後再加自主說明（有 `ask_human` 時用提問版）。
+pub fn agent_prompt(prefix: &str, prompt: &str, interactive: bool, can_ask: bool) -> String {
     let p = with_role_prefix(prefix, prompt);
-    if interactive {
-        p
-    } else {
-        format!("{p}\n\n{AUTONOMY_NOTE}")
+    match (interactive, can_ask) {
+        (true, _) => p,
+        (false, true) => format!("{p}\n\n{AUTONOMY_NOTE_ASK}"),
+        (false, false) => format!("{p}\n\n{AUTONOMY_NOTE}"),
     }
 }
 
@@ -535,6 +539,27 @@ impl Dispatcher for RealDispatcher {
         // 會直接啟動失敗（見 dispatch::looks_like_claude）。
         let session_id = dispatch::looks_like_claude(&claude_cmd)
             .then(|| uuid::Uuid::new_v4().to_string());
+        // 非互動的 Agent 卡掛上 ask_human（需要人決定時提問）。做不到就照舊。
+        let ask_args = if session_id.is_some() && !task.interactive && task.agent_id.is_some() {
+            match self.quota.mcp_url(&task.id).await {
+                Some(url) => {
+                    let dir = crate::tasks::task_dir(&project.path, &task.id);
+                    let path = dir.join("mcp.json");
+                    match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, crate::tasks::ask::mcp_config_json(&url))) {
+                        Ok(()) => crate::tasks::quota::path_flag("--mcp-config", &path)
+                            .map(|f| format!("{f} --allowedTools {}", crate::tasks::ask::ALLOWED_TOOL)),
+                        Err(e) => {
+                            eprintln!("mcp config for {}: {e}", task.id);
+                            None
+                        }
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        let can_ask = ask_args.is_some();
 
         let bridge_env = dispatch::resolve_bridge_env(
             &self.config,
@@ -559,7 +584,7 @@ impl Dispatcher for RealDispatcher {
         let (effective_dir, worktree_info) = if let Some(agent) = agent.as_ref().filter(|_| readonly) {
             // 審查卡、拆解卡：在受審版本的唯讀目錄跑，不記 start_sha（那兩欄存的是受審範圍）。
             let wt = prepare_review_worktree(&project.path, &agent.id, task).await?;
-            prompt = agent_prompt(&agent.prompt_prefix, &prompt, task.interactive);
+            prompt = agent_prompt(&agent.prompt_prefix, &prompt, task.interactive, can_ask);
             (wt, None)
         } else if let Some(agent) = &agent {
             let wt = prepare_agent_worktree(&project.pool, &project.path, agent).await?;
@@ -588,7 +613,7 @@ impl Dispatcher for RealDispatcher {
                 }
                 Err(e) => eprintln!("head_sha for agent card {}: {e}", task.id),
             }
-            prompt = agent_prompt(&agent.prompt_prefix, &prompt, task.interactive);
+            prompt = agent_prompt(&agent.prompt_prefix, &prompt, task.interactive, can_ask);
             (wt, None)
         } else {
             let isolate = resolve_isolation(
@@ -621,7 +646,7 @@ impl Dispatcher for RealDispatcher {
         };
         // 依角色指定的模型（只對 claude 指令加，看不出是 claude 就不動）。
         let model_args = if session_id.is_some() { model_flag(agent.as_ref().and_then(|a| a.model.as_deref())) } else { None };
-        let extra_args = join_args([model_args, quota_args.clone()]);
+        let extra_args = join_args([model_args, quota_args.clone(), ask_args]);
         let agent_ctx = agent.map(|a| (a.id, a.kind, effective_dir.clone()));
         let card_kind = task.card_kind.clone();
         let repo_dir = task.project_dir.clone();
@@ -638,7 +663,7 @@ impl Dispatcher for RealDispatcher {
             extra_args.as_deref(),
         )
         .await?;
-        if quota_args.is_some() {
+        if quota_args.is_some() || can_ask {
             self.quota.register(
                 &task.id,
                 &tab_id,
@@ -709,10 +734,28 @@ impl Dispatcher for RealDispatcher {
                 let task_id = task_id.clone();
                 move || quota.is_waiting(&task_id)
             };
+            let holding = {
+                let quota = quota.clone();
+                let task_id = task_id.clone();
+                move || quota.is_holding_marker(&task_id)
+            };
             let outcome = monitor::watch_with_quota(
-                &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode, &waiting,
+                &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode, &waiting, &holding,
             ).await;
             quota.unregister(&task_id);
+            // 卡片結束了，它還沒回答的問題作廢（收件匣與 Telegram 會跟著更新）。
+            match crate::tasks::questions::cancel_open_for_task(&pool, &task_id).await {
+                Ok(cancelled) if !cancelled.is_empty() => {
+                    let _ = app.emit("questions-updated", ());
+                    for q in cancelled {
+                        if let Some(mid) = q.telegram_message_id {
+                            crate::telegram::mark_question_closed(&app, mid, &q, None);
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("cancel questions {task_id}: {e}"),
+            }
             let outcome = match &agent_ctx {
                 Some((agent_id, _, worktree)) if card_kind == crate::tasks::workflow::KIND_REVIEW => {
                     finalize_review_card(&pool, &project_path, agent_id, &task_id, &repo_dir, worktree, outcome).await
@@ -1038,6 +1081,34 @@ impl SchedulerHandle {
     }
 }
 
+/// 沒人回答的問題：每分鐘檢查一次，該提醒的（見 `questions::due_reminders`）再通知一次。
+fn spawn_question_reminders(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let now = store::now_secs();
+            let projects = app.state::<ProjectRegistry>().all();
+            for p in projects {
+                let Ok(due) = crate::tasks::questions::due_reminders(&p.pool, now).await else { continue };
+                for q in due {
+                    let _ = crate::tasks::questions::mark_reminded(&p.pool, q.id, now).await;
+                    let title = store::get_task(&p.pool, &q.task_id).await.ok().flatten().map(|t| t.title).unwrap_or_default();
+                    let _ = app.emit(
+                        "agent-question",
+                        serde_json::json!({
+                            "project_id": p.id, "project_name": p.name, "title": title,
+                            "id": q.id, "question": q.question, "reminder": true,
+                        }),
+                    );
+                    if let Err(e) = crate::telegram::questions::send_reminder(&app, &q).await {
+                        eprintln!("telegram reminder {}: {e}", q.id);
+                    }
+                }
+            }
+        }
+    });
+}
+
 /// Start the long-lived scheduler. Called once from `lib.rs` `.setup()`.
 pub fn spawn(app: AppHandle) -> SchedulerHandle {
     let wake = Arc::new(Notify::new());
@@ -1089,6 +1160,36 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
                 );
             });
         }
+        {
+            let app = app.clone();
+            // 有新問題：前端收件匣／通知，同時送到 Telegram（有設定的話）。
+            quota.set_on_question(move |label, q| {
+                let _ = app.emit(
+                    "agent-question",
+                    serde_json::json!({
+                        "project_id": label.project_id, "project_name": label.project_name,
+                        "title": label.title, "id": q.id, "question": q.question, "reminder": false,
+                    }),
+                );
+                let _ = app.emit("questions-updated", ());
+                let (app, label, q) = (app.clone(), label.clone(), q.clone());
+                tauri::async_runtime::spawn(async move {
+                    match crate::telegram::questions::send_question(&app, &label.project_id, &label.project_name, &label.title, &q).await {
+                        Ok(Some(mid)) => {
+                            let reg = app.state::<ProjectRegistry>();
+                            if let Some(p) = reg.get(&label.project_id) {
+                                let _ = crate::tasks::questions::set_telegram_message(&p.pool, q.id, mid).await;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => eprintln!("telegram question {}: {e}", q.id),
+                    }
+                });
+            });
+        }
+        // 答案要能從收件匣與 Telegram 送回來：讓指令拿得到這份狀態（解除等決策）。
+        app.manage(quota.clone());
+        spawn_question_reminders(app.clone());
         crate::tasks::quota::spawn_resumer(quota.clone(), pty.clone());
         let dispatcher = RealDispatcher {
             app: app.clone(),
@@ -2213,10 +2314,22 @@ mod agent_dispatch_tests {
 
     #[test]
     fn non_interactive_agent_cards_are_told_not_to_stop_and_ask() {
-        let auto = agent_prompt("你是工程師", "做 A", false);
+        let auto = agent_prompt("你是工程師", "做 A", false, false);
         assert!(auto.starts_with("你是工程師\n\n做 A"));
         assert!(auto.ends_with(AUTONOMY_NOTE) && AUTONOMY_NOTE.contains("不要停下來詢問"));
-        assert_eq!(agent_prompt("你是工程師", "做 A", true), "你是工程師\n\n做 A", "互動卡本來就有人在旁邊");
+        assert_eq!(agent_prompt("你是工程師", "做 A", true, false), "你是工程師\n\n做 A", "互動卡本來就有人在旁邊");
+        // 掛上 ask_human 時：要決策的事用工具問，問完結束這一輪。
+        let ask = agent_prompt("你是工程師", "做 A", false, true);
+        assert!(ask.ends_with(AUTONOMY_NOTE_ASK) && AUTONOMY_NOTE_ASK.contains("ask_human"));
+    }
+
+    #[test]
+    fn path_flags_quote_the_path_and_refuse_shell_specials() {
+        assert_eq!(
+            crate::tasks::quota::path_flag("--mcp-config", std::path::Path::new("/a b/mcp.json")).as_deref(),
+            Some(r#"--mcp-config "/a b/mcp.json""#)
+        );
+        assert_eq!(crate::tasks::quota::path_flag("--mcp-config", std::path::Path::new("/a$b")), None);
     }
 
     #[tokio::test]

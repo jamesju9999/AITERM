@@ -129,6 +129,7 @@ use commands::{
         agents_merge, agents_abort_merge, tasks_assign_agent, agents_override_module, agents_check_repo, agents_init_repo,
         agents_open_repo,
     },
+    questions::{questions_answer, questions_list},
     tasks::{
         tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
         tasks_add_attachment, tasks_remove_attachment, tasks_clone, tasks_read_transcript,
@@ -780,6 +781,8 @@ pub fn run() {
             agents_check_repo,
             agents_init_repo,
             agents_open_repo,
+            questions_list,
+            questions_answer,
             // 專案
             projects_list,
             projects_create,

@@ -82,11 +82,16 @@ pub fn current_account() -> Option<String> {
 /// （zsh/bash/fish/pwsh/cmd 都有可能），雙引號在這些 shell 裡對一般路徑都
 /// 一樣有效；路徑含 `"`、`$`、`` ` ``、`%` 時各 shell 解讀不同，就不加（退回沒有 hook 的原行為）。
 pub fn settings_flag(path: &Path) -> Option<String> {
+    path_flag("--settings", path)
+}
+
+/// `<flag> "<path>"`，規則同 `settings_flag`（`--mcp-config` 也用它）。
+pub fn path_flag(flag: &str, path: &Path) -> Option<String> {
     let p = path.to_str()?;
     if p.chars().any(|c| matches!(c, '"' | '$' | '`' | '%')) {
         return None;
     }
-    Some(format!("--settings \"{p}\""))
+    Some(format!("{flag} \"{p}\""))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

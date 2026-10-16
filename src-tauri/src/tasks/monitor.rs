@@ -99,7 +99,7 @@ pub async fn watch(
     thresholds: Thresholds,
     mode: WatchMode,
 ) -> TaskOutcome {
-    watch_with_quota(pty, tab_id, control, baselines, thresholds, mode, &|| false).await
+    watch_with_quota(pty, tab_id, control, baselines, thresholds, mode, &|| false, &|| false).await
 }
 
 /// 同 `watch`，另外問 `waiting_for_quota`：派出去的 claude 撞到用量上限、
@@ -114,6 +114,8 @@ pub async fn watch_with_quota(
     thresholds: Thresholds,
     mode: WatchMode,
     waiting_for_quota: &(dyn Fn() -> bool + Send + Sync),
+    // 等決策（`ask_human` 還沒回答）：這段期間印的完成標記不算結案。
+    holding_marker: &(dyn Fn() -> bool + Send + Sync),
 ) -> TaskOutcome {
     let start = tokio::time::Instant::now();
     let exit_baseline = pty.last_exit_code(tab_id);
@@ -134,6 +136,9 @@ pub async fn watch_with_quota(
         let waiting = waiting_for_quota();
         if waiting {
             baselines.bell = bell;
+        }
+        if holding_marker() {
+            baselines.marker = marker;
         }
 
         // 2. reply signal — Auto mode only (see WatchMode::Interactive's doc).
@@ -279,6 +284,44 @@ mod tests {
 
         let outcome = watch(&pty, &tab, rx, Baselines::default(), test_thresholds(), WatchMode::Auto).await;
         assert!(matches!(outcome, TaskOutcome::Success), "{outcome:?}");
+    }
+
+    /// 等決策（`ask_human` 還沒回答）時印的完成標記不算結案；答完之後再印的才算。
+    #[tokio::test]
+    async fn a_marker_printed_while_held_does_not_finish_the_card() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        settle_exit_code(&pty, &tab).await;
+        let (_tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        let marker = done_marker(&tab);
+        let base = baselines_now(&pty, &tab);
+        let holding = std::sync::atomic::AtomicBool::new(true);
+        let released_at = parking_lot::Mutex::new(None::<std::time::Instant>);
+        let driver = async {
+            pty.write(&tab, format!("printf '%s\\n' '{marker}'\n").as_bytes()).unwrap();
+            // 等標記真的出現在輸出裡（被看到、但不該結案）。
+            for _ in 0..100 {
+                if pty.marker_count(&tab).unwrap_or(0) > base.marker {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            assert!(pty.marker_count(&tab).unwrap_or(0) > base.marker, "標記沒有出現，測試本身無效");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            *released_at.lock() = Some(std::time::Instant::now());
+            holding.store(false, std::sync::atomic::Ordering::SeqCst);
+            pty.write(&tab, format!("printf '%s\\n' '{marker}'\n").as_bytes()).unwrap();
+        };
+        let not_waiting = || false;
+        let held = || holding.load(std::sync::atomic::Ordering::SeqCst);
+        let watched = async {
+            let o = watch_with_quota(&pty, &tab, rx, base, test_thresholds(), WatchMode::Auto, &not_waiting, &held).await;
+            (o, std::time::Instant::now())
+        };
+        let ((outcome, finished_at), _) = tokio::join!(watched, driver);
+        assert!(matches!(outcome, TaskOutcome::Success), "{outcome:?}");
+        let released = released_at.lock().expect("driver 沒跑完");
+        assert!(finished_at >= released, "等決策時印的標記不能結案");
     }
 
     #[tokio::test]
@@ -462,7 +505,7 @@ mod tests {
         let base = baselines_now(&pty, &tab);
 
         let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
-        let watch_fut = watch_with_quota(&pty, &tab, rx, base, test_thresholds(), WatchMode::Auto, &is_waiting);
+        let watch_fut = watch_with_quota(&pty, &tab, rx, base, test_thresholds(), WatchMode::Auto, &is_waiting, &|| false);
         tokio::pin!(watch_fut);
 
         pty.write(&tab, b"printf '\\a'\n").unwrap();
@@ -489,7 +532,7 @@ mod tests {
         settle_exit_code(&pty, &tab).await;
         let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
         let thresholds = Thresholds { quiet_stuck_ms: 200, poll_ms: 50, min_run_ms: 100 };
-        let watch_fut = watch_with_quota(&pty, &tab, rx, baselines_now(&pty, &tab), thresholds, WatchMode::Auto, &|| true);
+        let watch_fut = watch_with_quota(&pty, &tab, rx, baselines_now(&pty, &tab), thresholds, WatchMode::Auto, &|| true, &|| false);
         tokio::pin!(watch_fut);
         assert!(
             tokio::time::timeout(Duration::from_millis(1_000), &mut watch_fut).await.is_err(),
