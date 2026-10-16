@@ -328,6 +328,12 @@ pub async fn agents_check_repo(path: String) -> Result<crate::tasks::repo_check:
 
 /// 一鍵把資料夾變成可用的 git repo（git init＋第一個 commit）。
 #[tauri::command]
-pub async fn agents_init_repo(path: String) -> Result<(), String> {
-    crate::tasks::repo_check::init_repo(&path).await
+pub async fn agents_init_repo(
+    path: String,
+    project_id: Option<String>,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<(), String> {
+    // 看板專案資料夾在這個程式庫裡面時，第一個 commit 不能把它收進去。
+    let board = project_id.and_then(|id| project(&reg, &id).ok()).map(|p| p.path.clone());
+    crate::tasks::repo_check::init_repo(&path, board.as_deref()).await
 }

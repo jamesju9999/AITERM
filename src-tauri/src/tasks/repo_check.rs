@@ -41,14 +41,46 @@ pub async fn check_repo(path: &str) -> RepoCheck {
 /// 不是 repo 就 `git init`；沒有 commit 就把資料夾現有檔案建成第一個 commit
 /// （沒有任何檔案時建空 commit）。使用者沒設定 git 身分時，這一個 commit
 /// 用 AITerm 的身分，不去改使用者的全域設定。
-pub async fn init_repo(path: &str) -> Result<(), String> {
+///
+/// `board`：看板專案資料夾。它在程式庫裡面時先排除（`exclude_inside`），不讓
+/// tasks.db 與 Agent 工作資料夾進到第一個 commit。
+pub async fn init_repo(path: &str, board: Option<&Path>) -> Result<(), String> {
     match check_repo(path).await {
         RepoCheck::Ok { .. } => return Ok(()),
         RepoCheck::Missing => return Err(format!("資料夾不存在：{path}")),
         RepoCheck::NotRepo => GitClient::new(path.to_string(), None).init().await?,
         RepoCheck::NoCommits => {}
     }
+    if let Some(board) = board {
+        exclude_inside(Path::new(path), board)?;
+    }
     GitClient::new(path.to_string(), None).initial_commit("Initial commit (AITerm Agent Canvas)").await
+}
+
+/// `inner` 在程式庫 `repo` 裡面時，把它加進 `.git/info/exclude`（本機、不進版控）。
+/// 回傳這次有沒有新加。不在裡面、就是程式庫本身、或 `.git` 不是資料夾（例如這是
+/// 別的 worktree）都不動。
+pub fn exclude_inside(repo: &Path, inner: &Path) -> Result<bool, String> {
+    let (Ok(repo), Ok(inner)) = (repo.canonicalize(), inner.canonicalize()) else { return Ok(false) };
+    let Ok(rel) = inner.strip_prefix(&repo) else { return Ok(false) };
+    if rel.as_os_str().is_empty() {
+        return Ok(false);
+    }
+    let git_dir = repo.join(".git");
+    if !git_dir.is_dir() {
+        return Ok(false);
+    }
+    let rel: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    let line = format!("/{}/", rel.join("/"));
+    let file = git_dir.join("info").join("exclude");
+    let current = std::fs::read_to_string(&file).unwrap_or_default();
+    if current.lines().any(|l| l.trim() == line) {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(git_dir.join("info")).map_err(|e| e.to_string())?;
+    let sep = if current.is_empty() || current.ends_with('\n') { "" } else { "\n" };
+    std::fs::write(&file, format!("{current}{sep}# AITerm 看板專案資料夾\n{line}\n")).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -90,30 +122,65 @@ mod tests {
         fs::write(dir.path().join("main.c"), "int main(){}").unwrap();
         let p = dir.path().to_string_lossy().into_owned();
 
-        init_repo(&p).await.unwrap();
+        init_repo(&p, None).await.unwrap();
 
         assert!(matches!(check_repo(&p).await, RepoCheck::Ok { .. }));
         let out = Command::new("git").args(["ls-files"]).current_dir(dir.path()).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "main.c", "現有檔案要進第一個 commit");
         // 已經 OK 的資料夾再按一次不會出事。
-        init_repo(&p).await.unwrap();
+        init_repo(&p, None).await.unwrap();
     }
 
     #[tokio::test]
     async fn init_handles_an_empty_folder_and_a_repo_without_commits() {
         let empty = tempfile::tempdir().unwrap();
-        init_repo(&empty.path().to_string_lossy()).await.unwrap();
+        init_repo(&empty.path().to_string_lossy(), None).await.unwrap();
         assert!(matches!(check_repo(&empty.path().to_string_lossy()).await, RepoCheck::Ok { .. }));
 
         let bare = tempfile::tempdir().unwrap();
         git(bare.path(), &["init", "-q"]);
         fs::write(bare.path().join("x.txt"), "x").unwrap();
-        init_repo(&bare.path().to_string_lossy()).await.unwrap();
+        init_repo(&bare.path().to_string_lossy(), None).await.unwrap();
         assert!(matches!(check_repo(&bare.path().to_string_lossy()).await, RepoCheck::Ok { .. }));
     }
 
     #[tokio::test]
     async fn init_refuses_a_missing_folder() {
-        assert!(init_repo("/definitely/not/here").await.is_err());
+        assert!(init_repo("/definitely/not/here", None).await.is_err());
+    }
+
+    /// Pomodoro 實機：看板專案資料夾建在程式庫裡面，一鍵 init 把它的 tasks.db 也
+    /// commit 進去，之後看板每次更新都讓程式庫「有未提交的改動」。
+    #[tokio::test]
+    async fn init_leaves_a_board_project_inside_the_repo_out_of_git() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("main.c"), "int main(){}").unwrap();
+        let board = dir.path().join("Board");
+        fs::create_dir_all(board.join("agents")).unwrap();
+        fs::write(board.join("tasks.db"), "db").unwrap();
+        let p = dir.path().to_string_lossy().into_owned();
+
+        init_repo(&p, Some(&board)).await.unwrap();
+
+        let out = Command::new("git").args(["ls-files"]).current_dir(dir.path()).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "main.c");
+        fs::write(board.join("tasks.db"), "changed").unwrap();
+        let st = Command::new("git").args(["status", "--porcelain"]).current_dir(dir.path()).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&st.stdout), "", "看板更新不能讓程式庫變髒");
+    }
+
+    #[test]
+    fn exclude_is_added_once_and_only_for_folders_inside_the_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q"]);
+        let inside = dir.path().join("Board");
+        fs::create_dir_all(&inside).unwrap();
+        assert!(exclude_inside(dir.path(), &inside).unwrap());
+        assert!(!exclude_inside(dir.path(), &inside).unwrap(), "已經有就不重複加");
+        let other = tempfile::tempdir().unwrap();
+        assert!(!exclude_inside(dir.path(), other.path()).unwrap(), "不在程式庫裡面就不動");
+        assert!(!exclude_inside(dir.path(), dir.path()).unwrap(), "程式庫本身不排除");
+        let text = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
+        assert_eq!(text.matches("/Board/").count(), 1, "{text}");
     }
 }

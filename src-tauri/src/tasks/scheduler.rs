@@ -204,6 +204,10 @@ pub(crate) async fn prepare_agent_worktree(
     project_storage_path: &std::path::Path,
     agent: &crate::tasks::agents::AgentRow,
 ) -> Result<std::path::PathBuf, String> {
+    // 看板專案資料夾（含各 Agent 的工作資料夾）在程式庫裡面時，不能讓它把程式庫弄髒。
+    if let Err(e) = crate::tasks::repo_check::exclude_inside(std::path::Path::new(&agent.project_dir), project_storage_path) {
+        eprintln!("exclude board folder: {e}");
+    }
     if let Some(p) = &agent.worktree_path {
         let pb = std::path::PathBuf::from(p);
         if pb.is_dir() {
