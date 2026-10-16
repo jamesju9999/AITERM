@@ -69,7 +69,7 @@ pub async fn create_agent(pool: &SqlitePool, a: &NewAgent<'_>) -> Result<String,
                 .fetch_one(pool)
                 .await?;
             if n > 0 {
-                let label = if a.kind == "reviewer" { "檢核人" } else { "協調者" };
+                let label = if a.kind == "reviewer" { "審核者" } else { "協調者" };
                 return Err(sqlx::Error::Protocol(format!("每個專案最多一個{label}")));
             }
         }

@@ -156,7 +156,7 @@ fn reasons_list(review: &TaskRow) -> Vec<String> {
 }
 
 pub fn review_body(module: &TaskRow, reviewed: &TaskRow, json_path: &Path, previous: Option<&TaskRow>) -> String {
-    // 規格與程式碼要看的東西不同：同一位檢核人，依交件種類換檢核重點。
+    // 規格與程式碼要看的東西不同：同一位審核者，依交件種類換檢核重點。
     let what = if module.is_spec { "規格文件" } else { "程式碼變更" };
     let mut s = format!(
         "請審查模組「{title}」的{what}。\n\
