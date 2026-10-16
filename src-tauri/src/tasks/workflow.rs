@@ -261,8 +261,13 @@ pub fn plan_body(
     s.push_str(&format!(
         "\n拆解原則：每個任務要能獨立實作與審查；body 要自給自足，寫清楚要做什麼、對應規格的哪個章節、驗收條件。\n\
          最多 {max} 個任務。\n\
-         完成後把結果寫成 JSON 檔到：{path}\n\
-         格式：{{\"tasks\": [{{\"title\": \"…\", \"body\": \"…\"}}]}}\n",
+         \n相依關係（depends_on）：每位工程師在自己的分支上做，看不到別人還沒合併的程式碼。\n\
+         - 任務需要用到前面某些任務寫出來的程式碼，就在 depends_on 列出那些任務的索引（0 起算，只能指向排在它前面的任務）。\n\
+         - 整合類任務（例如把各模組組裝起來）要列出它要組裝的所有模組。\n\
+         - 被依賴的任務排在前面；彼此獨立的任務不要寫 depends_on，才能平行做。\n\
+         系統會把有相依的任務排給同一位工程師，或等前置審查通過、合併進來之後才開工。\n\
+         \n完成後把結果寫成 JSON 檔到：{path}\n\
+         格式：{{\"tasks\": [{{\"title\": \"…\", \"body\": \"…\"}}, {{\"title\": \"…\", \"body\": \"…\", \"depends_on\": [0]}}]}}\n",
         max = MAX_PLAN_TASKS,
         path = json_path.display(),
     ));
@@ -274,6 +279,9 @@ pub struct PlanTask {
     pub title: String,
     #[serde(default)]
     pub body: String,
+    /// 依賴的前面任務的索引（0 起算）。
+    #[serde(default)]
+    pub depends_on: Vec<usize>,
 }
 
 #[derive(serde::Deserialize)]
@@ -287,7 +295,11 @@ pub fn parse_plan_json(text: &str) -> Result<Vec<PlanTask>, String> {
     let tasks: Vec<PlanTask> = f
         .tasks
         .into_iter()
-        .map(|t| PlanTask { title: t.title.trim().to_string(), body: t.body })
+        .map(|mut t| {
+            t.depends_on.sort_unstable();
+            t.depends_on.dedup();
+            PlanTask { title: t.title.trim().to_string(), ..t }
+        })
         .collect();
     if tasks.is_empty() {
         return Err("tasks 是空的".into());
@@ -297,6 +309,15 @@ pub fn parse_plan_json(text: &str) -> Result<Vec<PlanTask>, String> {
     }
     if tasks.iter().any(|t| t.title.is_empty()) {
         return Err("有任務沒有標題".into());
+    }
+    for (i, t) in tasks.iter().enumerate() {
+        if let Some(bad) = t.depends_on.iter().find(|&&d| d >= i) {
+            return Err(format!(
+                "第 {i} 個任務「{}」的 depends_on 有 {bad}：只能指向排在它前面的任務（0 到 {}）",
+                t.title,
+                i as isize - 1
+            ));
+        }
     }
     Ok(tasks)
 }
@@ -1462,6 +1483,30 @@ mod tests {
         let many = format!(r#"{{"tasks":[{}]}}"#, vec![r#"{"title":"x"}"#; MAX_PLAN_TASKS + 1].join(","));
         assert!(parse_plan_json(&many).is_err());
         assert!(parse_plan_json("nope").is_err());
+    }
+
+    #[test]
+    fn plan_json_depends_on_must_point_to_an_earlier_task() {
+        // 舊格式：沒有 depends_on＝沒有相依。
+        assert_eq!(parse_plan_json(r#"{"tasks":[{"title":"A"}]}"#).unwrap()[0].depends_on, Vec::<usize>::new());
+        let ok = parse_plan_json(r#"{"tasks":[{"title":"A"},{"title":"B"},{"title":"整合","depends_on":[0,1,1]}]}"#).unwrap();
+        assert_eq!(ok[2].depends_on, vec![0, 1], "重複的索引只留一個");
+        for (json, why) in [
+            (r#"{"tasks":[{"title":"A","depends_on":[0]}]}"#, "依賴自己"),
+            (r#"{"tasks":[{"title":"A","depends_on":[1]},{"title":"B"}]}"#, "依賴後面的任務"),
+            (r#"{"tasks":[{"title":"A"},{"title":"B","depends_on":[7]}]}"#, "超出範圍"),
+        ] {
+            let err = parse_plan_json(json).expect_err(why);
+            assert!(err.contains("depends_on"), "{why}：錯誤訊息要指出 depends_on：{err}");
+        }
+    }
+
+    #[test]
+    fn the_plan_prompt_asks_for_dependencies() {
+        let module = test_row("M");
+        let body = plan_body(&module, Some("s"), Some("e"), &[("工程師2".into(), "r".into())], Path::new("/t/tasks.json"));
+        assert!(body.contains("depends_on"), "{body}");
+        assert!(body.contains("整合"), "要提醒整合類任務列出所有要組裝的模組：{body}");
     }
 
     #[test]
