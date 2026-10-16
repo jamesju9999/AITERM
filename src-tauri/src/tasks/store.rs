@@ -613,12 +613,14 @@ pub async fn finish_task(
 ///
 /// 刻意不複製成新卡：審查／修正鏈靠 `review_of` 串成一條直線（見
 /// `tasks::workflow`），複製會讓同一個節點出現兩個後繼。上一次的執行紀錄
-/// 欄位一併清掉，結案後會重新寫入。
+/// 欄位一併清掉，結案後會重新寫入。例外是審查卡／拆解卡的 `end_sha`：
+/// 那是建卡時寫入的受審版本，不是執行結果，清掉就再也派不出去。
 pub async fn requeue_failed(pool: &SqlitePool, id: &str, sort_order: f64) -> Result<(), sqlx::Error> {
     let res = sqlx::query(
         "UPDATE tasks SET status = 'queued', outcome = NULL, error_message = NULL, tab_id = NULL,
              transcript_path = NULL, session_id = NULL, session_path = NULL, dispatched_at = NULL,
-             finished_at = NULL, verdict = NULL, review_reasons = NULL, end_sha = NULL, sort_order = ?
+             finished_at = NULL, verdict = NULL, review_reasons = NULL,
+             end_sha = CASE WHEN card_kind IN ('review', 'plan') THEN end_sha ELSE NULL END, sort_order = ?
          WHERE id = ? AND status = 'done' AND COALESCE(outcome, '') <> 'success'",
     )
     .bind(sort_order)
@@ -1675,6 +1677,35 @@ mod session_column_tests {
         dispatch_for_test(&pool, &ok, "tab2").await;
         finish_task(&pool, &ok, "success", None, None).await.unwrap();
         assert!(requeue_failed(&pool, &ok, 0.0).await.is_err(), "成功的卡片不能重試");
+    }
+
+    /// 審查卡／拆解卡的 `start_sha..end_sha` 是受審範圍（建卡時寫入的輸入），
+    /// 不是執行結果；重試清掉它，卡片就再也派不出去（「審查卡沒有受審版本」）。
+    /// 工作卡的 `end_sha` 是上一次的產出，照舊清掉。
+    #[tokio::test]
+    async fn requeue_failed_keeps_the_reviewed_range_of_review_and_plan_cards() {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        let mut ids = Vec::new();
+        for kind in ["review", "plan", "work"] {
+            let id = create_task(&pool, kind, "", "/r", true, false).await.unwrap();
+            sqlx::query("UPDATE tasks SET card_kind = ? WHERE id = ?").bind(kind).bind(&id).execute(&pool).await.unwrap();
+            move_task(&pool, &id, STATUS_QUEUED, 5.0).await.unwrap();
+            dispatch_for_test(&pool, &id, &format!("tab-{kind}")).await;
+            set_start_sha(&pool, &id, "s0").await.unwrap();
+            set_end_sha(&pool, &id, "e1").await.unwrap();
+            finish_task(&pool, &id, "cancelled", Some("app 重啟，工作已中斷"), None).await.unwrap();
+            requeue_failed(&pool, &id, -1.0).await.unwrap();
+            ids.push(id);
+        }
+        let end = |i: usize| {
+            let pool = pool.clone();
+            let id = ids[i].clone();
+            async move { get_task(&pool, &id).await.unwrap().unwrap().end_sha }
+        };
+        assert_eq!(end(0).await.as_deref(), Some("e1"), "審查卡");
+        assert_eq!(end(1).await.as_deref(), Some("e1"), "拆解卡");
+        assert_eq!(end(2).await, None, "工作卡");
     }
 
     /// Agent 協作之前的資料庫：沒有 `agents` 表、也沒有 `agent_id`/
