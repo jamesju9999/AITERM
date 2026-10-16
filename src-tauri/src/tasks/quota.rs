@@ -46,11 +46,13 @@ pub fn hook_settings_json(base: &str) -> String {
     .to_string()
 }
 
-/// 通知「在等你回覆」時用的卡片資訊。
+/// 通知「在等你回覆」「有問題要你決定」時用的卡片資訊。
 #[derive(Debug, Clone, Default)]
 pub struct ReplyLabel {
     pub title: String,
     pub project_name: String,
+    pub project_id: String,
+    pub agent_id: Option<String>,
 }
 
 /// `StopFailure` 的內容是不是「額度用完」。實測 429 時是 `"error":"rate_limit"`。
@@ -117,6 +119,8 @@ struct Entry {
     turn: u64,
     turn_pending: bool,
     reply_wait: bool,
+    /// 有還沒回答的 `ask_human` 問題。
+    asking: bool,
 }
 
 /// 執行中、由 AITerm 派出去的 claude 卡片，以及其中正在等額度或等人回覆的那些。
@@ -125,6 +129,7 @@ pub struct QuotaState {
     server: tokio::sync::OnceCell<Option<(u16, String)>>,
     on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
     on_reply_wait: OnceLock<Box<dyn Fn(&ReplyLabel) + Send + Sync>>,
+    on_question: OnceLock<Box<dyn Fn(&ReplyLabel, &crate::tasks::questions::QuestionRow) + Send + Sync>>,
     reply_grace: Duration,
 }
 
@@ -139,8 +144,64 @@ impl QuotaState {
             server: tokio::sync::OnceCell::new(),
             on_change: OnceLock::new(),
             on_reply_wait: OnceLock::new(),
+            on_question: OnceLock::new(),
             reply_grace,
         })
+    }
+
+    /// 有新問題時要做的事（正式環境：送 `agent-question`、發到 Telegram）。
+    pub fn set_on_question(
+        &self,
+        f: impl Fn(&ReplyLabel, &crate::tasks::questions::QuestionRow) + Send + Sync + 'static,
+    ) {
+        let _ = self.on_question.set(Box::new(f));
+    }
+
+    /// 這張卡的 `ask_human` MCP 端點網址；接收器第一次需要時才啟動。
+    pub async fn mcp_url(self: &Arc<Self>, task_id: &str) -> Option<String> {
+        let base = self.hook_base(task_id).await?;
+        Some(base.replacen("/quota/", "/mcp/", 1))
+    }
+
+    /// 等決策：有沒有還沒回答的問題。變了就通知畫面。
+    pub fn set_asking(&self, task_id: &str, asking: bool) {
+        let changed = {
+            let mut entries = self.entries.lock();
+            match entries.get_mut(task_id) {
+                Some(e) if e.asking != asking => {
+                    e.asking = asking;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            if let Some(f) = self.on_change.get() {
+                f();
+            }
+        }
+    }
+
+    /// 等決策時，完成標記先不算結案（它還沒拿到答案）。
+    pub fn is_holding_marker(&self, task_id: &str) -> bool {
+        self.entries.lock().get(task_id).is_some_and(|e| e.asking)
+    }
+
+    /// `ask_human`：建立問題、進入等決策、通知。回傳要回給 Claude 的文字與是否是錯誤。
+    async fn ask(&self, task_id: &str, q: &crate::tasks::questions::NewQuestion) -> (String, bool) {
+        let Some((pool, label)) = self.entries.lock().get(task_id).map(|e| (e.pool.clone(), e.label.clone())) else {
+            return ("這張卡已經結束，不能再提問。".into(), true);
+        };
+        match crate::tasks::questions::create(&pool, task_id, label.agent_id.as_deref(), q).await {
+            Ok(row) => {
+                self.set_asking(task_id, true);
+                if let Some(f) = self.on_question.get() {
+                    f(&label, &row);
+                }
+                (crate::tasks::questions::ask_reply(&row), false)
+            }
+            Err(e) => (format!("提問失敗：{e}"), true),
+        }
     }
 
     /// 開始等人回覆時要做的事（正式環境：送 `agent-reply-wait` 讓前端發通知）。
@@ -156,7 +217,16 @@ impl QuotaState {
     pub fn register(&self, task_id: &str, tab_id: &str, pool: SqlitePool, label: ReplyLabel) {
         self.entries.lock().insert(
             task_id.to_string(),
-            Entry { tab_id: tab_id.to_string(), pool, wait: None, label, turn: 0, turn_pending: false, reply_wait: false },
+            Entry {
+                tab_id: tab_id.to_string(),
+                pool,
+                wait: None,
+                label,
+                turn: 0,
+                turn_pending: false,
+                reply_wait: false,
+                asking: false,
+            },
         );
     }
 
@@ -164,9 +234,9 @@ impl QuotaState {
         self.entries.lock().remove(task_id);
     }
 
-    /// 在等額度或等人回覆：monitor 據此不判卡住、不把 bell 當完成。
+    /// 在等額度、等人回覆或等決策：monitor 據此不判卡住、不把 bell 當完成。
     pub fn is_waiting(&self, task_id: &str) -> bool {
-        self.entries.lock().get(task_id).is_some_and(|e| e.wait.is_some() || e.reply_wait)
+        self.entries.lock().get(task_id).is_some_and(|e| e.wait.is_some() || e.reply_wait || e.asking)
     }
 
     /// Claude 結束一輪回覆。寬限期滿時還是同一輪、沒有新動靜、卡片也還在 → 在等人回覆。
@@ -304,11 +374,39 @@ async fn start_server(state: Arc<QuotaState>) -> Result<(u16, String), String> {
         "{}"
     }
 
+    /// `ask_human` 的 MCP 端點：只回 JSON（不開 SSE），見 `tasks::ask`。
+    async fn mcp(
+        State(state): State<Arc<QuotaState>>,
+        AxPath((secret, task_id)): AxPath<(String, String)>,
+        body: axum::body::Bytes,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        if state.secret() != Some(secret.as_str()) {
+            return axum::http::StatusCode::NOT_FOUND.into_response();
+        }
+        let Ok(msg) = serde_json::from_slice::<serde_json::Value>(&body) else {
+            return axum::http::StatusCode::BAD_REQUEST.into_response();
+        };
+        match crate::tasks::ask::classify(&msg) {
+            crate::tasks::ask::Rpc::Notification => axum::http::StatusCode::ACCEPTED.into_response(),
+            crate::tasks::ask::Rpc::Respond(v) => axum::Json(v).into_response(),
+            crate::tasks::ask::Rpc::Ask { id, question } => {
+                let (text, is_error) = state.ask(&task_id, &question).await;
+                axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
+            }
+        }
+    }
+
+    async fn no_stream() -> axum::http::StatusCode {
+        axum::http::StatusCode::METHOD_NOT_ALLOWED
+    }
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let secret = uuid::Uuid::new_v4().simple().to_string();
     let app = axum::Router::new()
         .route("/quota/{secret}/{task_id}/{kind}", post(handle))
+        .route("/mcp/{secret}/{task_id}", post(mcp).get(no_stream).delete(|| async { axum::http::StatusCode::OK }))
         .with_state(state);
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
@@ -463,7 +561,7 @@ mod tests {
     }
 
     fn label() -> ReplyLabel {
-        ReplyLabel { title: "規格".into(), project_name: "P".into() }
+        ReplyLabel { title: "規格".into(), project_name: "P".into(), ..Default::default() }
     }
 
     /// Claude 結束一輪回覆（`Stop`）後一陣子都沒動靜、卡片也還沒結案 → 在等人回覆。
@@ -513,5 +611,59 @@ mod tests {
         store::set_reply_wait(&pool, &id, Some(5)).await.unwrap();
         store::finish_task(&pool, &id, "success", None, None).await.unwrap();
         assert_eq!(store::get_task(&pool, &id).await.unwrap().unwrap().reply_wait_at, None);
+    }
+
+    /// 派出去的 claude 透過 `--mcp-config` 連到這個端點呼叫 `ask_human`：建立問題、卡片進入
+    /// 「等決策」（不判卡住、完成標記先不算），通知前端。
+    #[tokio::test]
+    async fn the_mcp_endpoint_turns_ask_human_into_an_open_question() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::dispatch_for_test(&pool, &id, "tab").await;
+        let state = QuotaState::new();
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let a = asked.clone();
+        state.set_on_question(move |_, q| a.lock().push(q.question.clone()));
+        state.register(&id, "tab", pool.clone(), label());
+        let url = state.mcp_url(&id).await.unwrap();
+        let client = reqwest::Client::new();
+        let rpc = |body: serde_json::Value| {
+            let c = client.clone();
+            let url = url.clone();
+            async move { c.post(url).json(&body).send().await.unwrap() }
+        };
+
+        let init = rpc(serde_json::json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})).await;
+        assert_eq!(init.status(), 200);
+        let init: serde_json::Value = init.json().await.unwrap();
+        assert_eq!(init["result"]["serverInfo"]["name"], "aiterm");
+        assert_eq!(rpc(serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"})).await.status(), 202);
+        assert_eq!(client.get(&url).send().await.unwrap().status(), 405, "不提供 SSE 串流");
+
+        assert!(!state.is_waiting(&id) && !state.is_holding_marker(&id));
+        let call: serde_json::Value = rpc(serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ask_human",
+            "arguments":{"question":"名稱用中文？","options":["中文","英文"]}}})).await.json().await.unwrap();
+        let text = call["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("結束這一輪"), "{text}");
+        assert_eq!(call["result"]["isError"], false);
+        let open = crate::tasks::questions::list_open(&pool).await.unwrap();
+        assert_eq!(open.len(), 1);
+        assert!(text.contains(&open[0].label()));
+        assert!(state.is_waiting(&id), "等決策時不判卡住");
+        assert!(state.is_holding_marker(&id), "等決策時完成標記先不算結案");
+        assert_eq!(*asked.lock(), vec!["名稱用中文？".to_string()]);
+
+        state.set_asking(&id, false);
+        assert!(!state.is_waiting(&id) && !state.is_holding_marker(&id));
+
+        // 密鑰不對：拒絕。卡片已經不在（結案了）：工具回錯誤，不建問題。
+        let wrong = url.replace("/mcp/", "/mcp/x");
+        assert_eq!(client.post(&wrong).json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).send().await.unwrap().status(), 404);
+        state.unregister(&id);
+        let gone: serde_json::Value = rpc(serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ask_human",
+            "arguments":{"question":"還在嗎？"}}})).await.json().await.unwrap();
+        assert_eq!(gone["result"]["isError"], true);
+        assert_eq!(crate::tasks::questions::list_open(&pool).await.unwrap().len(), 1);
     }
 }

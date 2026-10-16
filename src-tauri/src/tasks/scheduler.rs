@@ -643,7 +643,12 @@ impl Dispatcher for RealDispatcher {
                 &task.id,
                 &tab_id,
                 project.pool.clone(),
-                crate::tasks::quota::ReplyLabel { title: task.title.clone(), project_name: project.name.clone() },
+                crate::tasks::quota::ReplyLabel {
+                    title: task.title.clone(),
+                    project_name: project.name.clone(),
+                    project_id: project.id.clone(),
+                    agent_id: task.agent_id.clone(),
+                },
             );
         }
         // 卡片在進到這裡之前就已經被 `claim_for_dispatch` 標成 running 了
