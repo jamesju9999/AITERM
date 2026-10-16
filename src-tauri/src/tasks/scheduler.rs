@@ -175,6 +175,20 @@ pub fn with_role_prefix(prefix: &str, prompt: &str) -> String {
     }
 }
 
+/// 非互動的 Agent 卡：旁邊通常沒有人，停下來問問題就會讓整條流程停住（Pomodoro 實機）。
+pub const AUTONOMY_NOTE: &str = "（這是自動派工，旁邊沒有人會即時回答。遇到不確定的地方，採用最合理的做法，\
+把假設寫進文件或交件說明的「待確認事項」，然後直接把工作做完，不要停下來詢問。）";
+
+/// Agent 卡的完整提示：角色前綴＋卡片內容；非互動卡最後再加 `AUTONOMY_NOTE`。
+pub fn agent_prompt(prefix: &str, prompt: &str, interactive: bool) -> String {
+    let p = with_role_prefix(prefix, prompt);
+    if interactive {
+        p
+    } else {
+        format!("{p}\n\n{AUTONOMY_NOTE}")
+    }
+}
+
 /// Agent 的 worktree：已經有就沿用，沒有就在 `<專案>/agents/<id>/worktree`
 /// 以 `aiterm-agent/<id>` 從 `agent.project_dir` 目前的 HEAD 建立，並寫回
 /// agents 表。
@@ -492,7 +506,7 @@ impl Dispatcher for RealDispatcher {
         let (effective_dir, worktree_info) = if let Some(agent) = agent.as_ref().filter(|_| readonly) {
             // 審查卡、拆解卡：在受審版本的唯讀目錄跑，不記 start_sha（那兩欄存的是受審範圍）。
             let wt = prepare_review_worktree(&project.path, &agent.id, task).await?;
-            prompt = with_role_prefix(&agent.prompt_prefix, &prompt);
+            prompt = agent_prompt(&agent.prompt_prefix, &prompt, task.interactive);
             (wt, None)
         } else if let Some(agent) = &agent {
             let wt = prepare_agent_worktree(&project.pool, &project.path, agent).await?;
@@ -517,7 +531,7 @@ impl Dispatcher for RealDispatcher {
                 }
                 Err(e) => eprintln!("head_sha for agent card {}: {e}", task.id),
             }
-            prompt = with_role_prefix(&agent.prompt_prefix, &prompt);
+            prompt = agent_prompt(&agent.prompt_prefix, &prompt, task.interactive);
             (wt, None)
         } else {
             let isolate = resolve_isolation(
@@ -2111,6 +2125,14 @@ mod agent_dispatch_tests {
     fn role_prefix_goes_first_and_an_empty_one_adds_nothing() {
         assert_eq!(with_role_prefix("  ", "做 A"), "做 A");
         assert_eq!(with_role_prefix("你是資深工程師", "做 A"), "你是資深工程師\n\n做 A");
+    }
+
+    #[test]
+    fn non_interactive_agent_cards_are_told_not_to_stop_and_ask() {
+        let auto = agent_prompt("你是工程師", "做 A", false);
+        assert!(auto.starts_with("你是工程師\n\n做 A"));
+        assert!(auto.ends_with(AUTONOMY_NOTE) && AUTONOMY_NOTE.contains("不要停下來詢問"));
+        assert_eq!(agent_prompt("你是工程師", "做 A", true), "你是工程師\n\n做 A", "互動卡本來就有人在旁邊");
     }
 
     #[tokio::test]
