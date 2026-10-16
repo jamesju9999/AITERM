@@ -565,7 +565,12 @@ impl Dispatcher for RealDispatcher {
         )
         .await?;
         if quota_args.is_some() {
-            self.quota.register(&task.id, &tab_id, project.pool.clone());
+            self.quota.register(
+                &task.id,
+                &tab_id,
+                project.pool.clone(),
+                crate::tasks::quota::ReplyLabel { title: task.title.clone(), project_name: project.name.clone() },
+            );
         }
         // 卡片在進到這裡之前就已經被 `claim_for_dispatch` 標成 running 了
         // （見 drain_once）——這裡只補上分頁 id。順序不能倒過來：spawn 要
@@ -995,6 +1000,16 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
                 let _ = app.emit("tasks-updated", ());
             });
         }
+        {
+            let app = app.clone();
+            // 前端（永遠掛載的通知 hook）依「派工完成時通知」的設定發系統通知。
+            quota.set_on_reply_wait(move |label| {
+                let _ = app.emit(
+                    "agent-reply-wait",
+                    serde_json::json!({ "title": label.title, "project_name": label.project_name }),
+                );
+            });
+        }
         crate::tasks::quota::spawn_resumer(quota.clone(), pty.clone());
         let dispatcher = RealDispatcher {
             app: app.clone(),
@@ -1066,7 +1081,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
-            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None,
+            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None,
         }
     }
 
@@ -1230,7 +1245,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
-            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None,
+            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None,
         }
     }
 

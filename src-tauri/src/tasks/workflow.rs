@@ -1787,7 +1787,7 @@ mod tests {
             use_bridge: false, bridge_tiers: None, label: None, worktree_path: None, worktree_branch: None,
             isolate_worktree: None, agent_id: None, start_sha: None, end_sha: None, card_kind: "work".into(),
             module_id: None, review_of: None, verdict: None, review_reasons: None, module_override: false,
-            is_spec: false, from_spec: None, quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None,
+            is_spec: false, from_spec: None, quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None,
         }
     }
 }

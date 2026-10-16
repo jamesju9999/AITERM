@@ -104,6 +104,9 @@ pub struct TaskRow {
     pub assigned_at: Option<i64>,
     /// 開工前合併進來的前置卡 id（JSON 陣列）。
     pub premerged: Option<String>,
+    /// 派出去的 claude 結束一輪回覆後停下來等人的起始時間（unix 秒）。見
+    /// docs/superpowers/specs/2026-10-16-agent-reply-wait-and-followups-design.md。
+    pub reply_wait_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -520,6 +523,12 @@ pub async fn set_quota_wait(pool: &SqlitePool, id: &str, at: Option<i64>) -> Res
     Ok(())
 }
 
+/// 派出去的 claude 結束一輪回覆後停下來等人（見 `tasks::quota`）。`None` = 解除。
+pub async fn set_reply_wait(pool: &SqlitePool, id: &str, at: Option<i64>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET reply_wait_at = ? WHERE id = ?").bind(at).bind(id).execute(pool).await?;
+    Ok(())
+}
+
 /// 記下複製進卡片資料夾的 session.jsonl 路徑。在 `finish_task` 之前呼叫，
 /// 這樣 `tasks-updated` 送出時該列已經是完整的。
 pub async fn set_session_path(pool: &SqlitePool, id: &str, path: &str) -> Result<(), sqlx::Error> {
@@ -605,7 +614,7 @@ pub async fn finish_task(
     transcript_path: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE tasks SET status = 'done', outcome = ?, error_message = ?, transcript_path = ?, finished_at = ?, quota_wait_at = NULL WHERE id = ?",
+        "UPDATE tasks SET status = 'done', outcome = ?, error_message = ?, transcript_path = ?, finished_at = ?, quota_wait_at = NULL, reply_wait_at = NULL WHERE id = ?",
     )
     .bind(outcome)
     .bind(error_message)

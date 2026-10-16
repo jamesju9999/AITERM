@@ -24,20 +24,33 @@ const POLL: Duration = Duration::from_secs(15);
 const ESC_SETTLE: Duration = Duration::from_millis(600);
 pub const RESUME_TEXT: &str = "繼續";
 
-/// 派工時用 `--settings` 交給 claude 的設定檔內容：三個 HTTP hook 都打到
+/// `Stop` 之後多久沒動靜就算「在等人回覆」。完成標記那一輪結束後卡片會在這段時間內
+/// 結案（解除登記），所以不會被誤判。
+pub const REPLY_GRACE: Duration = Duration::from_secs(8);
+
+/// 派工時用 `--settings` 交給 claude 的設定檔內容：HTTP hook 都打到
 /// `base`（`http://127.0.0.1:<port>/quota/<secret>/<task_id>`）底下。
 /// - `StopFailure` → `/stop-failure`：可能是額度用完。
-/// - `PostToolUse`、`Stop` → `/working`：它又在工作了（例如 Claude 自己等到重置後續跑）。
+/// - `Stop` → `/turn-end`：結束一輪回覆；之後沒動靜就是在等人回覆。
+/// - `PostToolUse`、`UserPromptSubmit` → `/working`：又在工作了（Claude 自己等到額度重置後續跑、或使用者回覆了）。
 pub fn hook_settings_json(base: &str) -> String {
     let hook = |path: &str| serde_json::json!([{ "hooks": [{ "type": "http", "url": format!("{base}/{path}") }] }]);
     serde_json::json!({
         "hooks": {
             "StopFailure": hook("stop-failure"),
             "PostToolUse": hook("working"),
-            "Stop": hook("working"),
+            "UserPromptSubmit": hook("working"),
+            "Stop": hook("turn-end"),
         }
     })
     .to_string()
+}
+
+/// 通知「在等你回覆」時用的卡片資訊。
+#[derive(Debug, Clone, Default)]
+pub struct ReplyLabel {
+    pub title: String,
+    pub project_name: String,
 }
 
 /// `StopFailure` 的內容是不是「額度用完」。實測 429 時是 `"error":"rate_limit"`。
@@ -99,19 +112,40 @@ struct Entry {
     tab_id: String,
     pool: SqlitePool,
     wait: Option<Wait>,
+    label: ReplyLabel,
+    /// 每次 `turn-end` 加一；寬限期滿時還是同一輪、而且沒被 `working` 清掉才算在等。
+    turn: u64,
+    turn_pending: bool,
+    reply_wait: bool,
 }
 
-/// 執行中、由 AITerm 派出去的 claude 卡片，以及其中正在等額度的那些。
-#[derive(Default)]
+/// 執行中、由 AITerm 派出去的 claude 卡片，以及其中正在等額度或等人回覆的那些。
 pub struct QuotaState {
     entries: Mutex<HashMap<String, Entry>>,
     server: tokio::sync::OnceCell<Option<(u16, String)>>,
     on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    on_reply_wait: OnceLock<Box<dyn Fn(&ReplyLabel) + Send + Sync>>,
+    reply_grace: Duration,
 }
 
 impl QuotaState {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
+        Self::with_reply_grace(REPLY_GRACE)
+    }
+
+    pub fn with_reply_grace(reply_grace: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            entries: Mutex::default(),
+            server: tokio::sync::OnceCell::new(),
+            on_change: OnceLock::new(),
+            on_reply_wait: OnceLock::new(),
+            reply_grace,
+        })
+    }
+
+    /// 開始等人回覆時要做的事（正式環境：送 `agent-reply-wait` 讓前端發通知）。
+    pub fn set_on_reply_wait(&self, f: impl Fn(&ReplyLabel) + Send + Sync + 'static) {
+        let _ = self.on_reply_wait.set(Box::new(f));
     }
 
     /// 等待狀態改變時要做的事（正式環境：送 `tasks-updated` 讓畫面重抓）。
@@ -119,16 +153,73 @@ impl QuotaState {
         let _ = self.on_change.set(Box::new(f));
     }
 
-    pub fn register(&self, task_id: &str, tab_id: &str, pool: SqlitePool) {
-        self.entries.lock().insert(task_id.to_string(), Entry { tab_id: tab_id.to_string(), pool, wait: None });
+    pub fn register(&self, task_id: &str, tab_id: &str, pool: SqlitePool, label: ReplyLabel) {
+        self.entries.lock().insert(
+            task_id.to_string(),
+            Entry { tab_id: tab_id.to_string(), pool, wait: None, label, turn: 0, turn_pending: false, reply_wait: false },
+        );
     }
 
     pub fn unregister(&self, task_id: &str) {
         self.entries.lock().remove(task_id);
     }
 
+    /// 在等額度或等人回覆：monitor 據此不判卡住、不把 bell 當完成。
     pub fn is_waiting(&self, task_id: &str) -> bool {
-        self.entries.lock().get(task_id).is_some_and(|e| e.wait.is_some())
+        self.entries.lock().get(task_id).is_some_and(|e| e.wait.is_some() || e.reply_wait)
+    }
+
+    /// Claude 結束一輪回覆。寬限期滿時還是同一輪、沒有新動靜、卡片也還在 → 在等人回覆。
+    pub fn turn_ended(self: &Arc<Self>, task_id: &str) {
+        let turn = {
+            let mut entries = self.entries.lock();
+            let Some(e) = entries.get_mut(task_id) else { return };
+            e.turn += 1;
+            e.turn_pending = true;
+            e.turn
+        };
+        let me = self.clone();
+        let task_id = task_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(me.reply_grace).await;
+            let still = me.entries.lock().get(&task_id).is_some_and(|e| e.turn == turn && e.turn_pending);
+            if still {
+                me.set_reply_wait(&task_id, true).await;
+            }
+        });
+    }
+
+    /// 又在工作了（或使用者回覆了）：清掉等額度與等回覆。
+    pub async fn working(&self, task_id: &str) {
+        if let Some(e) = self.entries.lock().get_mut(task_id) {
+            e.turn_pending = false;
+        }
+        self.set_waiting(task_id, false).await;
+        self.set_reply_wait(task_id, false).await;
+    }
+
+    async fn set_reply_wait(&self, task_id: &str, waiting: bool) {
+        let (pool, label) = {
+            let mut entries = self.entries.lock();
+            let Some(e) = entries.get_mut(task_id) else { return };
+            if e.reply_wait == waiting {
+                return;
+            }
+            e.reply_wait = waiting;
+            (e.pool.clone(), e.label.clone())
+        };
+        let at = waiting.then(|| chrono::Utc::now().timestamp());
+        if let Err(e) = store::set_reply_wait(&pool, task_id, at).await {
+            eprintln!("set_reply_wait {task_id}: {e}");
+        }
+        if let Some(f) = self.on_change.get() {
+            f();
+        }
+        if waiting {
+            if let Some(f) = self.on_reply_wait.get() {
+                f(&label);
+            }
+        }
     }
 
     /// 標記／解除等待：記憶體、資料表欄位、通知畫面。狀態沒變就什麼都不做
@@ -205,7 +296,8 @@ async fn start_server(state: Arc<QuotaState>) -> Result<(u16, String), String> {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
         match kind.as_str() {
             "stop-failure" if is_quota_failure(&json) => state.set_waiting(&task_id, true).await,
-            "working" => state.set_waiting(&task_id, false).await,
+            "turn-end" => state.turn_ended(&task_id),
+            "working" => state.working(&task_id).await,
             _ => {}
         }
         // Claude Code 會把回應當成 hook 輸出解析；空物件 = 沒有意見。
@@ -269,7 +361,8 @@ mod tests {
         assert_eq!(v["hooks"]["StopFailure"][0]["hooks"][0]["type"], "http");
         assert_eq!(url("StopFailure"), "http://127.0.0.1:9/quota/s/t/stop-failure");
         assert_eq!(url("PostToolUse"), "http://127.0.0.1:9/quota/s/t/working");
-        assert_eq!(url("Stop"), "http://127.0.0.1:9/quota/s/t/working");
+        assert_eq!(url("UserPromptSubmit"), "http://127.0.0.1:9/quota/s/t/working");
+        assert_eq!(url("Stop"), "http://127.0.0.1:9/quota/s/t/turn-end");
     }
 
     #[test]
@@ -330,7 +423,7 @@ mod tests {
         state.set_on_change(move || {
             c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         });
-        state.register(&id, "tab", pool.clone());
+        state.register(&id, "tab", pool.clone(), label());
         let base = state.hook_base(&id).await.unwrap();
         let client = reqwest::Client::new();
         let post = |path: &str, body: &str| client.post(format!("{base}/{path}")).body(body.to_string()).send();
@@ -359,13 +452,66 @@ mod tests {
     async fn only_waiting_cards_are_due() {
         let pool = mem_pool().await;
         let state = QuotaState::new();
-        state.register("a", "tab-a", pool.clone());
-        state.register("b", "tab-b", pool.clone());
+        state.register("a", "tab-a", pool.clone(), label());
+        state.register("b", "tab-b", pool.clone(), label());
         state.set_waiting("a", true).await;
         let far = Instant::now() + RETRY_AFTER + Duration::from_secs(1);
         let due = state.due_nudges(far, None);
         assert_eq!(due, vec![("a".to_string(), "tab-a".to_string(), Nudge::Retry)]);
         state.unregister("a");
         assert!(state.due_nudges(far, None).is_empty());
+    }
+
+    fn label() -> ReplyLabel {
+        ReplyLabel { title: "規格".into(), project_name: "P".into() }
+    }
+
+    /// Claude 結束一輪回覆（`Stop`）後一陣子都沒動靜、卡片也還沒結案 → 在等人回覆。
+    #[tokio::test]
+    async fn a_turn_end_without_follow_up_becomes_a_reply_wait() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        let state = QuotaState::with_reply_grace(Duration::from_millis(150));
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let a = asked.clone();
+        state.set_on_reply_wait(move |label| a.lock().push(label.title.clone()));
+        state.register(&id, "tab", pool.clone(), label());
+        let base = state.hook_base(&id).await.unwrap();
+        let client = reqwest::Client::new();
+        let post = |path: &str| client.post(format!("{base}/{path}")).body("{}").send();
+
+        // 一輪結束後馬上又在動（例如接著處理排隊的訊息）：不算在等。
+        post("turn-end").await.unwrap();
+        post("working").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!state.is_waiting(&id));
+
+        // 一輪結束後安靜下來：在等人回覆。等待期間 monitor 不判卡住（is_waiting）。
+        post("turn-end").await.unwrap();
+        assert!(!state.is_waiting(&id), "寬限期內還不算");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(state.is_waiting(&id));
+        assert!(store::get_task(&pool, &id).await.unwrap().unwrap().reply_wait_at.is_some(), "畫面要看得到");
+        assert_eq!(*asked.lock(), vec!["規格".to_string()], "要通知使用者一次");
+
+        // 使用者回覆了：解除。
+        post("working").await.unwrap();
+        assert!(!state.is_waiting(&id));
+        assert_eq!(store::get_task(&pool, &id).await.unwrap().unwrap().reply_wait_at, None);
+
+        // 一輪結束後卡片就結案（印了完成標記）：解除登記，不算在等。
+        post("turn-end").await.unwrap();
+        state.unregister(&id);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(asked.lock().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn finishing_a_card_clears_its_reply_wait_column() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        store::set_reply_wait(&pool, &id, Some(5)).await.unwrap();
+        store::finish_task(&pool, &id, "success", None, None).await.unwrap();
+        assert_eq!(store::get_task(&pool, &id).await.unwrap().unwrap().reply_wait_at, None);
     }
 }

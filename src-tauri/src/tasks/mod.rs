@@ -205,6 +205,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE tasks ADD COLUMN assigned_from TEXT",
         "ALTER TABLE tasks ADD COLUMN assigned_at INTEGER",
         "ALTER TABLE tasks ADD COLUMN premerged TEXT",
+        // 等你回覆，見 docs/superpowers/specs/2026-10-16-agent-reply-wait-and-followups-design.md。
+        "ALTER TABLE tasks ADD COLUMN reply_wait_at INTEGER",
     ] {
         let _ = sqlx::query(ddl).execute(pool).await;
     }
