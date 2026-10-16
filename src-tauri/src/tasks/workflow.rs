@@ -473,31 +473,19 @@ async fn dispatch_plan(
         load.insert(c.id.clone(), (busy, total));
     }
 
-    // 第 i 個任務建出來的卡：(id, 負責人)。相依的索引靠它換成 id、找出前置的擁有者。
-    let mut created: Vec<(String, Option<String>)> = Vec::new();
+    // 第 i 個任務建出來的卡 id：相依的索引靠它換成 id。
+    let mut created: Vec<String> = Vec::new();
     for t in tasks {
         let body = format!(
             "{}\n\n（這是從規格「{}」拆出來的任務；規格文件也一併附在下面。）{}",
             t.body, module.title, appendix
         );
-        let deps: Vec<&(String, Option<String>)> = t.depends_on.iter().filter_map(|&i| created.get(i)).collect();
-        let depends_on = (!deps.is_empty())
-            .then(|| serde_json::to_string(&deps.iter().map(|(id, _)| id).collect::<Vec<_>>()).unwrap_or_default());
-        // 有相依：交給擁有最多個前置的工程師（同一條分支上接著做）；平手比忙碌程度。
-        let mut owned: HashMap<&str, usize> = HashMap::new();
-        for (_, o) in &deps {
-            if let Some(o) = o.as_deref() {
-                *owned.entry(o).or_default() += 1;
-            }
-        }
-        let pick = match owned.values().max() {
-            Some(&most) => {
-                let owners: Vec<&AgentRow> =
-                    candidates.iter().copied().filter(|c| owned.get(c.id.as_str()) == Some(&most)).collect();
-                pick_least_busy(&owners, &load).or_else(|| pick_least_busy(&candidates, &load))
-            }
-            None => pick_least_busy(&candidates, &load),
-        };
+        let deps: Vec<&String> = t.depends_on.iter().filter_map(|&i| created.get(i)).collect();
+        let depends_on = (!deps.is_empty()).then(|| serde_json::to_string(&deps).unwrap_or_default());
+        // 有沒有相依都照忙碌程度分：前置在別人手上的卡，會等前置審過、開工前合併進來
+        // （`blocked_cards`、`scheduler::premerge_prerequisites`）。若把相依的卡集中給前置的
+        // 擁有者，共同的地基（例如專案骨架）會把所有卡都吸到同一人身上（實機踩過）。
+        let pick = pick_least_busy(&candidates, &load);
         match pick {
             Some(coder) => {
                 let id = insert_card(
@@ -521,7 +509,7 @@ async fn dispatch_plan(
                 let e = load.entry(coder.id.clone()).or_insert((0, 0));
                 e.0 += 1;
                 e.1 += 1;
-                created.push((id, Some(coder.id.clone())));
+                created.push(id);
             }
             None => {
                 let id = store::create_task(pool, &t.title, &body, &module.project_dir, true, false).await?;
@@ -531,7 +519,7 @@ async fn dispatch_plan(
                     .bind(&id)
                     .execute(pool)
                     .await?;
-                created.push((id, None));
+                created.push(id);
             }
         }
     }
@@ -607,8 +595,8 @@ pub async fn premerge_plan(pool: &SqlitePool, card: &TaskRow) -> Result<Vec<(Str
 ///
 /// - 只搬「規格拆出來」（`from_spec`）且還在排隊的 work 卡：使用者手動指派的
 ///   模組代表明確意圖，不動。
-/// - 只搬完全獨立的卡：自己有前置，或有別張卡依賴它，都不搬——接手的人分支上
-///   沒有那些程式碼，相依鏈要留在同一位工程師身上。
+/// - 只搬前置都已通過審查的卡（或前置本來就是接手者自己的）：接過去馬上能開工，
+///   開工前會把前置合併進來。被別張卡依賴也可以搬——依賴它的卡會改成等它審過。
 /// - 接手者：沒暫停、不產出規格、手上沒有 queued/running 卡的工程師。
 /// - 來源：手上 queued+running 最多、且至少 2 張的工程師（只剩一張又閒著就讓他自己做）。
 ///   搬它佇列裡最前面那張，盡量維持拆解時的先後順序。
@@ -624,6 +612,7 @@ pub async fn rebalance_idle_coders(pool: &SqlitePool) -> Result<usize, sqlx::Err
         return Ok(0);
     }
     let paused: HashSet<String> = agents::paused_agent_ids(pool).await?.into_iter().collect();
+    let has_reviewer = agents::list_agents(pool).await?.iter().any(|a| a.kind == "reviewer");
     let mut tasks = store::list_tasks(pool).await?;
     let active = |tasks: &[TaskRow], id: &str| {
         tasks
@@ -652,13 +641,21 @@ pub async fn rebalance_idle_coders(pool: &SqlitePool) -> Result<usize, sqlx::Err
         let victim_running = tasks
             .iter()
             .any(|t| t.agent_id.as_deref() == Some(victim.id.as_str()) && t.status == STATUS_RUNNING);
-        let depended: HashSet<String> = tasks.iter().flat_map(deps_of).collect();
+        let ready = |t: &TaskRow| {
+            deps_of(t).iter().all(|d| match tasks.iter().find(|x| &x.id == d) {
+                None => true,
+                Some(dep) if dep.agent_id.as_deref() == Some(thief.id.as_str()) => true,
+                Some(dep) => {
+                    let chain: Vec<TaskRow> =
+                        tasks.iter().filter(|c| c.module_id.as_deref() == Some(dep.id.as_str())).cloned().collect();
+                    module_state(dep, &chain, has_reviewer) == ModuleState::Passed
+                }
+            })
+        };
         let Some(card) = queue
             .into_iter()
             .skip(if victim_running { 0 } else { 1 })
-            .find(|t| {
-                t.card_kind == KIND_WORK && t.from_spec.is_some() && deps_of(t).is_empty() && !depended.contains(&t.id)
-            })
+            .find(|t| t.card_kind == KIND_WORK && t.from_spec.is_some() && ready(t))
         else {
             continue;
         };
@@ -1427,35 +1424,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_idle_coder_only_takes_cards_that_neither_depend_on_nor_are_depended_on() {
+    async fn an_idle_coder_takes_cards_whose_prerequisites_have_passed() {
         let pool = mem_pool().await;
         let busy = agent(&pool, "coder", "忙").await;
-        let idle = agent(&pool, "coder", "閒").await;
+        let idle1 = agent(&pool, "coder", "閒1").await;
+        let idle2 = agent(&pool, "coder", "閒2").await;
+        let set_deps = |id: String, deps: Vec<String>| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query("UPDATE tasks SET depends_on = ? WHERE id = ?")
+                    .bind(serde_json::to_string(&deps).unwrap())
+                    .bind(&id)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+        };
+        // 骨架：做完了（沒有 Reviewer → 成功就算通過）。
+        let skeleton = spec_card(&pool, &busy, "骨架", 0.5).await;
+        store::dispatch_for_test(&pool, &skeleton, "tab-s").await;
+        store::finish_task(&pool, &skeleton, "success", None, None).await.unwrap();
         let run = spec_card(&pool, &busy, "跑中", 1.0).await;
         store::dispatch_for_test(&pool, &run, "tab").await;
-        let p = spec_card(&pool, &busy, "被依賴", 2.0).await;
-        let q = spec_card(&pool, &busy, "有前置", 3.0).await;
-        sqlx::query("UPDATE tasks SET depends_on = ? WHERE id = ?")
-            .bind(serde_json::to_string(&[&p]).unwrap())
-            .bind(&q)
-            .execute(&pool)
-            .await
-            .unwrap();
-        let z = spec_card(&pool, &busy, "獨立", 4.0).await;
+        let q2 = spec_card(&pool, &busy, "等 X", 2.0).await;
+        let x = spec_card(&pool, &busy, "X", 3.0).await;
+        let q1 = spec_card(&pool, &busy, "只靠骨架", 4.0).await;
+        set_deps(q2.clone(), vec![x.clone()]).await;
+        set_deps(q1.clone(), vec![skeleton.clone()]).await;
 
-        assert_eq!(rebalance_idle_coders(&pool).await.unwrap(), 1);
+        assert_eq!(rebalance_idle_coders(&pool).await.unwrap(), 2);
         let tasks = all(&pool).await;
-        assert_eq!(owner(&tasks, &z), idle, "只搬獨立的那張");
-        assert_eq!((owner(&tasks, &p), owner(&tasks, &q)), (busy.clone(), busy.clone()));
-        let moved = tasks.iter().find(|t| t.id == z).unwrap();
+        // 「等 X」的前置還沒做：接過去也只能乾等，不搬。
+        assert_eq!(owner(&tasks, &q2), busy);
+        // X 被別張依賴也可以搬：依賴它的卡會等它審過、開工前合併進來。
+        assert_eq!(owner(&tasks, &x), idle1);
+        // 前置都已通過：接過去馬上能開工。
+        assert_eq!(owner(&tasks, &q1), idle2);
+        let moved = tasks.iter().find(|t| t.id == q1).unwrap();
         assert_eq!(moved.assigned_from.as_deref(), Some(busy.as_str()), "活動記錄要知道是從誰那裡移過來");
         assert!(moved.assigned_at.is_some());
-
-        // 只剩有相依的卡：閒著也不搬。
-        sqlx::query("UPDATE tasks SET agent_id = ? WHERE id = ?").bind(&busy).bind(&z).execute(&pool).await.unwrap();
-        store::dispatch_for_test(&pool, &z, "tab-z").await;
-        store::finish_task(&pool, &z, "success", None, None).await.unwrap();
-        assert_eq!(rebalance_idle_coders(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -1600,7 +1607,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dependent_tasks_go_to_the_coder_that_owns_most_of_their_prerequisites() {
+    async fn dependent_tasks_are_still_spread_by_workload() {
+        // 實機（Pomodoro）：每張卡都依賴「專案骨架」。若把相依的卡集中給前置的擁有者，
+        // 13 張會全部堆在同一人身上。前置靠「等審過＋開工前合併」保證，派工照忙碌程度分。
         let pool = mem_pool().await;
         let w = spec_writer(&pool).await;
         let c1 = agent(&pool, "coder", "C1").await;
@@ -1612,28 +1621,22 @@ mod tests {
             &w,
             project.path(),
             r#"{"tasks":[
-                {"title":"audio"},
-                {"title":"storage"},
-                {"title":"audio 測試","depends_on":[0]},
-                {"title":"整合","depends_on":[0,1,2]},
-                {"title":"雙邊","depends_on":[0,1]}
+                {"title":"骨架"},
+                {"title":"設定","depends_on":[0]},
+                {"title":"統計","depends_on":[0]},
+                {"title":"提醒","depends_on":[0]},
+                {"title":"畫面","depends_on":[0]},
+                {"title":"整合","depends_on":[0,1,2,3,4]}
             ]}"#,
         )
         .await;
-        let by = |title: &str| cards.iter().find(|c| c.title == title).unwrap();
-        let owner = |title: &str| by(title).agent_id.clone().unwrap();
-        // 沒有相依：照最閒，兩位各拿一張（平手時誰先拿不重要）。
-        let (a, b) = (owner("audio"), owner("storage"));
-        assert_ne!(a, b);
-        assert!([&c1, &c2].contains(&&a) && [&c1, &c2].contains(&&b));
-        // 相依集中到擁有前置的人，即使他已經比較忙。
-        assert_eq!(owner("audio 測試"), a);
-        assert_eq!(owner("整合"), a, "audio 的負責人擁有 2 個前置、另一位只有 1 個");
-        // 兩邊各擁有一個前置：平手挑比較閒的（a 已經 3 張、b 1 張）。
-        assert_eq!(owner("雙邊"), b);
+        let count = |id: &str| cards.iter().filter(|c| c.agent_id.as_deref() == Some(id)).count();
+        assert_eq!((count(&c1), count(&c2)), (3, 3), "依忙碌程度平均分配");
         // 相依存成實作卡的 id。
-        assert_eq!(deps_of(by("整合")), vec![by("audio").id.clone(), by("storage").id.clone(), by("audio 測試").id.clone()]);
-        assert!(deps_of(by("audio")).is_empty() && by("audio").depends_on.is_none());
+        let by = |title: &str| cards.iter().find(|c| c.title == title).unwrap();
+        assert_eq!(deps_of(by("設定")), vec![by("骨架").id.clone()]);
+        assert_eq!(deps_of(by("整合")).len(), 5);
+        assert!(by("骨架").depends_on.is_none());
     }
 
     #[tokio::test]
@@ -1653,11 +1656,11 @@ mod tests {
         let id = |title: &str| cards.iter().find(|c| c.title == title).unwrap().id.clone();
         let owner = |title: &str| cards.iter().find(|c| c.title == title).unwrap().agent_id.clone().unwrap();
         assert_ne!(owner("A"), owner("B"));
-        assert_eq!(owner("A 測試"), owner("A"));
         // 整合依賴兩位；不論派給誰，另一位的前置還沒通過 → 等。
         let blocked = blocked_cards(&pool).await.unwrap();
         assert!(blocked.contains(&id("整合")), "{blocked:?}");
-        assert!(!blocked.contains(&id("A 測試")), "同一位工程師的前置靠佇列順序，不用等");
+        // 「A 測試」只依賴 A：跟 A 同一位就不用等（佇列順序保證），不同位就要等 A 審過。
+        assert_eq!(blocked.contains(&id("A 測試")), owner("A 測試") != owner("A"));
         assert!(!blocked.contains(&id("A")) && !blocked.contains(&id("B")));
 
         // 整合派給了其中一位；擋住它的只有另一位的那個前置。
