@@ -16,6 +16,7 @@ pub mod agents;
 pub mod workflow;
 pub mod repo_check;
 pub mod quota;
+pub mod questions;
 
 use std::path::{Path, PathBuf};
 
@@ -238,6 +239,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await;
     // 依角色指定模型（派工時加 --model）。NULL＝沿用 claude 的預設。
     let _ = sqlx::query("ALTER TABLE agents ADD COLUMN model TEXT").execute(pool).await;
+    // Agent 找人決策的問題，見 docs/superpowers/specs/2026-10-16-agent-ask-human-design.md。
+    questions::init_schema(pool).await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")
         .execute(pool)
         .await?;
