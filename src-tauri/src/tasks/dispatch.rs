@@ -102,15 +102,20 @@ pub fn looks_like_claude(command: &str) -> bool {
 }
 
 /// 真正要送進終端機的那一行。有 session id 就接上 `--session-id <uuid>`，
-/// 沒有就是指令原樣。
+/// 再接上 `extra`（例如額度 hook 的 `--settings "<path>"`），都沒有就是指令原樣。
 ///
 /// 呼叫端負責先用 `looks_like_claude` 決定要不要給 session id——這裡不再
 /// 判斷一次，免得兩處規則漂移。
-pub fn launch_command(command: &str, session_id: Option<&str>) -> String {
-    match session_id {
+pub fn launch_command(command: &str, session_id: Option<&str>, extra: Option<&str>) -> String {
+    let mut line = match session_id {
         Some(sid) => format!("{command} --session-id {sid}"),
         None => command.to_string(),
+    };
+    if let Some(extra) = extra {
+        line.push(' ');
+        line.push_str(extra);
     }
+    line
 }
 
 /// 信任畫面上「我信任這個資料夾」那一個選項的文字，**已去掉所有空白**。
@@ -282,7 +287,7 @@ async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
 /// not just embedded newlines. A short delay before the standalone `\r`
 /// write keeps the two writes from being coalesced back into one read() on
 /// the far end.
-async fn write_then_submit(pty: &PtyManager, tab_id: &str, text: &str) -> Result<(), String> {
+pub(crate) async fn write_then_submit(pty: &PtyManager, tab_id: &str, text: &str) -> Result<(), String> {
     pty.write(tab_id, text.as_bytes()).map_err(|e| e.to_string())?;
     tokio::time::sleep(Duration::from_millis(SUBMIT_DELAY_MS)).await;
     pty.write(tab_id, b"\r").map_err(|e| e.to_string())
@@ -348,6 +353,7 @@ pub async fn spawn_and_run(
     prompt: &str,
     request_done_marker: bool,
     bridge_env: Option<(u16, String)>,
+    extra_args: Option<&str>,
 ) -> Result<(String, DispatchResult), String> {
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
     let tab_id = crate::pty::create_with_app(
@@ -362,7 +368,7 @@ pub async fn spawn_and_run(
     // 送進終端機的是接好旗標的版本；下面的事件送的是原本的指令——分頁
     // 標題是 `Agent: <command>`（TerminalApp.tsx），把 UUID 塞進去會讓
     // 每個派工分頁的標題都拖著一串亂碼。
-    let launch = launch_command(claude_command, session_id);
+    let launch = launch_command(claude_command, session_id, extra_args);
     if let Err(e) = pty.write(&tab_id, format!("{launch}\r").as_bytes()) {
         let _ = pty.close(&tab_id);
         return Err(e.to_string());
@@ -563,14 +569,22 @@ mod tests {
     #[test]
     fn launch_command_appends_the_flag_when_a_session_id_is_given() {
         assert_eq!(
-            launch_command("claude --verbose", Some("3f2a")),
+            launch_command("claude --verbose", Some("3f2a"), None),
             "claude --verbose --session-id 3f2a"
         );
     }
 
     #[test]
+    fn launch_command_appends_extra_args_after_the_session_id() {
+        assert_eq!(
+            launch_command("claude", Some("3f2a"), Some(r#"--settings "/a b/s.json""#)),
+            r#"claude --session-id 3f2a --settings "/a b/s.json""#
+        );
+    }
+
+    #[test]
     fn launch_command_is_the_command_verbatim_without_a_session_id() {
-        assert_eq!(launch_command("codex", None), "codex");
+        assert_eq!(launch_command("codex", None, None), "codex");
     }
 
     /// 真實抓下來的信任畫面：實跑 `claude` 進一個未信任的資料夾、擷取原始

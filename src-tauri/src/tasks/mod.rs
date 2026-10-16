@@ -15,6 +15,7 @@ pub mod scheduler;
 pub mod agents;
 pub mod workflow;
 pub mod repo_check;
+pub mod quota;
 
 use std::path::{Path, PathBuf};
 
@@ -197,6 +198,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         // 規格先行，見 docs/superpowers/specs/2026-10-15-agent-canvas-spec-first-design.md。
         "ALTER TABLE tasks ADD COLUMN is_spec INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE tasks ADD COLUMN from_spec TEXT",
+        // 額度用完自動續跑，見 docs/superpowers/specs/2026-10-16-agent-quota-resume-design.md。
+        "ALTER TABLE tasks ADD COLUMN quota_wait_at INTEGER",
     ] {
         let _ = sqlx::query(ddl).execute(pool).await;
     }

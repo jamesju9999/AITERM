@@ -92,6 +92,9 @@ pub struct TaskRow {
     pub is_spec: bool,
     /// 實作卡：由哪一份規格模組拆出來的。
     pub from_spec: Option<String>,
+    /// 派出去的 claude 撞到用量上限、正在等額度的起始時間（unix 秒）。見
+    /// docs/superpowers/specs/2026-10-16-agent-quota-resume-design.md。
+    pub quota_wait_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -502,6 +505,12 @@ pub async fn set_session_id(pool: &SqlitePool, id: &str, session_id: &str) -> Re
     Ok(())
 }
 
+/// 標記／解除「等待額度」（`Some(unix 秒)`／`None`）。只影響畫面，續跑邏輯看記憶體裡的等待表。
+pub async fn set_quota_wait(pool: &SqlitePool, id: &str, at: Option<i64>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET quota_wait_at = ? WHERE id = ?").bind(at).bind(id).execute(pool).await?;
+    Ok(())
+}
+
 /// 記下複製進卡片資料夾的 session.jsonl 路徑。在 `finish_task` 之前呼叫，
 /// 這樣 `tasks-updated` 送出時該列已經是完整的。
 pub async fn set_session_path(pool: &SqlitePool, id: &str, path: &str) -> Result<(), sqlx::Error> {
@@ -587,7 +596,7 @@ pub async fn finish_task(
     transcript_path: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE tasks SET status = 'done', outcome = ?, error_message = ?, transcript_path = ?, finished_at = ? WHERE id = ?",
+        "UPDATE tasks SET status = 'done', outcome = ?, error_message = ?, transcript_path = ?, finished_at = ?, quota_wait_at = NULL WHERE id = ?",
     )
     .bind(outcome)
     .bind(error_message)

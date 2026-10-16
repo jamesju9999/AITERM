@@ -241,6 +241,17 @@ describe("AgentCanvasView", () => {
     expect(within(node).getByText(/1:1[5-9]/)).toBeTruthy();
   });
 
+  it("撞到用量上限的 Agent 顯示等待額度與換帳號會自動繼續", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "A 登入", status: "running", agent_id: "a1", dispatched_at: 1, quota_wait_at: 2 }),
+    ]);
+    view();
+    const node = await screen.findByTestId("agent-a1");
+    expect(within(node).getByText(/額度用完|Usage limit reached/)).toBeTruthy();
+    expect(within(node).getByText(/換帳號|switch accounts/)).toBeTruthy();
+  });
+
   it("Reviewer 已在桌布上時，池裡的 Reviewer 停用；Orchestrator 仍可拖", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "Code Reviewer" })]);
     vi.mocked(listTasks).mockResolvedValue([]);

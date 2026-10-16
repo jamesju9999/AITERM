@@ -337,6 +337,16 @@
 .ac-chip--review { border-color: rgba(234, 179, 8, 0.45); color: #fde68a; }
 .ac-chip--release { cursor: pointer; }
 .ac-chip--release:hover { background: rgba(239, 68, 68, 0.15); }
+.ac-quota-wait {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #fde68a;
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: 5px;
+  padding: 4px 6px;
+  margin-top: 6px;
+}
 .ac-snip {
   font: 10.5px var(--mono);
   color: #fde68a;

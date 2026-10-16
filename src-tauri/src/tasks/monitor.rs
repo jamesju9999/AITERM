@@ -94,10 +94,26 @@ impl Default for Thresholds {
 pub async fn watch(
     pty: &PtyManager,
     tab_id: &str,
-    mut control: oneshot::Receiver<WatchControl>,
+    control: oneshot::Receiver<WatchControl>,
     baselines: Baselines,
     thresholds: Thresholds,
     mode: WatchMode,
+) -> TaskOutcome {
+    watch_with_quota(pty, tab_id, control, baselines, thresholds, mode, &|| false).await
+}
+
+/// 同 `watch`，另外問 `waiting_for_quota`：派出去的 claude 撞到用量上限、
+/// 正在等額度時（見 `tasks::quota`），bell 不算完成（而且等待期間的 bell
+/// 會被吸收，解除等待後也不會被拿來當完成）、也不做卡住判定。完成標記與
+/// 離開碼照常有效。
+pub async fn watch_with_quota(
+    pty: &PtyManager,
+    tab_id: &str,
+    mut control: oneshot::Receiver<WatchControl>,
+    mut baselines: Baselines,
+    thresholds: Thresholds,
+    mode: WatchMode,
+    waiting_for_quota: &(dyn Fn() -> bool + Send + Sync),
 ) -> TaskOutcome {
     let start = tokio::time::Instant::now();
     let exit_baseline = pty.last_exit_code(tab_id);
@@ -115,6 +131,10 @@ pub async fn watch(
             return TaskOutcome::Cancelled;
         };
         let marker = pty.marker_count(tab_id).unwrap_or(0);
+        let waiting = waiting_for_quota();
+        if waiting {
+            baselines.bell = bell;
+        }
 
         // 2. reply signal — Auto mode only (see WatchMode::Interactive's doc).
         if mode == WatchMode::Auto && (marker > baselines.marker || bell > baselines.bell) {
@@ -138,7 +158,7 @@ pub async fn watch(
         // 5. stuck — Auto mode only.
         let ran_ms = start.elapsed().as_millis() as u64;
         let quiet_ms = pty.ms_since_output(tab_id).unwrap_or(0);
-        if mode == WatchMode::Auto && ran_ms >= thresholds.min_run_ms && quiet_ms >= thresholds.quiet_stuck_ms {
+        if mode == WatchMode::Auto && !waiting && ran_ms >= thresholds.min_run_ms && quiet_ms >= thresholds.quiet_stuck_ms {
             return TaskOutcome::Failed("疑似卡住（120 秒無輸出）".to_string());
         }
 
@@ -427,5 +447,55 @@ mod tests {
         let outcome = watch_fut.await;
         assert!(matches!(outcome, TaskOutcome::Cancelled), "{outcome:?}");
     }
-}
 
+    /// 等待額度期間的 bell 不算完成，而且解除等待之後也不能拿它當完成——
+    /// 否則續跑那一刻就被判成功、半成品被 commit。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn a_bell_while_waiting_for_quota_is_not_completion_even_after_the_wait_ends() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        settle_exit_code(&pty, &tab).await;
+        let waiting = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let w = waiting.clone();
+        let is_waiting = move || w.load(std::sync::atomic::Ordering::SeqCst);
+        let base = baselines_now(&pty, &tab);
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        let watch_fut = watch_with_quota(&pty, &tab, rx, base, test_thresholds(), WatchMode::Auto, &is_waiting);
+        tokio::pin!(watch_fut);
+
+        pty.write(&tab, b"printf '\\a'\n").unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1_500), &mut watch_fut).await.is_err(),
+            "等待額度時的 bell 被當成完成"
+        );
+        assert!(pty.bell_count(&tab).unwrap_or(0) > base.bell, "測試前提：bell 真的有送出");
+        waiting.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(800), &mut watch_fut).await.is_err(),
+            "解除等待後，等待期間的舊 bell 被當成完成"
+        );
+        tx.send(WatchControl::Cancel).unwrap();
+        assert!(matches!(watch_fut.await, TaskOutcome::Cancelled));
+    }
+
+    /// 等額度可能要好幾個小時，期間完全沒有輸出，不能被判「卡住」。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn silence_while_waiting_for_quota_is_not_stuck() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        settle_exit_code(&pty, &tab).await;
+        let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        let thresholds = Thresholds { quiet_stuck_ms: 200, poll_ms: 50, min_run_ms: 100 };
+        let watch_fut = watch_with_quota(&pty, &tab, rx, baselines_now(&pty, &tab), thresholds, WatchMode::Auto, &|| true);
+        tokio::pin!(watch_fut);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1_000), &mut watch_fut).await.is_err(),
+            "等待額度時的安靜被判成卡住"
+        );
+        tx.send(WatchControl::Cancel).unwrap();
+        assert!(matches!(watch_fut.await, TaskOutcome::Cancelled));
+    }
+}

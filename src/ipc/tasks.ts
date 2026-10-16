@@ -74,6 +74,8 @@ export interface TaskRow {
   is_spec: boolean;
   /** 實作卡：由哪一份規格模組拆出來的。 */
   from_spec: string | null;
+  /** 派出去的 claude 撞到用量上限、正在等額度（unix 秒）；換帳號或過一陣子會自動續跑。 */
+  quota_wait_at?: number | null;
 }
 
 export type CardKind = "work" | "review" | "fix" | "merge" | "plan";

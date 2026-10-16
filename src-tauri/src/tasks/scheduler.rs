@@ -411,6 +411,8 @@ pub struct RealDispatcher {
     pub wake: Arc<Notify>,
     /// task_id → cancel sender, so `tasks_stop` can abort a running watch.
     pub cancels: Arc<parking_lot::Mutex<HashMap<String, oneshot::Sender<monitor::WatchControl>>>>,
+    /// 額度用完自動續跑（見 `tasks::quota`）。
+    pub quota: Arc<crate::tasks::quota::QuotaState>,
 }
 
 #[async_trait::async_trait]
@@ -477,6 +479,28 @@ impl Dispatcher for RealDispatcher {
             );
             prepare_worktree(&project.path, &task.id, &task.project_dir, isolate).await
         };
+        // 非互動的 claude 卡片掛上額度 hook：撞到用量上限時卡片改成「等待額度」，
+        // 換帳號或過一段時間自動續跑。做不到（接收器起不來、路徑有特殊字元）就照舊派工。
+        let quota_args = if session_id.is_some() && !task.interactive {
+            match self.quota.hook_base(&task.id).await {
+                Some(base) => {
+                    let dir = crate::tasks::task_dir(&project.path, &task.id);
+                    let path = dir.join("claude-settings.json");
+                    match std::fs::create_dir_all(&dir)
+                        .and_then(|_| std::fs::write(&path, crate::tasks::quota::hook_settings_json(&base)))
+                    {
+                        Ok(()) => crate::tasks::quota::settings_flag(&path),
+                        Err(e) => {
+                            eprintln!("quota settings for {}: {e}", task.id);
+                            None
+                        }
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         let agent_ctx = agent.map(|a| (a.id, a.kind, effective_dir.clone()));
         let card_kind = task.card_kind.clone();
         let repo_dir = task.project_dir.clone();
@@ -490,8 +514,12 @@ impl Dispatcher for RealDispatcher {
             &prompt,
             !task.interactive,
             bridge_env,
+            quota_args.as_deref(),
         )
         .await?;
+        if quota_args.is_some() {
+            self.quota.register(&task.id, &tab_id, project.pool.clone());
+        }
         // 卡片在進到這裡之前就已經被 `claim_for_dispatch` 標成 running 了
         // （見 drain_once）——這裡只補上分頁 id。順序不能倒過來：spawn 要
         // 等 claude 的 TUI 起來、最久 30 秒，那段期間卡片若還是 queued，
@@ -543,10 +571,17 @@ impl Dispatcher for RealDispatcher {
             min_run_ms: stuck_timeout_ms,
             ..monitor::Thresholds::default()
         };
+        let quota = self.quota.clone();
         tauri::async_runtime::spawn(async move {
-            let outcome = monitor::watch(
-                &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode,
+            let waiting = {
+                let quota = quota.clone();
+                let task_id = task_id.clone();
+                move || quota.is_waiting(&task_id)
+            };
+            let outcome = monitor::watch_with_quota(
+                &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode, &waiting,
             ).await;
+            quota.unregister(&task_id);
             let outcome = match &agent_ctx {
                 Some((agent_id, _, worktree)) if card_kind == crate::tasks::workflow::KIND_REVIEW => {
                     finalize_review_card(&pool, &project_path, agent_id, &task_id, &repo_dir, worktree, outcome).await
@@ -899,6 +934,14 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
             }
         }
 
+        let quota = crate::tasks::quota::QuotaState::new();
+        {
+            let app = app.clone();
+            quota.set_on_change(move || {
+                let _ = app.emit("tasks-updated", ());
+            });
+        }
+        crate::tasks::quota::spawn_resumer(quota.clone(), pty.clone());
         let dispatcher = RealDispatcher {
             app: app.clone(),
             pty,
@@ -907,6 +950,7 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
             secrets,
             wake: wake.clone(),
             cancels,
+            quota,
         };
 
         loop {
@@ -968,6 +1012,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
+            quota_wait_at: None,
         }
     }
 
@@ -1120,6 +1165,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
+            quota_wait_at: None,
         }
     }
 

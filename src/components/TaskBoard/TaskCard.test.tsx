@@ -377,6 +377,12 @@ describe("TaskCard 的共花費時間", () => {
     mountCard({ status: "running", dispatched_at: 1000, finished_at: null });
     expect(screen.queryByTestId("task-card-duration")).toBeNull();
   });
+
+  it("撞到用量上限的執行中卡片顯示等待額度，不再說執行中", () => {
+    mountCard({ status: "running", dispatched_at: 1000, quota_wait_at: 2000 });
+    expect(screen.getByText(/額度用完|Usage limit reached/)).toBeTruthy();
+    expect(screen.queryByText(/已交給 Claude Code 執行中|Handed to Claude Code/)).toBeNull();
+  });
 });
 
 describe("TaskCard 的 Agent 徽章", () => {

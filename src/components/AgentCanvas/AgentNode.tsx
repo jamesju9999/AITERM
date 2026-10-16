@@ -154,9 +154,13 @@ export function AgentNode({
         </div>
         {snip && <div className="ac-snip">{snip}</div>}
         <div className="ac-now-sub">{t.ac_elapsed(formatElapsed(nowSecs - (running.dispatched_at ?? nowSecs)))}</div>
-        <div className="ac-bar ac-bar--indeterminate" aria-hidden>
-          <i />
-        </div>
+        {running.quota_wait_at ? (
+          <div className="ac-quota-wait">{t.board_quota_wait_hint}</div>
+        ) : (
+          <div className="ac-bar ac-bar--indeterminate" aria-hidden>
+            <i />
+          </div>
+        )}
       </>
     );
   };
