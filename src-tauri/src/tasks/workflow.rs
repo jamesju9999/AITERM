@@ -423,7 +423,7 @@ async fn create_plan_card(
 /// 建立順序。產出規格的 Coder 不參與。`load` 由呼叫端持有，每派一張就 +1，
 /// 同一次拆出的多張卡才會平均分散。
 fn pick_least_busy<'a>(
-    candidates: &'a [&'a AgentRow],
+    candidates: &[&'a AgentRow],
     load: &HashMap<String, (usize, usize)>,
 ) -> Option<&'a AgentRow> {
     candidates.iter().copied().min_by(|a, b| {
@@ -473,14 +473,34 @@ async fn dispatch_plan(
         load.insert(c.id.clone(), (busy, total));
     }
 
+    // 第 i 個任務建出來的卡：(id, 負責人)。相依的索引靠它換成 id、找出前置的擁有者。
+    let mut created: Vec<(String, Option<String>)> = Vec::new();
     for t in tasks {
         let body = format!(
             "{}\n\n（這是從規格「{}」拆出來的任務；規格文件也一併附在下面。）{}",
             t.body, module.title, appendix
         );
-        match pick_least_busy(&candidates, &load) {
+        let deps: Vec<&(String, Option<String>)> = t.depends_on.iter().filter_map(|&i| created.get(i)).collect();
+        let depends_on = (!deps.is_empty())
+            .then(|| serde_json::to_string(&deps.iter().map(|(id, _)| id).collect::<Vec<_>>()).unwrap_or_default());
+        // 有相依：交給擁有最多個前置的工程師（同一條分支上接著做）；平手比忙碌程度。
+        let mut owned: HashMap<&str, usize> = HashMap::new();
+        for (_, o) in &deps {
+            if let Some(o) = o.as_deref() {
+                *owned.entry(o).or_default() += 1;
+            }
+        }
+        let pick = match owned.values().max() {
+            Some(&most) => {
+                let owners: Vec<&AgentRow> =
+                    candidates.iter().copied().filter(|c| owned.get(c.id.as_str()) == Some(&most)).collect();
+                pick_least_busy(&owners, &load).or_else(|| pick_least_busy(&candidates, &load))
+            }
+            None => pick_least_busy(&candidates, &load),
+        };
+        match pick {
             Some(coder) => {
-                insert_card(
+                let id = insert_card(
                     pool,
                     &NewCard {
                         title: &t.title,
@@ -497,13 +517,21 @@ async fn dispatch_plan(
                     },
                 )
                 .await?;
+                sqlx::query("UPDATE tasks SET depends_on = ? WHERE id = ?").bind(&depends_on).bind(&id).execute(pool).await?;
                 let e = load.entry(coder.id.clone()).or_insert((0, 0));
                 e.0 += 1;
                 e.1 += 1;
+                created.push((id, Some(coder.id.clone())));
             }
             None => {
                 let id = store::create_task(pool, &t.title, &body, &module.project_dir, true, false).await?;
-                sqlx::query("UPDATE tasks SET from_spec = ? WHERE id = ?").bind(&module.id).bind(&id).execute(pool).await?;
+                sqlx::query("UPDATE tasks SET from_spec = ?, depends_on = ? WHERE id = ?")
+                    .bind(&module.id)
+                    .bind(&depends_on)
+                    .bind(&id)
+                    .execute(pool)
+                    .await?;
+                created.push((id, None));
             }
         }
     }
@@ -1447,6 +1475,68 @@ mod tests {
         let module = tasks.iter().find(|t| t.id == spec).unwrap();
         assert_eq!(module_state(module, &chain_of(&tasks, &spec), false), ModuleState::Passed);
         assert!(of_kind(&tasks, KIND_MERGE).is_empty(), "實作卡還沒做，不能合併");
+    }
+
+    /// 規格撰寫師 `w` 交出一份規格（沒有 Reviewer，直接交給 Orchestrator），
+    /// Orchestrator 寫出 `tasks_json` 後結案。回傳拆出的實作卡（依建立順序）。
+    async fn split_spec(pool: &SqlitePool, w: &str, project: &Path, tasks_json: &str) -> Vec<TaskRow> {
+        let spec = store::create_task(pool, "A 規格", "寫 A 的規格", "/repo", true, false).await.unwrap();
+        agents::assign_task(pool, &spec, Some(w)).await.unwrap();
+        store::dispatch_for_test(pool, &spec, "tab").await;
+        store::finish_task(pool, &spec, "success", None, None).await.unwrap();
+        after_card_finished(pool, project, &spec).await.unwrap();
+        let plan = of_kind(&all(pool).await, KIND_PLAN)[0].clone();
+        let json = tasks_json_path(project, &plan.id);
+        std::fs::create_dir_all(json.parent().unwrap()).unwrap();
+        std::fs::write(&json, tasks_json).unwrap();
+        store::dispatch_for_test(pool, &plan.id, "t").await;
+        store::finish_task(pool, &plan.id, "success", None, None).await.unwrap();
+        after_card_finished(pool, project, &plan.id).await.unwrap();
+        let mut cards: Vec<TaskRow> =
+            all(pool).await.into_iter().filter(|t| t.from_spec.as_deref() == Some(spec.as_str())).collect();
+        cards.sort_by(|a, b| a.sort_order.partial_cmp(&b.sort_order).unwrap());
+        cards
+    }
+
+    fn deps_of(card: &TaskRow) -> Vec<String> {
+        card.depends_on.as_deref().map(|j| serde_json::from_str(j).unwrap()).unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn dependent_tasks_go_to_the_coder_that_owns_most_of_their_prerequisites() {
+        let pool = mem_pool().await;
+        let w = spec_writer(&pool).await;
+        let c1 = agent(&pool, "coder", "C1").await;
+        let c2 = agent(&pool, "coder", "C2").await;
+        agent(&pool, "orchestrator", "O").await;
+        let project = tempfile::tempdir().unwrap();
+        let cards = split_spec(
+            &pool,
+            &w,
+            project.path(),
+            r#"{"tasks":[
+                {"title":"audio"},
+                {"title":"storage"},
+                {"title":"audio 測試","depends_on":[0]},
+                {"title":"整合","depends_on":[0,1,2]},
+                {"title":"雙邊","depends_on":[0,1]}
+            ]}"#,
+        )
+        .await;
+        let by = |title: &str| cards.iter().find(|c| c.title == title).unwrap();
+        let owner = |title: &str| by(title).agent_id.clone().unwrap();
+        // 沒有相依：照最閒，兩位各拿一張（平手時誰先拿不重要）。
+        let (a, b) = (owner("audio"), owner("storage"));
+        assert_ne!(a, b);
+        assert!([&c1, &c2].contains(&&a) && [&c1, &c2].contains(&&b));
+        // 相依集中到擁有前置的人，即使他已經比較忙。
+        assert_eq!(owner("audio 測試"), a);
+        assert_eq!(owner("整合"), a, "audio 的負責人擁有 2 個前置、另一位只有 1 個");
+        // 兩邊各擁有一個前置：平手挑比較閒的（a 已經 3 張、b 1 張）。
+        assert_eq!(owner("雙邊"), b);
+        // 相依存成實作卡的 id。
+        assert_eq!(deps_of(by("整合")), vec![by("audio").id.clone(), by("storage").id.clone(), by("audio 測試").id.clone()]);
+        assert!(deps_of(by("audio")).is_empty() && by("audio").depends_on.is_none());
     }
 
     #[tokio::test]
