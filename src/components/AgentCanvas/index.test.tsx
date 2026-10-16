@@ -31,6 +31,7 @@ vi.mock("../../ipc/agents", () => ({
   overrideModule: vi.fn().mockResolvedValue(undefined),
   checkRepo: vi.fn().mockResolvedValue({ status: "ok", branch: "main" }),
   initRepo: vi.fn().mockResolvedValue(undefined),
+  openRepo: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../ipc/projects", () => ({
   listProjects: vi.fn().mockResolvedValue([
@@ -45,7 +46,7 @@ vi.mock("../../ipc/bridge", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
 
-import { assignAgent, checkRepo, createAgent, initRepo, listAgents, mergeAgent, overrideModule, resolveAgent, type AgentRow } from "../../ipc/agents";
+import { assignAgent, checkRepo, createAgent, initRepo, listAgents, mergeAgent, openRepo, overrideModule, resolveAgent, type AgentRow } from "../../ipc/agents";
 import { listTasks, type TaskWithAttachments } from "../../ipc/tasks";
 import { AgentCanvasView } from "./index";
 
@@ -375,5 +376,114 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(initRepo).toHaveBeenCalledWith("/repo/htbktw"));
     await waitFor(() => expect(within(dlg).getByTestId("repo-status")).toHaveTextContent(/main/));
     expect(place.disabled).toBe(false);
+  });
+
+  describe("版面與總覽", () => {
+    const orchestrated = (verdict: TaskWithAttachments["verdict"]) => {
+      vi.mocked(listAgents).mockResolvedValue([
+        agent({ branch: "aiterm-agent/a1" }),
+        agent({ id: "r1", kind: "reviewer", name: "R" }),
+        agent({ id: "o1", kind: "orchestrator", name: "O", branch: "aiterm-agent/bf7cb7ff-3c88-4149-b761-c4b4eadac581" }),
+      ]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "A", status: "done", outcome: "success", agent_id: "a1", module_override: true }),
+        card({ id: "M", title: "合併", status: "done", outcome: "success", agent_id: "o1", card_kind: "merge", finished_at: 9, project_dir: "/repo/htbktw", verdict }),
+      ]);
+    };
+
+    it("全部完成並合回程式庫：頂列寫出來，按「打開資料夾」開程式庫", async () => {
+      orchestrated("repo_merged");
+      view();
+      expect(await screen.findByTestId("ac-summary")).toHaveTextContent(/全部完成：1 個模組已合回程式庫|All done: 1 modules merged into the repo/);
+      fireEvent.click(screen.getByRole("button", { name: /打開資料夾|Open folder/ }));
+      await waitFor(() => expect(openRepo).toHaveBeenCalledWith("/repo/htbktw"));
+    });
+
+    it("沒合回程式庫：頂列寫原因，沒有打開資料夾", async () => {
+      orchestrated("repo_dirty");
+      view();
+      expect(await screen.findByTestId("ac-summary")).toHaveTextContent(/未提交的改動|uncommitted changes/);
+      expect(screen.queryByRole("button", { name: /打開資料夾|Open folder/ })).toBeNull();
+    });
+
+    it("已合回程式庫就不再顯示合併分支；有協調者時工程師卡也不放合併分支；分支名縮短；審核者沒有分支列", async () => {
+      orchestrated("repo_merged");
+      view();
+      const orch = await screen.findByTestId("agent-o1");
+      expect(within(orch).queryByText(/^合併分支$|^Merge branch$/)).toBeNull();
+      expect(within(screen.getByTestId("agent-a1")).queryByText(/^合併分支$|^Merge branch$/)).toBeNull();
+      const branch = within(orch).getByText(/aiterm-agent\/bf7cb7ff$/);
+      expect(branch.getAttribute("title")).toBe("aiterm-agent/bf7cb7ff-3c88-4149-b761-c4b4eadac581");
+      expect(within(screen.getByTestId("agent-r1")).queryByText(/⑂/)).toBeNull();
+    });
+
+    it("還沒合回程式庫：協調者保留合併分支", async () => {
+      orchestrated("repo_diverged");
+      view();
+      expect(within(await screen.findByTestId("agent-o1")).getByText(/^合併分支$|^Merge branch$/)).toBeTruthy();
+    });
+
+    it("協調者沒有在派工時，派工虛線淡掉", async () => {
+      vi.mocked(listAgents).mockResolvedValue([
+        agent({ id: "w", produces_spec: true, name: "規格" }),
+        agent(),
+        agent({ id: "o1", kind: "orchestrator", name: "O" }),
+      ]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      const edge = await screen.findByTestId("edge-o1-a1");
+      expect(edge.querySelector("path")?.getAttribute("class")).toContain("ac-edge-base--idle");
+    });
+
+    it("模組庫可以收合，記住設定；收合後仍可把模組拖回去", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([card({ id: "C", title: "C 訂單", status: "planning" })]);
+      const first = view();
+      await screen.findByTestId("module-C");
+      fireEvent.click(screen.getByRole("button", { name: /收合模組庫|Collapse module library/ }));
+      expect(screen.queryByTestId("module-C")).toBeNull();
+      expect(document.querySelector('[data-drop="library"]')).toHaveTextContent(/· 1/);
+      first.unmount();
+      view();
+      expect(await screen.findByRole("button", { name: /展開模組庫|Expand module library/ })).toBeTruthy();
+    });
+
+    it("活動記錄可以收合，收合後只留最新一筆", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1", dispatched_at: 100, finished_at: 200 }),
+      ]);
+      view();
+      const title = await screen.findByRole("button", { name: /活動記錄|Activity/ });
+      await waitFor(() => expect(document.querySelectorAll(".ac-log-line")).toHaveLength(2));
+      fireEvent.click(title);
+      expect(document.querySelectorAll(".ac-log-line")).toHaveLength(0);
+      expect(document.querySelector(".ac-log-latest")?.textContent).toMatch(/A 登入/);
+    });
+
+    it("縮放按鈕與全部顯示", async () => {
+      vi.mocked(listAgents).mockResolvedValue([
+        agent({ canvas_x: 0, canvas_y: 0 }),
+        agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 1800, canvas_y: 1200 }),
+      ]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      await screen.findByTestId("agent-r1");
+      const pct = screen.getByTestId("ac-zoom-pct");
+      expect(pct).toHaveTextContent("100%");
+      fireEvent.click(screen.getByRole("button", { name: /縮小|Zoom out/ }));
+      expect(pct).toHaveTextContent("83%");
+      fireEvent.click(screen.getByRole("button", { name: /放大|Zoom in/ }));
+      expect(pct).toHaveTextContent("100%");
+
+      // jsdom 沒有版面：給桌布一個 1000×600 的可視範圍。
+      const canvas = document.querySelector<HTMLElement>('[data-drop="canvas"]') as HTMLElement;
+      Object.defineProperty(canvas, "clientWidth", { configurable: true, value: 1000 });
+      Object.defineProperty(canvas, "clientHeight", { configurable: true, value: 600 });
+      fireEvent.click(screen.getByRole("button", { name: /全部顯示|Fit all/ }));
+      // 節點群 2048×1340（含估計的節點尺寸）塞進 936×536：高度決定 → 40%。
+      expect(pct).toHaveTextContent("40%");
+      expect(screen.getByTestId("ac-world").style.transform).toBe("scale(0.4)");
+    });
   });
 });

@@ -7,6 +7,7 @@ import type { AgentStatus } from "./deriveAgentStatus";
 import { deriveModuleState, type ModuleState } from "./deriveModuleState";
 import { localizedCardTitle } from "./cardTitle";
 import { formatElapsed } from "./formatElapsed";
+import { shortBranch } from "./projectSummary";
 
 const KIND_ICON: Record<AgentRow["kind"], string> = { coder: "</>", reviewer: "✓?", orchestrator: "⑂" };
 
@@ -33,6 +34,7 @@ export function AgentNode({
   agentName,
   coderIds,
   hasReviewer,
+  hasOrchestrator,
   status,
   nowSecs,
   dropState,
@@ -57,6 +59,8 @@ export function AgentNode({
   /** 專案裡所有 Coder 的 id——Orchestrator 用它找出全部模組。 */
   coderIds: Set<string>;
   hasReviewer: boolean;
+  /** 有協調者時，工程師的分支由它合併，工程師卡上就不放「合併分支」。 */
+  hasOrchestrator: boolean;
   status: AgentStatus;
   nowSecs: number;
   dropState: "ok" | "bad" | null;
@@ -104,7 +108,6 @@ export function AgentNode({
     dispatching: t.ac_ms_dispatching,
     dispatch_failed: t.ac_ms_dispatch_failed,
   };
-  const canMerge = agent.kind !== "reviewer" && !!agent.branch && (status === "idle" || status === "done");
 
   // ── Coder：每個模組一顆 chip，狀態沿著審查鏈推導 ─────────────────────────
   const modules = agent.kind === "coder" ? mine.filter((c) => c.card_kind === "work") : [];
@@ -125,6 +128,13 @@ export function AgentNode({
   const lastMerge = agent.kind === "orchestrator"
     ? [...mine].filter((c) => c.card_kind === "merge").sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))[0]
     : undefined;
+  // 已經合回程式庫就不用再按；手動合併的結果訊息還在顯示時保留按鈕（可能要還原衝突）。
+  const canMerge =
+    !!agent.branch &&
+    (status === "idle" || status === "done") &&
+    (agent.kind === "orchestrator"
+      ? lastMerge?.verdict !== "repo_merged" || mergeConflict
+      : agent.kind === "coder" && !hasOrchestrator);
 
   const runningLine = () => {
     if (!running) return null;
@@ -285,14 +295,16 @@ export function AgentNode({
           </div>
         )}
 
-        <div className="ac-meta">
-          <span>⑂ {agent.kind === "reviewer" ? "—" : (agent.branch ?? "—")}</span>
-          {agent.kind === "coder" && (
-            <span>
-              {passedCount}/{moduleStates.length}
-            </span>
-          )}
-        </div>
+        {agent.kind !== "reviewer" && (
+          <div className="ac-meta">
+            <span title={agent.branch ?? undefined}>⑂ {agent.branch ? shortBranch(agent.branch) : "—"}</span>
+            {agent.kind === "coder" && (
+              <span>
+                {passedCount}/{moduleStates.length}
+              </span>
+            )}
+          </div>
+        )}
         {canMerge && (
           <div className="ac-merge">
             <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={onMerge}>

@@ -297,6 +297,29 @@ pub async fn agents_override_module(
     Ok(())
 }
 
+/// 在系統的檔案管理員（Finder／檔案總管／Linux 預設）打開程式庫資料夾。
+#[tauri::command]
+pub fn agents_open_repo(path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).is_dir() {
+        return Err(format!("找不到資料夾：{path}"));
+    }
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    let mut cmd = std::process::Command::new(program);
+    cmd.arg(&path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // 被打開的是使用者的檔案管理員，不能繼承 AppImage 的函式庫路徑。
+    crate::appimage_env::strip_appimage_env(&mut cmd);
+    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// 對話框選資料夾時呼叫：是不是可以用的 git repo。
 #[tauri::command]
 pub async fn agents_check_repo(path: String) -> Result<crate::tasks::repo_check::RepoCheck, String> {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { confirm } from "@tauri-apps/plugin-dialog";
 
@@ -10,6 +10,7 @@ import {
   deleteAgent,
   listAgents,
   mergeAgent,
+  openRepo,
   overrideModule,
   resolveAgent,
   updateAgent,
@@ -35,11 +36,46 @@ import { deriveAgentStatus } from "./deriveAgentStatus";
 import { deriveModuleState } from "./deriveModuleState";
 import { EdgeLayer } from "./EdgeLayer";
 import { computeEdges, diffPulses, edgeActivity, type Pulse } from "./edges";
+import { projectSummary, type ProjectSummary } from "./projectSummary";
 import "./index.css";
 
 /** 跟看板、TabBar 同一個門檻：小於這個位移是點擊，不是拖曳。 */
 const DRAG_THRESHOLD_PX = 4;
 const PROJECT_KEY = "aiterm.agentCanvas.project";
+const LAYOUT_KEY = "aiterm.agentCanvas.layout";
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 1.5;
+/** 量不到節點尺寸時（還沒畫出來）的估計值。 */
+const NODE_W = 248;
+const NODE_H = 140;
+/** 桌布在最遠的節點之外再留多少空間，讓人能把節點往外拖。 */
+const WORLD_MARGIN = 600;
+
+interface Layout {
+  libCollapsed: boolean;
+  logCollapsed: boolean;
+  logHeight: number;
+}
+const DEFAULT_LAYOUT: Layout = { libCollapsed: false, logCollapsed: false, logHeight: 120 };
+
+function readLayout(): Layout {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    return raw ? { ...DEFAULT_LAYOUT, ...(JSON.parse(raw) as Partial<Layout>) } : DEFAULT_LAYOUT;
+  } catch {
+    return DEFAULT_LAYOUT;
+  }
+}
+
+function storeLayout(l: Layout) {
+  try {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(l));
+  } catch {
+    // 存不了就只在這次有效。
+  }
+}
+
+const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
 type DragKind = "pool" | "module" | "agent";
 
@@ -115,6 +151,23 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   const dragRef = useRef<DragState | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const mounted = useRef(true);
+  const [zoom, setZoom] = useState(1);
+  /** 事件處理器與拖曳用的最新縮放值（避免閉包拿到舊值）。 */
+  const zoomRef = useRef(1);
+  useLayoutEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+  /** 縮放後要把哪個桌布座標留在畫面上的哪個位置（縮放後的 layout effect 套用）。 */
+  const zoomAnchor = useRef<{ wx: number; wy: number; vx: number; vy: number } | null>(null);
+  /** 已經自動「全部顯示」過的專案——每個專案打開時做一次。 */
+  const fittedFor = useRef<string | null>(null);
+  const [layout, setLayoutState] = useState<Layout>(readLayout);
+  const setLayout = (patch: Partial<Layout>) =>
+    setLayoutState((cur) => {
+      const next = { ...cur, ...patch };
+      storeLayout(next);
+      return next;
+    });
 
   // 專案清單。
   useEffect(() => {
@@ -239,7 +292,8 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
     const el = canvasRef.current;
     if (!el) return { x: 0, y: 0 };
     const r = el.getBoundingClientRect();
-    return { x: clientX - r.left + el.scrollLeft, y: clientY - r.top + el.scrollTop };
+    const z = zoomRef.current;
+    return { x: (clientX - r.left + el.scrollLeft) / z, y: (clientY - r.top + el.scrollTop) / z };
   };
 
   const beginDrag = (e: ReactMouseEvent, kind: DragKind, id: string | null) => {
@@ -420,6 +474,152 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   const defaultName = (k: AgentKind) =>
     k === "coder" ? `${t.ac_coder}${agents.filter((a) => a.kind === "coder").length + 1}` : poolLabel(k);
 
+  // ── 縮放與「全部顯示」 ───────────────────────────────────────────────────
+
+  /** 節點在桌布座標裡的外框（尺寸從 DOM 量，量不到用估計值）。 */
+  const nodeBounds = useCallback(() => {
+    const root = canvasRef.current;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const a of agents) {
+      const el = root?.querySelector<HTMLElement>(`[data-agent-id="${a.id}"]`);
+      minX = Math.min(minX, a.canvas_x);
+      minY = Math.min(minY, a.canvas_y);
+      maxX = Math.max(maxX, a.canvas_x + (el?.offsetWidth || NODE_W));
+      maxY = Math.max(maxY, a.canvas_y + (el?.offsetHeight || NODE_H));
+    }
+    return { minX, minY, maxX, maxY };
+  }, [agents]);
+
+  /** 縮放並捲動到所有節點都看得到。畫面還沒有尺寸（分頁隱藏中）時回 false。 */
+  const fitToView = useCallback((): boolean => {
+    const el = canvasRef.current;
+    if (!el || agents.length === 0 || !el.clientWidth || !el.clientHeight) return false;
+    const { minX, minY, maxX, maxY } = nodeBounds();
+    const pad = 32;
+    const z = clampZoom(
+      Math.min(1, (el.clientWidth - pad * 2) / (maxX - minX), (el.clientHeight - pad * 2) / (maxY - minY)),
+    );
+    // 把節點群的中心放到畫面中心。
+    zoomAnchor.current = {
+      wx: (minX + maxX) / 2,
+      wy: (minY + maxY) / 2,
+      vx: el.clientWidth / 2,
+      vy: el.clientHeight / 2,
+    };
+    setZoom(z);
+    return true;
+  }, [agents.length, nodeBounds]);
+
+  /** 以畫面上的 (vx, vy) 為中心縮放。 */
+  const zoomAround = useCallback((next: number, vx?: number, vy?: number) => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const z = zoomRef.current;
+    const cx = vx ?? el.clientWidth / 2;
+    const cy = vy ?? el.clientHeight / 2;
+    zoomAnchor.current = { wx: (el.scrollLeft + cx) / z, wy: (el.scrollTop + cy) / z, vx: cx, vy: cy };
+    setZoom(clampZoom(next));
+  }, []);
+
+  // 縮放後依錨點捲動。每次 zoom 改變都要套用，即使值沒變（全部顯示也要捲到位）。
+  useLayoutEffect(() => {
+    const el = canvasRef.current;
+    const a = zoomAnchor.current;
+    if (!el || !a) return;
+    zoomAnchor.current = null;
+    el.scrollLeft = Math.max(0, a.wx * zoom - a.vx);
+    el.scrollTop = Math.max(0, a.wy * zoom - a.vy);
+  });
+
+  // 每個專案打開時自動全部顯示一次。分頁隱藏時畫面沒有尺寸，等看得到再做。
+  useEffect(() => {
+    if (!projectId || !isActive || agents.length === 0 || fittedFor.current === projectId) return;
+    const h = window.requestAnimationFrame(() => {
+      if (fitToView()) fittedFor.current = projectId;
+    });
+    return () => window.cancelAnimationFrame(h);
+  }, [projectId, isActive, agents.length, fitToView]);
+
+  // Ctrl／Cmd＋滾輪（含觸控板捏合）縮放。React 的 onWheel 是 passive，擋不掉頁面縮放，所以自己掛。
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      zoomAround(zoomRef.current * Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomAround, projects]);
+
+  const world = useMemo(() => {
+    let w = 0;
+    let h = 0;
+    for (const a of shownAgents) {
+      w = Math.max(w, a.canvas_x + NODE_W);
+      h = Math.max(h, a.canvas_y + NODE_H);
+    }
+    return { w: w + WORLD_MARGIN, h: h + WORLD_MARGIN };
+  }, [shownAgents]);
+
+  const summary = useMemo(() => projectSummary(agents, tasks), [agents, tasks]);
+  const hasOrchestrator = agents.some((a) => a.kind === "orchestrator");
+
+  // ── 活動記錄拖曳調整高度 ──────────────────────────────────────────────────
+  const beginLogResize = (e: ReactMouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = layout.logHeight;
+    const max = Math.max(80, Math.round(window.innerHeight * 0.6));
+    let h = startH;
+    const onMove = (ev: MouseEvent) => {
+      h = Math.min(max, Math.max(60, startH + (startY - ev.clientY)));
+      setLayoutState((cur) => ({ ...cur, logHeight: h }));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setLayout({ logHeight: h });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const summaryLine = (sm: ProjectSummary): { text: string; tone: "ok" | "bad" | "muted" } | null => {
+    switch (sm.kind) {
+      case "none":
+        return null;
+      case "working":
+        return {
+          text: t.ac_sum_working(sm.passed, sm.total) + (sm.attention ? ` · ${t.ac_attention_count(sm.attention)}` : ""),
+          tone: sm.attention ? "bad" : "muted",
+        };
+      case "all_passed":
+        return { text: `✓ ${t.ac_sum_all_passed(sm.total)}`, tone: "ok" };
+      case "merging":
+        return { text: t.ac_sum_merging(sm.total), tone: "muted" };
+      case "integrated":
+        return { text: `✓ ${t.ac_sum_integrated(sm.total)}`, tone: "ok" };
+      case "in_repo":
+        return { text: `✓ ${t.ac_sum_in_repo(sm.total)}`, tone: "ok" };
+      case "repo_pending": {
+        const why = {
+          repo_dirty: t.ac_repo_why_dirty,
+          repo_merge_in_progress: t.ac_repo_why_in_progress,
+          repo_diverged: t.ac_repo_why_diverged,
+        }[sm.reason];
+        return { text: t.ac_sum_repo_pending(sm.total, why), tone: "bad" };
+      }
+    }
+  };
+  const sumLine = summaryLine(summary);
+
   // ── 畫面 ───────────────────────────────────────────────────────────────
 
   if (projects !== null && projects.length === 0) {
@@ -431,7 +631,10 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   }
 
   return (
-    <div className="task-board agent-canvas">
+    <div
+      className="task-board agent-canvas"
+      style={{ gridTemplateRows: `auto auto minmax(0, 1fr) ${layout.logCollapsed ? "auto" : `${layout.logHeight}px`}` }}
+    >
       <div className="ac-top">
         <h1 className="ac-title">
           <span className="ac-dot" />
@@ -454,6 +657,19 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
             ))}
           </select>
         </label>
+        {sumLine && (
+          <span className={`ac-summary ac-summary--${sumLine.tone}`} data-testid="ac-summary">
+            {sumLine.text}
+          </span>
+        )}
+        {summary.kind === "in_repo" && (
+          <button
+            className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+            onClick={() => void openRepo(summary.repoDir).catch((e) => setToast(errText(e)))}
+          >
+            {t.ac_open_folder}
+          </button>
+        )}
         <span className="ac-spacer" />
         {cap !== null && <span className="ac-ctl">{t.ac_cap(cap)}</span>}
       </div>
@@ -482,88 +698,162 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
         <span className="ac-pool-hint">{t.ac_pool_hint}</span>
       </div>
 
-      <div className="ac-main">
-        <aside className={`ac-lib${hover?.kind === "library" ? " ac-lib--drop" : ""}`} data-drop="library">
-          <h2>{t.ac_library}</h2>
-          <div className="ac-lib-sub">{t.ac_library_sub}</div>
-          <div className="ac-lib-list">
-            {library.length === 0 && <div className="ac-lib-empty">{t.ac_library_empty}</div>}
-            {library.map((c) => (
-              <div
-                key={c.id}
-                className="ac-module"
-                data-testid={`module-${c.id}`}
-                onMouseDown={(e) => beginDrag(e, "module", c.id)}
-                title={c.body}
+      <div className={`ac-main${layout.libCollapsed ? " ac-main--lib-collapsed" : ""}`}>
+        {layout.libCollapsed ? (
+          <aside className={`ac-lib ac-lib--rail${hover?.kind === "library" ? " ac-lib--drop" : ""}`} data-drop="library">
+            <button
+              className="ac-iconbtn ac-lib-toggle"
+              title={t.ac_lib_expand}
+              aria-label={t.ac_lib_expand}
+              onClick={() => setLayout({ libCollapsed: false })}
+            >
+              »
+            </button>
+            <span className="ac-lib-rail-label">
+              {t.ac_library}
+              {library.length > 0 && ` · ${library.length}`}
+            </span>
+          </aside>
+        ) : (
+          <aside className={`ac-lib${hover?.kind === "library" ? " ac-lib--drop" : ""}`} data-drop="library">
+            <div className="ac-lib-head">
+              <h2>{t.ac_library}</h2>
+              <button
+                className="ac-iconbtn ac-lib-toggle"
+                title={t.ac_lib_collapse}
+                aria-label={t.ac_lib_collapse}
+                onClick={() => setLayout({ libCollapsed: true })}
               >
-                <span className="ac-module-title">{c.title}</span>
+                «
+              </button>
+            </div>
+            <div className="ac-lib-sub">{t.ac_library_sub}</div>
+            <div className="ac-lib-list">
+              {library.length === 0 && <div className="ac-lib-empty">{t.ac_library_empty}</div>}
+              {library.map((c) => (
+                <div
+                  key={c.id}
+                  className="ac-module"
+                  data-testid={`module-${c.id}`}
+                  onMouseDown={(e) => beginDrag(e, "module", c.id)}
+                  title={c.body}
+                >
+                  <span className="ac-module-title">{c.title}</span>
+                </div>
+              ))}
+            </div>
+            <button className="aiterm-btn aiterm-btn--secondary ac-add" disabled={!projectId} onClick={() => setNewModule(true)}>
+              {t.ac_add_module}
+            </button>
+          </aside>
+        )}
+
+        <div className="ac-canvas-wrap">
+          <section className={`ac-canvas${hover?.kind === "canvas" && ghost?.kind === "pool" ? " ac-canvas--drop" : ""}`} data-drop="canvas" ref={canvasRef}>
+            {agents.length === 0 && <div className="ac-canvas-empty">{t.ac_empty_canvas}</div>}
+            <div className="ac-sizer" style={{ width: world.w * zoom, height: world.h * zoom }}>
+              <div
+                className="ac-world"
+                data-testid="ac-world"
+                style={{ width: world.w, height: world.h, transform: `scale(${zoom})` }}
+              >
+                <EdgeLayer containerRef={canvasRef} agents={shownAgents} edges={edges} active={active} pulses={pulses} revision={tasks} />
+                {shownAgents.map((shown) => {
+                  const a = agents.find((x) => x.id === shown.id) as AgentRow;
+                  return (
+                    <AgentNode
+                      key={a.id}
+                      agent={shown}
+                      tasks={tasks}
+                      agentName={agentName}
+                      coderIds={coderIds}
+                      hasReviewer={hasReviewer}
+                      hasOrchestrator={hasOrchestrator}
+                      status={deriveAgentStatus(
+                        a,
+                        cardsOf(a.id),
+                        a.kind === "coder"
+                          ? cardsOf(a.id).filter((c) => c.card_kind === "work").map((m) => deriveModuleState(m, tasks, hasReviewer))
+                          : a.kind === "orchestrator"
+                            ? tasks
+                                .filter((c) => c.card_kind === "work" && c.agent_id && coderIds.has(c.agent_id))
+                                .map((m) => deriveModuleState(m, tasks, hasReviewer))
+                            : undefined,
+                      )}
+                      nowSecs={nowSecs}
+                      dropState={dropStateFor(a)}
+                      mergeMessage={merge[a.id]?.text ?? null}
+                      mergeConflict={merge[a.id]?.conflict ?? false}
+                      onHeaderMouseDown={(e) => beginDrag(e, "agent", a.id)}
+                      onChipMouseDown={(e, taskId) => {
+                        e.stopPropagation();
+                        beginDrag(e, "module", taskId);
+                      }}
+                      onEdit={() => setConfig({ kind: a.kind, agent: a, x: a.canvas_x, y: a.canvas_y })}
+                      onDelete={() => void removeAgent(a)}
+                      onRetry={() => projectId && void run(() => resolveAgent(projectId, a.id, "retry"))}
+                      onSkip={() => projectId && void run(() => resolveAgent(projectId, a.id, "skip"))}
+                      onTranscript={setTranscriptFor}
+                      onOpenTab={openTab}
+                      onMerge={() => doMerge(a)}
+                      onAbortMerge={() => doAbortMerge(a)}
+                      onRelease={(moduleId) => projectId && void run(() => overrideModule(projectId, moduleId))}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+          {agents.length > 0 && (
+            <div className="ac-zoom" role="toolbar">
+              <button className="ac-iconbtn" title={t.ac_zoom_out} aria-label={t.ac_zoom_out} onClick={() => zoomAround(zoom / 1.2)}>
+                −
+              </button>
+              <span className="ac-zoom-pct" data-testid="ac-zoom-pct">
+                {Math.round(zoom * 100)}%
+              </span>
+              <button className="ac-iconbtn" title={t.ac_zoom_in} aria-label={t.ac_zoom_in} onClick={() => zoomAround(zoom * 1.2)}>
+                +
+              </button>
+              <button className="ac-iconbtn ac-zoom-fit" onClick={() => fitToView()}>
+                {t.ac_zoom_fit}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className={`ac-log${layout.logCollapsed ? " ac-log--collapsed" : ""}`}>
+        {!layout.logCollapsed && (
+          <div
+            className="ac-log-resize"
+            title={t.ac_log_resize}
+            aria-label={t.ac_log_resize}
+            role="separator"
+            aria-orientation="horizontal"
+            onMouseDown={beginLogResize}
+          />
+        )}
+        <button
+          className="ac-log-title"
+          aria-expanded={!layout.logCollapsed}
+          title={layout.logCollapsed ? t.ac_log_expand : t.ac_log_collapse}
+          onClick={() => setLayout({ logCollapsed: !layout.logCollapsed })}
+        >
+          {layout.logCollapsed ? "▸" : "▾"} {t.ac_log_title}
+          {layout.logCollapsed && activity[0] && <span className="ac-log-latest">{activity[0].text}</span>}
+        </button>
+        {!layout.logCollapsed && (
+          <div className="ac-log-lines">
+            {activity.length === 0 && <div className="ac-log-empty">{t.ac_log_empty}</div>}
+            {activity.map((ev, i) => (
+              <div key={i} className={`ac-log-line ac-log-line--${ev.kind}`}>
+                <span className="ac-log-time">{new Date(ev.at * 1000).toLocaleTimeString()}</span>
+                {ev.text}
               </div>
             ))}
           </div>
-          <button className="aiterm-btn aiterm-btn--secondary ac-add" disabled={!projectId} onClick={() => setNewModule(true)}>
-            {t.ac_add_module}
-          </button>
-        </aside>
-
-        <section className={`ac-canvas${hover?.kind === "canvas" && ghost?.kind === "pool" ? " ac-canvas--drop" : ""}`} data-drop="canvas" ref={canvasRef}>
-          {agents.length === 0 && <div className="ac-canvas-empty">{t.ac_empty_canvas}</div>}
-          <EdgeLayer containerRef={canvasRef} agents={shownAgents} edges={edges} active={active} pulses={pulses} revision={tasks} />
-          {shownAgents.map((shown) => {
-            const a = agents.find((x) => x.id === shown.id) as AgentRow;
-            return (
-              <AgentNode
-                key={a.id}
-                agent={shown}
-                tasks={tasks}
-                agentName={agentName}
-                coderIds={coderIds}
-                hasReviewer={hasReviewer}
-                status={deriveAgentStatus(
-                  a,
-                  cardsOf(a.id),
-                  a.kind === "coder"
-                    ? cardsOf(a.id).filter((c) => c.card_kind === "work").map((m) => deriveModuleState(m, tasks, hasReviewer))
-                    : a.kind === "orchestrator"
-                      ? tasks
-                          .filter((c) => c.card_kind === "work" && c.agent_id && coderIds.has(c.agent_id))
-                          .map((m) => deriveModuleState(m, tasks, hasReviewer))
-                      : undefined,
-                )}
-                nowSecs={nowSecs}
-                dropState={dropStateFor(a)}
-                mergeMessage={merge[a.id]?.text ?? null}
-                mergeConflict={merge[a.id]?.conflict ?? false}
-                onHeaderMouseDown={(e) => beginDrag(e, "agent", a.id)}
-                onChipMouseDown={(e, taskId) => {
-                  e.stopPropagation();
-                  beginDrag(e, "module", taskId);
-                }}
-                onEdit={() => setConfig({ kind: a.kind, agent: a, x: a.canvas_x, y: a.canvas_y })}
-                onDelete={() => void removeAgent(a)}
-                onRetry={() => projectId && void run(() => resolveAgent(projectId, a.id, "retry"))}
-                onSkip={() => projectId && void run(() => resolveAgent(projectId, a.id, "skip"))}
-                onTranscript={setTranscriptFor}
-                onOpenTab={openTab}
-                onMerge={() => doMerge(a)}
-                onAbortMerge={() => doAbortMerge(a)}
-                onRelease={(moduleId) => projectId && void run(() => overrideModule(projectId, moduleId))}
-              />
-            );
-          })}
-        </section>
-      </div>
-
-      <div className="ac-log">
-        <div className="ac-log-title">{t.ac_log_title}</div>
-        <div className="ac-log-lines">
-          {activity.length === 0 && <div className="ac-log-empty">{t.ac_log_empty}</div>}
-          {activity.map((ev, i) => (
-            <div key={i} className={`ac-log-line ac-log-line--${ev.kind}`}>
-              <span className="ac-log-time">{new Date(ev.at * 1000).toLocaleTimeString()}</span>
-              {ev.text}
-            </div>
-          ))}
-        </div>
+        )}
       </div>
 
       {toast && (

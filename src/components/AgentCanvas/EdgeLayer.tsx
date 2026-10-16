@@ -69,7 +69,8 @@ export function EdgeLayer({
         return (
           <g key={`${e.from}>${e.to}`} data-testid={`edge-${e.from}-${e.to}`} data-active={color ?? ""} data-kind={e.kind ?? "flow"}>
             <path
-              className={`ac-edge-base${e.kind === "dispatch" ? " ac-edge-base--dispatch" : ""}`}
+              // 派工虛線只在協調者真的有東西派出去時顯眼；做完就淡到幾乎看不見，免得跟交件實線打架。
+              className={`ac-edge-base${e.kind === "dispatch" ? ` ac-edge-base--dispatch${color ? "" : " ac-edge-base--idle"}` : ""}`}
               d={d}
               markerEnd={e.kind === "dispatch" ? "url(#ac-arrow-dispatch)" : "url(#ac-arrow)"}
             />
