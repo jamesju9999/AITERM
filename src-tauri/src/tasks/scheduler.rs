@@ -54,6 +54,9 @@ pub fn pick_next<'a>(
 ///   Agent 卡片一律依序執行。Agent 已有卡片在跑（`running` 裡有同一個
 ///   `agent_id`）或暫停中（`paused`）就不交出。
 ///
+/// - `blocked`：還在等別位工程師前置的卡（`workflow::blocked_cards`）。跳過它、
+///   改交出同一個 Agent 佇列裡的下一張，不讓一張等待中的卡擋住整條佇列。
+///
 /// 每個 Agent 各有一條佇列，所以一個忙碌的 Agent 不會擋住另一個 Agent
 /// 或未指派的卡片——這正是「嚴格只看隊首」在這裡必須放寬的地方。
 /// `queued`/`running` 只能是**同一個專案**的卡片（Agent 屬於專案）。
@@ -62,6 +65,7 @@ pub fn candidate_heads(
     queued: &[TaskRow],
     running: &[TaskRow],
     paused: &std::collections::HashSet<String>,
+    blocked: &std::collections::HashSet<String>,
 ) -> Vec<TaskRow> {
     let mut sorted: Vec<&TaskRow> = queued.iter().collect();
     sorted.sort_by(|a, b| a.sort_order.partial_cmp(&b.sort_order).unwrap_or(std::cmp::Ordering::Equal));
@@ -80,6 +84,9 @@ pub fn candidate_heads(
                 }
             }
             Some(aid) => {
+                if blocked.contains(&t.id) {
+                    continue;
+                }
                 if seen.insert(aid) && !busy.contains(aid) && !paused.contains(aid) {
                     out.push(t.clone());
                 }
@@ -809,7 +816,14 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
                         return;
                     }
                 };
-            per_project.push((project.id.clone(), candidate_heads(&queued, &project_running, &paused)));
+            let blocked = match crate::tasks::workflow::blocked_cards(&project.pool).await {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("scheduler blocked cards ({}): {e}", project.name);
+                    return;
+                }
+            };
+            per_project.push((project.id.clone(), candidate_heads(&queued, &project_running, &paused, &blocked)));
             // 互動卡片不占名額——但 Agent 的互動卡片要占，見 `candidate_heads`。
             running.extend(project_running.into_iter().filter(|t| !t.interactive || t.agent_id.is_some()));
         }
@@ -1036,7 +1050,7 @@ mod tests {
             agent_row("b1", Some("B"), 4.0, false),
             agent_row("a2", Some("A"), 5.0, false),
         ];
-        let heads = candidate_heads(&queued, &[], &Default::default());
+        let heads = candidate_heads(&queued, &[], &Default::default(), &Default::default());
         assert_eq!(ids(&heads), vec!["u1", "a1", "b1"]);
     }
 
@@ -1044,26 +1058,37 @@ mod tests {
     fn candidate_heads_blocks_only_the_busy_agents_own_queue() {
         let queued = vec![agent_row("a2", Some("A"), 1.0, false), agent_row("b1", Some("B"), 2.0, false)];
         let running = vec![agent_row("a1", Some("A"), 0.0, false)];
-        assert_eq!(ids(&candidate_heads(&queued, &running, &Default::default())), vec!["b1"]);
+        assert_eq!(ids(&candidate_heads(&queued, &running, &Default::default(), &Default::default())), vec!["b1"]);
     }
 
     #[test]
     fn candidate_heads_skips_paused_agents() {
         let queued = vec![agent_row("a1", Some("A"), 1.0, false), agent_row("u1", None, 2.0, false)];
         let paused = ["A".to_string()].into_iter().collect();
-        assert_eq!(ids(&candidate_heads(&queued, &[], &paused)), vec!["u1"]);
+        assert_eq!(ids(&candidate_heads(&queued, &[], &paused, &Default::default())), vec!["u1"]);
     }
 
     #[test]
     fn candidate_heads_keeps_interactive_agent_cards_but_not_interactive_unassigned_ones() {
         let queued = vec![agent_row("chat", None, 1.0, true), agent_row("a1", Some("A"), 2.0, true), agent_row("u1", None, 3.0, false)];
-        assert_eq!(ids(&candidate_heads(&queued, &[], &Default::default())), vec!["a1", "u1"]);
+        assert_eq!(ids(&candidate_heads(&queued, &[], &Default::default(), &Default::default())), vec!["a1", "u1"]);
+    }
+
+    #[test]
+    fn candidate_heads_skips_a_card_waiting_for_prerequisites_and_offers_the_agents_next_one() {
+        let queued = vec![
+            agent_row("a1", Some("A"), 1.0, false),
+            agent_row("a2", Some("A"), 2.0, false),
+            agent_row("b1", Some("B"), 3.0, false),
+        ];
+        let blocked = ["a1".to_string(), "b1".to_string()].into_iter().collect();
+        assert_eq!(ids(&candidate_heads(&queued, &[], &Default::default(), &blocked)), vec!["a2"]);
     }
 
     #[test]
     fn candidate_heads_orders_by_sort_order_even_if_input_is_not() {
         let queued = vec![agent_row("b1", Some("B"), 9.0, false), agent_row("a1", Some("A"), 2.0, false)];
-        assert_eq!(ids(&candidate_heads(&queued, &[], &Default::default())), vec!["a1", "b1"]);
+        assert_eq!(ids(&candidate_heads(&queued, &[], &Default::default(), &Default::default())), vec!["a1", "b1"]);
     }
 
     #[test]

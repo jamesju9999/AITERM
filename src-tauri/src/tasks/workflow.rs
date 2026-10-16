@@ -541,6 +541,34 @@ async fn dispatch_plan(
     Ok(events)
 }
 
+/// 卡片的前置（`depends_on`）。沒有或格式壞掉都當作沒有。
+pub fn deps_of(card: &TaskRow) -> Vec<String> {
+    card.depends_on.as_deref().and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default()
+}
+
+/// 還不能開工的 queued 卡：有別位工程師的前置還沒通過審查（含手動放行）。
+/// 同一位工程師的前置不擋——佇列順序本來就保證前置先做。找不到的前置（被刪、
+/// 被封存）不擋。
+pub async fn blocked_cards(pool: &SqlitePool) -> Result<HashSet<String>, sqlx::Error> {
+    let tasks = store::list_tasks(pool).await?;
+    let has_reviewer = agents::list_agents(pool).await?.iter().any(|a| a.kind == "reviewer");
+    let by_id: HashMap<&str, &TaskRow> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut out = HashSet::new();
+    for t in tasks.iter().filter(|t| t.status == STATUS_QUEUED && t.depends_on.is_some()) {
+        let waiting = deps_of(t).iter().filter_map(|d| by_id.get(d.as_str())).any(|d| {
+            if d.agent_id == t.agent_id {
+                return false;
+            }
+            let chain: Vec<TaskRow> = tasks.iter().filter(|c| c.module_id.as_deref() == Some(d.id.as_str())).cloned().collect();
+            module_state(d, &chain, has_reviewer) != ModuleState::Passed
+        });
+        if waiting {
+            out.insert(t.id.clone());
+        }
+    }
+    Ok(out)
+}
+
 /// 閒著的工程師接走別人還沒開始的實作卡。拆解當下才分派，之後才加入（或先做完）
 /// 的工程師原本只能乾等——實機上 17 張全堆在一位工程師身上。
 ///
@@ -1498,10 +1526,6 @@ mod tests {
         cards
     }
 
-    fn deps_of(card: &TaskRow) -> Vec<String> {
-        card.depends_on.as_deref().map(|j| serde_json::from_str(j).unwrap()).unwrap_or_default()
-    }
-
     #[tokio::test]
     async fn dependent_tasks_go_to_the_coder_that_owns_most_of_their_prerequisites() {
         let pool = mem_pool().await;
@@ -1537,6 +1561,71 @@ mod tests {
         // 相依存成實作卡的 id。
         assert_eq!(deps_of(by("整合")), vec![by("audio").id.clone(), by("storage").id.clone(), by("audio 測試").id.clone()]);
         assert!(deps_of(by("audio")).is_empty() && by("audio").depends_on.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_card_waits_for_prerequisites_owned_by_another_coder_until_they_pass_review() {
+        let pool = mem_pool().await;
+        let w = spec_writer(&pool).await;
+        agent(&pool, "reviewer", "R").await;
+        agent(&pool, "coder", "C1").await;
+        agent(&pool, "coder", "C2").await;
+        agent(&pool, "orchestrator", "O").await;
+        let project = tempfile::tempdir().unwrap();
+        // 規格要先過審查才會拆：這裡直接放行規格模組，省掉審查卡。
+        let cards = split_spec_reviewed(&pool, &w, project.path(), r#"{"tasks":[
+            {"title":"A"},{"title":"B"},{"title":"A 測試","depends_on":[0]},{"title":"整合","depends_on":[0,1]}
+        ]}"#)
+        .await;
+        let id = |title: &str| cards.iter().find(|c| c.title == title).unwrap().id.clone();
+        let owner = |title: &str| cards.iter().find(|c| c.title == title).unwrap().agent_id.clone().unwrap();
+        assert_ne!(owner("A"), owner("B"));
+        assert_eq!(owner("A 測試"), owner("A"));
+        // 整合依賴兩位；不論派給誰，另一位的前置還沒通過 → 等。
+        let blocked = blocked_cards(&pool).await.unwrap();
+        assert!(blocked.contains(&id("整合")), "{blocked:?}");
+        assert!(!blocked.contains(&id("A 測試")), "同一位工程師的前置靠佇列順序，不用等");
+        assert!(!blocked.contains(&id("A")) && !blocked.contains(&id("B")));
+
+        // 整合派給了其中一位；擋住它的只有另一位的那個前置。
+        let other = if owner("A") == owner("整合") { "B" } else { "A" };
+        store::dispatch_for_test(&pool, &id(other), "tab").await;
+        store::finish_task(&pool, &id(other), "success", None, None).await.unwrap();
+        after_card_finished(&pool, project.path(), &id(other)).await.unwrap();
+        // 只做完、還沒審過：仍要等。
+        assert!(blocked_cards(&pool).await.unwrap().contains(&id("整合")), "{other} 還沒審過");
+        let review = all(&pool)
+            .await
+            .into_iter()
+            .find(|c| c.card_kind == KIND_REVIEW && c.module_id.as_deref() == Some(id(other).as_str()))
+            .unwrap();
+        finish_review(&pool, &review.id, "fail").await;
+        assert!(blocked_cards(&pool).await.unwrap().contains(&id("整合")), "審查不通過也要等");
+        sqlx::query("UPDATE tasks SET verdict = 'pass' WHERE id = ?").bind(&review.id).execute(&pool).await.unwrap();
+        assert!(!blocked_cards(&pool).await.unwrap().contains(&id("整合")), "前置審查通過 → 可以開工");
+    }
+
+    /// 跟 `split_spec` 一樣，但專案有 Reviewer：規格模組直接手動放行，再交給 Orchestrator。
+    async fn split_spec_reviewed(pool: &SqlitePool, w: &str, project: &Path, tasks_json: &str) -> Vec<TaskRow> {
+        let spec = store::create_task(pool, "A 規格", "寫 A 的規格", "/repo", true, false).await.unwrap();
+        agents::assign_task(pool, &spec, Some(w)).await.unwrap();
+        store::dispatch_for_test(pool, &spec, "tab").await;
+        store::finish_task(pool, &spec, "success", None, None).await.unwrap();
+        after_card_finished(pool, project, &spec).await.unwrap();
+        let review = all(pool).await.into_iter().find(|c| c.card_kind == KIND_REVIEW).unwrap();
+        finish_review(pool, &review.id, "pass").await;
+        after_card_finished(pool, project, &review.id).await.unwrap();
+        let plan = of_kind(&all(pool).await, KIND_PLAN)[0].clone();
+        let json = tasks_json_path(project, &plan.id);
+        std::fs::create_dir_all(json.parent().unwrap()).unwrap();
+        std::fs::write(&json, tasks_json).unwrap();
+        store::dispatch_for_test(pool, &plan.id, "t").await;
+        store::finish_task(pool, &plan.id, "success", None, None).await.unwrap();
+        after_card_finished(pool, project, &plan.id).await.unwrap();
+        let mut cards: Vec<TaskRow> =
+            all(pool).await.into_iter().filter(|t| t.from_spec.as_deref() == Some(spec.as_str())).collect();
+        cards.sort_by(|a, b| a.sort_order.partial_cmp(&b.sort_order).unwrap());
+        cards
     }
 
     #[tokio::test]
