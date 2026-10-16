@@ -411,6 +411,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
         canvas_x: a.canvas_x,
         canvas_y: a.canvas_y,
         produces_spec: v.produces_spec,
+        model: v.model,
       });
     } else {
       await createAgent(projectId, {
@@ -422,6 +423,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
         canvas_x: config.x,
         canvas_y: config.y,
         produces_spec: v.produces_spec,
+        model: v.model,
       });
     }
     setConfig(null);

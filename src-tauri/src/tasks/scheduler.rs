@@ -179,6 +179,22 @@ pub fn with_role_prefix(prefix: &str, prompt: &str) -> String {
 pub const AUTONOMY_NOTE: &str = "（這是自動派工，旁邊沒有人會即時回答。遇到不確定的地方，採用最合理的做法，\
 把假設寫進文件或交件說明的「待確認事項」，然後直接把工作做完，不要停下來詢問。）";
 
+/// 派工指令的 `--model <name>`。名稱只接受英數與 `._-[]:`——指令是打進使用者的
+/// shell 的，其他字元在各 shell 的意義不同，不安全就不加（沿用預設模型）。
+pub fn model_flag(model: Option<&str>) -> Option<String> {
+    let m = model?.trim();
+    if m.is_empty() || !m.chars().all(|c| c.is_ascii_alphanumeric() || "._-[]:".contains(c)) {
+        return None;
+    }
+    Some(format!("--model {m}"))
+}
+
+/// 把有值的參數片段用空白接起來；全部都沒有就是 `None`。
+pub fn join_args<const N: usize>(parts: [Option<String>; N]) -> Option<String> {
+    let v: Vec<String> = parts.into_iter().flatten().collect();
+    (!v.is_empty()).then(|| v.join(" "))
+}
+
 /// Agent 卡的完整提示：角色前綴＋卡片內容；非互動卡最後再加 `AUTONOMY_NOTE`。
 pub fn agent_prompt(prefix: &str, prompt: &str, interactive: bool) -> String {
     let p = with_role_prefix(prefix, prompt);
@@ -603,6 +619,9 @@ impl Dispatcher for RealDispatcher {
         } else {
             None
         };
+        // 依角色指定的模型（只對 claude 指令加，看不出是 claude 就不動）。
+        let model_args = if session_id.is_some() { model_flag(agent.as_ref().and_then(|a| a.model.as_deref())) } else { None };
+        let extra_args = join_args([model_args, quota_args.clone()]);
         let agent_ctx = agent.map(|a| (a.id, a.kind, effective_dir.clone()));
         let card_kind = task.card_kind.clone();
         let repo_dir = task.project_dir.clone();
@@ -616,7 +635,7 @@ impl Dispatcher for RealDispatcher {
             &prompt,
             !task.interactive,
             bridge_env,
-            quota_args.as_deref(),
+            extra_args.as_deref(),
         )
         .await?;
         if quota_args.is_some() {
@@ -2166,6 +2185,25 @@ mod agent_dispatch_tests {
     fn role_prefix_goes_first_and_an_empty_one_adds_nothing() {
         assert_eq!(with_role_prefix("  ", "做 A"), "做 A");
         assert_eq!(with_role_prefix("你是資深工程師", "做 A"), "你是資深工程師\n\n做 A");
+    }
+
+    #[test]
+    fn model_flag_accepts_model_names_and_refuses_shell_specials() {
+        assert_eq!(model_flag(Some("opus")).as_deref(), Some("--model opus"));
+        assert_eq!(model_flag(Some(" claude-sonnet-5-5 ")).as_deref(), Some("--model claude-sonnet-5-5"));
+        assert_eq!(model_flag(Some("opus[1m]")).as_deref(), Some("--model opus[1m]"));
+        for none in [None, Some(""), Some("   ")] {
+            assert_eq!(model_flag(none), None);
+        }
+        for bad in ["opus; rm -rf ~", "a b", "$(x)", "`x`", "a\"b", "a|b", "a&b"] {
+            assert_eq!(model_flag(Some(bad)), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn extra_args_join_only_present_parts() {
+        assert_eq!(join_args([Some("--model opus".to_string()), None, Some("--settings \"/x\"".to_string())]).as_deref(), Some("--model opus --settings \"/x\""));
+        assert_eq!(join_args([None, None]), None);
     }
 
     #[test]

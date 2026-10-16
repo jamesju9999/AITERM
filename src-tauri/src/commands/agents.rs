@@ -39,6 +39,9 @@ pub struct CreateAgentArgs {
     /// Coder：產出規格（見規格先行 spec）。舊前端不送就是 false。
     #[serde(default)]
     pub produces_spec: bool,
+    /// 派工時的 `--model`；空字串或不送＝沿用預設。
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[tauri::command]
@@ -81,6 +84,7 @@ pub async fn agents_create(
     if args.produces_spec && args.kind == "coder" {
         agents::set_produces_spec(&p.pool, &id, true).await.map_err(|e| e.to_string())?;
     }
+    agents::set_model(&p.pool, &id, args.model.as_deref()).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
     Ok(id)
 }
@@ -96,6 +100,9 @@ pub struct UpdateAgentArgs {
     /// `None` = 不改（例如只是在桌布上拖動位置）。
     #[serde(default)]
     pub produces_spec: Option<bool>,
+    /// `None` = 不改；空字串 = 清掉（沿用預設）。
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[tauri::command]
@@ -111,6 +118,9 @@ pub async fn agents_update(
         .map_err(|e| e.to_string())?;
     if let Some(v) = args.produces_spec {
         agents::set_produces_spec(&p.pool, &args.id, v).await.map_err(|e| e.to_string())?;
+    }
+    if let Some(m) = &args.model {
+        agents::set_model(&p.pool, &args.id, Some(m)).await.map_err(|e| e.to_string())?;
     }
     emit_updated(&app);
     Ok(())

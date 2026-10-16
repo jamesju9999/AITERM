@@ -576,4 +576,29 @@ describe("AgentCanvasView", () => {
       await waitFor(() => expect(markTaskDone).toHaveBeenCalledWith("p1", "A"));
     });
   });
+
+  describe("依角色指定模型", () => {
+    it("建立 Agent 時可以填模型，送出 model", async () => {
+      vi.mocked(listAgents).mockResolvedValue([]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
+      const dlg = await screen.findByRole("dialog");
+      fireEvent.change(within(dlg).getByLabelText(/^模型$|^Model$/), { target: { value: " sonnet " } });
+      await waitFor(() => expect((within(dlg).getByLabelText(/程式庫|Repository/) as HTMLInputElement).value).not.toBe(""));
+      await placeOnCanvas(dlg);
+      await waitFor(() => expect(createAgent).toHaveBeenCalledWith("p1", expect.objectContaining({ model: "sonnet" })));
+    });
+
+    it("卡上顯示模型；編輯時帶出原本的模型", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent({ model: "opus" })]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      const node = await screen.findByTestId("agent-a1");
+      expect(within(node).getByText(/· opus/)).toBeTruthy();
+      fireEvent.click(within(node).getByRole("button", { name: /設定|Settings/ }));
+      const dlg = await screen.findByRole("dialog");
+      expect((within(dlg).getByLabelText(/^模型$|^Model$/) as HTMLInputElement).value).toBe("opus");
+    });
+  });
 });

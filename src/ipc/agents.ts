@@ -26,6 +26,8 @@ export interface AgentRow {
   last_merge_signature: string | null;
   /** Coder：產出規格。 */
   produces_spec: boolean;
+  /** 派工時的 `--model`。null = 沿用 claude 的預設。 */
+  model?: string | null;
 }
 
 export interface NewAgentArgs {
@@ -37,6 +39,8 @@ export interface NewAgentArgs {
   canvas_x: number;
   canvas_y: number;
   produces_spec?: boolean;
+  /** 空字串或省略 = 沿用預設。 */
+  model?: string;
 }
 
 export interface UpdateAgentArgs {
@@ -48,6 +52,8 @@ export interface UpdateAgentArgs {
   canvas_y: number;
   /** 省略 = 不改（例如只是拖動位置）。 */
   produces_spec?: boolean;
+  /** 省略 = 不改；空字串 = 清掉（沿用預設）。 */
+  model?: string;
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────

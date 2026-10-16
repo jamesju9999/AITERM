@@ -240,7 +240,10 @@ export function AgentNode({
             )}
             {agent.name}
           </b>
-          <span>{agent.role}</span>
+          <span>
+            {agent.role}
+            {agent.model && <span className="ac-model"> · {agent.model}</span>}
+          </span>
         </div>
         <span className="ac-badge">
           {status === "done" ? "✓ " : ""}

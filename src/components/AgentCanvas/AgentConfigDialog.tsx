@@ -14,7 +14,12 @@ export interface AgentConfigValues {
   project_dir: string;
   /** 只對 Coder 有意義。 */
   produces_spec: boolean;
+  /** 派工時的 `--model`；空字串 = 沿用預設。 */
+  model: string;
 }
+
+/** 模型欄位的建議值（Claude Code 的別名）；也可以輸入完整的模型名稱。 */
+const MODEL_SUGGESTIONS = ["opus", "sonnet", "haiku", "opusplan"];
 
 /**
  * 「指派角色」對話框。新建時才能選程式庫；編輯時程式庫鎖住——Agent 的
@@ -49,6 +54,7 @@ export function AgentConfigDialog({
   const [prefix, setPrefix] = useState(agent?.prompt_prefix ?? roles[0].prefix);
   const [dir, setDir] = useState(agent?.project_dir ?? "");
   const [producesSpec, setProducesSpec] = useState(agent?.produces_spec ?? false);
+  const [model, setModel] = useState(agent?.model ?? "");
   const [dirs, setDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   /** 程式庫檢查結果。null = 還沒查完（或欄位是空的）。 */
@@ -157,6 +163,7 @@ export function AgentConfigDialog({
         prompt_prefix: prefix,
         project_dir: dir.trim(),
         produces_spec: kind === "coder" && producesSpec,
+        model: model.trim(),
       });
     } catch (e) {
       // Tauri 的 invoke 錯誤是字串；其他情況才是 Error。
@@ -253,6 +260,24 @@ export function AgentConfigDialog({
             <span>📐 {t.ac_produces_spec}</span>
           </label>
         )}
+        <label className="task-field">
+          <span className="task-field-label">{t.ac_model}</span>
+          <input
+            className="task-field-input"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder={t.ac_model_placeholder}
+            list="ac-model-suggestions"
+            aria-label={t.ac_model}
+            spellCheck={false}
+          />
+          <datalist id="ac-model-suggestions">
+            {MODEL_SUGGESTIONS.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          <span className="task-field-hint">{t.ac_model_hint}</span>
+        </label>
         <div className="ac-role-save">
           <button
             type="button"

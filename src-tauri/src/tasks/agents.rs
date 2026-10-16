@@ -34,6 +34,8 @@ pub struct AgentRow {
     /// Coder：產出規格。指派給它的卡片是規格模組，審查通過後交給
     /// Orchestrator 拆解派工；它自己也不會被挑來做拆出來的實作卡。
     pub produces_spec: bool,
+    /// 派工時給 claude 的 `--model`（opus／sonnet／完整模型名稱）。`None`＝沿用預設。
+    pub model: Option<String>,
 }
 
 pub struct NewAgent<'a> {
@@ -141,6 +143,13 @@ pub async fn set_agent_worktree(
         .bind(id)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// 設定模型；空白或 `None` 存成 NULL（沿用預設）。
+pub async fn set_model(pool: &SqlitePool, id: &str, model: Option<&str>) -> Result<(), sqlx::Error> {
+    let model = model.map(str::trim).filter(|m| !m.is_empty());
+    sqlx::query("UPDATE agents SET model = ? WHERE id = ?").bind(model).bind(id).execute(pool).await?;
     Ok(())
 }
 
@@ -497,6 +506,11 @@ mod tests {
         let pool = mem_pool().await;
         let writer = coder(&pool, "Spec").await;
         set_produces_spec(&pool, &writer, true).await.unwrap();
+        // 依角色指定模型：空字串＝沿用預設。
+        set_model(&pool, &writer, Some("opus")).await.unwrap();
+        assert_eq!(get_agent(&pool, &writer).await.unwrap().unwrap().model.as_deref(), Some("opus"));
+        set_model(&pool, &writer, Some("  ")).await.unwrap();
+        assert_eq!(get_agent(&pool, &writer).await.unwrap().unwrap().model, None);
         let plain = coder(&pool, "C2").await;
         let a = store::create_task(&pool, "A", "", "/r", true, false).await.unwrap();
         let b = store::create_task(&pool, "B", "", "/r", true, false).await.unwrap();
