@@ -492,6 +492,84 @@ async fn dispatch_plan(
     Ok(events)
 }
 
+/// 閒著的工程師接走別人還沒開始的實作卡。拆解當下才分派，之後才加入（或先做完）
+/// 的工程師原本只能乾等——實機上 17 張全堆在一位工程師身上。
+///
+/// - 只搬「規格拆出來」（`from_spec`）且還在排隊的 work 卡：使用者手動指派的
+///   模組代表明確意圖，不動。
+/// - 接手者：沒暫停、不產出規格、手上沒有 queued/running 卡的工程師。
+/// - 來源：手上 queued+running 最多、且至少 2 張的工程師（只剩一張又閒著就讓他自己做）。
+///   搬它佇列裡最前面那張，盡量維持拆解時的先後順序。
+///
+/// 回傳搬了幾張。每個接手者一輪最多接一張。
+pub async fn rebalance_idle_coders(pool: &SqlitePool) -> Result<usize, sqlx::Error> {
+    let coders: Vec<AgentRow> = agents::list_agents(pool)
+        .await?
+        .into_iter()
+        .filter(|a| a.kind == "coder" && !a.produces_spec)
+        .collect();
+    if coders.len() < 2 {
+        return Ok(0);
+    }
+    let paused: HashSet<String> = agents::paused_agent_ids(pool).await?.into_iter().collect();
+    let mut tasks = store::list_tasks(pool).await?;
+    let active = |tasks: &[TaskRow], id: &str| {
+        tasks
+            .iter()
+            .filter(|t| t.agent_id.as_deref() == Some(id) && (t.status == STATUS_QUEUED || t.status == STATUS_RUNNING))
+            .count()
+    };
+    let mut moved = 0;
+    for thief in coders.iter().filter(|a| !paused.contains(&a.id)) {
+        if active(&tasks, &thief.id) > 0 {
+            continue;
+        }
+        let Some(victim) = coders
+            .iter()
+            .filter(|v| v.id != thief.id && active(&tasks, &v.id) >= 2)
+            .max_by_key(|v| active(&tasks, &v.id))
+        else {
+            continue;
+        };
+        let mut queue: Vec<&TaskRow> = tasks
+            .iter()
+            .filter(|t| t.agent_id.as_deref() == Some(victim.id.as_str()) && t.status == STATUS_QUEUED)
+            .collect();
+        queue.sort_by(|a, b| a.sort_order.partial_cmp(&b.sort_order).unwrap_or(std::cmp::Ordering::Equal));
+        // 原主人還沒開跑時，隊首是它下一張就要做的，留給它。
+        let victim_running = tasks
+            .iter()
+            .any(|t| t.agent_id.as_deref() == Some(victim.id.as_str()) && t.status == STATUS_RUNNING);
+        let Some(card) = queue
+            .into_iter()
+            .skip(if victim_running { 0 } else { 1 })
+            .find(|t| t.card_kind == KIND_WORK && t.from_spec.is_some())
+        else {
+            continue;
+        };
+        let card_id = card.id.clone();
+        // 條件式更新：排程器可能剛好在這之間把它認領走。
+        let done = sqlx::query(
+            "UPDATE tasks SET agent_id = ?, project_dir = ? WHERE id = ? AND status = 'queued' AND agent_id = ?",
+        )
+        .bind(&thief.id)
+        .bind(&thief.project_dir)
+        .bind(&card_id)
+        .bind(&victim.id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        if done == 1 {
+            moved += 1;
+            if let Some(t) = tasks.iter_mut().find(|t| t.id == card_id) {
+                t.agent_id = Some(thief.id.clone());
+                t.project_dir = thief.project_dir.clone();
+            }
+        }
+    }
+    Ok(moved)
+}
+
 async fn queued_tail(pool: &SqlitePool) -> Result<f64, sqlx::Error> {
     sqlx::query_scalar("SELECT CAST(COALESCE(MAX(sort_order), 0) + 1 AS REAL) FROM tasks WHERE status = 'queued'")
         .fetch_one(pool)
@@ -1118,6 +1196,78 @@ mod tests {
     fn head(dir: &Path) -> String {
         let out = std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(dir).output().unwrap();
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// 一張由規格拆出、已派給 `coder` 的實作卡（queued）。
+    async fn spec_card(pool: &SqlitePool, coder: &str, title: &str, order: f64) -> String {
+        insert_card(
+            pool,
+            &NewCard {
+                title, body: "做", project_dir: "/repo", agent_id: coder, card_kind: KIND_WORK,
+                module_id: None, review_of: None, start_sha: None, end_sha: None,
+                sort_order: order, from_spec: Some("spec"),
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    fn owner(tasks: &[TaskRow], id: &str) -> String {
+        tasks.iter().find(|t| t.id == id).unwrap().agent_id.clone().unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_idle_coder_takes_the_next_unstarted_spec_card_from_the_busiest_coder() {
+        // 實機：工程師3 在拆解完成後才加入，17 張全在工程師2 身上，工程師3 一直閒著。
+        let pool = mem_pool().await;
+        let busy = agent(&pool, "coder", "工程師2").await;
+        let late = agent(&pool, "coder", "工程師3").await;
+        sqlx::query("UPDATE agents SET project_dir = '/late' WHERE id = ?").bind(&late).execute(&pool).await.unwrap();
+        let running = spec_card(&pool, &busy, "跑中", 1.0).await;
+        store::dispatch_for_test(&pool, &running, "tab").await;
+        let next = spec_card(&pool, &busy, "下一張", 2.0).await;
+        let later = spec_card(&pool, &busy, "再下一張", 3.0).await;
+
+        assert_eq!(rebalance_idle_coders(&pool).await.unwrap(), 1);
+        let tasks = all(&pool).await;
+        assert_eq!(owner(&tasks, &next), late, "接走最前面還沒開始的那張");
+        assert_eq!(tasks.iter().find(|t| t.id == next).unwrap().project_dir, "/late", "工作目錄換成接手者的程式庫");
+        assert_eq!(owner(&tasks, &later), busy);
+        assert_eq!(owner(&tasks, &running), busy, "跑中的卡不動");
+        // 接手者已經有卡了，不會再多拿。
+        assert_eq!(rebalance_idle_coders(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn rebalancing_leaves_manual_assignments_and_ineligible_coders_alone() {
+        let pool = mem_pool().await;
+        let busy = agent(&pool, "coder", "忙").await;
+        let paused = agent(&pool, "coder", "暫停").await;
+        sqlx::query("UPDATE agents SET paused_task_id = 'x' WHERE id = ?").bind(&paused).execute(&pool).await.unwrap();
+        let writer = spec_writer(&pool).await;
+        agent(&pool, "reviewer", "R").await;
+        let idle = agent(&pool, "coder", "閒").await;
+        // 使用者手動指派的模組卡（不是規格拆出來的）：閒著的工程師也不搶。
+        for t in ["A", "B"] {
+            let id = store::create_task(&pool, t, "", "/repo", true, false).await.unwrap();
+            agents::assign_task(&pool, &id, Some(&busy)).await.unwrap();
+        }
+        assert_eq!(rebalance_idle_coders(&pool).await.unwrap(), 0);
+        sqlx::query("DELETE FROM agents WHERE id = ?").bind(&idle).execute(&pool).await.unwrap();
+
+        // 有可搶的規格卡，但閒著的只有暫停中的 Coder、規格撰寫師與 Reviewer：都不接。
+        let run = spec_card(&pool, &busy, "跑中", 5.0).await;
+        store::dispatch_for_test(&pool, &run, "tab").await;
+        let waiting = spec_card(&pool, &busy, "等著", 6.0).await;
+        assert_eq!(rebalance_idle_coders(&pool).await.unwrap(), 0);
+        assert_eq!(owner(&all(&pool).await, &waiting), busy);
+        assert_ne!(owner(&all(&pool).await, &waiting), writer);
+
+        // 規格卡只有一張而且原主人閒著：讓原主人自己做，不搶。
+        sqlx::query("UPDATE agents SET paused_task_id = NULL WHERE id = ?").bind(&paused).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM tasks WHERE id <> ?").bind(&waiting).execute(&pool).await.unwrap();
+        assert_eq!(rebalance_idle_coders(&pool).await.unwrap(), 0);
+        assert_eq!(owner(&all(&pool).await, &waiting), busy);
     }
 
     #[tokio::test]

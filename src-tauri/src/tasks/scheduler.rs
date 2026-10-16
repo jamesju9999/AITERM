@@ -748,6 +748,10 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
         let mut running: Vec<TaskRow> = Vec::new();
         let mut per_project: Vec<(String, Vec<TaskRow>)> = Vec::new();
         for project in &projects {
+            // 閒著的工程師先接走別人還沒開始的實作卡，下面的隊首才會算到它。
+            if let Err(e) = crate::tasks::workflow::rebalance_idle_coders(&project.pool).await {
+                eprintln!("scheduler rebalance ({}): {e}", project.name);
+            }
             let project_running = match store::list_by_status(&project.pool, store::STATUS_RUNNING).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -1270,9 +1274,10 @@ mod loop_tests {
         .unwrap()
     }
 
-    async fn card_for(project: &ProjectHandle, title: &str, agent: &str, interactive: bool) {
+    async fn card_for(project: &ProjectHandle, title: &str, agent: &str, interactive: bool) -> String {
         let id = store::create_task(&project.pool, title, "", "/r", true, interactive).await.unwrap();
         crate::tasks::agents::assign_task(&project.pool, &id, Some(agent)).await.unwrap();
+        id
     }
 
     fn titles(all: &[TaskRow], status: &str) -> Vec<String> {
@@ -1298,6 +1303,25 @@ mod loop_tests {
         let all = store::list_tasks(&project.pool).await.unwrap();
         assert_eq!(titles(&all, "running"), vec!["A", "D"]);
         assert_eq!(titles(&all, "queued"), vec!["B", "E"]);
+    }
+
+    #[tokio::test]
+    async fn drain_once_lets_an_idle_coder_take_an_unstarted_spec_card() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        let c2 = agent_in(&project, "Coder2").await;
+        for t in ["S1", "S2", "S3"] {
+            let id = card_for(&project, t, &c1, false).await;
+            sqlx::query("UPDATE tasks SET from_spec = 'spec' WHERE id = ?").bind(&id).execute(&project.pool).await.unwrap();
+        }
+
+        drain_once(&reg, &NeverFinishes, 5).await;
+
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        let owner = |title: &str| all.iter().find(|t| t.title == title).unwrap().agent_id.clone().unwrap();
+        assert_eq!(titles(&all, "running"), vec!["S1", "S2"], "Coder2 接走 S2 並同時開跑");
+        assert_eq!(owner("S2"), c2);
+        assert_eq!(owner("S3"), c1);
     }
 
     #[tokio::test]
