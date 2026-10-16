@@ -364,6 +364,7 @@ pub async fn spawn_and_run(
     request_done_marker: bool,
     bridge_env: Option<(u16, String)>,
     extra_args: Option<&str>,
+    on_spawned: impl FnOnce(&str) + Send,
 ) -> Result<(String, DispatchResult), String> {
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
     let tab_id = crate::pty::create_with_app(
@@ -374,6 +375,10 @@ pub async fn spawn_and_run(
         bridge_env,
     )
     .map_err(|e| e.to_string())?;
+    // 分頁有了、claude 還沒啟動：讓呼叫端先把卡片登記好。claude 一拿到提示詞
+    // 幾秒內就可能打 hook 或呼叫 ask_human，這個函式卻要等到送完提示詞（最久
+    // 再等 15 秒）才回傳——之後才登記的話，那些呼叫會被當成「卡片已結束」。
+    on_spawned(&tab_id);
 
     // 送進終端機的是接好旗標的版本；下面的事件送的是原本的指令——分頁
     // 標題是 `Agent: <command>`（TerminalApp.tsx），把 UUID 塞進去會讓

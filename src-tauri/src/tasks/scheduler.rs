@@ -651,7 +651,21 @@ impl Dispatcher for RealDispatcher {
         let card_kind = task.card_kind.clone();
         let repo_dir = task.project_dir.clone();
         let effective_dir_str = effective_dir.to_string_lossy().into_owned();
-        let (tab_id, disp) = dispatch::spawn_and_run(
+        // 額度 hook 與 ask_human 都要先登記才收得到；登記發生在 claude 啟動之前
+        // （見 spawn_and_run 的 on_spawned）。
+        let register = (quota_args.is_some() || can_ask).then(|| {
+            let quota = self.quota.clone();
+            let task_id = task.id.clone();
+            let pool = project.pool.clone();
+            let label = crate::tasks::quota::ReplyLabel {
+                title: task.title.clone(),
+                project_name: project.name.clone(),
+                project_id: project.id.clone(),
+                agent_id: task.agent_id.clone(),
+            };
+            move |tab_id: &str| quota.register(&task_id, tab_id, pool, label)
+        });
+        let spawned = dispatch::spawn_and_run(
             &self.app,
             &self.pty,
             &effective_dir_str,
@@ -661,21 +675,20 @@ impl Dispatcher for RealDispatcher {
             !task.interactive,
             bridge_env,
             extra_args.as_deref(),
+            |tab_id| {
+                if let Some(register) = register {
+                    register(tab_id);
+                }
+            },
         )
-        .await?;
-        if quota_args.is_some() || can_ask {
-            self.quota.register(
-                &task.id,
-                &tab_id,
-                project.pool.clone(),
-                crate::tasks::quota::ReplyLabel {
-                    title: task.title.clone(),
-                    project_name: project.name.clone(),
-                    project_id: project.id.clone(),
-                    agent_id: task.agent_id.clone(),
-                },
-            );
-        }
+        .await;
+        let (tab_id, disp) = match spawned {
+            Ok(v) => v,
+            Err(e) => {
+                self.quota.unregister(&task.id);
+                return Err(e);
+            }
+        };
         // 卡片在進到這裡之前就已經被 `claim_for_dispatch` 標成 running 了
         // （見 drain_once）——這裡只補上分頁 id。順序不能倒過來：spawn 要
         // 等 claude 的 TUI 起來、最久 30 秒，那段期間卡片若還是 queued，
