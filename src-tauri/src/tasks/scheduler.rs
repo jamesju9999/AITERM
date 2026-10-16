@@ -1436,6 +1436,29 @@ mod loop_tests {
     }
 
     #[tokio::test]
+    async fn drain_once_skips_a_card_waiting_for_another_coders_prerequisite() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        let c2 = agent_in(&project, "Coder2").await;
+        let y = card_for(&project, "Y 前置", &c2, false).await;
+        let x = card_for(&project, "X 整合", &c1, false).await;
+        card_for(&project, "W 獨立", &c1, false).await;
+        sqlx::query("UPDATE tasks SET depends_on = ? WHERE id = ?")
+            .bind(serde_json::to_string(&[&y]).unwrap())
+            .bind(&x)
+            .execute(&project.pool)
+            .await
+            .unwrap();
+
+        drain_once(&reg, &NeverFinishes, 5).await;
+
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        // X 排在 Coder1 最前面，但 Coder2 的 Y 還沒做完 → 先做 W，X 留在佇列。
+        assert_eq!(titles(&all, "running"), vec!["W 獨立", "Y 前置"]);
+        assert_eq!(titles(&all, "queued"), vec!["X 整合"]);
+    }
+
+    #[tokio::test]
     async fn drain_once_finishes_an_agents_queue_in_order_when_cards_complete() {
         let (reg, project, _parent) = one_project_registry().await;
         let c1 = agent_in(&project, "Coder1").await;
