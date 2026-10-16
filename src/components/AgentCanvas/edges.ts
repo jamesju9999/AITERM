@@ -141,8 +141,21 @@ export interface Box {
   h: number;
 }
 
-/** 從上游右緣中點畫到下游左緣中點；下游在左邊時改從左緣出發。 */
+/**
+ * 兩張卡左右分得開：從上游右緣中點畫到下游左緣中點（下游在左邊時反過來）。
+ * 左右有重疊（上下疊著）：改接上下緣——否則最後一段與箭頭會畫在下游卡片底下被蓋住。
+ */
 export function edgePath(a: Box, b: Box): string {
+  const overlapX = a.x < b.x + b.w && b.x < a.x + a.w;
+  if (overlapX) {
+    const x1 = a.x + a.w / 2;
+    const x2 = b.x + b.w / 2;
+    const down = b.y + b.h / 2 >= a.y + a.h / 2;
+    const y1 = down ? a.y + a.h : a.y;
+    const y2 = down ? b.y : b.y + b.h;
+    const dy = Math.max(40, Math.abs(y2 - y1) / 2) * (down ? 1 : -1);
+    return `M${x1},${y1} C${x1},${y1 + dy} ${x2},${y2 - dy} ${x2},${y2}`;
+  }
   let x1 = a.x + a.w;
   let x2 = b.x;
   if (b.x + b.w / 2 < a.x + a.w / 2) {

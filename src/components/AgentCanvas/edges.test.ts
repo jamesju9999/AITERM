@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentRow } from "../../ipc/agents";
 import type { TaskRow } from "../../ipc/tasks";
-import { computeEdges, diffPulses, EDGE_COLORS, edgeActivity } from "./edges";
+import { computeEdges, diffPulses, EDGE_COLORS, edgeActivity, edgePath } from "./edges";
 
 const ag = (id: string, kind: AgentRow["kind"]): AgentRow => ({
   id, kind, name: id, role: "", prompt_prefix: "", project_dir: "/r", canvas_x: 0, canvas_y: 0,
@@ -105,5 +105,32 @@ describe("diffPulses", () => {
     expect(edgeActivity(edges, agents, [impl]).get("o>c2")).toBe(EDGE_COLORS.dispatch);
     expect(edgeActivity(edges, agents, [{ ...impl, status: "done" }]).has("o>c2")).toBe(false);
     expect(edgeActivity(edges, agents, [{ ...impl, from_spec: null }]).has("o>c2")).toBe(false);
+  });
+});
+
+describe("edgePath", () => {
+  /** 路徑的終點與最後一個控制點：箭頭方向由這兩點決定。 */
+  const tail = (d: string) => {
+    const nums = d.match(/-?\d+(\.\d+)?/g)!.map(Number);
+    return { cx: nums[4], cy: nums[5], x: nums[6], y: nums[7] };
+  };
+
+  it("下游在右邊：右緣接左緣，從左邊水平進來", () => {
+    const t = tail(edgePath({ x: 0, y: 0, w: 200, h: 100 }, { x: 400, y: 0, w: 200, h: 100 }));
+    expect([t.x, t.y]).toEqual([400, 50]);
+    expect(t.cx).toBeLessThan(t.x);
+  });
+
+  it("兩張卡左右重疊、下游在上面：接到下游的下緣，從下面往上進來，箭頭不會被卡片蓋住", () => {
+    // 工程師3（下）→ 審核者（上），左右有重疊。
+    const t = tail(edgePath({ x: 670, y: 920, w: 340, h: 400 }, { x: 895, y: 300, w: 345, h: 115 }));
+    expect([t.x, t.y]).toEqual([895 + 345 / 2, 415]);
+    expect(t.cy).toBeGreaterThan(t.y);
+  });
+
+  it("兩張卡左右重疊、下游在下面：接到下游的上緣，從上面往下進來", () => {
+    const t = tail(edgePath({ x: 0, y: 0, w: 200, h: 100 }, { x: 50, y: 300, w: 200, h: 100 }));
+    expect([t.x, t.y]).toEqual([150, 300]);
+    expect(t.cy).toBeLessThan(t.y);
   });
 });
