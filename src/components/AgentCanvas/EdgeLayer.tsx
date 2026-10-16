@@ -14,6 +14,7 @@ export function EdgeLayer({
   active,
   pulses,
   revision,
+  dispatchHint,
 }: {
   containerRef: RefObject<HTMLElement | null>;
   /** 節點內容一變（卡片狀態變了）高度就可能變——用它觸發重新量測。 */
@@ -22,6 +23,8 @@ export function EdgeLayer({
   edges: Edge[];
   active: Map<string, string>;
   pulses: Pulse[];
+  /** 滑過派工虛線時的說明：派工是系統決定的，不是協調者。 */
+  dispatchHint: string;
 }) {
   const [sizes, setSizes] = useState<Record<string, { w: number; h: number }>>({});
 
@@ -74,6 +77,11 @@ export function EdgeLayer({
               d={d}
               markerEnd={e.kind === "dispatch" ? "url(#ac-arrow-dispatch)" : "url(#ac-arrow)"}
             />
+            {e.kind === "dispatch" && (
+              <path className="ac-edge-hit" d={d}>
+                <title>{dispatchHint}</title>
+              </path>
+            )}
             {color && (
               <>
                 <path className="ac-edge-glow" d={d} stroke={color} />

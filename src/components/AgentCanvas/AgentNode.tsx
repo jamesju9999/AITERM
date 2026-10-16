@@ -7,6 +7,7 @@ import type { AgentStatus } from "./deriveAgentStatus";
 import { deriveModuleState, type ModuleState } from "./deriveModuleState";
 import { localizedCardTitle } from "./cardTitle";
 import { formatElapsed } from "./formatElapsed";
+import { waitingPrerequisites } from "./prerequisites";
 import { shortBranch } from "./projectSummary";
 
 const KIND_ICON: Record<AgentRow["kind"], string> = { coder: "</>", reviewer: "✓?", orchestrator: "⑂" };
@@ -266,14 +267,18 @@ export function AgentNode({
           <div className="ac-chips">
             {moduleStates.length === 0 && <span className="ac-dropzone">{t.ac_drop_here}</span>}
             {moduleStates.map(({ m, s }) => {
-              const { cls, icon } = MODULE_CHIP[s];
+              const { cls, icon: stateIcon } = MODULE_CHIP[s];
               const draggable = s === "queued";
               const releasable = s === "attention" || s === "review_failed";
+              // 排隊中但還在等別位工程師的前置審過：排程器會先跳過它。
+              const waiting = waitingPrerequisites(m, tasks, hasReviewer);
+              const icon = waiting.length ? "⛓" : stateIcon;
+              const label = waiting.length ? t.ac_waiting_prereqs(waiting.map((d) => d.title).join("、")) : msLabel[s];
               return (
                 <span
                   key={m.id}
-                  className={`ac-chip ${cls}${draggable ? " ac-chip--draggable" : ""}`}
-                  title={`${m.title} · ${msLabel[s]}`}
+                  className={`ac-chip ${cls}${draggable ? " ac-chip--draggable" : ""}${waiting.length ? " ac-chip--waiting" : ""}`}
+                  title={`${m.title} · ${label}`}
                   data-testid={`chip-${m.id}`}
                   data-state={s}
                   onMouseDown={draggable ? (e) => onChipMouseDown(e, m.id) : undefined}

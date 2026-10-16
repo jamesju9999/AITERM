@@ -486,4 +486,67 @@ describe("AgentCanvasView", () => {
       expect(screen.getByTestId("ac-world").style.transform).toBe("scale(0.4)");
     });
   });
+
+  describe("相依關係與派工", () => {
+    const setup = () => {
+      vi.mocked(listAgents).mockResolvedValue([
+        agent({ id: "a1", name: "工程師3" }),
+        agent({ id: "a2", name: "工程師2" }),
+        agent({ id: "r1", kind: "reviewer", name: "R" }),
+      ]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "Y", title: "Y 模組", status: "done", outcome: "success", agent_id: "a2", from_spec: "S" }),
+        card({ id: "RY", title: "審查：Y 模組", status: "queued", agent_id: "r1", card_kind: "review", module_id: "Y", review_of: "Y" }),
+        card({
+          id: "X",
+          title: "整合",
+          status: "queued",
+          agent_id: "a1",
+          from_spec: "S",
+          depends_on: '["Y"]',
+          created_at: "2026-10-16 10:00:00",
+          assigned_from: "a2",
+          assigned_at: 1_900_000_000,
+        }),
+        card({
+          id: "Z",
+          title: "Z 模組",
+          status: "running",
+          agent_id: "a1",
+          dispatched_at: 1_900_000_100,
+          premerged: '["Y"]',
+        }),
+      ]);
+    };
+
+    it("還在等別位工程師前置的模組：chip 顯示 ⛓ 與在等誰", async () => {
+      setup();
+      view();
+      const chip = await screen.findByTestId("chip-X");
+      expect(chip.textContent).toMatch(/^⛓/);
+      expect(chip.getAttribute("title")).toMatch(/等前置模組：Y 模組|Waiting for prerequisites: Y 模組/);
+    });
+
+    it("活動記錄寫出派工、重新分配、開工前合併", async () => {
+      setup();
+      view();
+      await screen.findByTestId("chip-X");
+      const log = document.querySelector(".ac-log-lines") as HTMLElement;
+      expect(log).toHaveTextContent(/派工：整合 → 工程師2|Dispatched: 整合 → 工程師2/);
+      expect(log).toHaveTextContent(/重新分配：整合 從 工程師2 移給 工程師3|Reassigned: 整合 from 工程師2 to 工程師3/);
+      expect(log).toHaveTextContent(/開工前合併：把 Y 模組 合進 工程師3|Merged before starting: Y 模組 into 工程師3/);
+    });
+
+    it("派工虛線滑過有說明：派工由系統決定", async () => {
+      vi.mocked(listAgents).mockResolvedValue([
+        agent({ id: "w", produces_spec: true, name: "規格" }),
+        agent(),
+        agent({ id: "o1", kind: "orchestrator", name: "O" }),
+      ]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      const edge = await screen.findByTestId("edge-o1-a1");
+      expect(edge.querySelector("title")?.textContent).toMatch(/由系統依忙碌程度與相依關係分派|assigns them by workload and dependencies/);
+    });
+  });
 });

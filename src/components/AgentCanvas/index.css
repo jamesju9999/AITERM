@@ -497,3 +497,8 @@ button.ac-log-title:hover { color: var(--text-primary); }
   font: 11.5px var(--mono);
   color: var(--text-secondary);
 }
+
+/* 相依關係：等前置的模組、派工事件、派工虛線的說明 */
+.ac-chip--waiting { border-style: dashed; color: var(--text-muted); }
+.ac-log-line--dispatch { color: #d8b4fe; }
+.ac-edge-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: help; }

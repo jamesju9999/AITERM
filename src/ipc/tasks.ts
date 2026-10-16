@@ -76,6 +76,14 @@ export interface TaskRow {
   from_spec: string | null;
   /** 派出去的 claude 撞到用量上限、正在等額度（unix 秒）；換帳號或過一陣子會自動續跑。 */
   quota_wait_at?: number | null;
+  /** 規格拆出的實作卡：依賴的前置卡 id（JSON 陣列字串）。 */
+  depends_on?: string | null;
+  /** 閒置工程師接走這張卡時，原本的負責人（agent id）。 */
+  assigned_from?: string | null;
+  /** 上面那次重新分配的時間（unix 秒）。 */
+  assigned_at?: number | null;
+  /** 開工前合併進來的前置卡 id（JSON 陣列字串）。 */
+  premerged?: string | null;
 }
 
 export type CardKind = "work" | "review" | "fix" | "merge" | "plan";

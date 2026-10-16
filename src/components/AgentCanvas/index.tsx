@@ -36,6 +36,7 @@ import { deriveAgentStatus } from "./deriveAgentStatus";
 import { deriveModuleState } from "./deriveModuleState";
 import { EdgeLayer } from "./EdgeLayer";
 import { computeEdges, diffPulses, edgeActivity, type Pulse } from "./edges";
+import { idList } from "./prerequisites";
 import { projectSummary, type ProjectSummary } from "./projectSummary";
 import "./index.css";
 
@@ -270,11 +271,27 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   const agentName = useCallback((id: string | null) => agents.find((a) => a.id === id)?.name ?? "?", [agents]);
 
   const activity = useMemo(() => {
-    const ev: { at: number; text: string; kind: "start" | "ok" | "bad" }[] = [];
+    const ev: { at: number; text: string; kind: "start" | "ok" | "bad" | "dispatch" }[] = [];
+    const titleOf = (id: string) => tasks.find((x) => x.id === id)?.title;
     for (const c of tasks) {
       if (!c.agent_id) continue;
       const who = agentName(c.agent_id);
       const title = localizedCardTitle(c, t);
+      // 派工過程（由系統決定，見 docs/superpowers/specs/2026-10-16-agent-task-dependencies-design.md §7）。
+      if (c.from_spec && c.card_kind === "work") {
+        // created_at 是 SQLite 的 datetime('now')：UTC、沒有時區標記。
+        const created = Date.parse(`${c.created_at.replace(" ", "T")}Z`) / 1000;
+        if (Number.isFinite(created)) {
+          ev.push({ at: created, text: t.ac_log_dispatched(title, agentName(c.assigned_from ?? c.agent_id)), kind: "dispatch" });
+        }
+      }
+      if (c.assigned_from && c.assigned_at) {
+        ev.push({ at: c.assigned_at, text: t.ac_log_reassigned(title, agentName(c.assigned_from), who), kind: "dispatch" });
+      }
+      const merged = idList(c.premerged).map(titleOf).filter((x): x is string => !!x);
+      if (merged.length && c.dispatched_at) {
+        ev.push({ at: c.dispatched_at, text: t.ac_log_premerged(merged.join("、"), who), kind: "dispatch" });
+      }
       if (c.dispatched_at) ev.push({ at: c.dispatched_at, text: t.ac_log_started(who, title), kind: "start" });
       if (c.finished_at)
         ev.push(
@@ -757,7 +774,15 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
                 data-testid="ac-world"
                 style={{ width: world.w, height: world.h, transform: `scale(${zoom})` }}
               >
-                <EdgeLayer containerRef={canvasRef} agents={shownAgents} edges={edges} active={active} pulses={pulses} revision={tasks} />
+                <EdgeLayer
+                  containerRef={canvasRef}
+                  agents={shownAgents}
+                  edges={edges}
+                  active={active}
+                  pulses={pulses}
+                  revision={tasks}
+                  dispatchHint={t.ac_dispatch_edge_hint}
+                />
                 {shownAgents.map((shown) => {
                   const a = agents.find((x) => x.id === shown.id) as AgentRow;
                   return (
