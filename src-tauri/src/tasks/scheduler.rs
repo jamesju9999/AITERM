@@ -265,6 +265,33 @@ pub(crate) async fn finalize_agent_card(
     }
 }
 
+/// 開工前把別位工程師的前置（審過的版本）合進這張卡的工作資料夾。
+/// 回傳合進來的前置卡 id。衝突或其他失敗：還原合併、回 Err（派工失敗、工程師暫停）。
+pub(crate) async fn premerge_prerequisites(
+    pool: &sqlx::SqlitePool,
+    task: &TaskRow,
+    worktree: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    let plan = crate::tasks::workflow::premerge_plan(pool, task).await.map_err(|e| e.to_string())?;
+    let client = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
+    let mut merged = Vec::new();
+    for (id, title, sha) in plan {
+        if let Err(e) = client.merge_rev(&sha, &format!("Merge 前置：{title}")).await {
+            let files = client.conflicted_files().await.unwrap_or_default();
+            if client.is_merge_in_progress().await {
+                let _ = client.merge_abort().await;
+            }
+            return Err(if files.is_empty() {
+                format!("開工前合併前置「{title}」失敗：{e}")
+            } else {
+                format!("開工前合併前置「{title}」有衝突：{}。請在工作資料夾解決後按重試", files.join("、"))
+            });
+        }
+        merged.push(id);
+    }
+    Ok(merged)
+}
+
 /// Agent 卡片的自動 commit 訊息：模組、修正、整合各一種前綴，git log 才分得出來。
 pub(crate) fn commit_message_for(card_kind: &str, title: &str) -> String {
     match card_kind {
@@ -469,6 +496,19 @@ impl Dispatcher for RealDispatcher {
             (wt, None)
         } else if let Some(agent) = &agent {
             let wt = prepare_agent_worktree(&project.pool, &project.path, agent).await?;
+            // 別位工程師的前置先合進來；之後才記 start_sha，審查範圍只含這張卡自己的改動。
+            let merged = premerge_prerequisites(&project.pool, task, &wt).await?;
+            if !merged.is_empty() {
+                let json = serde_json::to_string(&merged).unwrap_or_default();
+                if let Err(e) = sqlx::query("UPDATE tasks SET premerged = ? WHERE id = ?")
+                    .bind(&json)
+                    .bind(&task.id)
+                    .execute(&project.pool)
+                    .await
+                {
+                    eprintln!("set premerged {}: {e}", task.id);
+                }
+            }
             match crate::vcs::git::GitClient::new(wt.to_string_lossy().into_owned(), None).head_sha().await {
                 Ok(sha) => {
                     if let Err(e) = store::set_start_sha(&project.pool, &task.id, &sha).await {
@@ -2072,6 +2112,100 @@ mod agent_dispatch_tests {
         let stored = agents::get_agent(&pool, &agent.id).await.unwrap().unwrap();
         let again = prepare_agent_worktree(&pool, storage.path(), &stored).await.unwrap();
         assert_eq!(head(&again), work_sha, "重新接上後要回到原本分支的最新 commit");
+    }
+
+    async fn coder(pool: &sqlx::SqlitePool, repo: &std::path::Path, name: &str) -> agents::AgentRow {
+        let id = agents::create_agent(
+            pool,
+            &agents::NewAgent {
+                kind: "coder", name, role: "r", prompt_prefix: "p",
+                project_dir: &repo.to_string_lossy(), canvas_x: 0.0, canvas_y: 0.0,
+            },
+        )
+        .await
+        .unwrap();
+        agents::get_agent(pool, &id).await.unwrap().unwrap()
+    }
+
+    fn commit_file(dir: &std::path::Path, file: &str, text: &str) -> String {
+        fs::write(dir.join(file), text).unwrap();
+        StdCommand::new("git").args(["add", "."]).current_dir(dir).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "-m", file]).current_dir(dir).status().unwrap();
+        head(dir)
+    }
+
+    /// 工程師 X 做完並審過模組 A（審過的版本 = `approved`），工程師 Y 有一張依賴 A 的卡。
+    /// 回傳 (pool, Y 的卡, X 的 worktree, Y 的 worktree, approved)。
+    async fn prerequisite_setup(
+        repo: &std::path::Path,
+        storage: &std::path::Path,
+        a_text: &str,
+    ) -> (sqlx::SqlitePool, TaskRow, std::path::PathBuf, std::path::PathBuf, String) {
+        init_repo(repo);
+        let pool = mem_pool().await;
+        let x = coder(&pool, repo, "X").await;
+        let y = coder(&pool, repo, "Y").await;
+        let x_wt = prepare_agent_worktree(&pool, storage, &x).await.unwrap();
+        let y_wt = prepare_agent_worktree(&pool, storage, &y).await.unwrap();
+        let approved = commit_file(&x_wt, "a.txt", a_text);
+        let dep = store::create_task(&pool, "A 模組", "", &repo.to_string_lossy(), true, false).await.unwrap();
+        agents::assign_task(&pool, &dep, Some(&x.id)).await.unwrap();
+        store::dispatch_for_test(&pool, &dep, "t").await;
+        store::set_end_sha(&pool, &dep, &approved).await.unwrap();
+        store::finish_task(&pool, &dep, "success", None, None).await.unwrap();
+        let card = store::create_task(&pool, "整合", "", &repo.to_string_lossy(), true, false).await.unwrap();
+        agents::assign_task(&pool, &card, Some(&y.id)).await.unwrap();
+        sqlx::query("UPDATE tasks SET depends_on = ? WHERE id = ?")
+            .bind(serde_json::to_string(&[&dep]).unwrap())
+            .bind(&card)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let card = store::get_task(&pool, &card).await.unwrap().unwrap();
+        (pool, card, x_wt, y_wt, approved)
+    }
+
+    #[tokio::test]
+    async fn premerge_brings_in_the_approved_version_of_another_coders_prerequisite() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, x_wt, y_wt, approved) = prerequisite_setup(repo.path(), storage.path(), "A 的成果\n").await;
+        // X 之後又做了還沒審的東西：不能跟著合進來。
+        commit_file(&x_wt, "unreviewed.txt", "還沒審\n");
+
+        let merged = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap();
+
+        assert_eq!(merged, crate::tasks::workflow::deps_of(&card));
+        assert_eq!(fs::read_to_string(y_wt.join("a.txt")).unwrap(), "A 的成果\n");
+        assert!(!y_wt.join("unreviewed.txt").exists(), "只合審過的版本，不是對方分支的最新狀態");
+        let ok = StdCommand::new("git").args(["merge-base", "--is-ancestor", &approved, "HEAD"]).current_dir(&y_wt).status().unwrap();
+        assert!(ok.success());
+    }
+
+    #[tokio::test]
+    async fn a_conflicting_prerequisite_is_rolled_back_and_reported() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "X 的版本\n").await;
+        let before = commit_file(&y_wt, "a.txt", "Y 的版本\n");
+
+        let err = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap_err();
+
+        assert!(err.contains("a.txt") && err.contains("A 模組"), "{err}");
+        assert_eq!(head(&y_wt), before, "衝突時要還原，不能停在合併一半");
+        let merging = StdCommand::new("git").args(["rev-parse", "-q", "--verify", "MERGE_HEAD"]).current_dir(&y_wt).status().unwrap();
+        assert!(!merging.success());
+    }
+
+    #[tokio::test]
+    async fn prerequisites_of_the_same_coder_are_not_merged() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "A\n").await;
+        let dep = &crate::tasks::workflow::deps_of(&card)[0];
+        sqlx::query("UPDATE tasks SET agent_id = ? WHERE id = ?").bind(&card.agent_id).bind(dep).execute(&pool).await.unwrap();
+        assert!(premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().is_empty());
+        assert_eq!(fs::read_to_string(y_wt.join("a.txt")).unwrap(), "hello\n", "a.txt 維持初始版本");
     }
 
     #[tokio::test]

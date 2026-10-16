@@ -446,6 +446,16 @@ impl GitClient {
         self.git(&["merge".to_string(), "--ff-only".to_string(), rev.to_string()]).await.map(|_| ())
     }
 
+    /// `git merge --no-edit -m <message> <rev>`：把某個版本合進目前分支。衝突時回
+    /// Err、倉庫停在合併進行中，由呼叫端決定要不要 `merge_abort`。
+    pub async fn merge_rev(&self, rev: &str, message: &str) -> Result<(), String> {
+        self.git(&[
+            "merge".to_string(), "--no-edit".to_string(), "-m".to_string(), message.to_string(), rev.to_string(),
+        ])
+        .await
+        .map(|_| ())
+    }
+
     /// 這個倉庫是不是停在「合併進行中」（`MERGE_HEAD` 還在）。
     ///
     /// `git merge` 遇到衝突會把倉庫留在這個狀態直到有人收尾。在這種狀態上

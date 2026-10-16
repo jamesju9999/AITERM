@@ -569,6 +569,39 @@ pub async fn blocked_cards(pool: &SqlitePool) -> Result<HashSet<String>, sqlx::E
     Ok(out)
 }
 
+/// 一個模組審過的版本：最後一張通過的審查卡審的版本；沒有審查（沒有 Reviewer、
+/// 手動放行）就用模組鏈上最後一張成功的 work/fix 卡的產出。
+fn approved_sha(module: &TaskRow, chain: &[TaskRow]) -> Option<String> {
+    let latest = |it: &mut dyn Iterator<Item = &TaskRow>| it.max_by_key(|c| c.finished_at.unwrap_or(0)).and_then(|c| c.end_sha.clone());
+    latest(&mut chain.iter().filter(|c| c.card_kind == KIND_REVIEW && c.verdict.as_deref() == Some("pass"))).or_else(|| {
+        latest(&mut std::iter::once(module).chain(chain.iter()).filter(|c| {
+            (c.card_kind == KIND_WORK || c.card_kind == KIND_FIX) && c.outcome.as_deref() == Some("success")
+        }))
+    })
+}
+
+/// 開工前要合進來的前置：別位工程師的前置，各取審過的版本。
+/// 回傳 (前置卡 id, 標題, 版本)，依 `depends_on` 的順序。
+pub async fn premerge_plan(pool: &SqlitePool, card: &TaskRow) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+    let deps = deps_of(card);
+    if deps.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tasks = store::list_tasks(pool).await?;
+    let mut out = Vec::new();
+    for dep in deps {
+        let Some(d) = tasks.iter().find(|t| t.id == dep) else { continue };
+        if d.agent_id == card.agent_id {
+            continue;
+        }
+        let chain: Vec<TaskRow> = tasks.iter().filter(|c| c.module_id.as_deref() == Some(d.id.as_str())).cloned().collect();
+        if let Some(sha) = approved_sha(d, &chain) {
+            out.push((d.id.clone(), d.title.clone(), sha));
+        }
+    }
+    Ok(out)
+}
+
 /// 閒著的工程師接走別人還沒開始的實作卡。拆解當下才分派，之後才加入（或先做完）
 /// 的工程師原本只能乾等——實機上 17 張全堆在一位工程師身上。
 ///
