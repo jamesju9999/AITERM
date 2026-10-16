@@ -518,3 +518,33 @@ button.ac-log-title:hover { color: var(--text-primary); }
   padding: 5px 7px;
   margin-top: 6px;
 }
+
+/* 待決策收件匣（Agent 的 ask_human 問題） */
+.ac-ask { width: 100%; text-align: left; cursor: pointer; font: inherit; font-size: 11.5px; }
+.ac-ask span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-inbox {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  bottom: 16px;
+  width: min(420px, calc(100vw - 32px));
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+.ac-inbox-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border-color); }
+.ac-inbox-head h2 { margin: 0; font-size: 13px; }
+.ac-inbox-empty { padding: 24px; color: var(--text-muted); font-size: 12.5px; text-align: center; }
+.ac-inbox-list { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; user-select: text; -webkit-user-select: text; }
+.ac-q { border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; background: var(--bg-tertiary); }
+.ac-q--focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.ac-q-meta { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+.ac-q-text { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.ac-q-context { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; white-space: pre-wrap; }
+.ac-q-options { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.ac-q-free { display: flex; gap: 6px; align-items: flex-end; }
+.ac-q-free textarea { flex: 1; resize: vertical; }

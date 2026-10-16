@@ -38,6 +38,8 @@ import { deriveModuleState } from "./deriveModuleState";
 import { EdgeLayer } from "./EdgeLayer";
 import { computeEdges, diffPulses, edgeActivity, type Pulse } from "./edges";
 import { idList } from "./prerequisites";
+import { QuestionInbox } from "./QuestionInbox";
+import { answerQuestion, listQuestions, onQuestionsUpdated, type QuestionView } from "../../ipc/questions";
 import { projectSummary, type ProjectSummary } from "./projectSummary";
 import "./index.css";
 
@@ -164,6 +166,9 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   /** 已經自動「全部顯示」過的專案——每個專案打開時做一次。 */
   const fittedFor = useRef<string | null>(null);
   const [layout, setLayoutState] = useState<Layout>(readLayout);
+  /** 所有專案還沒回答的 Agent 問題（收件匣）。 */
+  const [questions, setQuestions] = useState<QuestionView[]>([]);
+  const [inbox, setInbox] = useState<{ open: boolean; focus: number | null }>({ open: false, focus: null });
   const setLayout = (patch: Partial<Layout>) =>
     setLayoutState((cur) => {
       const next = { ...cur, ...patch };
@@ -231,6 +236,33 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
       unlisten();
     };
   }, [projectId]);
+
+  // 收件匣：有新問題、回答、或卡片結束讓問題作廢時重抓；卡片狀態變了也重抓（可能有問題作廢）。
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      listQuestions()
+        .then((qs) => alive && setQuestions(qs))
+        .catch(() => {});
+    };
+    load();
+    const stopQ = unlistenOnCleanup(onQuestionsUpdated(load), "questions-updated");
+    const stopT = unlistenOnCleanup(onTasksUpdated(load), "tasks-updated");
+    return () => {
+      alive = false;
+      stopQ();
+      stopT();
+    };
+  }, []);
+
+  const doAnswer = async (q: QuestionView, answer: string) => {
+    try {
+      await answerQuestion(q.project_id, q.id, answer);
+      setQuestions((cur) => cur.filter((x) => !(x.project_id === q.project_id && x.id === q.id)));
+    } catch (e) {
+      setToast(errText(e));
+    }
+  };
 
   const anyRunning = tasks.some((x) => x.status === "running" && x.agent_id);
   // 經過時間每秒更新——只在看得到、而且真的有東西在跑的時候。
@@ -703,6 +735,13 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
           </button>
         )}
         <span className="ac-spacer" />
+        <button
+          className={`aiterm-btn aiterm-btn--sm ${questions.length ? "aiterm-btn--primary" : "aiterm-btn--ghost"}`}
+          data-testid="ac-inbox-button"
+          onClick={() => setInbox({ open: !inbox.open, focus: null })}
+        >
+          {t.ac_inbox_button(questions.length)}
+        </button>
         {cap !== null && <span className="ac-ctl">{t.ac_cap(cap)}</span>}
       </div>
 
@@ -839,6 +878,8 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
                       onAbortMerge={() => doAbortMerge(a)}
                       onRelease={(moduleId) => projectId && void run(() => overrideModule(projectId, moduleId))}
                 onMarkDone={(taskId) => void markDone(taskId)}
+                question={questions.find((q) => q.project_id === projectId && q.agent_id === a.id) ?? null}
+                onOpenQuestion={(id) => setInbox({ open: true, focus: id })}
                     />
                   );
                 })}
@@ -896,6 +937,15 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
           </div>
         )}
       </div>
+
+      {inbox.open && (
+        <QuestionInbox
+          questions={questions}
+          focusId={inbox.focus}
+          onAnswer={doAnswer}
+          onClose={() => setInbox({ open: false, focus: null })}
+        />
+      )}
 
       {toast && (
         <div className="ac-toast" role="status">

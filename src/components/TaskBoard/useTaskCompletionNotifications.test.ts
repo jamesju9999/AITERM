@@ -25,11 +25,13 @@ vi.mock("../../lib/notifyPermission", () => ({
 let taskFinishedHandler: ((e: { payload: unknown }) => void) | null = null;
 let attentionHandler: ((e: { payload: unknown }) => void) | null = null;
 let replyHandler: ((e: { payload: unknown }) => void) | null = null;
+let questionHandler: ((e: { payload: unknown }) => void) | null = null;
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, handler: (e: { payload: unknown }) => void) => {
     if (event === "task-finished") taskFinishedHandler = handler;
     if (event === "agent-module-attention") attentionHandler = handler;
     if (event === "agent-reply-wait") replyHandler = handler;
+    if (event === "agent-question") questionHandler = handler;
     return Promise.resolve(() => {});
   }),
 }));
@@ -178,5 +180,12 @@ describe("useTaskCompletionNotifications", () => {
       expect(sendNotification).toHaveBeenCalledWith({ title: "番茄鐘網頁小工具", body: "Pomodoro · 在等你回覆" }),
     );
     await waitFor(() => expect(sendTelegramMessage).toHaveBeenCalledWith("💬 Pomodoro — 番茄鐘網頁小工具\n在等你回覆"));
+  });
+
+  it("Agent 提問時發桌面通知（Telegram 由後端送）", async () => {
+    renderHook(() => useTaskCompletionNotifications(activeRef("other-tab")));
+    questionHandler!({ payload: { project_name: "Pomodoro", title: "規格", question: "名稱用中文？", reminder: false } });
+    await waitFor(() => expect(sendNotification).toHaveBeenCalledWith({ title: "❓ 規格", body: "Pomodoro · 需要你決定：名稱用中文？" }));
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
 });

@@ -53,6 +53,8 @@ export function AgentNode({
   onAbortMerge,
   onRelease,
   onMarkDone,
+  question,
+  onOpenQuestion,
 }: {
   agent: AgentRow;
   /** 這個專案所有未封存的卡片（節點自己挑出跟它有關的）。 */
@@ -81,6 +83,9 @@ export function AgentNode({
   onRelease: (moduleId: string) => void;
   /** 執行中的互動卡：手動標記完成（互動卡不會被完成標記結案）。 */
   onMarkDone: (taskId: string) => void;
+  /** 這個 Agent 正在等人回答的問題（ask_human）。 */
+  question?: { id: number; question: string } | null;
+  onOpenQuestion?: (id: number) => void;
 }) {
   const { t } = useLocale();
   const mine = tasks.filter((c) => c.agent_id === agent.id);
@@ -168,7 +173,11 @@ export function AgentNode({
         </div>
         {snip && <div className="ac-snip">{snip}</div>}
         <div className="ac-now-sub">{t.ac_elapsed(formatElapsed(nowSecs - (running.dispatched_at ?? nowSecs)))}</div>
-        {running.quota_wait_at ? (
+        {question ? (
+          <button className="ac-reply-wait ac-ask" onClick={() => onOpenQuestion?.(question.id)}>
+            <span>{t.ac_waiting_decision(question.question)}</span>
+          </button>
+        ) : running.quota_wait_at ? (
           <div className="ac-quota-wait">{t.board_quota_wait_hint}</div>
         ) : running.interactive ? (
           <div className="ac-reply-wait">

@@ -42,6 +42,15 @@ vi.mock("../../ipc/projects", () => ({
   usedLabels: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../../ipc/provider", () => ({ listProviders: vi.fn().mockResolvedValue([]) }));
+vi.mock("../../ipc/questions", async () => {
+  const actual = await vi.importActual<typeof import("../../ipc/questions")>("../../ipc/questions");
+  return {
+    ...actual,
+    listQuestions: vi.fn().mockResolvedValue([]),
+    answerQuestion: vi.fn().mockResolvedValue(undefined),
+    onQuestionsUpdated: vi.fn().mockResolvedValue(() => {}),
+  };
+});
 vi.mock("../../ipc/bridge", () => ({
   bridgeStatus: vi.fn().mockResolvedValue({ running: false, port: null, token: null, error: null }),
 }));
@@ -49,6 +58,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.f
 
 import { assignAgent, checkRepo, createAgent, initRepo, listAgents, mergeAgent, openRepo, overrideModule, resolveAgent, type AgentRow } from "../../ipc/agents";
 import { listTasks, markTaskDone, type TaskWithAttachments } from "../../ipc/tasks";
+import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { AgentCanvasView } from "./index";
 
 const agent = (over: Partial<AgentRow> = {}): AgentRow => ({
@@ -599,6 +609,54 @@ describe("AgentCanvasView", () => {
       fireEvent.click(within(node).getByRole("button", { name: /設定|Settings/ }));
       const dlg = await screen.findByRole("dialog");
       expect((within(dlg).getByLabelText(/^模型$|^Model$/) as HTMLInputElement).value).toBe("opus");
+    });
+  });
+
+  describe("待決策收件匣", () => {
+    const question = (over: Partial<QuestionView> = {}): QuestionView => ({
+      project_id: "p1", project_name: "HTBKTW", task_title: "規格", agent_name: "Coder Agent1",
+      id: 5, task_id: "A", agent_id: "a1", question: "名稱用中文？", options: '["中文","英文"]',
+      recommended: "英文", context: "README 標題", status: "open", created_at: 1, ...over,
+    });
+
+    it("頂列顯示待決策數量；按選項回答，答案送回提問的 Agent", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([card({ id: "A", title: "規格", status: "running", agent_id: "a1", dispatched_at: 1 })]);
+      vi.mocked(listQuestions).mockResolvedValue([question()]);
+      view();
+      const button = await screen.findByTestId("ac-inbox-button");
+      await waitFor(() => expect(button).toHaveTextContent(/待決策 1|Decisions 1/));
+      fireEvent.click(button);
+      const item = await screen.findByTestId("question-5");
+      expect(item).toHaveTextContent("名稱用中文？");
+      expect(item).toHaveTextContent("README 標題");
+      expect(within(item).getByRole("button", { name: /★ 英文/ })).toBeTruthy();
+      fireEvent.click(within(item).getByRole("button", { name: /^中文$/ }));
+      await waitFor(() => expect(answerQuestion).toHaveBeenCalledWith("p1", 5, "中文"));
+      await waitFor(() => expect(screen.queryByTestId("question-5")).toBeNull());
+    });
+
+    it("也可以自己打字回答", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      vi.mocked(listQuestions).mockResolvedValue([question({ options: "[]", recommended: null })]);
+      view();
+      fireEvent.click(await screen.findByTestId("ac-inbox-button"));
+      const item = await screen.findByTestId("question-5");
+      fireEvent.change(within(item).getByRole("textbox"), { target: { value: " 用中文，副標寫英文 " } });
+      fireEvent.click(within(item).getByRole("button", { name: /送出回答|Send answer/ }));
+      await waitFor(() => expect(answerQuestion).toHaveBeenCalledWith("p1", 5, "用中文，副標寫英文"));
+    });
+
+    it("提問的 Agent 卡上顯示等決策，點一下打開那一題", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([card({ id: "A", title: "規格", status: "running", agent_id: "a1", dispatched_at: 1 })]);
+      vi.mocked(listQuestions).mockResolvedValue([question()]);
+      view();
+      const node = await screen.findByTestId("agent-a1");
+      const hint = await within(node).findByText(/等決策：名稱用中文？|Waiting for your decision: 名稱用中文？/);
+      fireEvent.click(hint);
+      expect((await screen.findByTestId("question-5")).className).toContain("ac-q--focus");
     });
   });
 });

@@ -86,13 +86,27 @@ export function useTaskCompletionNotifications(activeIdRef: RefObject<string>): 
         }
       });
     });
+    // Agent 用 ask_human 提問（或沒人回答時的提醒）。Telegram 由後端直接送（帶選項按鈕），這裡只發桌面通知。
+    const unQuestion = listen<{ project_name: string; title: string; question: string; reminder: boolean }>("agent-question", (e) => {
+      const { project_name, title, question, reminder } = e.payload;
+      void getTaskBoardConfig().then((cfg) => {
+        if (!cfg.notify_desktop_on_finish) return;
+        void ensureNotificationPermission().then((granted) => {
+          if (granted) {
+            sendNotification({ title: `❓ ${title}`, body: `${project_name} · ${reminder ? "還在等你決定" : "需要你決定"}：${question}` });
+          }
+        });
+      });
+    });
     const stopFinished = unlistenOnCleanup(un, "task-finished");
+    const stopQuestion = unlistenOnCleanup(unQuestion, "agent-question");
     const stopAttention = unlistenOnCleanup(unAttention, "agent-module-attention");
     const stopReply = unlistenOnCleanup(unReply, "agent-reply-wait");
     return () => {
       stopFinished();
       stopAttention();
       stopReply();
+      stopQuestion();
     };
   }, [activeIdRef]);
 }
