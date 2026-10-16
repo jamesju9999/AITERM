@@ -177,6 +177,14 @@ export function AgentNode({
     }
     if (agent.kind === "reviewer") return queued.length ? t.ac_review_queue(queued.length) : t.ac_waiting_handoff;
     if (lastMerge && lastMerge.outcome === "success" && allPassed === allStates.length && queued.length === 0) {
+      // verdict：合併卡結束後有沒有自動合回程式庫（見後端 workflow::fast_forward_repo）。
+      const why = ({
+        repo_dirty: t.ac_repo_why_dirty,
+        repo_merge_in_progress: t.ac_repo_why_in_progress,
+        repo_diverged: t.ac_repo_why_diverged,
+      } as Record<string, string>)[lastMerge.verdict ?? ""];
+      if (lastMerge.verdict === "repo_merged") return <span><span className="ac-check">✓</span> {t.ac_in_repo}</span>;
+      if (why) return <span className="ac-bad-text">{t.ac_repo_pending(why)}</span>;
       return <span><span className="ac-check">✓</span> {t.ac_integrated}</span>;
     }
     return (

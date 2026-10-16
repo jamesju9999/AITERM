@@ -64,8 +64,8 @@ export interface TaskRow {
   module_id: string | null;
   /** review 卡：被審的卡；fix 卡：要它修正的那張審查。 */
   review_of: string | null;
-  /** review 卡的判定。 */
-  verdict: "pass" | "fail" | null;
+  /** review 卡的判定；merge 卡：有沒有合回程式庫（沒有的話是原因）。 */
+  verdict: "pass" | "fail" | "repo_merged" | "repo_dirty" | "repo_merge_in_progress" | "repo_diverged" | null;
   /** review 卡 reasons 的 JSON 陣列字串。 */
   review_reasons: string | null;
   /** 模組卡：使用者手動放行。 */

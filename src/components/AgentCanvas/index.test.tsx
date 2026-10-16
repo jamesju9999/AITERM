@@ -327,6 +327,22 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(createAgent).toHaveBeenCalledWith("p1", expect.objectContaining({ produces_spec: true })));
   });
 
+  it.each([
+    ["repo_merged", /已合回程式庫|Merged into the repo$/],
+    ["repo_diverged", /尚未合回程式庫：程式庫的分支有整合分支沒有的 commit|Not merged into the repo yet: the repo branch/],
+    ["repo_dirty", /尚未合回程式庫：程式庫有未提交的改動|Not merged into the repo yet: the repo has uncommitted/],
+    [null, /已合併進整合分支|Merged into the integration branch/],
+  ] as const)("合併卡結束後，協調者顯示有沒有合回程式庫（%s）", async (verdict, text) => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "o1", kind: "orchestrator", name: "O", branch: "aiterm-agent/o1" })]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "A", status: "done", outcome: "success", agent_id: "a1" }),
+      card({ id: "M", title: "合併 1 個工程師分支", status: "done", outcome: "success", agent_id: "o1", card_kind: "merge", finished_at: 9, verdict }),
+    ]);
+    view();
+    const node = await screen.findByTestId("agent-o1");
+    await waitFor(() => expect(within(node).getByText(text)).toBeTruthy());
+  });
+
   it("協調者拆解中：規格模組顯示 🧭，Orchestrator 顯示拆解規格", async () => {
     vi.mocked(listAgents).mockResolvedValue([
       agent({ produces_spec: true, name: "規格撰寫師" }),

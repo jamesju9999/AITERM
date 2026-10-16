@@ -250,6 +250,19 @@ pub async fn agents_merge(
         }
         return Err(merge_err);
     }
+    if agent.kind == "orchestrator" {
+        // 合併卡上「還沒合回程式庫」的提示到此解除。
+        sqlx::query(
+            "UPDATE tasks SET verdict = ? WHERE id = (
+                 SELECT id FROM tasks WHERE agent_id = ? AND card_kind = 'merge' AND outcome = 'success'
+                 ORDER BY finished_at DESC LIMIT 1)",
+        )
+        .bind(crate::tasks::workflow::REPO_MERGED)
+        .bind(&agent.id)
+        .execute(&p.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
     emit_updated(&app);
     Ok(MergeOutcome::Merged)
 }

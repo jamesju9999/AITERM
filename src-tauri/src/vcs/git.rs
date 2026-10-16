@@ -440,6 +440,12 @@ impl GitClient {
         })
     }
 
+    /// `git merge --ff-only <rev>`：目前分支是 `rev` 的祖先才會動，否則回 Err、
+    /// 什麼都不改。
+    pub async fn merge_ff_only(&self, rev: &str) -> Result<(), String> {
+        self.git(&["merge".to_string(), "--ff-only".to_string(), rev.to_string()]).await.map(|_| ())
+    }
+
     /// 這個倉庫是不是停在「合併進行中」（`MERGE_HEAD` 還在）。
     ///
     /// `git merge` 遇到衝突會把倉庫留在這個狀態直到有人收尾。在這種狀態上

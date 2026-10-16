@@ -658,6 +658,10 @@ pub async fn after_card_finished(
         KIND_PLAN if success => {
             events.extend(dispatch_plan(pool, project_path, &task, &all_agents).await?);
         }
+        KIND_MERGE if success => {
+            let verdict = fast_forward_repo(&task.project_dir, task.end_sha.as_deref()).await;
+            sqlx::query("UPDATE tasks SET verdict = ? WHERE id = ?").bind(verdict).bind(&task.id).execute(pool).await?;
+        }
         KIND_REVIEW if success && task.verdict.as_deref() == Some("fail") => {
             let Some(mid) = task.module_id.as_deref() else { return Ok(events) };
             let Some(module) = store::get_task(pool, mid).await? else { return Ok(events) };
@@ -701,6 +705,32 @@ pub async fn after_card_finished(
 
     maybe_enqueue_merge(pool).await?;
     Ok(events)
+}
+
+/// 合併卡的 `verdict`：整合分支有沒有合回程式庫目前的分支。不是 `repo_merged`
+/// 的值說明為什麼沒有自動合，畫面據此提示使用者按「合併分支」。
+pub const REPO_MERGED: &str = "repo_merged";
+pub const REPO_DIRTY: &str = "repo_dirty";
+pub const REPO_MERGE_IN_PROGRESS: &str = "repo_merge_in_progress";
+pub const REPO_DIVERGED: &str = "repo_diverged";
+
+/// 合併卡成功後，把程式庫目前的分支快轉到整合結果（`end_sha`）。
+///
+/// 只做快轉：程式庫有未提交的改動、停在沒收尾的合併、或分支已經分岔
+/// （使用者在程式庫自己 commit 過）都不動，留給使用者按「合併分支」決定。
+async fn fast_forward_repo(repo_dir: &str, end_sha: Option<&str>) -> &'static str {
+    let Some(sha) = end_sha else { return REPO_DIVERGED };
+    let repo = crate::vcs::git::GitClient::new(repo_dir.to_string(), None);
+    if repo.is_merge_in_progress().await {
+        return REPO_MERGE_IN_PROGRESS;
+    }
+    if repo.has_uncommitted_changes().await.unwrap_or(true) {
+        return REPO_DIRTY;
+    }
+    match repo.merge_ff_only(sha).await {
+        Ok(()) => REPO_MERGED,
+        Err(_) => REPO_DIVERGED,
+    }
 }
 
 /// 所有模組都通過、而且沒有任何 Coder／Reviewer 還在忙時，替 Orchestrator
@@ -1196,6 +1226,68 @@ mod tests {
     fn head(dir: &Path) -> String {
         let out = std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(dir).output().unwrap();
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// 合併卡成功後，程式庫目前的分支快轉到整合結果；程式庫不乾淨或已分岔
+    /// 就不動，verdict 記下原因。
+    #[tokio::test]
+    async fn a_successful_merge_fast_forwards_the_repo_only_when_it_is_safe() {
+        let pool = mem_pool().await;
+        let orch = agent(&pool, "orchestrator", "O").await;
+        let repo = tempfile::tempdir().unwrap();
+        let dir = repo.path();
+        git(dir, &["init", "-q", "-b", "main"]);
+        git(dir, &["config", "user.email", "t@t"]);
+        git(dir, &["config", "user.name", "t"]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let base = head(dir);
+        // 整合分支：比 main 多一個有檔案的 commit。
+        git(dir, &["checkout", "-q", "-b", "integration"]);
+        std::fs::write(dir.join("game.ts"), "x").unwrap();
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "integrate"]);
+        let integrated = head(dir);
+        git(dir, &["checkout", "-q", "main"]);
+
+        let repo_dir = dir.to_string_lossy().into_owned();
+        let merge = |end: String| {
+            let pool = pool.clone();
+            let (orch, repo_dir) = (orch.clone(), repo_dir.clone());
+            async move {
+                let id = insert_card(
+                    &pool,
+                    &NewCard {
+                        title: "合併", body: "", project_dir: &repo_dir, agent_id: &orch, card_kind: KIND_MERGE,
+                        module_id: None, review_of: None, start_sha: None, end_sha: None, sort_order: 1.0, from_spec: None,
+                    },
+                )
+                .await
+                .unwrap();
+                store::dispatch_for_test(&pool, &id, "tab-m").await;
+                store::set_end_sha(&pool, &id, &end).await.unwrap();
+                store::finish_task(&pool, &id, "success", None, None).await.unwrap();
+                after_card_finished(&pool, Path::new("/p"), &id).await.unwrap();
+                store::get_task(&pool, &id).await.unwrap().unwrap().verdict
+            }
+        };
+
+        // 不乾淨：有未追蹤的檔案 → 不動。
+        std::fs::write(dir.join("notes.txt"), "mine").unwrap();
+        assert_eq!(merge(integrated.clone()).await.as_deref(), Some(REPO_DIRTY));
+        assert_eq!(head(dir), base);
+        std::fs::remove_file(dir.join("notes.txt")).unwrap();
+
+        // 乾淨而且可以快轉 → 檔案出現在程式庫。
+        assert_eq!(merge(integrated.clone()).await.as_deref(), Some(REPO_MERGED));
+        assert_eq!(head(dir), integrated);
+        assert!(dir.join("game.ts").exists());
+
+        // 使用者在 main 上自己 commit 過、整合結果不是它的後代 → 不動。
+        git(dir, &["reset", "-q", "--hard", &base]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        let mine = head(dir);
+        assert_eq!(merge(integrated.clone()).await.as_deref(), Some(REPO_DIVERGED));
+        assert_eq!(head(dir), mine);
     }
 
     /// 一張由規格拆出、已派給 `coder` 的實作卡（queued）。
