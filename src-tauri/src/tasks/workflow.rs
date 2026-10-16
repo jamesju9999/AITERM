@@ -607,6 +607,8 @@ pub async fn premerge_plan(pool: &SqlitePool, card: &TaskRow) -> Result<Vec<(Str
 ///
 /// - 只搬「規格拆出來」（`from_spec`）且還在排隊的 work 卡：使用者手動指派的
 ///   模組代表明確意圖，不動。
+/// - 只搬完全獨立的卡：自己有前置，或有別張卡依賴它，都不搬——接手的人分支上
+///   沒有那些程式碼，相依鏈要留在同一位工程師身上。
 /// - 接手者：沒暫停、不產出規格、手上沒有 queued/running 卡的工程師。
 /// - 來源：手上 queued+running 最多、且至少 2 張的工程師（只剩一張又閒著就讓他自己做）。
 ///   搬它佇列裡最前面那張，盡量維持拆解時的先後順序。
@@ -650,20 +652,26 @@ pub async fn rebalance_idle_coders(pool: &SqlitePool) -> Result<usize, sqlx::Err
         let victim_running = tasks
             .iter()
             .any(|t| t.agent_id.as_deref() == Some(victim.id.as_str()) && t.status == STATUS_RUNNING);
+        let depended: HashSet<String> = tasks.iter().flat_map(deps_of).collect();
         let Some(card) = queue
             .into_iter()
             .skip(if victim_running { 0 } else { 1 })
-            .find(|t| t.card_kind == KIND_WORK && t.from_spec.is_some())
+            .find(|t| {
+                t.card_kind == KIND_WORK && t.from_spec.is_some() && deps_of(t).is_empty() && !depended.contains(&t.id)
+            })
         else {
             continue;
         };
         let card_id = card.id.clone();
         // 條件式更新：排程器可能剛好在這之間把它認領走。
         let done = sqlx::query(
-            "UPDATE tasks SET agent_id = ?, project_dir = ? WHERE id = ? AND status = 'queued' AND agent_id = ?",
+            "UPDATE tasks SET agent_id = ?, project_dir = ?, assigned_from = ?, assigned_at = ?
+             WHERE id = ? AND status = 'queued' AND agent_id = ?",
         )
         .bind(&thief.id)
         .bind(&thief.project_dir)
+        .bind(&victim.id)
+        .bind(store::now_secs())
         .bind(&card_id)
         .bind(&victim.id)
         .execute(pool)
@@ -1416,6 +1424,38 @@ mod tests {
 
     fn owner(tasks: &[TaskRow], id: &str) -> String {
         tasks.iter().find(|t| t.id == id).unwrap().agent_id.clone().unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_idle_coder_only_takes_cards_that_neither_depend_on_nor_are_depended_on() {
+        let pool = mem_pool().await;
+        let busy = agent(&pool, "coder", "忙").await;
+        let idle = agent(&pool, "coder", "閒").await;
+        let run = spec_card(&pool, &busy, "跑中", 1.0).await;
+        store::dispatch_for_test(&pool, &run, "tab").await;
+        let p = spec_card(&pool, &busy, "被依賴", 2.0).await;
+        let q = spec_card(&pool, &busy, "有前置", 3.0).await;
+        sqlx::query("UPDATE tasks SET depends_on = ? WHERE id = ?")
+            .bind(serde_json::to_string(&[&p]).unwrap())
+            .bind(&q)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let z = spec_card(&pool, &busy, "獨立", 4.0).await;
+
+        assert_eq!(rebalance_idle_coders(&pool).await.unwrap(), 1);
+        let tasks = all(&pool).await;
+        assert_eq!(owner(&tasks, &z), idle, "只搬獨立的那張");
+        assert_eq!((owner(&tasks, &p), owner(&tasks, &q)), (busy.clone(), busy.clone()));
+        let moved = tasks.iter().find(|t| t.id == z).unwrap();
+        assert_eq!(moved.assigned_from.as_deref(), Some(busy.as_str()), "活動記錄要知道是從誰那裡移過來");
+        assert!(moved.assigned_at.is_some());
+
+        // 只剩有相依的卡：閒著也不搬。
+        sqlx::query("UPDATE tasks SET agent_id = ? WHERE id = ?").bind(&busy).bind(&z).execute(&pool).await.unwrap();
+        store::dispatch_for_test(&pool, &z, "tab-z").await;
+        store::finish_task(&pool, &z, "success", None, None).await.unwrap();
+        assert_eq!(rebalance_idle_coders(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]
