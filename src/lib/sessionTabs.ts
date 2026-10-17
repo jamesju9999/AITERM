@@ -6,7 +6,10 @@ export const SESSION_TABS_KEY = "aiterm-session-tabs";
 // 只存重開 app 後還有意義的欄位。ptySessionId / attention / agentProgress
 // 這類執行期狀態不存——重開後它們指向的 PTY、事件、進度都已經不存在，
 // 存下來只會讓還原出來的分頁帶著假狀態。
-type SavedTab = Pick<Tab, "title" | "type" | "dbConnectionId" | "cwd" | "aiSummary" | "suggestionGoal" | "suggestionMilestones">;
+type SavedTab = Pick<
+  Tab,
+  "title" | "type" | "dbConnectionId" | "cwd" | "aiSummary" | "suggestionGoal" | "suggestionMilestones" | "agentCanvasProjectId"
+>;
 
 export function restoreSessionTabs(): Tab[] | null {
   try {
@@ -35,8 +38,9 @@ export function restoreSessionTabs(): Tab[] | null {
 }
 
 export function saveSessionTabs(tabs: Tab[]) {
-  const toSave: SavedTab[] = tabs.map(({ title, type, dbConnectionId, cwd, aiSummary, lastSessionSummary, suggestionGoal, suggestionMilestones }) => ({
+  const toSave: SavedTab[] = tabs.map(({ title, type, dbConnectionId, cwd, aiSummary, lastSessionSummary, suggestionGoal, suggestionMilestones, agentCanvasProjectId }) => ({
     title,
+    agentCanvasProjectId,
     suggestionGoal,
     suggestionMilestones,
     type,

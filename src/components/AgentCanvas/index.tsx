@@ -143,10 +143,26 @@ function hitTest(x: number, y: number): DropTarget | null {
   return null;
 }
 
-export function AgentCanvasView({ isActive }: { isActive: boolean }) {
+export function AgentCanvasView({
+  isActive,
+  initialProjectId = null,
+  onProjectChange,
+}: {
+  isActive: boolean;
+  /** 這個分頁上次選的看板專案（每個分頁各自記住，見 Tab.agentCanvasProjectId）。 */
+  initialProjectId?: string | null;
+  /** 選了別的專案：寫回這個分頁。 */
+  onProjectChange?: (projectId: string) => void;
+}) {
   const { t } = useLocale();
   const [projects, setProjects] = useState<ProjectInfo[] | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
+  // 只在第一次載入專案清單時用；放 ref 是因為那個 effect 只跑一次。
+  const initialProjectRef = useRef(initialProjectId);
+  const onProjectChangeRef = useRef(onProjectChange);
+  useEffect(() => {
+    onProjectChangeRef.current = onProjectChange;
+  });
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
   /** 每張卡的 token 用量；記著是哪個專案的，切專案時舊的不會被拿來用。 */
@@ -202,8 +218,12 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
         if (!mounted.current) return;
         const ok = ps.filter((p) => p.status === "ok");
         setProjects(ok);
-        const stored = readStoredProject();
-        setProjectId((cur) => cur ?? (ok.find((p) => p.id === stored) ?? ok[0])?.id ?? null);
+        // 先用這個分頁自己記住的專案；新分頁才退回「上次選的」，再退回第一個。
+        const initial = initialProjectRef.current;
+        const pick = [initial, readStoredProject()].map((id) => ok.find((p) => p.id === id)).find(Boolean) ?? ok[0];
+        setProjectId((cur) => cur ?? pick?.id ?? null);
+        // 自動選到的也記到這個分頁上，之後別的分頁換專案不會影響它。
+        if (pick && pick.id !== initial) onProjectChangeRef.current?.(pick.id);
       })
       .catch((e) => setToast(errText(e)));
     getTaskBoardConfig()
@@ -756,6 +776,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
             onChange={(e) => {
               setProjectId(e.target.value);
               storeProject(e.target.value);
+              onProjectChange?.(e.target.value);
               setMerge({});
             }}
           >

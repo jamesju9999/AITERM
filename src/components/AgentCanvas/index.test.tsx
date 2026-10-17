@@ -80,6 +80,7 @@ import {
 import { listTasks, listTokenUsage, markTaskDone, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
+import { listProjects } from "../../ipc/projects";
 import { AgentCanvasView } from "./index";
 
 const agent = (over: Partial<AgentRow> = {}): AgentRow => ({
@@ -336,6 +337,46 @@ describe("AgentCanvasView", () => {
     view();
     fireEvent.click(await screen.findByTestId("ac-templates-empty"));
     expect(await screen.findByRole("dialog", { name: "團隊範本" })).toBeTruthy();
+  });
+
+  it("每個分頁用自己記住的看板專案；切換專案寫回這個分頁", async () => {
+    const proj = (id: string, name: string) => ({
+      id, name, description: "", path: `/${id}`, status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null,
+    });
+    vi.mocked(listProjects).mockResolvedValue([proj("p1", "HTBKTW"), proj("p2", "Pomodoro")]);
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    localStorage.setItem("aiterm.agentCanvas.project", "p1"); // 全域「上次選的」是 p1
+    const onProjectChange = vi.fn();
+    render(
+      <LocaleProvider>
+        <AgentCanvasView isActive initialProjectId="p2" onProjectChange={onProjectChange} />
+      </LocaleProvider>,
+    );
+    const select = (await screen.findByDisplayValue("Pomodoro")) as HTMLSelectElement;
+    expect(select.value).toBe("p2");
+    expect(onProjectChange).not.toHaveBeenCalled();
+    await waitFor(() => expect(listAgents).toHaveBeenCalledWith("p2"));
+    fireEvent.change(select, { target: { value: "p1" } });
+    expect(onProjectChange).toHaveBeenCalledWith("p1");
+  });
+
+  it("新分頁沒有記住的專案：用上次選的，並記到這個分頁上", async () => {
+    const proj = (id: string, name: string) => ({
+      id, name, description: "", path: `/${id}`, status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null,
+    });
+    vi.mocked(listProjects).mockResolvedValue([proj("p1", "HTBKTW"), proj("p2", "Pomodoro")]);
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    localStorage.setItem("aiterm.agentCanvas.project", "p2");
+    const onProjectChange = vi.fn();
+    render(
+      <LocaleProvider>
+        <AgentCanvasView isActive onProjectChange={onProjectChange} />
+      </LocaleProvider>,
+    );
+    expect(((await screen.findByDisplayValue("Pomodoro")) as HTMLSelectElement).value).toBe("p2");
+    await waitFor(() => expect(onProjectChange).toHaveBeenCalledWith("p2"));
   });
 
   it("團隊範本：存下桌布上的團隊，套用時用選的程式庫建立，已經有的審核者不重複", async () => {

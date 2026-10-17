@@ -904,7 +904,13 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
               ) : tab.type === "knowledge-base" ? (
                 <KnowledgeBaseView isActive={isActive} />
               ) : tab.type === "agent-canvas" ? (
-                <AgentCanvasView isActive={isActive} />
+                <AgentCanvasView
+                  isActive={isActive}
+                  initialProjectId={tab.agentCanvasProjectId ?? null}
+                  onProjectChange={(projectId) =>
+                    setTabs((prev) => prev.map((t) => (t.id === tab.id ? { ...t, agentCanvasProjectId: projectId } : t)))
+                  }
+                />
               ) : tab.type === "mail" ? (
                 <MailView isActive={isActive} onMessageRead={refreshMailUnread} />
               ) : tab.type === "remote-terminal" ? (

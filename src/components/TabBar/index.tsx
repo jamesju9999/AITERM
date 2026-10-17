@@ -58,6 +58,8 @@ export interface Tab {
   suggestionGoal?: string;
   /** 這個分頁的里程碑（依大目標拆出來的、可勾選的成果清單）。與目標一起持久化。 */
   suggestionMilestones?: MilestoneState;
+  /** Agent 協作分頁：這個分頁選的看板專案。每個分頁各自記住，會持久化。 */
+  agentCanvasProjectId?: string;
   /** 這個終端機分頁目前實際所在的工作目錄。由 TerminalView 回報，會持久化。
    *  跟 initialCwd（開分頁時的起始目錄）是兩件事，不要混用。 */
   cwd?: string;
