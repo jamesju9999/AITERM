@@ -68,6 +68,17 @@ Codex 路徑：
 - 環境變數：`create_with_app` 的 env 參數擴充成「額外環境變數」清單，Codex 卡片帶上 Codex 環境變數。
 - 監看：`WatchMode::Auto`，完成訊號就是行程結束（OSC 133 結束碼）。等 ask_human 時沿用現有暫停卡住偵測。
 
+### ask_human：Codex 版要「等到答案才回傳」
+
+Claude 版的 ask_human 立刻回「已送出，請結束這一輪」，答案之後**打字送進 claude 的對話**。`codex exec` 沒有對話可以打字，結束這一輪行程就退出了，所以 Codex 卡片改成：
+
+- 登記時標記這張卡「提問要等答案」（`QuotaState::register` 多一個參數）。
+- `ask_human` 被呼叫：照舊建立問題、進入等決策、通知；接著**把這個 HTTP 請求掛著**，直到答案來才回傳工具結果「Q? 的回答：…（請依這個答案繼續。）」。卡片結束（解除登記）時等待被丟棄，回傳「問題已取消」。
+- 送出答案（`deliver_answer`）：先交給正在等的請求；有人在等就不往分頁打字。Codex 卡片沒人在等時回錯誤「Agent 目前沒有在等這個答案」，不往 shell 打字。
+- 指令加 `-c mcp_servers.aiterm.tool_timeout_sec=86400`（等人回答可能很久）。
+- Codex 卡片的自主說明改成「用 ask_human 提問，工具會等到有人回答才回傳答案，照答案繼續」。
+- App 重開：Codex 卡片沒答的問題直接取消；接著做的提示詞請它需要的話重新提問。
+
 ### 結案
 
 在 `watch` 結束、`finalize_*` 之前：Codex 卡片若結果是 Failed（結束碼非 0），讀 `session_path` 的 rollout：
