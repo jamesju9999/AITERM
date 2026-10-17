@@ -60,18 +60,22 @@ pub fn branch_name(agent_id: &str) -> String {
     format!("aiterm-agent/{agent_id}")
 }
 
-/// 建立 Agent。Reviewer 與 Orchestrator 每個專案最多一個——連線是自動
+/// 建立 Agent。Reviewer、Orchestrator 與 Verifier 每個專案最多一個——連線是自動
 /// 建立的（所有 Coder → 唯一的 Reviewer → 唯一的 Orchestrator）。
 pub async fn create_agent(pool: &SqlitePool, a: &NewAgent<'_>) -> Result<String, sqlx::Error> {
     match a.kind {
         "coder" => {}
-        "reviewer" | "orchestrator" => {
+        "reviewer" | "orchestrator" | "verifier" => {
             let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents WHERE kind = ?")
                 .bind(a.kind)
                 .fetch_one(pool)
                 .await?;
             if n > 0 {
-                let label = if a.kind == "reviewer" { "審核者" } else { "協調者" };
+                let label = match a.kind {
+                    "reviewer" => "審核者",
+                    "orchestrator" => "協調者",
+                    _ => "驗收者",
+                };
                 return Err(sqlx::Error::Protocol(format!("每個專案最多一個{label}")));
             }
         }
@@ -477,6 +481,17 @@ mod tests {
         create_agent(&pool, &mk("coder")).await.unwrap();
         create_agent(&pool, &mk("coder")).await.unwrap();
         assert!(create_agent(&pool, &mk("pilot")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn one_verifier_per_project() {
+        let pool = mem_pool().await;
+        let mk = |kind: &'static str| NewAgent {
+            kind, name: kind, role: "r", prompt_prefix: "", project_dir: "/r", canvas_x: 0.0, canvas_y: 0.0,
+        };
+        create_agent(&pool, &mk("verifier")).await.unwrap();
+        let err = create_agent(&pool, &mk("verifier")).await.unwrap_err().to_string();
+        assert!(err.contains("驗收者"), "{err}");
     }
 
     #[tokio::test]
