@@ -8,6 +8,7 @@ import { TerminalView } from "./TerminalView";
 import { TabBar, type Tab, type TabType } from "./TabBar";
 import { reorderTabs } from "./TabBar/reorderTabs";
 import { TitleBar } from "./TitleBar";
+import { displayTabTitle } from "../lib/tabTitle";
 import { DatabaseView } from "./DatabaseView";
 import { DesignView } from "./DesignView/DesignView";
 import { NewTabPicker } from "./NewTabPicker";
@@ -699,8 +700,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   const activeTabForTitle = homeActive || boardActive ? undefined : tabs.find((t) => t.id === activeId);
   const titleBarText = activeTabForTitle
     ? (activeTabForTitle.type === "terminal" && activeTabForTitle.aiSummary
-        ? `${activeTabForTitle.title} - ${activeTabForTitle.aiSummary}`
-        : activeTabForTitle.title)
+        ? `${displayTabTitle(activeTabForTitle, t)} - ${activeTabForTitle.aiSummary}`
+        : displayTabTitle(activeTabForTitle, t))
     : undefined;
 
   return (
