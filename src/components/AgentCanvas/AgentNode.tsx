@@ -2,13 +2,14 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import type { AgentRow } from "../../ipc/agents";
-import type { TaskRow } from "../../ipc/tasks";
+import type { TaskRow, TokenUsage } from "../../ipc/tasks";
 import type { AgentStatus } from "./deriveAgentStatus";
 import { deriveModuleState, type ModuleState } from "./deriveModuleState";
 import { localizedCardTitle } from "./cardTitle";
 import { formatElapsed } from "./formatElapsed";
 import { waitingPrerequisites } from "./prerequisites";
 import { shortBranch } from "./projectSummary";
+import { formatTokens, moduleCards, sumUsage, totalTokens, usageBreakdown, type UsageSum } from "./tokenUsage";
 
 const KIND_ICON: Record<AgentRow["kind"], string> = { coder: "</>", reviewer: "✓?", orchestrator: "⑂" };
 
@@ -55,6 +56,7 @@ export function AgentNode({
   onMarkDone,
   question,
   onOpenQuestion,
+  usage = {},
 }: {
   agent: AgentRow;
   /** 這個專案所有未封存的卡片（節點自己挑出跟它有關的）。 */
@@ -86,11 +88,15 @@ export function AgentNode({
   /** 這個 Agent 正在等人回答的問題（ask_human）。 */
   question?: { id: number; question: string } | null;
   onOpenQuestion?: (id: number) => void;
+  /** 每張卡的 token 用量（task id → 用量）。 */
+  usage?: Record<string, TokenUsage>;
 }) {
   const { t } = useLocale();
   const mine = tasks.filter((c) => c.agent_id === agent.id);
   const running = mine.find((c) => c.status === "running");
   const queued = mine.filter((c) => c.status === "queued");
+  const mineUsage = sumUsage(mine, usage);
+  const tokensText = (s: UsageSum) => t.ac_tokens(formatTokens(totalTokens(s.usage)));
   const failed = agent.paused_task_id ? mine.find((c) => c.id === agent.paused_task_id) : undefined;
   const byId = (id: string | null) => tasks.find((c) => c.id === id);
   const statusLabel = {
@@ -300,11 +306,12 @@ export function AgentNode({
               const waiting = waitingPrerequisites(m, tasks, hasReviewer);
               const icon = waiting.length ? "⛓" : stateIcon;
               const label = waiting.length ? t.ac_waiting_prereqs(waiting.map((d) => d.title).join("、")) : msLabel[s];
+              const mUsage = sumUsage(moduleCards(m.id, tasks), usage);
               return (
                 <span
                   key={m.id}
                   className={`ac-chip ${cls}${draggable ? " ac-chip--draggable" : ""}${waiting.length ? " ac-chip--waiting" : ""}`}
-                  title={`${m.title} · ${label}`}
+                  title={`${m.title} · ${label}${mUsage?.cards ? ` · ${tokensText(mUsage)}` : ""}`}
                   data-testid={`chip-${m.id}`}
                   data-state={s}
                   onMouseDown={draggable ? (e) => onChipMouseDown(e, m.id) : undefined}
@@ -326,9 +333,16 @@ export function AgentNode({
           </div>
         )}
 
-        {agent.kind !== "reviewer" && (
+        {(agent.kind !== "reviewer" || mineUsage) && (
           <div className="ac-meta">
-            <span title={agent.branch ?? undefined}>⑂ {agent.branch ? shortBranch(agent.branch) : "—"}</span>
+            {agent.kind !== "reviewer" && (
+              <span title={agent.branch ?? undefined}>⑂ {agent.branch ? shortBranch(agent.branch) : "—"}</span>
+            )}
+            {mineUsage && (
+              <span className="ac-tokens" data-testid={`tokens-${agent.id}`} title={t.ac_tokens_tip(usageBreakdown(mineUsage))}>
+                {mineUsage.cards ? tokensText(mineUsage) : t.ac_tokens("—")}
+              </span>
+            )}
             {agent.kind === "coder" && (
               <span>
                 {passedCount}/{moduleStates.length}

@@ -21,10 +21,12 @@ import { listProjects, type ProjectInfo } from "../../ipc/projects";
 import {
   getTaskBoardConfig,
   listTasks,
+  listTokenUsage,
   markTaskDone,
   onTasksUpdated,
   type MergeOutcome,
   type TaskWithAttachments,
+  type TokenUsage,
 } from "../../ipc/tasks";
 import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { TaskEditorDialog } from "../TaskBoard/TaskEditorDialog";
@@ -42,6 +44,7 @@ import { idList } from "./prerequisites";
 import { QuestionInbox } from "./QuestionInbox";
 import { answerQuestion, listQuestions, onQuestionsUpdated, type QuestionView } from "../../ipc/questions";
 import { projectSummary, type ProjectSummary } from "./projectSummary";
+import { formatTokens, sumUsage, totalTokens, usageBreakdown } from "./tokenUsage";
 import "./index.css";
 
 /** 跟看板、TabBar 同一個門檻：小於這個位移是點擊，不是拖曳。 */
@@ -139,6 +142,8 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
+  /** 每張卡的 token 用量；記著是哪個專案的，切專案時舊的不會被拿來用。 */
+  const [usageOf, setUsageOf] = useState<{ projectId: string; map: Record<string, TokenUsage> } | null>(null);
   const [cap, setCap] = useState<number | null>(null);
   const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000));
   const [config, setConfig] = useState<{ kind: AgentKind; agent: AgentRow | null; x: number; y: number } | null>(null);
@@ -229,6 +234,9 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
           }
         })
         .catch((e) => alive && setToast(errText(e)));
+      listTokenUsage(projectId)
+        .then((map) => alive && setUsageOf({ projectId, map }))
+        .catch(() => {});
     };
     load();
     const unlisten = unlistenOnCleanup(onTasksUpdated(load), "tasks-updated");
@@ -272,6 +280,18 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
     const h = window.setInterval(() => setNowSecs(Math.floor(Date.now() / 1000)), 1000);
     return () => window.clearInterval(h);
   }, [isActive, anyRunning]);
+  // 執行中卡片的用量一直在長：看得到的時候每 15 秒重抓一次。
+  useEffect(() => {
+    if (!isActive || !anyRunning || !projectId) return;
+    const h = window.setInterval(() => {
+      listTokenUsage(projectId)
+        .then((map) => setUsageOf({ projectId, map }))
+        .catch(() => {});
+    }, 15_000);
+    return () => window.clearInterval(h);
+  }, [isActive, anyRunning, projectId]);
+  const usage = useMemo(() => (usageOf && usageOf.projectId === projectId ? usageOf.map : {}), [usageOf, projectId]);
+  const projectUsage = useMemo(() => sumUsage(tasks, usage), [tasks, usage]);
 
   useEffect(() => {
     if (!toast) return;
@@ -727,6 +747,11 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
             {sumLine.text}
           </span>
         )}
+        {projectUsage?.cards ? (
+          <span className="ac-tokens" data-testid="ac-tokens" title={t.ac_tokens_tip(usageBreakdown(projectUsage))}>
+            {t.ac_tokens(formatTokens(totalTokens(projectUsage.usage)))}
+          </span>
+        ) : null}
         {summary.kind === "in_repo" && (
           <button
             className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
@@ -861,6 +886,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
                             : undefined,
                       )}
                       nowSecs={nowSecs}
+                      usage={usage}
                       dropState={dropStateFor(a)}
                       mergeMessage={merge[a.id]?.text ?? null}
                       mergeConflict={merge[a.id]?.conflict ?? false}

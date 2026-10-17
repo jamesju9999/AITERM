@@ -48,6 +48,30 @@ pub(crate) fn project(reg: &ProjectRegistry, id: &str) -> Result<ProjectHandle, 
     reg.get(id).ok_or_else(|| format!("專案不存在或已關閉：{id}"))
 }
 
+/// 每張卡用了多少 token（task id → 用量）。沒有對話記錄的卡片不列出。
+/// 讀檔可能要幾 MB，所以丟到 blocking 執行緒。
+#[tauri::command]
+pub async fn tasks_token_usage(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<std::collections::HashMap<String, crate::tasks::usage::TokenUsage>, String> {
+    let p = project(&reg, &project_id)?;
+    let tasks = store::list_tasks(&p.pool).await.map_err(|e| e.to_string())?;
+    let path = p.path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = crate::tasks::session_log::claude_projects_root();
+        tasks
+            .iter()
+            .filter_map(|t| {
+                crate::tasks::usage::task_usage(&path, root.as_deref(), &t.id, t.session_id.as_deref(), t.session_path.as_deref())
+                    .map(|u| (t.id.clone(), u))
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[derive(Serialize)]
 pub struct TaskWithAttachments {
     #[serde(flatten)]

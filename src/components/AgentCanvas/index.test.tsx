@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 let tasksUpdated: (() => void) | null = null;
 vi.mock("../../ipc/tasks", () => ({
   listTasks: vi.fn(),
+  listTokenUsage: vi.fn().mockResolvedValue({}),
   getTaskBoardConfig: vi.fn().mockResolvedValue({ max_concurrent: 3 }),
   onTasksUpdated: vi.fn((cb: () => void) => {
     tasksUpdated = cb;
@@ -57,7 +58,7 @@ vi.mock("../../ipc/bridge", () => ({
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
 
 import { assignAgent, checkRepo, createAgent, initRepo, listAgents, mergeAgent, openRepo, overrideModule, resolveAgent, type AgentRow } from "../../ipc/agents";
-import { listTasks, markTaskDone, type TaskWithAttachments } from "../../ipc/tasks";
+import { listTasks, listTokenUsage, markTaskDone, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { AgentCanvasView } from "./index";
 
@@ -124,6 +125,23 @@ describe("AgentCanvasView", () => {
     expect(within(node).getByText(/A 登入/)).toBeTruthy();
     expect(screen.getByTestId("module-C")).toBeTruthy();
     expect(screen.queryByTestId("module-Q")).toBeNull();
+  });
+
+  it("Agent 卡、模組 chip 與頂列顯示 token 用量（審查卡算在模組上）", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "審核者" })]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1", dispatched_at: 1 }),
+      card({ id: "R", title: "審查 A", status: "done", card_kind: "review", module_id: "A", agent_id: "r1", dispatched_at: 2 }),
+      card({ id: "B", title: "B 沒記錄", status: "done", agent_id: "a1", dispatched_at: 3 }),
+    ]);
+    const u = (n: number) => ({ input: n, cache_write: 0, cache_read: 0, output: 0, calls: 1 });
+    vi.mocked(listTokenUsage).mockResolvedValue({ A: u(1_000_000), R: u(250_000) });
+    view();
+    await waitFor(() => expect(screen.getByTestId("tokens-a1").textContent).toBe("Σ 1.00M token"));
+    expect(screen.getByTestId("tokens-a1").getAttribute("title")).toMatch(/另有 1 張卡沒有對話記錄/);
+    expect(screen.getByTestId("tokens-r1").textContent).toBe("Σ 250.0K token");
+    expect(screen.getByTestId("chip-A").getAttribute("title")).toMatch(/Σ 1.25M token$/);
+    expect(screen.getByTestId("ac-tokens").textContent).toBe("Σ 1.25M token");
   });
 
   it("把模組拖到 Agent 上會指派給它", async () => {

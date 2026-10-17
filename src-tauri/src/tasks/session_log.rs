@@ -164,7 +164,7 @@ pub fn claude_projects_root() -> Option<PathBuf> {
 /// 的那個檔案。`session_id` 是派工時自己生的 UUID v4，檔名對得上就是它，
 /// 不會撞名——不需要知道、也不需要重建 Claude Code 把它排進哪個資料夾的
 /// 編碼規則。
-fn find_session_log(projects_root: &Path, session_id: &str) -> Option<PathBuf> {
+pub(crate) fn find_session_log(projects_root: &Path, session_id: &str) -> Option<PathBuf> {
     let filename = format!("{session_id}.jsonl");
     std::fs::read_dir(projects_root)
         .ok()?

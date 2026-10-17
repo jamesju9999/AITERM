@@ -18,6 +18,7 @@ pub mod repo_check;
 pub mod quota;
 pub mod questions;
 pub mod ask;
+pub mod usage;
 
 use std::path::{Path, PathBuf};
 

@@ -535,6 +535,10 @@ const zhTW = {
     ac_sum_waiting_you: (n: number) => `${n} 個 Agent 在等你`,
     board_reply_wait_hint: "💬 在等你回覆：到分頁回答它",
     ac_cap: (n: number) => `同時上限 ${n}`,
+    ac_tokens: (n: string) => `Σ ${n} token`,
+    ac_tokens_tip: (b: { input: string; cacheWrite: string; cacheRead: string; output: string; calls: number; cards: number; missing: number }) =>
+      `輸入 ${b.input} · 快取寫入 ${b.cacheWrite} · 快取讀取 ${b.cacheRead} · 輸出 ${b.output}\n${b.cards} 張卡、${b.calls} 次呼叫` +
+      (b.missing ? `\n另有 ${b.missing} 張卡沒有對話記錄，未計入` : ""),
     ac_produces_spec: "產出規格：檢核通過後交給協調者拆解，派給其他工程師實作",
     ac_spec_badge: "產出規格",
     ac_splitting_spec: (module: string) => `拆解規格：${module}`,
@@ -2521,6 +2525,10 @@ const enRaw = {
     ac_sum_waiting_you: (n: number) => `${n} agent(s) waiting for you`,
     board_reply_wait_hint: "💬 Waiting for your reply — answer it in its tab",
     ac_cap: (n: number) => `Max concurrent ${n}`,
+    ac_tokens: (n: string) => `Σ ${n} tokens`,
+    ac_tokens_tip: (b: { input: string; cacheWrite: string; cacheRead: string; output: string; calls: number; cards: number; missing: number }) =>
+      `Input ${b.input} · cache write ${b.cacheWrite} · cache read ${b.cacheRead} · output ${b.output}\n${b.cards} cards, ${b.calls} calls` +
+      (b.missing ? `\n${b.missing} more cards have no transcript and aren't counted` : ""),
     ac_produces_spec: "Produces specs: once approved, the orchestrator splits them into tasks for other engineers",
     ac_spec_badge: "Produces specs",
     ac_splitting_spec: (module: string) => `Splitting spec: ${module}`,

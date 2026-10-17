@@ -900,6 +900,14 @@ async fn persist_outcome(
             }
         }
     }
+    // 用量（含子代理）存進卡片資料夾：`~/.claude` 裡的記錄 30 天後會被清掉。
+    if let (Some(sid), Some(root)) = (session_id, projects_root) {
+        if let Some(u) = crate::tasks::session_log::find_session_log(root, sid)
+            .and_then(|main| crate::tasks::usage::session_usage(&main))
+        {
+            crate::tasks::usage::save(project_path, task_id, &u);
+        }
+    }
     let _ = store::finish_task(
         pool, task_id, outcome.as_str(), outcome.error_message(), transcript,
     ).await;
@@ -2171,6 +2179,29 @@ mod persist_tests {
         assert_eq!(row.status, "done");
         assert_eq!(row.outcome.as_deref(), Some("cancelled"));
         assert!(row.session_path.is_some(), "session_path 沒被寫入");
+    }
+
+    #[tokio::test]
+    async fn the_token_usage_is_saved_with_the_card_when_it_finishes() {
+        let pool = mem_pool().await;
+        let task_id = queued_and_claimed(&pool).await;
+        let project = tempfile::tempdir().unwrap();
+        let usage_line = r#"{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":40,"output_tokens":5}}}"#;
+        let projects_root = fake_projects_root("SID3", usage_line);
+
+        persist_outcome(
+            &pool,
+            Some(projects_root.path()),
+            Some("SID3"),
+            project.path(),
+            &task_id,
+            None,
+            &monitor::TaskOutcome::Cancelled,
+        )
+        .await;
+
+        let saved = crate::tasks::usage::load(project.path(), &task_id).expect("usage.json 沒被寫入");
+        assert_eq!((saved.input, saved.cache_read, saved.output, saved.calls), (3, 40, 5, 1));
     }
 }
 

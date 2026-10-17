@@ -131,7 +131,7 @@ use commands::{
     },
     questions::{questions_answer, questions_list},
     tasks::{
-        tasks_list, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
+        tasks_list, tasks_token_usage, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_delete,
         tasks_add_attachment, tasks_remove_attachment, tasks_clone, tasks_read_transcript,
         tasks_save_transcript, tasks_mark_done, tasks_used_dirs, tasks_used_labels,
         tasks_set_summary, tasks_set_label, tasks_archive, tasks_unarchive,
@@ -747,6 +747,7 @@ pub fn run() {
             task_board_get_config,
             task_board_set_config,
             tasks_list,
+            tasks_token_usage,
             tasks_create,
             tasks_update,
             tasks_move,

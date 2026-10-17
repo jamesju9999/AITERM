@@ -111,6 +111,20 @@ export interface TaskBoardConfig {
 export const listTasks = (projectId: string): Promise<TaskWithAttachments[]> =>
   invoke("tasks_list", { projectId });
 
+/** 一張卡用了多少 token（鏡射 Rust tasks::usage::TokenUsage）。 */
+export interface TokenUsage {
+  input: number;
+  cache_write: number;
+  cache_read: number;
+  output: number;
+  /** API 呼叫次數。 */
+  calls: number;
+}
+
+/** 每張卡的 token 用量（task id → 用量）；沒有對話記錄的卡片不在裡面。 */
+export const listTokenUsage = (projectId: string): Promise<Record<string, TokenUsage>> =>
+  invoke("tasks_token_usage", { projectId });
+
 export const createTask = (
   projectId: string,
   args: {
