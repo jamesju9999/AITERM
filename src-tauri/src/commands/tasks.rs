@@ -72,6 +72,27 @@ pub async fn tasks_token_usage(
     .map_err(|e| e.to_string())
 }
 
+/// 專案的 token 上限（`None` = 沒設）。
+#[tauri::command]
+pub async fn tasks_get_token_budget(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Option<u64>, String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::budget::get_budget(&p.pool).await.map_err(|e| e.to_string())
+}
+
+/// 設定專案的 token 上限（`None` 或 0 = 取消）。調高或取消後馬上叫排程器重看一次。
+#[tauri::command]
+pub async fn tasks_set_token_budget(
+    project_id: String,
+    budget: Option<u64>,
+    reg: State<'_, ProjectRegistry>,
+    scheduler: State<'_, crate::tasks::scheduler::SchedulerHandle>,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::budget::set_budget(&p.pool, budget).await.map_err(|e| e.to_string())?;
+    scheduler.poke();
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct TaskWithAttachments {
     #[serde(flatten)]

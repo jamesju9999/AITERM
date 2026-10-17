@@ -20,6 +20,7 @@ pub mod questions;
 pub mod ask;
 pub mod usage;
 pub mod verify_ports;
+pub mod budget;
 
 use std::path::{Path, PathBuf};
 
@@ -260,6 +261,10 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments(task_id)")
+        .execute(pool)
+        .await?;
+    // 專案層級的設定（目前只有 token 上限，見 budget.rs）。
+    sqlx::query("CREATE TABLE IF NOT EXISTS project_settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
         .execute(pool)
         .await?;
     Ok(())

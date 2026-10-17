@@ -37,6 +37,13 @@
 .ac-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 600; }
 .ac-title-icon { flex: none; color: #e879f9; }
 .ac-tokens { color: var(--text-muted, #8b949e); font-variant-numeric: tabular-nums; cursor: help; }
+.ac-tokens--btn { background: none; border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; font: inherit; cursor: pointer; }
+.ac-tokens--btn:hover { border-color: var(--border-color); }
+.ac-tokens--over { color: var(--ac-fail, #ef4444); }
+.ac-budget { position: relative; }
+.ac-budget-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 50; display: flex; align-items: center; gap: 8px; white-space: nowrap; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35); font-size: 12px; }
+.ac-budget-pop label { display: flex; align-items: center; gap: 6px; }
+.ac-budget-pop input { width: 72px; }
 .ac-spacer { flex: 1; }
 .ac-ctl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
 .ac-ctl select {

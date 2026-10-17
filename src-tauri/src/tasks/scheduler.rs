@@ -1203,7 +1203,14 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
                     return;
                 }
             };
-            per_project.push((project.id.clone(), candidate_heads(&queued, &project_running, &paused, &blocked)));
+            let mut heads = candidate_heads(&queued, &project_running, &paused, &blocked);
+            // 用到 token 上限：Agent 卡先不派（已經在跑的照樣跑完），看板一般卡片不受影響。
+            match crate::tasks::budget::over_budget(&project.pool, &project.path).await {
+                Ok(true) => heads.retain(|h| h.agent_id.is_none()),
+                Ok(false) => {}
+                Err(e) => eprintln!("scheduler budget ({}): {e}", project.name),
+            }
+            per_project.push((project.id.clone(), heads));
             // 互動卡片不占名額——但 Agent 的互動卡片要占，見 `candidate_heads`。
             running.extend(project_running.into_iter().filter(|t| !t.interactive || t.agent_id.is_some()));
         }
@@ -2055,6 +2062,42 @@ mod loop_tests {
         assert_eq!(status_of("already-running"), "running");
         assert_eq!(status_of("blocked-auto"), "queued"); // cap=1 respected for the auto lane
         assert_eq!(status_of("chat"), "running"); // interactive bypassed the cap entirely
+    }
+
+    /// 專案用到 token 上限：Agent 卡不再派工，看板一般卡片照常。
+    #[tokio::test]
+    async fn over_its_token_budget_a_project_stops_dispatching_agent_cards() {
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let project = reg.create(parent.path(), "p", "").await.unwrap();
+        let coder = crate::tasks::agents::create_agent(&project.pool, &crate::tasks::agents::NewAgent {
+            kind: "coder", name: "C", role: "r", prompt_prefix: "", project_dir: "/r", canvas_x: 0.0, canvas_y: 0.0,
+        }).await.unwrap();
+        // 之前跑過的卡用了 1000 token。
+        let old = store::create_task(&project.pool, "old", "", "/r", true, false).await.unwrap();
+        sqlx::query("UPDATE tasks SET status = 'done', outcome = 'success', dispatched_at = 1 WHERE id = ?").bind(&old).execute(&project.pool).await.unwrap();
+        crate::tasks::usage::save(&project.path, &old, &crate::tasks::usage::TokenUsage { input: 1000, ..Default::default() });
+        let agent_card = store::create_task(&project.pool, "agent-card", "", "/r", true, false).await.unwrap();
+        crate::tasks::agents::assign_task(&project.pool, &agent_card, Some(&coder)).await.unwrap();
+        let board_card = store::create_task(&project.pool, "board-card", "", "/r", true, false).await.unwrap();
+        store::move_task(&project.pool, &board_card, store::STATUS_QUEUED, 99.0).await.unwrap();
+
+        struct Rec(std::sync::Mutex<Vec<String>>);
+        #[async_trait::async_trait]
+        impl Dispatcher for Rec {
+            async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
+                self.0.lock().unwrap().push(task.title.clone());
+                store::set_tab_id(&project.pool, &task.id, "tab").await.map_err(|e| e.to_string())
+            }
+        }
+        crate::tasks::budget::set_budget(&project.pool, Some(1000)).await.unwrap();
+        let rec = Rec(std::sync::Mutex::new(vec![]));
+        drain_once(&reg, &rec, 5).await;
+        assert_eq!(*rec.0.lock().unwrap(), vec!["board-card".to_string()], "超過上限的 Agent 卡先不派");
+
+        crate::tasks::budget::set_budget(&project.pool, Some(5000)).await.unwrap();
+        drain_once(&reg, &rec, 5).await;
+        assert_eq!(*rec.0.lock().unwrap(), vec!["board-card".to_string(), "agent-card".to_string()], "調高上限就恢復");
     }
 
     /// `tests::a_blocked_solo_head_lets_another_project_start` only exercises

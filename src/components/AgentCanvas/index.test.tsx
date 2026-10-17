@@ -15,6 +15,8 @@ let tasksUpdated: (() => void) | null = null;
 vi.mock("../../ipc/tasks", () => ({
   listTasks: vi.fn(),
   listTokenUsage: vi.fn().mockResolvedValue({}),
+  getTokenBudget: vi.fn().mockResolvedValue(null),
+  setTokenBudget: vi.fn().mockResolvedValue(undefined),
   getTaskBoardConfig: vi.fn().mockResolvedValue({ max_concurrent: 3 }),
   onTasksUpdated: vi.fn((cb: () => void) => {
     tasksUpdated = cb;

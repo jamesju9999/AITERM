@@ -536,6 +536,12 @@ const zhTW = {
     board_reply_wait_hint: "💬 在等你回覆：到分頁回答它",
     ac_cap: (n: number) => `同時上限 ${n}`,
     ac_tokens: (n: string) => `Σ ${n} token`,
+    ac_tokens_of: (used: string, budget: string) => `Σ ${used} / ${budget} token`,
+    ac_budget_title: "token 上限",
+    ac_budget_hint: "點一下設定這個專案的 token 上限：用到上限後，新的 Agent 卡先不派工（已經在跑的會做完）。",
+    ac_budget_over: "已達上限，Agent 卡暫停派工",
+    ac_budget_save: "儲存",
+    ac_budget_clear: "取消上限",
     ac_tokens_tip: (b: { input: string; cacheWrite: string; cacheRead: string; output: string; calls: number; cards: number; missing: number }) =>
       `輸入 ${b.input} · 快取寫入 ${b.cacheWrite} · 快取讀取 ${b.cacheRead} · 輸出 ${b.output}\n${b.cards} 張卡、${b.calls} 次呼叫` +
       (b.missing ? `\n另有 ${b.missing} 張卡沒有對話記錄，未計入` : ""),
@@ -2560,6 +2566,12 @@ const enRaw = {
     board_reply_wait_hint: "💬 Waiting for your reply — answer it in its tab",
     ac_cap: (n: number) => `Max concurrent ${n}`,
     ac_tokens: (n: string) => `Σ ${n} tokens`,
+    ac_tokens_of: (used: string, budget: string) => `Σ ${used} / ${budget} tokens`,
+    ac_budget_title: "Token budget",
+    ac_budget_hint: "Click to set this project's token budget: once it's reached, new agent cards wait (running ones finish).",
+    ac_budget_over: "budget reached, agent cards paused",
+    ac_budget_save: "Save",
+    ac_budget_clear: "Remove budget",
     ac_tokens_tip: (b: { input: string; cacheWrite: string; cacheRead: string; output: string; calls: number; cards: number; missing: number }) =>
       `Input ${b.input} · cache write ${b.cacheWrite} · cache read ${b.cacheRead} · output ${b.output}\n${b.cards} cards, ${b.calls} calls` +
       (b.missing ? `\n${b.missing} more cards have no transcript and aren't counted` : ""),

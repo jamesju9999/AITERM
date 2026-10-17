@@ -129,6 +129,13 @@ export interface TokenUsage {
 export const listTokenUsage = (projectId: string): Promise<Record<string, TokenUsage>> =>
   invoke("tasks_token_usage", { projectId });
 
+/** 專案的 token 上限（null = 沒設）。用到上限後 Agent 卡先不派工。 */
+export const getTokenBudget = (projectId: string): Promise<number | null> => invoke("tasks_get_token_budget", { projectId });
+
+/** 設定專案的 token 上限；null 取消。 */
+export const setTokenBudget = (projectId: string, budget: number | null): Promise<void> =>
+  invoke("tasks_set_token_budget", { projectId, budget });
+
 export const createTask = (
   projectId: string,
   args: {

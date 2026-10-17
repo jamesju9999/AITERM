@@ -23,6 +23,8 @@ import {
   getTaskBoardConfig,
   listTasks,
   listTokenUsage,
+  getTokenBudget,
+  setTokenBudget,
   markTaskDone,
   onTasksUpdated,
   type MergeOutcome,
@@ -46,7 +48,8 @@ import { QuestionInbox } from "./QuestionInbox";
 import { VerifyReportDialog } from "./VerifyReportDialog";
 import { answerQuestion, listQuestions, onQuestionsUpdated, type QuestionView } from "../../ipc/questions";
 import { projectSummary, type ProjectSummary } from "./projectSummary";
-import { formatTokens, sumUsage, totalTokens, usageBreakdown } from "./tokenUsage";
+import { sumUsage } from "./tokenUsage";
+import { TokenBudgetChip } from "./TokenBudgetChip";
 import "./index.css";
 
 /** 跟看板、TabBar 同一個門檻：小於這個位移是點擊，不是拖曳。 */
@@ -146,6 +149,8 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
   /** 每張卡的 token 用量；記著是哪個專案的，切專案時舊的不會被拿來用。 */
   const [usageOf, setUsageOf] = useState<{ projectId: string; map: Record<string, TokenUsage> } | null>(null);
+  /** 專案的 token 上限；同樣記著是哪個專案的。 */
+  const [budgetOf, setBudgetOf] = useState<{ projectId: string; budget: number | null } | null>(null);
   const [cap, setCap] = useState<number | null>(null);
   const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000));
   const [config, setConfig] = useState<{ kind: AgentKind; agent: AgentRow | null; x: number; y: number } | null>(null);
@@ -240,6 +245,9 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
         .catch((e) => alive && setToast(errText(e)));
       listTokenUsage(projectId)
         .then((map) => alive && setUsageOf({ projectId, map }))
+        .catch(() => {});
+      getTokenBudget(projectId)
+        .then((budget) => alive && setBudgetOf({ projectId, budget }))
         .catch(() => {});
     };
     load();
@@ -760,11 +768,20 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
             {sumLine.text}
           </span>
         )}
-        {projectUsage?.cards ? (
-          <span className="ac-tokens" data-testid="ac-tokens" title={t.ac_tokens_tip(usageBreakdown(projectUsage))}>
-            {t.ac_tokens(formatTokens(totalTokens(projectUsage.usage)))}
-          </span>
-        ) : null}
+        {projectId && (
+          <TokenBudgetChip
+            sum={projectUsage}
+            budget={budgetOf?.projectId === projectId ? budgetOf.budget : null}
+            onSave={async (budget) => {
+              try {
+                await setTokenBudget(projectId, budget);
+                setBudgetOf({ projectId, budget });
+              } catch (e) {
+                setToast(errText(e));
+              }
+            }}
+          />
+        )}
         {summary.kind === "in_repo" && (
           <button
             className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
