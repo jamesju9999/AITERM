@@ -69,13 +69,30 @@ fn walk<'a>(module: &'a TaskRow, chain: &'a [TaskRow]) -> (Vec<&'a TaskRow>, usi
     let mut path = vec![module];
     let mut fails = 0usize;
     let mut cur = module;
+    // 驗收退回的修正卡接在鏈尾（通過的審查卡；沒有審查者時就是目前這張），
+    // 不算審查退回的輪數。見 docs/superpowers/specs/2026-10-17-agent-verifier-design.md §4.4。
+    let fix_after = |id: &str| chain.iter().find(|c| c.card_kind == KIND_FIX && c.review_of.as_deref() == Some(id));
     loop {
         let Some(review) = chain.iter().find(|c| c.card_kind == KIND_REVIEW && c.review_of.as_deref() == Some(cur.id.as_str())) else {
-            break;
+            match fix_after(&cur.id) {
+                Some(fix) => {
+                    path.push(fix);
+                    cur = fix;
+                    continue;
+                }
+                None => break,
+            }
         };
         path.push(review);
         if review.verdict.as_deref() != Some("fail") {
-            break;
+            match fix_after(&review.id) {
+                Some(fix) => {
+                    path.push(fix);
+                    cur = fix;
+                    continue;
+                }
+                None => break,
+            }
         }
         fails += 1;
         let Some(fix) = chain.iter().find(|c| c.card_kind == KIND_FIX && c.review_of.as_deref() == Some(review.id.as_str())) else {
@@ -1780,6 +1797,53 @@ mod tests {
         assert!(spec.contains("規格文件") && spec.contains("驗收條件是否具體") && spec.contains("git diff a..b"));
         assert!(spec.contains("請審查模組「M」"), "保留同一個開頭，代理（含驗收用的假 claude）才認得出是審查");
         assert_eq!(review_title(&m, true), "審查規格：M（修正後）");
+    }
+
+    /// 模組鏈上的一張卡：種類、狀態、結果、判定、所屬模組、接在哪張後面。
+    fn link(id: &str, kind: &str, status: &str, outcome: Option<&str>, verdict: Option<&str>, review_of: Option<&str>) -> TaskRow {
+        TaskRow {
+            card_kind: kind.into(),
+            status: status.into(),
+            outcome: outcome.map(Into::into),
+            verdict: verdict.map(Into::into),
+            module_id: (kind != KIND_WORK).then(|| "m".to_string()),
+            review_of: review_of.map(Into::into),
+            ..test_row(id)
+        }
+    }
+
+    #[test]
+    fn a_fix_from_verification_reopens_a_passed_module() {
+        let m = link("m", KIND_WORK, "done", Some("success"), None, None);
+        let r = link("r", KIND_REVIEW, "done", Some("success"), Some("pass"), Some("m"));
+        assert_eq!(module_state(&m, &[r.clone()], true), ModuleState::Passed);
+        let f = link("f", KIND_FIX, "queued", None, None, Some("r"));
+        assert_eq!(module_state(&m, &[r.clone(), f], true), ModuleState::FixQueued);
+        let f_done = link("f", KIND_FIX, "done", Some("success"), None, Some("r"));
+        assert_eq!(module_state(&m, &[r.clone(), f_done.clone()], true), ModuleState::AwaitingReview);
+        let r2 = link("r2", KIND_REVIEW, "done", Some("success"), Some("pass"), Some("f"));
+        assert_eq!(module_state(&m, &[r, f_done, r2], true), ModuleState::Passed);
+    }
+
+    #[test]
+    fn without_a_reviewer_a_verification_fix_hangs_off_the_module() {
+        let m = link("m", KIND_WORK, "done", Some("success"), None, None);
+        let f = link("f", KIND_FIX, "running", None, None, Some("m"));
+        assert_eq!(module_state(&m, &[f], false), ModuleState::Coding);
+    }
+
+    #[test]
+    fn verification_fixes_do_not_count_as_review_rounds() {
+        // 審查 pass → 驗收修正 → 審查 fail → 修正 → 審查 fail：審查退回只算 2 次，還沒到上限。
+        let m = link("m", KIND_WORK, "done", Some("success"), None, None);
+        let chain = vec![
+            link("r1", KIND_REVIEW, "done", Some("success"), Some("pass"), Some("m")),
+            link("f1", KIND_FIX, "done", Some("success"), None, Some("r1")),
+            link("r2", KIND_REVIEW, "done", Some("success"), Some("fail"), Some("f1")),
+            link("f2", KIND_FIX, "done", Some("success"), None, Some("r2")),
+            link("r3", KIND_REVIEW, "done", Some("success"), Some("fail"), Some("f2")),
+        ];
+        assert_eq!(module_state(&m, &chain, true), ModuleState::FixQueued);
     }
 
     fn test_row(id: &str) -> TaskRow {

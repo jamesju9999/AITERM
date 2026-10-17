@@ -31,16 +31,33 @@ function specGate(module: TaskRow, chain: TaskRow[]): ModuleState {
   return plan.outcome === "success" ? "passed" : "dispatch_failed";
 }
 
-/** 沿著 模組 → 審查 → 修正 → 審查 … 的鏈走到尾端。 */
+/**
+ * 沿著 模組 → 審查 → 修正 → 審查 … 的鏈走到尾端。驗收退回的修正卡接在鏈尾
+ * （通過的審查卡；沒有審查者時就是目前這張），不算審查退回的輪數——與後端
+ * `walk` 相同。
+ */
 function walk(module: TaskRow, chain: TaskRow[]): { tip: TaskRow; fails: number } {
   let cur = module;
   let tip = module;
   let fails = 0;
+  const fixAfter = (id: string) => chain.find((c) => c.card_kind === "fix" && c.review_of === id);
   for (;;) {
     const review = chain.find((c) => c.card_kind === "review" && c.review_of === cur.id);
-    if (!review) break;
+    if (!review) {
+      const fix = fixAfter(cur.id);
+      if (!fix) break;
+      tip = fix;
+      cur = fix;
+      continue;
+    }
     tip = review;
-    if (review.verdict !== "fail") break;
+    if (review.verdict !== "fail") {
+      const fix = fixAfter(review.id);
+      if (!fix) break;
+      tip = fix;
+      cur = fix;
+      continue;
+    }
     fails += 1;
     const fix = chain.find((c) => c.card_kind === "fix" && c.review_of === review.id);
     if (!fix) break;

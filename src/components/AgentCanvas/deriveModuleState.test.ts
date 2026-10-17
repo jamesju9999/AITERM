@@ -28,6 +28,31 @@ describe("deriveModuleState", () => {
     expect(deriveModuleState(mod({ outcome: "failed" }), [], true)).toBe("failed");
   });
 
+  it("驗收退回的修正卡接在通過的審查後面，模組重新打開（與後端同規則）", () => {
+    const m = mod();
+    const r = review("M", { id: "R", verdict: "pass" });
+    expect(deriveModuleState(m, [r], true)).toBe("passed");
+    expect(deriveModuleState(m, [r, fix("R", { id: "F", status: "queued", outcome: null })], true)).toBe("fix_queued");
+    const fDone = fix("R", { id: "F" });
+    expect(deriveModuleState(m, [r, fDone], true)).toBe("awaiting_review");
+    expect(deriveModuleState(m, [r, fDone, review("F", { verdict: "pass" })], true)).toBe("passed");
+  });
+
+  it("沒有審查者時，驗收退回的修正卡接在模組後面", () => {
+    expect(deriveModuleState(mod(), [fix("M", { status: "running", outcome: null })], false)).toBe("coding");
+  });
+
+  it("驗收退回的修正不算審查退回的輪數", () => {
+    const chain = [
+      review("M", { id: "R1", verdict: "pass" }),
+      fix("R1", { id: "F1" }),
+      review("F1", { id: "R2", verdict: "fail" }),
+      fix("R2", { id: "F2" }),
+      review("F2", { id: "R3", verdict: "fail" }),
+    ];
+    expect(deriveModuleState(mod(), chain, true)).toBe("fix_queued");
+  });
+
   it("沒有任何審查的完成模組算通過", () => {
     expect(deriveModuleState(mod(), [], true)).toBe("passed");
   });
