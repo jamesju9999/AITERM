@@ -47,21 +47,29 @@
 
 ### 4.2 通過
 
-- 把程式庫快轉到受驗版本（沿用 `fast_forward_repo`，結果寫在**驗收卡**的 `verdict`）。
+- 把程式庫快轉到受驗版本（沿用 `fast_forward_repo`）。快轉結果寫在**受驗的合併卡**的 `verdict`（驗收卡的 `review_of` 指向它），跟沒有驗收者時的位置一樣，頂列判斷不用分兩套。有驗收者時，合併卡的 `verdict` 在驗收通過前是空的。
+- 驗收卡自己的 `verdict`：`pass`／`fail`／`attention`（失敗而且要你決定：輪數超過上限，或失敗項全都找不到模組）。
 - `?` 需人工確認的項目不擋通過，但頂列寫「✓ 驗收通過（N 項需你確認）」，點開看清單。
 
 ### 4.3 不通過
 
 - 每個失敗項如果有 `module_id` 而且對得上一個模組 → 依模組分組，每個模組開一張修正卡給原工程師。
   - 修正卡內文：驗收者寫的重現步驟、預期與實際、截圖路徑，加上模組原始需求。
-  - 修正卡 `module_id` = 模組，`review_of` = 驗收卡。
+  - 修正卡 `module_id` = 模組，`review_of` = **模組鏈目前的尾端**（通過的那張審查卡；沒有審查者時是最後一張成功的工作／修正卡）。修正卡內文寫明是哪張驗收卡退回的。
 - 修好後照原本的路走：審查 → 模組回到通過 → `maybe_enqueue_merge`（工程師分支 HEAD 變了，signature 不同，會建新的合併卡）→ 再驗收。
 - **輪數**：同一輪工作裡驗收失敗超過 `MAX_FIX_ROUNDS`（2）次 → 不再開修正卡，改成通知使用者（沿用 `agent-module-attention` 的通知與「放行」流程，放行 = 視為驗收通過、快轉程式庫）。
 - 有任何失敗項找不到模組 → 那些項目不開卡，通知使用者；有模組的照樣開修正卡。
+- 失敗項**全部**找不到模組 → 驗收卡 `verdict = attention`，流程停住等你決定（放行或自己處理）。
+- 輪數的算法：從最近一次 `pass` 之後，連續 `fail`／`attention` 的驗收卡張數。
 
 ### 4.4 模組狀態（實作時要特別小心）
 
-`workflow::module_state` 與前端 `deriveModuleState` 用 `review_of` 串出模組鏈判斷狀態。驗收退回的修正卡，`review_of` 指向的是驗收卡，不是審查卡。
+`workflow::module_state` 與前端 `deriveModuleState` 用 `review_of` 串出模組鏈判斷狀態：模組 → 審查 →（fail）→ 修正 → 審查 …，走到審查 `pass` 就停。
+
+驗收退回的修正卡 `review_of` 指向鏈尾（§4.3），所以 `walk` 只要多兩條規則：
+- 走到 `pass` 的審查卡時，再找 `review_of` = 這張審查卡的修正卡，有就接著走。
+- 找不到審查卡時（沒有審查者），找 `review_of` = 目前這張的修正卡，有就接著走。
+這兩種修正卡不算進審查退回的輪數（`fails`）。
 
 要確認：
 - 模組本來是 Passed，驗收退回開了修正卡之後，模組狀態要變回「修正中」，不能還是 Passed（否則 `maybe_enqueue_merge` 會在修正前又合併一次）。
@@ -121,8 +129,7 @@
 
 ### 6.3 待驗證（寫計畫前或計畫第一步要確認）
 
-1. 截圖給**絕對路徑**（`<task_dir>/evidence/xxx.png`）時，會不會被「只能存取工作目錄」的限制擋掉；擋掉的話要加 `--allow-unrestricted-file-access`，或把 MCP 行程的工作目錄設成 evidence 資料夾（`mcp.json` 的 stdio 伺服器能不能設 `cwd`）。
-   驗證：同 6.2 的 probe 腳本，`filename` 改絕對路徑，看檔案出現在哪裡。
+1. ~~截圖給絕對路徑會不會被擋~~ 已驗證（2026-10-17）：工作目錄與 `--output-dir` 以外的絕對路徑被擋（`File access denied … outside allowed roots`）；**`--output-dir` 底下的絕對路徑可以寫**。所以提示要求截圖一律存成 `<task_dir>/evidence/<名稱>.png` 的絕對路徑，`--output-dir` 就設成那個資料夾，不需要開放任意檔案存取。
 2. **沒有裝 Chrome 的機器**：預設用 Chrome，沒有的話會怎樣？要不要改 `--browser chromium` 並在第一次使用時下載（約 150MB）？
    驗證：用乾淨的 HOME、`--browser` 各種值跑 probe。Windows、Linux 各跑一次。
 3. 沒有 Node.js（沒有 npx）的機器：驗收者照樣能做非網頁的驗收，瀏覽器工具不可用時要在 verify.json 把需要瀏覽器的條件標成 `manual` 並說明原因，不能當通過。
