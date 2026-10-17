@@ -362,6 +362,62 @@ pub async fn run_on_session(
     })
 }
 
+/// 「Codex 環境變數」設定：一行一組 `KEY=VALUE`，空行與 `#` 開頭略過；KEY 只收
+/// `[A-Za-z_][A-Za-z0-9_]*`（其他的在各平台的環境變數裡意義不同）。
+pub fn parse_env_lines(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            let k = k.trim();
+            let mut chars = k.chars();
+            let ok = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+            ok.then(|| (k.to_string(), v.trim().to_string()))
+        })
+        .collect()
+}
+
+/// 只開分頁、打一行指令就回來（Codex 卡片：`codex exec` 從參數拿提示詞，不必等 TUI、
+/// 不打提示詞、也不要完成標記——行程結束就是做完）。
+pub async fn spawn_command(
+    app: &AppHandle,
+    pty: &PtyManager,
+    project_dir: &str,
+    line: &str,
+    extra_env: Vec<(String, String)>,
+    on_spawned: impl FnOnce(&str) + Send,
+) -> Result<(String, DispatchResult), String> {
+    let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+    let tab_id = crate::pty::create_with_app_env(
+        pty,
+        app.clone(),
+        size,
+        Some(std::path::PathBuf::from(project_dir)),
+        None,
+        extra_env,
+    )
+    .map_err(|e| e.to_string())?;
+    on_spawned(&tab_id);
+    let result = DispatchResult {
+        bell_baseline: pty.bell_count(&tab_id).unwrap_or(0),
+        marker_baseline: pty.marker_count(&tab_id).unwrap_or(0),
+    };
+    if let Err(e) = pty.write(&tab_id, format!("{line}\r").as_bytes()) {
+        let _ = pty.close(&tab_id);
+        return Err(e.to_string());
+    }
+    // 分頁標題用固定的「codex」，不把整行（含網址與密鑰）放進去。
+    if let Err(e) = app.emit(
+        "mcp-coordination-tab-spawned",
+        TabSpawnedEvent { session_id: tab_id.clone(), command: Some("codex".to_string()) },
+    ) {
+        eprintln!("emit mcp-coordination-tab-spawned failed: {e}");
+    }
+    Ok((tab_id, result))
+}
+
 /// Full dispatch: create a visible tab in `project_dir` running
 /// `claude_command`, emit the adopt event, wait for it to settle, type the
 /// prompt in. Returns `(tab_id, DispatchResult)`.
@@ -415,6 +471,15 @@ pub async fn spawn_and_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_env_lines_take_plain_keys_only() {
+        let text = "# 本機 oMLX\nOMLX_API_KEY = abc=1\n\n bad key=x\n1X=y\nPATHX=\nnoequals\n";
+        assert_eq!(
+            parse_env_lines(text),
+            vec![("OMLX_API_KEY".to_string(), "abc=1".to_string()), ("PATHX".to_string(), String::new())]
+        );
+    }
 
     mod bridge_env_tests {
         // `ConfigStore`/`TierMapping`/`TaskRow` 已經透過 `use super::*` 從外層

@@ -46,13 +46,26 @@ pub fn create_with_app(
     cwd: Option<PathBuf>,
     bridge_env: Option<(u16, String)>,
 ) -> PtyResult<String> {
-    let (envs, env_removals) = match bridge_env {
+    create_with_app_env(manager, app, size, cwd, bridge_env, Vec::new())
+}
+
+/// 同 `create_with_app`，另外帶上 `extra_env`（例如派給 Codex 的卡片需要的 `OMLX_API_KEY`）。
+pub fn create_with_app_env(
+    manager: &PtyManager,
+    app: AppHandle,
+    size: PtySize,
+    cwd: Option<PathBuf>,
+    bridge_env: Option<(u16, String)>,
+    extra_env: Vec<(String, String)>,
+) -> PtyResult<String> {
+    let (mut envs, env_removals) = match bridge_env {
         Some((port, token)) => (
             crate::bridge::env::bridge_envs(port, &token),
             crate::bridge::env::ENV_TO_REMOVE.iter().map(|s| s.to_string()).collect(),
         ),
         None => (Vec::new(), Vec::new()),
     };
+    envs.extend(extra_env);
 
     let id = uuid::Uuid::new_v4().to_string();
     let event_name = data_event_name(&id);
