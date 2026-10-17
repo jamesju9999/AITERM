@@ -884,14 +884,19 @@ export function AgentCanvasView({
               onMouseDown={disabled ? undefined : (e) => beginDrag(e, "pool", k)}
             >
               <span className="ac-agent-ico"><KindIcon kind={k} /></span>
-              <div>
-                {poolLabel(k)}
-                <small>
-                  {disabled
-                    ? `✓ ${t.ac_already_placed}`
-                    : { coder: t.ac_coder_hint, reviewer: t.ac_reviewer_hint, orchestrator: t.ac_orchestrator_hint, verifier: t.ac_verifier_hint }[k]}
-                </small>
-              </div>
+              {/* 已放上桌布的縮成一顆小標籤，視線留給還能拖的角色。 */}
+              {disabled ? (
+                <span className="ac-pool-placed">
+                  {poolLabel(k)} <span className="ac-check" aria-label={t.ac_already_placed}>✓</span>
+                </span>
+              ) : (
+                <div>
+                  {poolLabel(k)}
+                  <small>
+                    {{ coder: t.ac_coder_hint, reviewer: t.ac_reviewer_hint, orchestrator: t.ac_orchestrator_hint, verifier: t.ac_verifier_hint }[k]}
+                  </small>
+                </div>
+              )}
             </div>
           );
         })}
