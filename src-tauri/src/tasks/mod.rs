@@ -19,6 +19,7 @@ pub mod quota;
 pub mod questions;
 pub mod ask;
 pub mod usage;
+pub mod verify_ports;
 
 use std::path::{Path, PathBuf};
 
