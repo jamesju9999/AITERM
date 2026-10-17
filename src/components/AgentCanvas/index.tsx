@@ -36,6 +36,7 @@ import { localizedCardTitle } from "./cardTitle";
 import { deriveAgentStatus } from "./deriveAgentStatus";
 import { deriveModuleState } from "./deriveModuleState";
 import { EdgeLayer } from "./EdgeLayer";
+import { WorkflowIcon } from "../Icons";
 import { computeEdges, diffPulses, edgeActivity, type Pulse } from "./edges";
 import { idList } from "./prerequisites";
 import { QuestionInbox } from "./QuestionInbox";
@@ -701,7 +702,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
     >
       <div className="ac-top">
         <h1 className="ac-title">
-          <span className="ac-dot" />
+          <WorkflowIcon size={16} className="ac-title-icon" aria-hidden="true" />
           {t.agent_canvas_tab}
         </h1>
         <label className="ac-ctl">
