@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { verifyReport, type VerifyItem, type VerifyReportView } from "../../ipc/agents";
+import { writeTextFile } from "../../ipc/fs";
+import { sortItems, verifyReportHtml } from "./verifyReportHtml";
 
 const STATUS_ICON: Record<VerifyItem["status"], string> = { pass: "✓", fail: "✗", manual: "?" };
 
@@ -10,12 +13,15 @@ const STATUS_ICON: Record<VerifyItem["status"], string> = { pass: "✓", fail: "
  */
 export function VerifyReportDialog({
   projectId,
+  projectName,
   taskId,
   canAccept,
   onAccept,
   onClose,
 }: {
   projectId: string;
+  /** 匯出檔名與報告標題用。 */
+  projectName: string;
   taskId: string;
   /** 驗收卡判定是 attention（要你決定）時顯示「放行」。 */
   canAccept: boolean;
@@ -26,6 +32,7 @@ export function VerifyReportDialog({
   const [view, setView] = useState<VerifyReportView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState<string | null>(null);
+  const [exported, setExported] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -40,9 +47,36 @@ export function VerifyReportDialog({
   const items = view?.report?.items ?? [];
   const count = (s: VerifyItem["status"]) => items.filter((i) => i.status === s).length;
   const label = { pass: t.ac_verify_pass_item, fail: t.ac_verify_fail_item, manual: t.ac_verify_manual_item };
-  // 沒通過的放最前面，再來是要你確認的。
-  const order = { fail: 0, manual: 1, pass: 2 };
-  const sorted = [...items].sort((a, b) => order[a.status] - order[b.status]);
+  const sorted = sortItems(items);
+
+  const doExport = async () => {
+    if (!view?.report) return;
+    const date = new Date().toISOString().slice(0, 10);
+    try {
+      const path = await save({
+        defaultPath: `${t.ac_verify_title}-${projectName}-${date}.html`,
+        filters: [{ name: "HTML", extensions: ["html"] }],
+      });
+      if (!path) return;
+      const html = verifyReportHtml(view, { project: projectName, date }, {
+        title: t.ac_verify_title,
+        pass: t.ac_verify_pass_item,
+        fail: t.ac_verify_fail_item,
+        manual: t.ac_verify_manual_item,
+        steps: t.ac_verify_steps,
+        expected: t.ac_verify_expected,
+        actual: t.ac_verify_actual,
+        notes: t.ac_verify_notes,
+        evidence: t.ac_verify_evidence,
+        overall: t.ac_verify_overall,
+        summary: t.ac_verify_summary,
+      });
+      await writeTextFile(path, html);
+      setExported(path);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   return (
     <div className="task-dialog-backdrop">
@@ -60,7 +94,7 @@ export function VerifyReportDialog({
               {sorted.map((item, i) => (
                 <div key={i} className={`ac-verify-item ac-verify-item--${item.status}`} data-testid={`verify-item-${item.status}`}>
                   <div className="ac-verify-head">
-                    <span aria-label={label[item.status]} title={label[item.status]}>
+                    <span className="ac-verify-status" aria-label={label[item.status]} title={label[item.status]}>
                       {STATUS_ICON[item.status]}
                     </span>
                     <span>{item.criterion}</span>
@@ -68,31 +102,31 @@ export function VerifyReportDialog({
                   {item.steps && (
                     <div className="ac-verify-field">
                       <b>{t.ac_verify_steps}</b>
-                      {item.steps}
+                      <span>{item.steps}</span>
                     </div>
                   )}
                   {item.expected && (
                     <div className="ac-verify-field">
                       <b>{t.ac_verify_expected}</b>
-                      {item.expected}
+                      <span>{item.expected}</span>
                     </div>
                   )}
                   {item.actual && (
                     <div className="ac-verify-field">
                       <b>{t.ac_verify_actual}</b>
-                      {item.actual}
+                      <span>{item.actual}</span>
                     </div>
                   )}
                   {item.notes && (
                     <div className="ac-verify-field">
                       <b>{t.ac_verify_notes}</b>
-                      {item.notes}
+                      <span>{item.notes}</span>
                     </div>
                   )}
                   {item.evidence.some((e) => !view.images[e]) && (
                     <div className="ac-verify-field">
                       <b>{t.ac_verify_evidence}</b>
-                      {item.evidence.filter((e) => !view.images[e]).join("\n")}
+                      <span>{item.evidence.filter((e) => !view.images[e]).join("\n")}</span>
                     </div>
                   )}
                   {item.evidence.some((e) => view.images[e]) && (
@@ -108,11 +142,22 @@ export function VerifyReportDialog({
                   )}
                 </div>
               ))}
+              {view.report.notes && (
+                <div className="ac-verify-notes">
+                  <b>{t.ac_verify_overall}</b>
+                  {view.report.notes}
+                </div>
+              )}
             </div>
-            {view.report.notes && <p className="ac-verify-field">{view.report.notes}</p>}
           </>
         )}
+        {exported && <p className="ac-dialog-desc">{t.ac_verify_exported(exported)}</p>}
         <div className="task-dialog-actions">
+          {view?.report && (
+            <button className="aiterm-btn aiterm-btn--secondary" onClick={() => void doExport()}>
+              {t.ac_verify_export}
+            </button>
+          )}
           {canAccept && (
             <button className="aiterm-btn aiterm-btn--primary" onClick={onAccept}>
               {t.ac_verify_accept}

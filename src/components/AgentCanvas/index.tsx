@@ -1032,6 +1032,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
       {verifyCard && projectId && (
         <VerifyReportDialog
           projectId={projectId}
+          projectName={projects?.find((x) => x.id === projectId)?.name ?? ""}
           taskId={verifyCard.id}
           canAccept={verifyCard.verdict === "attention" || verifyCard.verdict === "fail"}
           onAccept={() => {

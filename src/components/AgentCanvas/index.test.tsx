@@ -6,7 +6,9 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn().mockResolvedValue("/repo"),
   confirm: vi.fn().mockResolvedValue(true),
   message: vi.fn().mockResolvedValue(undefined),
+  save: vi.fn().mockResolvedValue("/Users/me/驗收報告.html"),
 }));
+vi.mock("../../ipc/fs", () => ({ writeTextFile: vi.fn().mockResolvedValue(undefined) }));
 
 // 抓住 tasks-updated 的回呼，測試裡手動觸發「後端說資料變了」。
 let tasksUpdated: (() => void) | null = null;
@@ -75,6 +77,7 @@ import {
 } from "../../ipc/agents";
 import { listTasks, listTokenUsage, markTaskDone, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
+import { writeTextFile } from "../../ipc/fs";
 import { AgentCanvasView } from "./index";
 
 const agent = (over: Partial<AgentRow> = {}): AgentRow => ({
@@ -215,6 +218,14 @@ describe("AgentCanvasView", () => {
       expect(within(dlg).getByText("版面跑掉")).toBeTruthy();
       expect(within(dlg).getByText("要真實付款")).toBeTruthy();
       expect(within(dlg).getByAltText("evidence/style.png").getAttribute("src")).toBe("data:image/png;base64,BBBB");
+
+      fireEvent.click(within(dlg).getByRole("button", { name: "匯出" }));
+      await waitFor(() => expect(within(dlg).getByText(/已匯出：\/Users\/me\/驗收報告.html/)).toBeTruthy());
+      const [path, html] = vi.mocked(writeTextFile).mock.calls[0];
+      expect(path).toBe("/Users/me/驗收報告.html");
+      expect(html).toContain("版面跑掉");
+      expect(html).toContain("data:image/png;base64,BBBB");
+      expect(html).toContain("HTBKTW");
 
       fireEvent.click(within(dlg).getByRole("button", { name: "放行" }));
       await waitFor(() => expect(vi.mocked(acceptVerification)).toHaveBeenCalledWith("p1", "V"));
