@@ -69,4 +69,37 @@ describe("recentProjects", () => {
     recordProject("");
     expect(listRecentProjects()).toEqual([]);
   });
+
+  describe("Agent／派工卡的工作資料夾不算專案", () => {
+    const board = "/Users/me/Ask Test";
+    const workdirs = [
+      `${board}/agents/ebaf11e5-3323/worktree`,
+      `${board}/agents/ebaf11e5-3323/worktree/src`,
+      `${board}/agents/c5f8213e-42ab/reviews/eb1c7d91-9dbb`,
+      `${board}/tasks/79ca689d-b95b/worktree`,
+      "C:\\Users\\me\\Ask Test\\agents\\a1\\worktree",
+    ];
+
+    it("不會被記錄", () => {
+      for (const w of workdirs) recordProject(w);
+      recordProject("/repo/real");
+      expect(listRecentProjects().map((p) => p.path)).toEqual(["/repo/real"]);
+    });
+
+    it("舊版已經存進去的也不列出來，也不佔名額", () => {
+      const stored = [...workdirs, "/repo/a", "/repo/b"].map((path, i) => ({ path, lastUsedAt: i }));
+      localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(stored));
+      expect(listRecentProjects().map((p) => p.path)).toEqual(["/repo/a", "/repo/b"]);
+      for (let i = 0; i < MAX_RECENT_PROJECTS - 2; i++) recordProject(`/p${i}`);
+      expect(listRecentProjects()).toHaveLength(MAX_RECENT_PROJECTS);
+      expect(listRecentProjects().map((p) => p.path)).toContain("/repo/b");
+    });
+
+    it("名字剛好叫 worktree、agents 的一般資料夾照樣記錄", () => {
+      recordProject("/code/worktree");
+      recordProject("/code/agents");
+      recordProject("/code/agents/notes");
+      expect(listRecentProjects().map((p) => p.path)).toEqual(["/code/agents/notes", "/code/agents", "/code/worktree"]);
+    });
+  });
 });

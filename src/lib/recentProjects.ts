@@ -7,12 +7,28 @@ export interface RecentProject {
   lastUsedAt: number;
 }
 
+/**
+ * 工作看板／Agent 協作派工時開的工作資料夾（`<看板專案>/agents/<id>/worktree`、
+ * `<看板專案>/agents/<id>/reviews/<卡片>`、`<看板專案>/tasks/<id>/worktree`，
+ * 規則在 src-tauri 的 tasks::task_dir 與 agents::agent_dir）。派工分頁也是終端機，
+ * 會回報 cwd，不排除的話「最近的專案目錄」會被一串 worktree 和 UUID 洗掉。
+ */
+export function isDispatchWorkdir(path: string): boolean {
+  const parts = path.split(/[\\/]+/);
+  return parts.some(
+    (seg, i) =>
+      (seg === "agents" && (parts[i + 2] === "worktree" || parts[i + 2] === "reviews")) ||
+      (seg === "tasks" && parts[i + 2] === "worktree"),
+  );
+}
+
 export function listRecentProjects(): RecentProject[] {
   try {
     const raw = localStorage.getItem(RECENT_PROJECTS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    // 舊版已經存進去的工作資料夾也一併濾掉，名額讓給真正的專案。
+    return Array.isArray(parsed) ? parsed.filter((p: RecentProject) => !isDispatchWorkdir(p.path)) : [];
   } catch {
     return [];
   }
@@ -29,7 +45,7 @@ export function listRecentProjects(): RecentProject[] {
  * 專案永久消失，而那正是這個清單的用途。
  */
 export function recordProject(path: string, previousPath?: string) {
-  if (!path || path === previousPath) return;
+  if (!path || path === previousPath || isDispatchWorkdir(path)) return;
   const rest = listRecentProjects().filter((p) => p.path !== path);
   const next = [{ path, lastUsedAt: Date.now() }, ...rest].slice(0, MAX_RECENT_PROJECTS);
   localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next));
