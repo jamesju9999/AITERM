@@ -457,6 +457,17 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(resolveAgent).toHaveBeenCalledWith("p1", "a1", "skip"));
   });
 
+  it("工程師卡底部顯示「模組 x/y」，分支名放在提示裡；圖示依角色", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent({ branch: "aiterm-agent/a1" })]);
+    vi.mocked(listTasks).mockResolvedValue([card({ id: "A", status: "running", agent_id: "a1" })]);
+    view();
+    const node = await screen.findByTestId("agent-a1");
+    const progress = await within(node).findByText(/^(模組|Modules) 0\/1$/);
+    expect(progress.getAttribute("title")).toBe("aiterm-agent/a1");
+    expect(within(node).queryByText(/⑂/)).toBeNull();
+    expect(node.querySelector('[data-kind-icon="coder"]')).not.toBeNull();
+  });
+
   it("有分支且閒置時可以合併，衝突時顯示還原合併", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent({ branch: "aiterm-agent/a1" })]);
     vi.mocked(listTasks).mockResolvedValue([card({ id: "A", status: "done", outcome: "success", agent_id: "a1" })]);

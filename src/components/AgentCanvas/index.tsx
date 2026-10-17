@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { KindIcon } from "./KindIcon";
 import { createPortal } from "react-dom";
 import { confirm } from "@tauri-apps/plugin-dialog";
 
@@ -64,7 +65,7 @@ const MAX_ZOOM = 1.5;
 const NODE_W = 248;
 const NODE_H = 140;
 /** 桌布在最遠的節點之外再留多少空間，讓人能把節點往外拖。 */
-const WORLD_MARGIN = 600;
+const WORLD_MARGIN = 160;
 
 interface Layout {
   libCollapsed: boolean;
@@ -844,12 +845,12 @@ export function AgentCanvasView({
               title={disabled ? t.ac_already_placed : undefined}
               onMouseDown={disabled ? undefined : (e) => beginDrag(e, "pool", k)}
             >
-              <span className="ac-agent-ico">{{ coder: "</>", reviewer: "✓?", orchestrator: "⑂", verifier: "☑" }[k]}</span>
+              <span className="ac-agent-ico"><KindIcon kind={k} /></span>
               <div>
                 {poolLabel(k)}
                 <small>
                   {disabled
-                    ? t.ac_already_placed
+                    ? `✓ ${t.ac_already_placed}`
                     : { coder: t.ac_coder_hint, reviewer: t.ac_reviewer_hint, orchestrator: t.ac_orchestrator_hint, verifier: t.ac_verifier_hint }[k]}
                 </small>
               </div>

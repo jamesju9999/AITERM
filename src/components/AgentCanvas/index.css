@@ -153,6 +153,8 @@
 .ac-agent--coding::before,
 .ac-agent--done::before,
 .ac-agent--attention::before { opacity: 1; }
+/* 完成是常態：細框、淡一點；粗框留給正在跑和需要你處理的卡片。 */
+.ac-agent--done::before { border-width: 1px; opacity: 0.55; }
 .ac-agent--coding::before { animation: ac-ring 1.6s ease-out infinite; }
 @keyframes ac-ring {
   0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.55); }
@@ -177,9 +179,8 @@
   width: 26px;
   height: 26px;
   border-radius: 7px;
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(59, 130, 246, 0.18);
   color: #93c5fd;
-  font: 700 11px var(--mono);
 }
 .ac-agent-name { flex: 1; min-width: 0; }
 .ac-agent-name b { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -250,7 +251,9 @@
 .ac-chip--ok { border-color: rgba(34, 197, 94, 0.45); color: #86efac; cursor: pointer; }
 .ac-chip--bad { border-color: var(--ac-fail); color: #fca5a5; cursor: pointer; }
 .ac-dropzone { font-size: 11px; color: var(--text-muted); border: 1px dashed var(--border-color); border-radius: 5px; padding: 3px 7px; }
-.ac-meta { margin-top: 8px; display: flex; justify-content: space-between; gap: 6px; font: 10.5px var(--mono); color: var(--text-muted); }
+.ac-meta { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); }
+.ac-meta .ac-branch { font: 10.5px var(--mono); }
+.ac-progress { cursor: help; }
 /* 分支名稱可以被截短，其他（token、通過數）不換行：不然「Σ 149.7K token」會斷成兩行。 */
 .ac-meta > span { flex: none; white-space: nowrap; }
 .ac-meta > span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -374,7 +377,8 @@
 .ac-verify-shot img { width: 100%; height: 100%; object-fit: cover; border-radius: 6px; }
 .ac-verify-zoom { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.8); display: flex; align-items: center; justify-content: center; z-index: 1000; cursor: zoom-out; border: 0; padding: 16px; }
 .ac-verify-zoom img { max-width: 100%; max-height: 100%; }
-.ac-pool-item--disabled { opacity: 0.45; cursor: not-allowed; }
+.ac-pool-item--disabled { cursor: default; }
+.ac-pool-item--disabled small { color: var(--ac-done); }
 .ac-pool-item--disabled:hover { border-color: var(--border-color); }
 
 .ac-chip--fix { border-color: rgba(249, 115, 22, 0.55); color: #fdba74; }

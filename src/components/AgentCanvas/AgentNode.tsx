@@ -1,4 +1,5 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
+import { KindIcon } from "./KindIcon";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import type { AgentRow } from "../../ipc/agents";
@@ -11,7 +12,6 @@ import { waitingPrerequisites } from "./prerequisites";
 import { shortBranch } from "./projectSummary";
 import { formatTokens, moduleCards, sumUsage, totalTokens, usageBreakdown, type UsageSum } from "./tokenUsage";
 
-const KIND_ICON: Record<AgentRow["kind"], string> = { coder: "</>", reviewer: "✓?", orchestrator: "⑂", verifier: "☑" };
 
 const MODULE_CHIP: Record<ModuleState, { cls: string; icon: string }> = {
   planning: { cls: "ac-chip--queued", icon: "·" },
@@ -324,7 +324,7 @@ export function AgentNode({
     >
       <div className="ac-agent-head" onMouseDown={onHeaderMouseDown}>
         <span className="ac-agent-ico" aria-hidden>
-          {KIND_ICON[agent.kind]}
+          <KindIcon kind={agent.kind} />
         </span>
         <div className="ac-agent-name">
           <b>
@@ -415,18 +415,20 @@ export function AgentNode({
 
         {(agent.kind === "coder" || agent.kind === "orchestrator" || !!mineUsage?.cards) && (
           <div className="ac-meta">
-            {(agent.kind === "coder" || agent.kind === "orchestrator") && (
-              <span title={agent.branch ?? undefined}>⑂ {agent.branch ? shortBranch(agent.branch) : "—"}</span>
+            {/* 工程師顯示進度，分支名放到提示裡；協調者的分支就是要合回程式庫的那條，留在卡片上。 */}
+            {agent.kind === "coder" ? (
+              <span className="ac-progress" title={agent.branch ?? undefined}>
+                {t.ac_modules_progress(passedCount, moduleStates.length)}
+              </span>
+            ) : agent.kind === "orchestrator" ? (
+              <span className="ac-branch" title={agent.branch ?? undefined}>⑂ {agent.branch ? shortBranch(agent.branch) : "—"}</span>
+            ) : (
+              <span />
             )}
             {/* 一張都沒有對話記錄（例如早期的卡片）就不顯示，免得只剩一個「–」。 */}
             {!!mineUsage?.cards && (
               <span className="ac-tokens" data-testid={`tokens-${agent.id}`} title={t.ac_tokens_tip(usageBreakdown(mineUsage))}>
                 {tokensText(mineUsage)}
-              </span>
-            )}
-            {agent.kind === "coder" && (
-              <span>
-                {passedCount}/{moduleStates.length}
               </span>
             )}
           </div>
