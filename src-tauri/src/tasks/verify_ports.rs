@@ -112,14 +112,14 @@ pub fn stop_listeners(ports: &[u16]) -> Vec<u32> {
 mod tests {
     use super::*;
 
+    /// 不在這裡重綁一次來「證明空著」：放掉之後到重綁之間，平行跑的其他測試可能
+    /// 正好拿到同一個臨時埠（實際踩過），那個斷言本身就有賽跑。
     #[test]
-    fn free_ports_are_distinct_and_bindable() {
+    fn free_ports_are_distinct() {
         let ports = pick_free_ports(3);
         assert_eq!(ports.len(), 3);
+        assert!(ports.iter().all(|p| *p > 0));
         assert_eq!(ports.iter().collect::<std::collections::HashSet<_>>().len(), 3);
-        for p in &ports {
-            std::net::TcpListener::bind(("127.0.0.1", *p)).unwrap();
-        }
     }
 
     #[test]

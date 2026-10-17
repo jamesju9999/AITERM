@@ -4,7 +4,7 @@
 //!   2. fresh bell or done-marker observed (Auto mode only) → Success
 //!   3. OSC133 non-zero exit code          → Failed("claude 以 exit code N 結束")
 //!   4. OSC133 exit code 0                 → Success (claude exited cleanly)
-//!   5. no output for `quiet_stuck_ms` (Auto mode only) → Failed("疑似卡住（120 秒無輸出）")
+//!   5. no output for `quiet_stuck_ms` (Auto mode only) → Failed("疑似卡住（N 分鐘無輸出）")
 //!
 //! Interactive mode (`WatchMode::Interactive`) skips signals ②⑤ — see that
 //! variant's doc comment for why. Reuses `PtyManager`'s existing per-session
@@ -83,6 +83,16 @@ pub struct Thresholds {
     /// Don't declare "stuck" until at least this long after watch start, so a
     /// slow cold start isn't mistaken for a hang. Production: `quiet_stuck_ms`.
     pub min_run_ms: u64,
+}
+
+/// 卡住的訊息寫實際的判定時間（使用者可調，見 `stuck_timeout_secs`），不能寫死。
+pub fn stuck_message(quiet_ms: u64) -> String {
+    let secs = quiet_ms / 1000;
+    if secs >= 60 && secs % 60 == 0 {
+        format!("疑似卡住（{} 分鐘無輸出）", secs / 60)
+    } else {
+        format!("疑似卡住（{secs} 秒無輸出）")
+    }
 }
 
 impl Default for Thresholds {
@@ -164,7 +174,7 @@ pub async fn watch_with_quota(
         let ran_ms = start.elapsed().as_millis() as u64;
         let quiet_ms = pty.ms_since_output(tab_id).unwrap_or(0);
         if mode == WatchMode::Auto && !waiting && ran_ms >= thresholds.min_run_ms && quiet_ms >= thresholds.quiet_stuck_ms {
-            return TaskOutcome::Failed("疑似卡住（120 秒無輸出）".to_string());
+            return TaskOutcome::Failed(stuck_message(thresholds.quiet_stuck_ms));
         }
 
         tokio::time::sleep(Duration::from_millis(thresholds.poll_ms)).await;
@@ -174,6 +184,13 @@ pub async fn watch_with_quota(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_stuck_message_states_the_configured_timeout() {
+        assert_eq!(stuck_message(1_200_000), "疑似卡住（20 分鐘無輸出）");
+        assert_eq!(stuck_message(120_000), "疑似卡住（2 分鐘無輸出）");
+        assert_eq!(stuck_message(90_000), "疑似卡住（90 秒無輸出）");
+    }
     use crate::pty::PtyManager;
     use crate::pty::session::done_marker;
     use portable_pty::PtySize;
