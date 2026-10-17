@@ -69,6 +69,19 @@ describe("TaskBoardPage", () => {
     );
   });
 
+  it("精簡啟動預設開著，可以關掉並存檔", async () => {
+    const user = userEvent.setup();
+    view();
+    await waitFor(() => screen.getByDisplayValue("2"));
+    const checkbox = screen.getByRole("checkbox", { name: /精簡啟動|Lean start/ });
+    expect(checkbox).toBeChecked();
+    await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
+    await waitFor(() =>
+      expect(setTaskBoardConfig).toHaveBeenCalledWith(expect.objectContaining({ lean_agent_dispatch: false })),
+    );
+  });
+
   it("關掉隔離且同時執行數大於 1 時顯示互相覆蓋的提醒", async () => {
     vi.mocked(getTaskBoardConfig).mockResolvedValue({
       max_concurrent: 3,

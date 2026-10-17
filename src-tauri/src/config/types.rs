@@ -305,6 +305,11 @@ pub struct TaskBoardConfig {
     /// 可以用 `TaskRow::isolate_worktree` 覆寫這個預設值。
     #[serde(default = "default_true")]
     pub isolate_with_worktree: bool,
+    /// Agent 協作的非互動卡片「精簡啟動」：不載入使用者的外掛、技能與自己的
+    /// MCP 伺服器，每張卡的固定 token 成本少一半以上。見
+    /// docs/superpowers/specs/2026-10-17-agent-lean-dispatch-design.md。
+    #[serde(default = "default_true")]
+    pub lean_agent_dispatch: bool,
 }
 
 impl Default for TaskBoardConfig {
@@ -318,6 +323,7 @@ impl Default for TaskBoardConfig {
             notify_telegram_on_finish: true,
             stuck_timeout_secs: default_stuck_timeout_secs(),
             isolate_with_worktree: true,
+            lean_agent_dispatch: true,
         }
     }
 }

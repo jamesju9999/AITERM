@@ -34,16 +34,39 @@ pub const REPLY_GRACE: Duration = Duration::from_secs(8);
 /// - `Stop` → `/turn-end`：結束一輪回覆；之後沒動靜就是在等人回覆。
 /// - `PostToolUse`、`UserPromptSubmit` → `/working`：又在工作了（Claude 自己等到額度重置後續跑、或使用者回覆了）。
 pub fn hook_settings_json(base: &str) -> String {
+    hook_settings_json_with(base, &[])
+}
+
+/// 同 `hook_settings_json`，另外把 `plugins_off` 這些外掛關掉（精簡啟動）。
+pub fn hook_settings_json_with(base: &str, plugins_off: &[String]) -> String {
     let hook = |path: &str| serde_json::json!([{ "hooks": [{ "type": "http", "url": format!("{base}/{path}") }] }]);
-    serde_json::json!({
+    let mut v = serde_json::json!({
         "hooks": {
             "StopFailure": hook("stop-failure"),
             "PostToolUse": hook("working"),
             "UserPromptSubmit": hook("working"),
             "Stop": hook("turn-end"),
         }
-    })
-    .to_string()
+    });
+    if !plugins_off.is_empty() {
+        let off: serde_json::Map<String, serde_json::Value> = plugins_off.iter().map(|p| (p.clone(), false.into())).collect();
+        v["enabledPlugins"] = off.into();
+    }
+    v.to_string()
+}
+
+/// 精簡啟動加在指令後面的旗標：只用 `--mcp-config` 給的 MCP 伺服器、不載入技能。
+/// 實測（claude 2.1.300，`-p` 模式第一次呼叫）：預設約 25K token，加上這兩個再關掉
+/// 外掛約 11.7K。`--bare` 不能用：它連 `--settings` 裡的 hook 都略過、也不讀 OAuth。
+pub const LEAN_FLAGS: &str = "--strict-mcp-config --disable-slash-commands";
+
+/// 使用者在 `~/.claude/settings.json` 啟用的外掛（精簡啟動時逐一關掉）。
+pub fn user_enabled_plugins(settings_json: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(settings_json)
+        .ok()
+        .and_then(|v| v.get("enabledPlugins").and_then(|p| p.as_object()).cloned())
+        .map(|m| m.into_iter().filter(|(_, on)| on.as_bool() == Some(true)).map(|(k, _)| k).collect())
+        .unwrap_or_default()
 }
 
 /// 通知「在等你回覆」「有問題要你決定」時用的卡片資訊。
@@ -449,6 +472,18 @@ pub fn spawn_resumer(state: Arc<QuotaState>, pty: Arc<PtyManager>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lean_dispatch_turns_off_the_users_plugins() {
+        let plugins = user_enabled_plugins(r#"{"enabledPlugins":{"superpowers@x":true,"swift-lsp@x":true,"old@x":false},"model":"opus"}"#);
+        assert_eq!(plugins, vec!["superpowers@x".to_string(), "swift-lsp@x".to_string()]);
+        assert!(user_enabled_plugins("not json").is_empty());
+        let v: serde_json::Value = serde_json::from_str(&hook_settings_json_with("http://h", &plugins)).unwrap();
+        assert_eq!(v["enabledPlugins"], serde_json::json!({"superpowers@x": false, "swift-lsp@x": false}));
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["url"], "http://h/turn-end", "hook 照舊");
+        let plain: serde_json::Value = serde_json::from_str(&hook_settings_json("http://h")).unwrap();
+        assert!(plain.get("enabledPlugins").is_none(), "沒開精簡啟動就不動外掛");
+    }
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn mem_pool() -> SqlitePool {

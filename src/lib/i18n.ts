@@ -1995,6 +1995,8 @@ const zhTW = {
     board_settings_isolate: "派工時建立獨立的 git worktree",
     board_settings_isolate_hint:
       "開啟時，每張卡片會在自己的 worktree 與 aiterm-task/<id> 分支上執行，完成後用「合併回原分支」合併。關閉時 Agent 直接在專案目錄工作——適合讓 Agent 自己操作 git 版控。",
+    board_settings_lean: "Agent 協作精簡啟動",
+    board_settings_lean_hint: "非互動的 Agent 卡片不載入你的外掛、技能與自己的 MCP 伺服器，每張卡啟動時少讀一半以上的 token。卡片需要某個 MCP 工具時再關掉。",
     board_settings_isolate_concurrent_warning:
       "⚠️ 同時執行數大於 1：關閉隔離後，多張卡片會在同一個工作目錄互相覆蓋。",
     board_card_isolate: "git worktree 隔離",
@@ -4010,6 +4012,8 @@ const enRaw = {
     board_settings_isolate: "Create an isolated git worktree for each task",
     board_settings_isolate_hint:
       "When on, each card runs in its own worktree on an aiterm-task/<id> branch and is merged back with \"Merge into base branch\". When off, the agent works directly in the project directory — suitable if you let the agent manage git itself.",
+    board_settings_lean: "Lean start for Agent collaboration",
+    board_settings_lean_hint: "Non-interactive agent cards skip your plugins, skills and your own MCP servers, cutting each card's startup tokens by more than half. Turn it off if a card needs one of those MCP tools.",
     board_settings_isolate_concurrent_warning:
       "⚠️ Concurrency is above 1: with isolation off, multiple cards will overwrite each other in the same working directory.",
     board_card_isolate: "Git worktree isolation",

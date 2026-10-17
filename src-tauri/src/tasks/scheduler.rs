@@ -720,13 +720,23 @@ impl Dispatcher for RealDispatcher {
         };
         // 非互動的 claude 卡片掛上額度 hook：撞到用量上限時卡片改成「等待額度」，
         // 換帳號或過一段時間自動續跑。做不到（接收器起不來、路徑有特殊字元）就照舊派工。
+        // 精簡啟動（非互動的 Agent 卡）：關掉使用者的外掛、只用我們給的 MCP、不載入技能。
+        let lean = session_id.is_some() && !task.interactive && task.agent_id.is_some() && self.config.get().task_board.lean_agent_dispatch;
+        let plugins_off = if lean {
+            dirs::home_dir()
+                .and_then(|h| std::fs::read_to_string(h.join(".claude").join("settings.json")).ok())
+                .map(|t| crate::tasks::quota::user_enabled_plugins(&t))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let quota_args = if session_id.is_some() && !task.interactive {
             match self.quota.hook_base(&task.id).await {
                 Some(base) => {
                     let dir = crate::tasks::task_dir(&project.path, &task.id);
                     let path = dir.join("claude-settings.json");
                     match std::fs::create_dir_all(&dir)
-                        .and_then(|_| std::fs::write(&path, crate::tasks::quota::hook_settings_json(&base)))
+                        .and_then(|_| std::fs::write(&path, crate::tasks::quota::hook_settings_json_with(&base, &plugins_off)))
                     {
                         Ok(()) => crate::tasks::quota::settings_flag(&path),
                         Err(e) => {
@@ -742,7 +752,8 @@ impl Dispatcher for RealDispatcher {
         };
         // 依角色指定的模型（只對 claude 指令加，看不出是 claude 就不動）。
         let model_args = if session_id.is_some() { model_flag(agent.as_ref().and_then(|a| a.model.as_deref())) } else { None };
-        let extra_args = join_args([model_args, quota_args.clone(), ask_args]);
+        let lean_args = lean.then(|| crate::tasks::quota::LEAN_FLAGS.to_string());
+        let extra_args = join_args([model_args, quota_args.clone(), ask_args, lean_args]);
         if resume {
             // 卡片內容已經在對話裡了，只要叫它接著做。驗收卡的埠剛重新挑過，要再告訴它一次。
             let ports_note = prompt.rfind("\n\n可用的埠：").map(|i| prompt[i..].to_string()).unwrap_or_default();

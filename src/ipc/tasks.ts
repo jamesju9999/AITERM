@@ -100,6 +100,8 @@ export interface TaskBoardConfig {
   max_concurrent: number;
   /** 派工時是否為每張卡片建立獨立的 git worktree。 */
   isolate_with_worktree: boolean;
+  /** Agent 協作的非互動卡片不載入外掛、技能與使用者自己的 MCP 伺服器。 */
+  lean_agent_dispatch?: boolean;
   claude_command: string;
   auto_close_finished_tabs: boolean;
   notify_desktop_on_finish: boolean;

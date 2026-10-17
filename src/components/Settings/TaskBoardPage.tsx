@@ -124,6 +124,20 @@ export function TaskBoardPage() {
           <span className="task-board-hint">{t.board_settings_isolate_hint}</span>
         </label>
 
+        <label className="task-board-field task-board-field--checkbox">
+          <input
+            type="checkbox"
+            className="task-board-checkbox"
+            checked={cfg.lean_agent_dispatch ?? true}
+            onChange={(e) => {
+              setSaved(false);
+              setCfg({ ...cfg, lean_agent_dispatch: e.target.checked });
+            }}
+          />
+          <span>{t.board_settings_lean}</span>
+          <span className="task-board-hint">{t.board_settings_lean_hint}</span>
+        </label>
+
         {/* 關掉隔離之後，多張卡片會在同一個工作目錄互相覆蓋——Agent 會自己
             管 git，不代表兩個 Agent 同時改同一份檔案不會打架。只提醒，不代
             使用者改 max_concurrent。 */}

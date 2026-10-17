@@ -39,6 +39,7 @@ pub(crate) fn apply_editable_task_board_fields(
         notify_telegram_on_finish: incoming.notify_telegram_on_finish,
         stuck_timeout_secs: incoming.stuck_timeout_secs.clamp(60, 21_600),
         isolate_with_worktree: incoming.isolate_with_worktree,
+        lean_agent_dispatch: incoming.lean_agent_dispatch,
     }
 }
 
@@ -69,6 +70,7 @@ mod tests {
             notify_telegram_on_finish: true,
             stuck_timeout_secs: 1200,
             isolate_with_worktree: true,
+            lean_agent_dispatch: true,
         }
     }
 
@@ -86,6 +88,7 @@ mod tests {
             notify_telegram_on_finish: true,
             stuck_timeout_secs: 1200,
             isolate_with_worktree: true,
+            lean_agent_dispatch: true,
         };
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert_eq!(merged.max_concurrent, 3);
@@ -108,6 +111,7 @@ mod tests {
             notify_telegram_on_finish: true,
             stuck_timeout_secs: 1200,
             isolate_with_worktree: true,
+            lean_agent_dispatch: true,
         };
         let merged = apply_editable_task_board_fields(&current(), incoming);
         assert_eq!(
@@ -127,6 +131,7 @@ mod tests {
             notify_telegram_on_finish: true,
             stuck_timeout_secs: 1200,
             isolate_with_worktree: true,
+            lean_agent_dispatch: true,
         };
         assert_eq!(apply_editable_task_board_fields(&current(), mk(0)).max_concurrent, 1);
         assert_eq!(apply_editable_task_board_fields(&current(), mk(99)).max_concurrent, 16);
@@ -144,6 +149,7 @@ mod tests {
             notify_telegram_on_finish: true,
             stuck_timeout_secs: 1200,
             isolate_with_worktree: true,
+            lean_agent_dispatch: true,
         };
         assert_eq!(
             apply_editable_task_board_fields(&current(), incoming).claude_command,
