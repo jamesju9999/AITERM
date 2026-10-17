@@ -54,7 +54,8 @@ export function AgentConfigDialog({
   const [prefix, setPrefix] = useState(agent?.prompt_prefix ?? roles[0].prefix);
   const [dir, setDir] = useState(agent?.project_dir ?? "");
   const [producesSpec, setProducesSpec] = useState(agent?.produces_spec ?? false);
-  const [model, setModel] = useState(agent?.model ?? "");
+  // 新的審核者、驗收者預設用 Sonnet：判定與照條件驗收不需要最貴的模型，可以改。
+  const [model, setModel] = useState(agent?.model ?? (isNew && (kind === "reviewer" || kind === "verifier") ? "sonnet" : ""));
   const [dirs, setDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   /** 程式庫檢查結果。null = 還沒查完（或欄位是空的）。 */

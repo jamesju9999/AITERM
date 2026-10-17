@@ -290,6 +290,19 @@ describe("AgentCanvasView", () => {
     );
   });
 
+  it("新的審核者、驗收者模型預設 sonnet；工程師沿用預設", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    for (const [kind, expected] of [["verifier", "sonnet"], ["reviewer", "sonnet"], ["coder", ""]] as const) {
+      drag(await screen.findByTestId(`pool-${kind}`), document.querySelector('[data-drop="canvas"]') as Element);
+      const dlg = await screen.findByRole("dialog");
+      expect((within(dlg).getByLabelText(/^模型$|^Model$/) as HTMLInputElement).value).toBe(expected);
+      fireEvent.click(within(dlg).getByRole("button", { name: /取消|Cancel/ }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    }
+  });
+
   it("可以自訂角色名稱與提示詞，存成我的角色後下次從選單帶入", async () => {
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
