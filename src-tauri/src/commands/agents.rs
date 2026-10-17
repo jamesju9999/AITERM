@@ -42,6 +42,9 @@ pub struct CreateAgentArgs {
     /// 派工時的 `--model`；空字串或不送＝沿用預設。
     #[serde(default)]
     pub model: Option<String>,
+    /// AI 工具（claude／codex）；不送＝claude。
+    #[serde(default)]
+    pub cli: Option<String>,
 }
 
 #[tauri::command]
@@ -85,6 +88,9 @@ pub async fn agents_create(
         agents::set_produces_spec(&p.pool, &id, true).await.map_err(|e| e.to_string())?;
     }
     agents::set_model(&p.pool, &id, args.model.as_deref()).await.map_err(|e| e.to_string())?;
+    if let Some(cli) = &args.cli {
+        agents::set_cli(&p.pool, &id, cli).await.map_err(|e| e.to_string())?;
+    }
     emit_updated(&app);
     Ok(id)
 }
@@ -103,6 +109,9 @@ pub struct UpdateAgentArgs {
     /// `None` = 不改；空字串 = 清掉（沿用預設）。
     #[serde(default)]
     pub model: Option<String>,
+    /// `None` = 不改。
+    #[serde(default)]
+    pub cli: Option<String>,
 }
 
 #[tauri::command]
@@ -121,6 +130,9 @@ pub async fn agents_update(
     }
     if let Some(m) = &args.model {
         agents::set_model(&p.pool, &args.id, Some(m)).await.map_err(|e| e.to_string())?;
+    }
+    if let Some(cli) = &args.cli {
+        agents::set_cli(&p.pool, &args.id, cli).await.map_err(|e| e.to_string())?;
     }
     emit_updated(&app);
     Ok(())

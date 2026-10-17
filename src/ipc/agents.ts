@@ -28,7 +28,11 @@ export interface AgentRow {
   produces_spec: boolean;
   /** 派工時的 `--model`。null = 沿用 claude 的預設。 */
   model?: string | null;
+  /** 用哪個 AI 工具做事；舊資料沒有 = claude。 */
+  cli?: AgentCli;
 }
+
+export type AgentCli = "claude" | "codex";
 
 export interface NewAgentArgs {
   kind: AgentKind;
@@ -41,6 +45,7 @@ export interface NewAgentArgs {
   produces_spec?: boolean;
   /** 空字串或省略 = 沿用預設。 */
   model?: string;
+  cli?: AgentCli;
 }
 
 export interface UpdateAgentArgs {
@@ -54,6 +59,8 @@ export interface UpdateAgentArgs {
   produces_spec?: boolean;
   /** 省略 = 不改；空字串 = 清掉（沿用預設）。 */
   model?: string;
+  /** 省略 = 不改。 */
+  cli?: AgentCli;
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────

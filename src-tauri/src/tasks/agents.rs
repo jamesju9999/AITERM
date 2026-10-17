@@ -36,6 +36,8 @@ pub struct AgentRow {
     pub produces_spec: bool,
     /// 派工時給 claude 的 `--model`（opus／sonnet／完整模型名稱）。`None`＝沿用預設。
     pub model: Option<String>,
+    /// 用哪個 AI 工具做事：`claude`（預設）｜`codex`。見 docs/superpowers/specs/2026-10-17-agent-codex-design.md。
+    pub cli: String,
 }
 
 pub struct NewAgent<'a> {
@@ -154,6 +156,18 @@ pub async fn set_agent_worktree(
 pub async fn set_model(pool: &SqlitePool, id: &str, model: Option<&str>) -> Result<(), sqlx::Error> {
     let model = model.map(str::trim).filter(|m| !m.is_empty());
     sqlx::query("UPDATE agents SET model = ? WHERE id = ?").bind(model).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+pub const CLI_CLAUDE: &str = "claude";
+pub const CLI_CODEX: &str = "codex";
+
+/// 設定 AI 工具；只接受 `claude`／`codex`。
+pub async fn set_cli(pool: &SqlitePool, id: &str, cli: &str) -> Result<(), sqlx::Error> {
+    if cli != CLI_CLAUDE && cli != CLI_CODEX {
+        return Err(sqlx::Error::Protocol(format!("未知的 AI 工具：{cli}")));
+    }
+    sqlx::query("UPDATE agents SET cli = ? WHERE id = ?").bind(cli).bind(id).execute(pool).await?;
     Ok(())
 }
 
@@ -514,6 +528,17 @@ mod tests {
             .bind(&rid).execute(&pool).await.unwrap();
         delete_agent(&pool, &rid).await.unwrap();
         assert!(store::get_task(&pool, "rv").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_agent_uses_claude_unless_set_to_codex() {
+        let pool = mem_pool().await;
+        let id = coder(&pool, "C").await;
+        assert_eq!(get_agent(&pool, &id).await.unwrap().unwrap().cli, "claude");
+        set_cli(&pool, &id, "codex").await.unwrap();
+        assert_eq!(get_agent(&pool, &id).await.unwrap().unwrap().cli, "codex");
+        assert!(set_cli(&pool, &id, "bogus").await.is_err(), "只接受 claude／codex");
+        assert_eq!(get_agent(&pool, &id).await.unwrap().unwrap().cli, "codex");
     }
 
     #[tokio::test]
