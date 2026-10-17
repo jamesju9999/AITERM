@@ -130,9 +130,19 @@
 ### 6.3 待驗證（寫計畫前或計畫第一步要確認）
 
 1. ~~截圖給絕對路徑會不會被擋~~ 已驗證（2026-10-17）：工作目錄與 `--output-dir` 以外的絕對路徑被擋（`File access denied … outside allowed roots`）；**`--output-dir` 底下的絕對路徑可以寫**。所以提示要求截圖一律存成 `<task_dir>/evidence/<名稱>.png` 的絕對路徑，`--output-dir` 就設成那個資料夾，不需要開放任意檔案存取。
-2. **沒有裝 Chrome 的機器**：預設用 Chrome，沒有的話會怎樣？要不要改 `--browser chromium` 並在第一次使用時下載（約 150MB）？
-   驗證：用乾淨的 HOME、`--browser` 各種值跑 probe。Windows、Linux 各跑一次。
+2. **沒有裝 Chrome 的機器**（2026-10-17 macOS 實測）：
+   - 預設通道是系統 Chrome；不存在時工具回 `Chromium distribution '…' is not found … Run "npx playwright install …"`（用 `--browser msedge` 模擬）。裝 Google Chrome 本身可能要管理員權限，不採用。
+   - `--browser chromium` 找的是 Playwright 的 Chrome for Testing，沒有時回 `not installed … Run npx @playwright/mcp install-browser chrome-for-testing`。這個安裝在使用者自己的快取（98 MiB、約 1 分鐘、不用管理員權限），**同一個 MCP session 裡裝好後重試導航就成功**。
+   - 作法：App 派工時偵測系統 Chrome（macOS `/Applications`、`~/Applications`；Windows Program Files／LocalAppData；Linux `/opt/google/chrome/chrome`）；沒有就加 `--browser chromium`，提示要求驗收者遇到 not installed 先跑 `npx -y @playwright/mcp@0.0.83 install-browser chrome-for-testing` 再重試。
+   - Windows、Linux 尚未實測。
 3. 沒有 Node.js（沒有 npx）的機器：驗收者照樣能做非網頁的驗收，瀏覽器工具不可用時要在 verify.json 把需要瀏覽器的條件標成 `manual` 並說明原因，不能當通過。
+
+### 6.4 真 claude 實測（2026-10-17）
+
+故意有 bug 的計數器網頁（按 +1 實際加 2），用 App 產生的提示＋同一份 mcp.json 跑真 claude：
+用指定的埠啟動 python http.server → 瀏覽器實際點擊 → 4 張截圖存進 evidence → 判定 fail，
+`module_id` 正確、附重現步驟與預期／實際 → 結束前關掉伺服器與瀏覽器 → repo 沒有變更。
+花費 0.36 美元、約 32 萬 token（大部分是快取讀取）。
 
 ## 7. verify.json
 

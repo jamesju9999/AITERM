@@ -812,7 +812,8 @@ pub fn verify_body(modules: &[&TaskRow], spec_text: &str, json_path: &Path, evid
          \n專案自己有測試就一定要跑。\n\
          \n截圖一律存成這個資料夾底下的絕對路徑：{evidence}（例如 {evidence}/start.png）。存到別的地方會被拒絕。\n\
          伺服器只能用下面「可用的埠」，驗收結束前把你啟動的伺服器、瀏覽器都關掉（browser_close）。\n\
-         瀏覽器工具或其他工具不能用時，把需要它的條件標成 manual 並寫原因，不能當成通過。\n\
+         瀏覽器工具回報瀏覽器沒有安裝（not installed／not found）時，先執行 `{install}` 再重試一次（第一次要下載約 100MB）。\n\
+         瀏覽器工具或其他工具還是不能用時，把需要它的條件標成 manual 並寫原因，不能當成通過。\n\
          \n完成後把結果寫成 JSON 檔到：{json}\n\
          格式：\n\
          {{\"verdict\": \"pass\" 或 \"fail\", \"project_type\": \"web\", \"items\": [\
@@ -824,6 +825,7 @@ pub fn verify_body(modules: &[&TaskRow], spec_text: &str, json_path: &Path, evid
          任何一條 fail，verdict 就是 fail。manual 不算失敗，但一定要寫原因。\
          evidence 裡的檔案路徑寫成相對於 {dir} 的路徑。\n",
         evidence = evidence.display(),
+        install = crate::tasks::ask::BROWSER_INSTALL,
         json = json_path.display(),
         dir = json_path.parent().map(|p| p.display().to_string()).unwrap_or_default(),
     ));
@@ -2359,7 +2361,7 @@ mod tests {
     fn the_verify_prompt_lists_modules_evidence_dir_and_project_types() {
         let m = TaskRow { title: "計時器".into(), body: "按開始倒數".into(), ..test_row("m1") };
         let body = verify_body(&[&m], "規格：倒數 25 分鐘", Path::new("/p/tasks/v/verify.json"), Path::new("/p/tasks/v/evidence"));
-        for needle in ["[m1] 計時器", "按開始倒數", "規格：倒數 25 分鐘", "/p/tasks/v/verify.json", "/p/tasks/v/evidence", "網頁前端", "manual", "module_id", "mcp__playwright"] {
+        for needle in ["[m1] 計時器", "按開始倒數", "規格：倒數 25 分鐘", "/p/tasks/v/verify.json", "/p/tasks/v/evidence", "網頁前端", "manual", "module_id", "mcp__playwright", "install-browser chrome-for-testing"] {
             assert!(body.contains(needle), "缺少 {needle}：{body}");
         }
         let no_spec = verify_body(&[&m], "", Path::new("/j"), Path::new("/e"));

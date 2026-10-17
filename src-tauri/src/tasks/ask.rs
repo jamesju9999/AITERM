@@ -97,22 +97,67 @@ pub const PLAYWRIGHT_MCP: &str = "@playwright/mcp@0.0.83";
 /// `--allowedTools` 裡代表整個 playwright 伺服器的工具。
 pub const BROWSER_TOOLS: &str = "mcp__playwright";
 
+/// 驗收者的瀏覽器：有裝 Chrome 就用它（不必下載）；沒有就用 Playwright 的
+/// Chrome for Testing，第一次用要先下載（約 100MB，裝在使用者自己的快取，不需要
+/// 管理員權限；實測同一個 session 裡裝好就能直接用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Browser {
+    SystemChrome,
+    Bundled,
+}
+
+/// 驗收者沒有瀏覽器時要執行的安裝指令（寫進提示）。
+pub const BROWSER_INSTALL: &str = "npx -y @playwright/mcp@0.0.83 install-browser chrome-for-testing";
+
+/// 這台電腦有沒有裝 Google Chrome（Playwright 的 `chrome` 通道找的位置）。
+pub fn detect_browser() -> Browser {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if cfg!(target_os = "macos") {
+        candidates.push("/Applications/Google Chrome.app".into());
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(home.join("Applications/Google Chrome.app"));
+        }
+    } else if cfg!(windows) {
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            if let Ok(base) = std::env::var(var) {
+                candidates.push(std::path::Path::new(&base).join("Google/Chrome/Application/chrome.exe"));
+            }
+        }
+    } else {
+        candidates.push("/opt/google/chrome/chrome".into());
+    }
+    if candidates.iter().any(|p| p.exists()) {
+        Browser::SystemChrome
+    } else {
+        Browser::Bundled
+    }
+}
+
 /// `--mcp-config` 的內容：`ask_url` 有值就放 ask_human；`browser_out` 有值就放
 /// 無頭、獨立設定檔的瀏覽器，截圖等輸出寫在那個資料夾（它只准寫那裡與工作目錄）。
 /// 兩個都沒有就是 `None`。
 pub fn mcp_config_json_with(ask_url: Option<&str>, browser_out: Option<&std::path::Path>) -> Option<String> {
+    mcp_config_json_for(ask_url, browser_out, Browser::SystemChrome)
+}
+
+pub fn mcp_config_json_for(ask_url: Option<&str>, browser_out: Option<&std::path::Path>, browser: Browser) -> Option<String> {
     let mut servers = serde_json::Map::new();
     if let Some(url) = ask_url {
         servers.insert("aiterm".into(), json!({ "type": "http", "url": url }));
     }
     if let Some(out) = browser_out {
-        servers.insert(
-            "playwright".into(),
-            json!({
-                "command": "npx",
-                "args": ["-y", PLAYWRIGHT_MCP, "--headless", "--isolated", "--output-dir", out.to_string_lossy()],
-            }),
-        );
+        let mut args = vec![
+            "-y".to_string(),
+            PLAYWRIGHT_MCP.into(),
+            "--headless".into(),
+            "--isolated".into(),
+            "--output-dir".into(),
+            out.to_string_lossy().into_owned(),
+        ];
+        if browser == Browser::Bundled {
+            args.extend(["--browser".to_string(), "chromium".to_string()]);
+        }
+        servers.insert("playwright".into(), json!({ "command": "npx", "args": args }));
     }
     (!servers.is_empty()).then(|| json!({ "mcpServers": servers }).to_string())
 }
@@ -142,6 +187,15 @@ mod tests {
         assert_eq!(mcp_config_json_with(None, None), None);
         // 其他卡片的設定跟原本一模一樣。
         assert_eq!(mcp_config_json("http://x/mcp"), r#"{"mcpServers":{"aiterm":{"type":"http","url":"http://x/mcp"}}}"#);
+    }
+
+    #[test]
+    fn without_chrome_the_verifier_uses_the_bundled_browser() {
+        let out = std::path::Path::new("/e");
+        let v: Value = serde_json::from_str(&mcp_config_json_for(None, Some(out), Browser::Bundled).unwrap()).unwrap();
+        let args = v["mcpServers"]["playwright"]["args"].as_array().unwrap();
+        assert_eq!(&args[args.len() - 2..], &[json!("--browser"), json!("chromium")]);
+        assert!(BROWSER_INSTALL.contains(PLAYWRIGHT_MCP), "安裝指令與 MCP 同一個版本");
     }
 
     #[test]

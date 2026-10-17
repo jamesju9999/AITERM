@@ -619,7 +619,8 @@ impl Dispatcher for RealDispatcher {
             None
         };
         let evidence = (session_id.is_some() && is_verify).then(|| crate::tasks::workflow::evidence_dir(&project.path, &task.id));
-        let ask_args = match crate::tasks::ask::mcp_config_json_with(ask_url.as_deref(), evidence.as_deref()) {
+        let browser = if evidence.is_some() { crate::tasks::ask::detect_browser() } else { crate::tasks::ask::Browser::SystemChrome };
+        let ask_args = match crate::tasks::ask::mcp_config_json_for(ask_url.as_deref(), evidence.as_deref(), browser) {
             Some(json) => {
                 let dir = crate::tasks::task_dir(&project.path, &task.id);
                 let path = dir.join("mcp.json");
