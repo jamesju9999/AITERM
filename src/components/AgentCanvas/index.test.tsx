@@ -881,6 +881,34 @@ describe("AgentCanvasView", () => {
     });
   });
 
+  describe("AI 工具（Claude Code／Codex）", () => {
+    it("選 Codex 時模型必填，送出帶 cli: codex", async () => {
+      vi.mocked(listAgents).mockResolvedValue([]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
+      const dlg = await screen.findByRole("dialog");
+      await within(dlg).findByText(/^✓/);
+      fireEvent.click(within(dlg).getByRole("radio", { name: "Codex" }));
+      const submit = within(dlg).getByRole("button", { name: /放上桌布|Place on canvas/ });
+      await waitFor(() => expect(submit).toBeDisabled());
+      fireEvent.change(within(dlg).getByLabelText(/^模型$|^Model$/), { target: { value: "Qwen3.6-35B-A3B-4bit" } });
+      await waitFor(() => expect(submit).not.toBeDisabled());
+      fireEvent.click(submit);
+      await waitFor(() =>
+        expect(createAgent).toHaveBeenCalledWith("p1", expect.objectContaining({ cli: "codex", model: "Qwen3.6-35B-A3B-4bit" })),
+      );
+    });
+
+    it("Codex 的卡片標出 Codex", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent({ cli: "codex", model: "qwen" })]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      const node = await screen.findByTestId("agent-a1");
+      expect(within(node).getByText(/^Codex · qwen$/)).toBeTruthy();
+    });
+  });
+
   describe("待決策收件匣", () => {
     const question = (over: Partial<QuestionView> = {}): QuestionView => ({
       project_id: "p1", project_name: "HTBKTW", task_title: "規格", agent_name: "Coder Agent1",

@@ -1,4 +1,4 @@
-import type { AgentKind, AgentRow, NewAgentArgs } from "../../ipc/agents";
+import type { AgentCli, AgentKind, AgentRow, NewAgentArgs } from "../../ipc/agents";
 
 /** 範本裡的一位 Agent：角色設定與相對位置，不含程式庫（套用時再選）。 */
 export interface TemplateAgent {
@@ -7,6 +7,8 @@ export interface TemplateAgent {
   role: string;
   prompt_prefix: string;
   model: string;
+  /** 舊範本沒有 = Claude Code。 */
+  cli?: AgentCli;
   produces_spec: boolean;
   dx: number;
   dy: number;
@@ -65,6 +67,7 @@ export function snapshot(name: string, agents: AgentRow[]): TeamTemplate {
       role: a.role,
       prompt_prefix: a.prompt_prefix,
       model: a.model ?? "",
+      cli: a.cli ?? "claude",
       produces_spec: a.produces_spec,
       dx: a.canvas_x - x0,
       dy: a.canvas_y - y0,
@@ -90,5 +93,6 @@ export function toCreate(tpl: TeamTemplate, existing: AgentRow[], repoDir: strin
       canvas_y: y + a.dy,
       produces_spec: a.produces_spec,
       model: a.model,
+      cli: a.cli ?? "claude",
     }));
 }

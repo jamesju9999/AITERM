@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { checkRepo, initRepo, type AgentKind, type AgentRow, type RepoCheck } from "../../ipc/agents";
+import { checkRepo, initRepo, type AgentCli, type AgentKind, type AgentRow, type RepoCheck } from "../../ipc/agents";
 import { usedDirs } from "../../ipc/projects";
 import { deleteCustomRole, loadCustomRoles, saveCustomRole, type CustomRole } from "./customRoles";
 import { builtinRoles, type RolePreset } from "./roles";
@@ -16,6 +16,8 @@ export interface AgentConfigValues {
   produces_spec: boolean;
   /** 派工時的 `--model`；空字串 = 沿用預設。 */
   model: string;
+  /** 用哪個 AI 工具做事。 */
+  cli: AgentCli;
 }
 
 /** 模型欄位的建議值（Claude Code 的別名）；也可以輸入完整的模型名稱。 */
@@ -56,6 +58,14 @@ export function AgentConfigDialog({
   const [producesSpec, setProducesSpec] = useState(agent?.produces_spec ?? false);
   // 新的審核者、驗收者預設用 Sonnet：判定與照條件驗收不需要最貴的模型，可以改。
   const [model, setModel] = useState(agent?.model ?? (isNew && (kind === "reviewer" || kind === "verifier") ? "sonnet" : ""));
+  const [cli, setCli] = useState<AgentCli>(agent?.cli ?? "claude");
+  // Codex 沿用使用者 ~/.codex/config.toml 的供應商，預設模型不一定存在於供應商上，所以必填。
+  const modelMissing = cli === "codex" && !model.trim();
+  const pickCli = (next: AgentCli) => {
+    setCli(next);
+    // Claude 的別名（sonnet…）對 Codex 沒有意義，切過去時清掉。
+    if (next === "codex" && MODEL_SUGGESTIONS.includes(model.trim())) setModel("");
+  };
   const [dirs, setDirs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   /** 程式庫檢查結果。null = 還沒查完（或欄位是空的）。 */
@@ -165,6 +175,7 @@ export function AgentConfigDialog({
         project_dir: dir.trim(),
         produces_spec: kind === "coder" && producesSpec,
         model: model.trim(),
+        cli,
       });
     } catch (e) {
       // Tauri 的 invoke 錯誤是字串；其他情況才是 Error。
@@ -261,14 +272,25 @@ export function AgentConfigDialog({
             <span>📐 {t.ac_produces_spec}</span>
           </label>
         )}
+        <div className="task-field">
+          <span className="task-field-label">{t.ac_cli}</span>
+          <div className="ac-cli" role="radiogroup" aria-label={t.ac_cli}>
+            {(["claude", "codex"] as const).map((c) => (
+              <label key={c} className={`ac-cli-option${cli === c ? " ac-cli-option--on" : ""}`}>
+                <input type="radio" name="ac-cli" checked={cli === c} onChange={() => pickCli(c)} />
+                {c === "claude" ? "Claude Code" : "Codex"}
+              </label>
+            ))}
+          </div>
+        </div>
         <label className="task-field">
           <span className="task-field-label">{t.ac_model}</span>
           <input
             className="task-field-input"
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder={t.ac_model_placeholder}
-            list="ac-model-suggestions"
+            placeholder={cli === "codex" ? t.ac_model_placeholder_codex : t.ac_model_placeholder}
+            list={cli === "codex" ? undefined : "ac-model-suggestions"}
             aria-label={t.ac_model}
             spellCheck={false}
           />
@@ -277,7 +299,9 @@ export function AgentConfigDialog({
               <option key={m} value={m} />
             ))}
           </datalist>
-          <span className="task-field-hint">{t.ac_model_hint}</span>
+          <span className={`task-field-hint${modelMissing ? " ac-bad-text" : ""}`}>
+            {cli === "codex" ? t.ac_model_hint_codex : t.ac_model_hint}
+          </span>
         </label>
         <div className="ac-role-save">
           <button
@@ -361,7 +385,7 @@ export function AgentConfigDialog({
           <button className="aiterm-btn aiterm-btn--secondary" disabled={busy} onClick={onCancel}>
             {t.ac_cancel}
           </button>
-          <button className="aiterm-btn aiterm-btn--primary" disabled={busy || (isNew && !dir.trim()) || !repoReady} onClick={() => void submit()}>
+          <button className="aiterm-btn aiterm-btn--primary" disabled={busy || (isNew && !dir.trim()) || !repoReady || modelMissing} onClick={() => void submit()}>
             {isNew ? t.ac_place : t.ac_save}
           </button>
         </div>

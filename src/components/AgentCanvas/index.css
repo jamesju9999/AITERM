@@ -192,6 +192,11 @@
 .ac-agent-name > .ac-agent-sub { display: flex; align-items: center; gap: 5px; }
 .ac-agent-role { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ac-model { flex: none; font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--border-color); color: var(--text-secondary); }
+.ac-model--codex { border-color: color-mix(in srgb, #10b981 45%, transparent); color: #6ee7b7; }
+.ac-cli { display: flex; gap: 8px; }
+.ac-cli-option { display: flex; align-items: center; gap: 6px; padding: 5px 12px; border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; font-size: 12.5px; }
+.ac-cli-option--on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.ac-cli-option input { margin: 0; }
 .ac-badge {
   font-size: 10.5px;
   font-weight: 600;

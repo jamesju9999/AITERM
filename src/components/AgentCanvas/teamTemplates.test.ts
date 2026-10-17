@@ -38,6 +38,13 @@ describe("teamTemplates", () => {
     expect(toCreate(tpl, [], "/repo", 0, 0).map((a) => a.kind)).toContain("reviewer");
   });
 
+  it("記住每位 Agent 的 AI 工具；舊範本沒有就是 Claude Code", () => {
+    const tpl = snapshot("t", [ag({ id: "c1", cli: "codex", model: "qwen" }), ag({ id: "c2" })]);
+    expect(toCreate(tpl, [], "/repo", 0, 0).map((a) => a.cli)).toEqual(["codex", "claude"]);
+    const old = { name: "舊", agents: tpl.agents.map(({ cli: _cli, ...rest }) => rest) };
+    expect(toCreate(old, [], "/repo", 0, 0).map((a) => a.cli)).toEqual(["claude", "claude"]);
+  });
+
   it("存在這台機器、同名覆蓋、可以刪除", () => {
     saveTemplate(snapshot("A", team));
     saveTemplate(snapshot("B", team.slice(0, 1)));

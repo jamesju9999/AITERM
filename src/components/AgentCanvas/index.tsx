@@ -506,6 +506,7 @@ export function AgentCanvasView({
         canvas_y: a.canvas_y,
         produces_spec: v.produces_spec,
         model: v.model,
+        cli: v.cli,
       });
     } else {
       await createAgent(projectId, {
@@ -518,6 +519,7 @@ export function AgentCanvasView({
         canvas_y: config.y,
         produces_spec: v.produces_spec,
         model: v.model,
+        cli: v.cli,
       });
     }
     setConfig(null);
