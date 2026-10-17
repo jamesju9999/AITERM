@@ -483,6 +483,16 @@ struct ModuleAttentionEvent {
     module_title: String,
 }
 
+/// 驗收沒通過、要使用者決定時送給前端的通知。
+#[derive(Clone, serde::Serialize)]
+struct VerifyAttentionEvent {
+    project_id: String,
+    project_name: String,
+    verify_id: String,
+    /// 找不到負責模組的失敗項數。
+    unowned: usize,
+}
+
 /// `task-finished` 的酬載：明確指出剛到達終局的是哪個專案的哪張卡片、
 /// 用的是哪個分頁。前端靠它把對話記錄換成 xterm 序列化出來的乾淨版本
 /// （那需要活著的 xterm 實例，只有前端有）。
@@ -815,16 +825,30 @@ impl Dispatcher for RealDispatcher {
                 match crate::tasks::workflow::after_card_finished(&pool, &project_path, &task_id).await {
                     Ok(events) => {
                         for ev in events {
-                            let crate::tasks::workflow::WorkflowEvent::Attention { module_id, module_title } = ev;
-                            let _ = app.emit(
-                                "agent-module-attention",
-                                ModuleAttentionEvent {
-                                    project_id: project_id.clone(),
-                                    project_name: project_name.clone(),
-                                    module_id,
-                                    module_title,
-                                },
-                            );
+                            match ev {
+                                crate::tasks::workflow::WorkflowEvent::Attention { module_id, module_title } => {
+                                    let _ = app.emit(
+                                        "agent-module-attention",
+                                        ModuleAttentionEvent {
+                                            project_id: project_id.clone(),
+                                            project_name: project_name.clone(),
+                                            module_id,
+                                            module_title,
+                                        },
+                                    );
+                                }
+                                crate::tasks::workflow::WorkflowEvent::VerifyAttention { verify_id, unowned } => {
+                                    let _ = app.emit(
+                                        "agent-verify-attention",
+                                        VerifyAttentionEvent {
+                                            project_id: project_id.clone(),
+                                            project_name: project_name.clone(),
+                                            verify_id,
+                                            unowned,
+                                        },
+                                    );
+                                }
+                            }
                         }
                     }
                     Err(e) => eprintln!("workflow after {task_id}: {e}"),

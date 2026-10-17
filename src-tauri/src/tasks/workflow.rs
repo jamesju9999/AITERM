@@ -154,6 +154,9 @@ pub fn module_state(module: &TaskRow, chain: &[TaskRow], has_reviewer: bool) -> 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowEvent {
     Attention { module_id: String, module_title: String },
+    /// 驗收沒通過而且要使用者決定：有找不到模組的失敗項（`unowned` 項），
+    /// 或連續失敗超過輪數上限。
+    VerifyAttention { verify_id: String, unowned: usize },
 }
 
 /// `<專案>/tasks/<plan_id>/tasks.json`——Orchestrator 寫拆解結果的位置。
@@ -891,8 +894,10 @@ pub async fn after_card_finished(
                 }
             }
             if let (Some(module), Some(reviewer)) = (module, find_kind(&all_agents, "reviewer")) {
+                // 上一輪的審查意見只在「審查退回」後才有；驗收退回的修正卡接在通過的
+                // 審查後面，那張的意見不是這次要修的東西（要修的寫在修正卡內文）。
                 let previous = match task.review_of.as_deref() {
-                    Some(rid) => store::get_task(pool, rid).await?,
+                    Some(rid) => store::get_task(pool, rid).await?.filter(|r| r.verdict.as_deref() == Some("fail")),
                     None => None,
                 };
                 // 先插入拿到 id，才知道 review.json 放哪；body 隨後補上。
@@ -933,9 +938,21 @@ pub async fn after_card_finished(
         KIND_PLAN if success => {
             events.extend(dispatch_plan(pool, project_path, &task, &all_agents).await?);
         }
-        KIND_MERGE if success => {
-            let verdict = fast_forward_repo(&task.project_dir, task.end_sha.as_deref()).await;
-            sqlx::query("UPDATE tasks SET verdict = ? WHERE id = ?").bind(verdict).bind(&task.id).execute(pool).await?;
+        KIND_MERGE if success => match find_kind(&all_agents, "verifier") {
+            // 有驗收者：驗收通過才更新程式庫（見 on_verify_passed）。
+            Some(verifier) => {
+                create_verify_card(pool, project_path, &task, verifier).await?;
+            }
+            None => {
+                let verdict = fast_forward_repo(&task.project_dir, task.end_sha.as_deref()).await;
+                sqlx::query("UPDATE tasks SET verdict = ? WHERE id = ?").bind(verdict).bind(&task.id).execute(pool).await?;
+            }
+        },
+        KIND_VERIFY if success && task.verdict.as_deref() == Some("pass") => {
+            on_verify_passed(pool, &task).await?;
+        }
+        KIND_VERIFY if success && task.verdict.as_deref() == Some("fail") => {
+            events.extend(on_verify_failed(pool, project_path, &task).await?);
         }
         KIND_REVIEW if success && task.verdict.as_deref() == Some("fail") => {
             let Some(mid) = task.module_id.as_deref() else { return Ok(events) };
@@ -980,6 +997,137 @@ pub async fn after_card_finished(
 
     maybe_enqueue_merge(pool).await?;
     Ok(events)
+}
+
+/// 專案裡指派給工程師的模組（work 卡）。
+fn coder_modules<'a>(all_agents: &[AgentRow], tasks: &'a [TaskRow]) -> Vec<&'a TaskRow> {
+    let coders: HashSet<&str> = all_agents.iter().filter(|a| a.kind == "coder").map(|a| a.id.as_str()).collect();
+    tasks
+        .iter()
+        .filter(|t| t.card_kind == KIND_WORK && t.agent_id.as_deref().is_some_and(|a| coders.contains(a)))
+        .collect()
+}
+
+/// 合併成功後替驗收者建一張驗收卡；受驗版本 = 合併結果。
+async fn create_verify_card(pool: &SqlitePool, project_path: &Path, merge: &TaskRow, verifier: &AgentRow) -> Result<String, sqlx::Error> {
+    let all_agents = agents::list_agents(pool).await?;
+    let tasks = store::list_tasks(pool).await?;
+    let modules = coder_modules(&all_agents, &tasks);
+    let mut spec = String::new();
+    for m in modules.iter().filter(|m| m.is_spec) {
+        spec.push_str(&spec_appendix(&m.project_dir, m.start_sha.as_deref(), m.end_sha.as_deref()).await);
+    }
+    let id = insert_card(
+        pool,
+        &NewCard {
+            title: "驗收：合併結果",
+            body: "",
+            project_dir: &merge.project_dir,
+            agent_id: &verifier.id,
+            card_kind: KIND_VERIFY,
+            module_id: None,
+            review_of: Some(&merge.id),
+            start_sha: merge.start_sha.as_deref(),
+            end_sha: merge.end_sha.as_deref(),
+            sort_order: queued_tail(pool).await?,
+            from_spec: None,
+        },
+    )
+    .await?;
+    let body = verify_body(&modules, &spec, &verify_json_path(project_path, &id), &evidence_dir(project_path, &id));
+    sqlx::query("UPDATE tasks SET body = ? WHERE id = ?").bind(&body).bind(&id).execute(pool).await?;
+    Ok(id)
+}
+
+/// 驗收通過（或使用者放行）：程式庫快轉到受驗版本，結果記在受驗的合併卡上。
+async fn on_verify_passed(pool: &SqlitePool, verify: &TaskRow) -> Result<(), sqlx::Error> {
+    let verdict = fast_forward_repo(&verify.project_dir, verify.end_sha.as_deref()).await;
+    if let Some(merge) = verify.review_of.as_deref() {
+        sqlx::query("UPDATE tasks SET verdict = ? WHERE id = ?").bind(verdict).bind(merge).execute(pool).await?;
+    }
+    Ok(())
+}
+
+/// 從最近一次通過之後，連續失敗的驗收卡張數（含剛結束的這張）。
+async fn verify_fail_streak(pool: &SqlitePool) -> Result<usize, sqlx::Error> {
+    let verdicts: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT verdict FROM tasks WHERE card_kind = ? AND status = ? AND verdict IS NOT NULL
+         ORDER BY finished_at DESC, rowid DESC",
+    )
+    .bind(KIND_VERIFY)
+    .bind(STATUS_DONE)
+    .fetch_all(pool)
+    .await?;
+    Ok(verdicts.iter().take_while(|v| v.as_deref() != Some("pass")).count())
+}
+
+/// 驗收沒通過：依模組開修正卡給原工程師；找不到模組的項目、或超過輪數，交給使用者。
+async fn on_verify_failed(pool: &SqlitePool, project_path: &Path, verify: &TaskRow) -> Result<Vec<WorkflowEvent>, sqlx::Error> {
+    let report = std::fs::read_to_string(verify_json_path(project_path, &verify.id))
+        .ok()
+        .and_then(|t| parse_verify_json(&t).ok());
+    let failed: Vec<VerifyItem> = report.map(|r| r.items.into_iter().filter(|i| i.status == "fail").collect()).unwrap_or_default();
+    let all_agents = agents::list_agents(pool).await?;
+    let tasks = store::list_tasks(pool).await?;
+    let modules = coder_modules(&all_agents, &tasks);
+
+    let mut owned: Vec<(&TaskRow, Vec<&VerifyItem>)> = Vec::new();
+    let mut unowned = 0usize;
+    for item in &failed {
+        match modules.iter().find(|m| Some(m.id.as_str()) == item.module_id.as_deref()) {
+            Some(m) => match owned.iter_mut().find(|(o, _)| o.id == m.id) {
+                Some((_, items)) => items.push(item),
+                None => owned.push((m, vec![item])),
+            },
+            None => unowned += 1,
+        }
+    }
+    let streak = verify_fail_streak(pool).await?;
+    let attention = WorkflowEvent::VerifyAttention { verify_id: verify.id.clone(), unowned };
+    if owned.is_empty() || streak > MAX_FIX_ROUNDS {
+        sqlx::query("UPDATE tasks SET verdict = 'attention' WHERE id = ?").bind(&verify.id).execute(pool).await?;
+        return Ok(vec![attention]);
+    }
+    for (module, items) in owned {
+        let Some(coder) = module.agent_id.as_deref() else { continue };
+        let chain: Vec<TaskRow> = tasks.iter().filter(|t| t.module_id.as_deref() == Some(module.id.as_str())).cloned().collect();
+        let (path, _) = walk(module, &chain);
+        let tip = path.last().map(|t| t.id.clone()).unwrap_or_else(|| module.id.clone());
+        let order = match agents::first_queued_order(pool, coder).await? {
+            Some(first) => first - 1.0,
+            None => queued_tail(pool).await?,
+        };
+        let title = format!("修正：{}（驗收退回第 {streak} 輪）", module.title);
+        let body = verify_fix_body(module, &items, &verify.id, streak);
+        insert_card(
+            pool,
+            &NewCard {
+                title: &title,
+                body: &body,
+                project_dir: &module.project_dir,
+                agent_id: coder,
+                card_kind: KIND_FIX,
+                module_id: Some(&module.id),
+                review_of: Some(&tip),
+                start_sha: None,
+                end_sha: None,
+                sort_order: order,
+                from_spec: None,
+            },
+        )
+        .await?;
+    }
+    Ok(if unowned > 0 { vec![attention] } else { vec![] })
+}
+
+/// 使用者放行一張沒通過的驗收卡：當成通過，更新程式庫。
+pub async fn accept_verification(pool: &SqlitePool, verify_id: &str) -> Result<(), sqlx::Error> {
+    let task = store::get_task(pool, verify_id).await?.ok_or(sqlx::Error::RowNotFound)?;
+    if task.card_kind != KIND_VERIFY || !matches!(task.verdict.as_deref(), Some("fail") | Some("attention")) {
+        return Err(sqlx::Error::Protocol("只有沒通過的驗收可以放行".into()));
+    }
+    sqlx::query("UPDATE tasks SET verdict = 'pass' WHERE id = ?").bind(verify_id).execute(pool).await?;
+    on_verify_passed(pool, &task).await
 }
 
 /// 合併卡的 `verdict`：整合分支有沒有合回程式庫目前的分支。不是 `repo_merged`
@@ -1501,6 +1649,213 @@ mod tests {
     fn head(dir: &Path) -> String {
         let out = std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(dir).output().unwrap();
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// 一個 git repo：main 在 base，另有一個比它多一個 commit 的整合結果。
+    fn repo_with_integration() -> (tempfile::TempDir, String, String) {
+        let repo = tempfile::tempdir().unwrap();
+        let dir = repo.path();
+        git(dir, &["init", "-q", "-b", "main"]);
+        git(dir, &["config", "user.email", "t@t"]);
+        git(dir, &["config", "user.name", "t"]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let base = head(dir);
+        git(dir, &["checkout", "-q", "-b", "integration"]);
+        std::fs::write(dir.join("game.ts"), "x").unwrap();
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "integrate"]);
+        let integrated = head(dir);
+        git(dir, &["checkout", "-q", "main"]);
+        (repo, base, integrated)
+    }
+
+    /// 一張跑完成功的合併卡。
+    async fn finished_merge(pool: &SqlitePool, orch: &str, repo_dir: &str, end: &str) -> String {
+        let id = insert_card(
+            pool,
+            &NewCard {
+                title: "合併", body: "", project_dir: repo_dir, agent_id: orch, card_kind: KIND_MERGE,
+                module_id: None, review_of: None, start_sha: None, end_sha: None, sort_order: 1.0, from_spec: None,
+            },
+        )
+        .await
+        .unwrap();
+        store::dispatch_for_test(pool, &id, "tab-m").await;
+        store::set_end_sha(pool, &id, end).await.unwrap();
+        store::finish_task(pool, &id, "success", None, None).await.unwrap();
+        id
+    }
+
+    /// 驗收者跑完一張驗收卡：寫 verify.json、記判定、結案。
+    async fn finish_verify(pool: &SqlitePool, project: &Path, verify_id: &str, json: &str) {
+        let path = verify_json_path(project, verify_id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, json).unwrap();
+        let report = parse_verify_json(json).unwrap();
+        store::dispatch_for_test(pool, verify_id, "tab-v").await;
+        set_verdict(pool, verify_id, &ReviewVerdict { verdict: report.verdict, reasons: vec![] }).await.unwrap();
+        store::finish_task(pool, verify_id, "success", None, None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn merge_with_a_verifier_queues_a_verify_card_and_leaves_the_repo_alone() {
+        let pool = mem_pool().await;
+        let orch = agent(&pool, "orchestrator", "O").await;
+        let ver = agent(&pool, "verifier", "V").await;
+        let (repo, base, integrated) = repo_with_integration();
+        let repo_dir = repo.path().to_string_lossy().into_owned();
+        let merge = finished_merge(&pool, &orch, &repo_dir, &integrated).await;
+        after_card_finished(&pool, Path::new("/p"), &merge).await.unwrap();
+
+        let tasks = all(&pool).await;
+        let v = of_kind(&tasks, KIND_VERIFY);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].agent_id.as_deref(), Some(ver.as_str()));
+        assert_eq!(v[0].review_of.as_deref(), Some(merge.as_str()));
+        assert_eq!(v[0].end_sha.as_deref(), Some(integrated.as_str()));
+        assert_eq!(v[0].project_dir, repo_dir);
+        assert!(v[0].body.contains("verify.json"), "{}", v[0].body);
+        assert_eq!(store::get_task(&pool, &merge).await.unwrap().unwrap().verdict, None, "驗收前不碰程式庫");
+        assert_eq!(head(repo.path()), base);
+    }
+
+    #[tokio::test]
+    async fn a_passed_verification_fast_forwards_and_marks_the_merge_card() {
+        let pool = mem_pool().await;
+        let orch = agent(&pool, "orchestrator", "O").await;
+        agent(&pool, "verifier", "V").await;
+        let (repo, _base, integrated) = repo_with_integration();
+        let project = tempfile::tempdir().unwrap();
+        let repo_dir = repo.path().to_string_lossy().into_owned();
+        let merge = finished_merge(&pool, &orch, &repo_dir, &integrated).await;
+        after_card_finished(&pool, project.path(), &merge).await.unwrap();
+        let verify = of_kind(&all(&pool).await, KIND_VERIFY)[0].id.clone();
+
+        finish_verify(&pool, project.path(), &verify, r#"{"verdict":"pass","items":[{"criterion":"a","status":"pass"}]}"#).await;
+        after_card_finished(&pool, project.path(), &verify).await.unwrap();
+
+        assert_eq!(store::get_task(&pool, &merge).await.unwrap().unwrap().verdict.as_deref(), Some(REPO_MERGED));
+        assert_eq!(head(repo.path()), integrated);
+    }
+
+    /// 兩個工程師各一個模組都審過，協調者合併完成，驗收卡已建立。回傳 (模組1, 模組2, 驗收卡)。
+    async fn verified_round(pool: &SqlitePool, project: &Path) -> (String, String, String, String, String) {
+        let c1 = agent(pool, "coder", "C1").await;
+        let c2 = agent(pool, "coder", "C2").await;
+        agent(pool, "reviewer", "R").await;
+        agent(pool, "orchestrator", "O").await;
+        agent(pool, "verifier", "V").await;
+        let m1 = done_module(pool, &c1, "A 登入", "e1").await;
+        let m2 = done_module(pool, &c2, "B 訂單", "e2").await;
+        for m in [&m1, &m2] {
+            after_card_finished(pool, project, m).await.unwrap();
+        }
+        for r in of_kind(&all(pool).await, KIND_REVIEW).iter().map(|r| r.id.clone()).collect::<Vec<_>>() {
+            finish_review(pool, &r, "pass").await;
+            after_card_finished(pool, project, &r).await.unwrap();
+        }
+        let merge = of_kind(&all(pool).await, KIND_MERGE)[0].id.clone();
+        store::dispatch_for_test(pool, &merge, "tab-m").await;
+        store::set_end_sha(pool, &merge, "int1").await.unwrap();
+        store::finish_task(pool, &merge, "success", None, None).await.unwrap();
+        after_card_finished(pool, project, &merge).await.unwrap();
+        let verify = of_kind(&all(pool).await, KIND_VERIFY)[0].id.clone();
+        (c1, c2, m1, m2, verify)
+    }
+
+    #[tokio::test]
+    async fn a_failed_verification_sends_fixes_to_the_owning_coders() {
+        let pool = mem_pool().await;
+        let project = tempfile::tempdir().unwrap();
+        let (c1, c2, m1, m2, verify) = verified_round(&pool, project.path()).await;
+        let json = format!(
+            r#"{{"verdict":"fail","items":[
+                {{"criterion":"登入後看到首頁","status":"fail","module_id":"{m1}","steps":"1. 登入","actual":"白畫面"}},
+                {{"criterion":"訂單送出","status":"fail","module_id":"{m2}"}},
+                {{"criterion":"整體樣式","status":"fail"}},
+                {{"criterion":"付款","status":"manual","notes":"要真實付款"}}]}}"#
+        );
+        finish_verify(&pool, project.path(), &verify, &json).await;
+        let events = after_card_finished(&pool, project.path(), &verify).await.unwrap();
+
+        let tasks = all(&pool).await;
+        let fixes = of_kind(&tasks, KIND_FIX);
+        assert_eq!(fixes.len(), 2);
+        let fix1 = fixes.iter().find(|f| f.module_id.as_deref() == Some(m1.as_str())).unwrap();
+        assert_eq!(fix1.agent_id.as_deref(), Some(c1.as_str()));
+        assert!(fix1.body.contains("白畫面") && fix1.body.contains("登入後看到首頁") && !fix1.body.contains("訂單送出"), "{}", fix1.body);
+        let fix2 = fixes.iter().find(|f| f.module_id.as_deref() == Some(m2.as_str())).unwrap();
+        assert_eq!(fix2.agent_id.as_deref(), Some(c2.as_str()));
+        // 修正卡接在模組鏈尾：模組重新打開，不會在修好前又被合併。
+        let module = store::get_task(&pool, &m1).await.unwrap().unwrap();
+        let chain: Vec<TaskRow> = tasks.iter().filter(|t| t.module_id.as_deref() == Some(m1.as_str())).cloned().collect();
+        assert_eq!(module_state(&module, &chain, true), ModuleState::FixQueued);
+        assert_eq!(events, vec![WorkflowEvent::VerifyAttention { verify_id: verify.clone(), unowned: 1 }]);
+        assert_eq!(store::get_task(&pool, &verify).await.unwrap().unwrap().verdict.as_deref(), Some("fail"));
+        assert_eq!(of_kind(&tasks, KIND_MERGE).len(), 1, "修好之前不會再合併");
+    }
+
+    #[tokio::test]
+    async fn a_failure_nobody_owns_stops_for_the_user() {
+        let pool = mem_pool().await;
+        let project = tempfile::tempdir().unwrap();
+        let (_c1, _c2, _m1, _m2, verify) = verified_round(&pool, project.path()).await;
+        let json = r#"{"verdict":"fail","items":[{"criterion":"a","status":"fail"},{"criterion":"b","status":"fail","module_id":"no-such-module"}]}"#;
+        finish_verify(&pool, project.path(), &verify, json).await;
+        let events = after_card_finished(&pool, project.path(), &verify).await.unwrap();
+
+        assert!(of_kind(&all(&pool).await, KIND_FIX).is_empty());
+        assert_eq!(store::get_task(&pool, &verify).await.unwrap().unwrap().verdict.as_deref(), Some("attention"));
+        assert_eq!(events, vec![WorkflowEvent::VerifyAttention { verify_id: verify, unowned: 2 }]);
+    }
+
+    #[tokio::test]
+    async fn the_third_failed_verification_in_a_row_stops_for_the_user() {
+        let pool = mem_pool().await;
+        let project = tempfile::tempdir().unwrap();
+        let (_c1, _c2, m1, _m2, verify) = verified_round(&pool, project.path()).await;
+        let ver = store::get_task(&pool, &verify).await.unwrap().unwrap().agent_id.unwrap();
+        // 之前已經有兩張驗收失敗（比這張早結束）。
+        for (i, verdict) in [(1, "fail"), (2, "fail")] {
+            sqlx::query("INSERT INTO tasks (id, title, project_dir, status, outcome, agent_id, card_kind, verdict, finished_at) VALUES (?, 'v', '/r', 'done', 'success', ?, 'verify', ?, ?)")
+                .bind(format!("old{i}")).bind(&ver).bind(verdict).bind(i as i64).execute(&pool).await.unwrap();
+        }
+        let json = format!(r#"{{"verdict":"fail","items":[{{"criterion":"a","status":"fail","module_id":"{m1}"}}]}}"#);
+        finish_verify(&pool, project.path(), &verify, &json).await;
+        let events = after_card_finished(&pool, project.path(), &verify).await.unwrap();
+        assert!(of_kind(&all(&pool).await, KIND_FIX).is_empty(), "超過輪數就不再退回");
+        assert_eq!(store::get_task(&pool, &verify).await.unwrap().unwrap().verdict.as_deref(), Some("attention"));
+        assert_eq!(events.len(), 1);
+
+        // 中間有一次通過就重新計算：pass 之前的失敗（old0、old1）不算，只剩這一張。
+        sqlx::query("UPDATE tasks SET verdict = 'pass' WHERE id = 'old2'").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, title, project_dir, status, outcome, agent_id, card_kind, verdict, finished_at) VALUES ('old0', 'v', '/r', 'done', 'success', ?, 'verify', 'fail', 0)")
+            .bind(&ver).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE tasks SET verdict = 'fail' WHERE id = ?").bind(&verify).execute(&pool).await.unwrap();
+        after_card_finished(&pool, project.path(), &verify).await.unwrap();
+        assert_eq!(of_kind(&all(&pool).await, KIND_FIX).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn accepting_a_verification_fast_forwards() {
+        let pool = mem_pool().await;
+        let orch = agent(&pool, "orchestrator", "O").await;
+        agent(&pool, "verifier", "V").await;
+        let (repo, _base, integrated) = repo_with_integration();
+        let project = tempfile::tempdir().unwrap();
+        let repo_dir = repo.path().to_string_lossy().into_owned();
+        let merge = finished_merge(&pool, &orch, &repo_dir, &integrated).await;
+        after_card_finished(&pool, project.path(), &merge).await.unwrap();
+        let verify = of_kind(&all(&pool).await, KIND_VERIFY)[0].id.clone();
+        finish_verify(&pool, project.path(), &verify, r#"{"verdict":"fail","items":[{"criterion":"a","status":"fail"}]}"#).await;
+        after_card_finished(&pool, project.path(), &verify).await.unwrap();
+
+        assert!(accept_verification(&pool, &merge).await.is_err(), "只接受驗收卡");
+        accept_verification(&pool, &verify).await.unwrap();
+        assert_eq!(store::get_task(&pool, &verify).await.unwrap().unwrap().verdict.as_deref(), Some("pass"));
+        assert_eq!(store::get_task(&pool, &merge).await.unwrap().unwrap().verdict.as_deref(), Some(REPO_MERGED));
+        assert_eq!(head(repo.path()), integrated);
+        assert!(accept_verification(&pool, &verify).await.is_err(), "已經通過的不能再放行");
     }
 
     /// 合併卡成功後，程式庫目前的分支快轉到整合結果；程式庫不乾淨或已分岔
