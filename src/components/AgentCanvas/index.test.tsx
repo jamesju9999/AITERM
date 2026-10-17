@@ -290,6 +290,20 @@ describe("AgentCanvasView", () => {
     );
   });
 
+  it("審核者的角色選單有綜合審核者（一般＋資安），選了會帶入兩種檢查的提示詞", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    drag(await screen.findByTestId("pool-reviewer"), document.querySelector('[data-drop="canvas"]') as Element);
+    const dlg = await screen.findByRole("dialog");
+    fireEvent.click(within(dlg).getByRole("button", { name: /從預設角色帶入|Start from a preset/ }));
+    fireEvent.click(within(dlg).getByRole("menuitem", { name: /綜合審核者/ }));
+    expect((within(dlg).getByLabelText(/^角色名稱$|^Role name$/) as HTMLInputElement).value).toBe("綜合審核者（一般＋資安）");
+    const prompt = (within(dlg).getByLabelText(/提示詞|Prompt/) as HTMLTextAreaElement).value;
+    expect(prompt).toMatch(/正確性/);
+    expect(prompt).toMatch(/注入/);
+  });
+
   it("新的審核者、驗收者模型預設 sonnet；工程師沿用預設", async () => {
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
