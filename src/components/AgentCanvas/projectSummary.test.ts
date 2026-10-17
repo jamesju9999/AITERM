@@ -23,6 +23,36 @@ const coder = agent("c1", "coder");
 const orch = agent("o1", "orchestrator");
 const merge = (over: Partial<TaskRow>) => card({ agent_id: "o1", card_kind: "merge", finished_at: 10, ...over });
 
+describe("projectSummary 有驗收者時", () => {
+  const ver = agent("v1", "verifier");
+  const agents = [coder, orch, ver];
+  const m = merge({ id: "MG", verdict: null });
+  const verify = (over: Partial<TaskRow>) => card({ agent_id: "v1", card_kind: "verify", review_of: "MG", finished_at: 20, ...over });
+
+  it("合併完成、驗收還沒開始或進行中：驗收中", () => {
+    expect(projectSummary(agents, [card({ id: "A" }), m])).toEqual({ kind: "verifying", total: 1 });
+    expect(projectSummary(agents, [card({ id: "A" }), m, verify({ status: "running", outcome: null })])).toEqual({ kind: "verifying", total: 1 });
+  });
+
+  it("驗收退回／要你決定", () => {
+    const failed = verify({ verdict: "fail", review_reasons: JSON.stringify(["登入", "訂單"]) });
+    expect(projectSummary(agents, [card({ id: "A" }), m, failed])).toEqual({ kind: "verify_failed", total: 1, items: 2 });
+    expect(projectSummary(agents, [card({ id: "A" }), m, verify({ verdict: "attention", review_reasons: "[]" })])).toEqual({
+      kind: "verify_attention",
+      total: 1,
+    });
+  });
+
+  it("驗收通過：照合併卡記的程式庫結果", () => {
+    const tasks = [card({ id: "A" }), merge({ id: "MG", verdict: "repo_merged" }), verify({ verdict: "pass" })];
+    expect(projectSummary(agents, tasks)).toEqual({ kind: "in_repo", total: 1, repoDir: "/repo" });
+  });
+
+  it("沒有驗收者時完全照舊", () => {
+    expect(projectSummary([coder, orch], [card({ id: "A" }), m])).toEqual({ kind: "integrated", total: 1 });
+  });
+});
+
 describe("projectSummary", () => {
   it("沒有指派給工程師的模組：沒有東西可總結", () => {
     expect(projectSummary([coder, orch], [card({ agent_id: null })])).toEqual({ kind: "none" });

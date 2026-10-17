@@ -39,6 +39,12 @@ describe("computeEdges", () => {
       { from: "o", to: "c2", kind: "dispatch" },
     ]);
   });
+  it("有驗收者時協調者接驗收者；沒有協調者就不接", () => {
+    const V = ag("v", "verifier");
+    expect(computeEdges([C1, R, O, V]).map((e) => `${e.from}>${e.to}`)).toEqual(["c1>r", "r>o", "o>v"]);
+    expect(computeEdges([C1, R, V]).map((e) => `${e.from}>${e.to}`)).toEqual(["c1>r"]);
+  });
+
   it("只有 Coder 沒有連線", () => {
     expect(computeEdges([C1, C2])).toEqual([]);
   });
@@ -62,6 +68,20 @@ describe("edgeActivity", () => {
     const act = edgeActivity(computeEdges([C1, R, O]), [C1, R, O], tasks);
     expect(act.get("c1>r")).toBe(EDGE_COLORS.handoff);
     expect(act.get("r>o")).toBe(EDGE_COLORS.pass);
+  });
+});
+
+describe("驗收者的連線與光點", () => {
+  const V = ag("v", "verifier");
+  const agents = [C1, R, O, V];
+  it("驗收中 o>v 亮驗收色", () => {
+    const vc = card({ id: "VC", card_kind: "verify", agent_id: "v", status: "running" });
+    expect(edgeActivity(computeEdges(agents), agents, [vc]).get("o>v")).toBe(EDGE_COLORS.verify);
+    expect(edgeActivity(computeEdges(agents), agents, [{ ...vc, status: "done" }]).has("o>v")).toBe(false);
+  });
+  it("新的驗收卡：o→v", () => {
+    const vc = card({ id: "VC", card_kind: "verify", agent_id: "v" });
+    expect(diffPulses([], [vc], agents)).toEqual([{ key: "VC:verify", from: "o", to: "v", color: EDGE_COLORS.verify, reverse: false }]);
   });
 });
 

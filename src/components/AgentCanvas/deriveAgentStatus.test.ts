@@ -43,6 +43,10 @@ describe("deriveAgentStatus", () => {
     expect(deriveAgentStatus(agent(), [card("done", "success"), card("done", "failed")])).toBe("idle");
   });
 
+  it("驗收者執行中是 verifying", () => {
+    expect(deriveAgentStatus(agent({ kind: "verifier" }), [card("running")])).toBe("verifying");
+  });
+
   it("執行中的字依 Agent 種類", () => {
     expect(deriveAgentStatus(agent({ kind: "reviewer" }), [card("running")])).toBe("reviewing");
     expect(deriveAgentStatus(agent({ kind: "orchestrator" }), [card("running")])).toBe("merging");

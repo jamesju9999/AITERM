@@ -22,6 +22,9 @@ export function builtinRoles(kind: AgentKind, t: Translations): RolePreset[] {
       { name: t.ls_preset_security, emoji: "🛡️", prefix: t.ac_role_security_reviewer_desc },
     ];
   }
+  if (kind === "verifier") {
+    return [{ name: t.ac_role_verifier, emoji: "☑", prefix: t.ac_role_verifier_desc }];
+  }
   if (kind === "orchestrator") {
     return [{ name: t.ac_role_integrator, emoji: "⑂", prefix: t.ac_role_integrator_desc }];
   }

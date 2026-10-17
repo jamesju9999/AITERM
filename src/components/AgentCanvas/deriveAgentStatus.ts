@@ -12,7 +12,7 @@ import type { ModuleState } from "./deriveModuleState";
  * - done：有卡片、全部成功完成、沒有待執行的
  * - idle：其他（沒有卡片，或做完了但中間有跳過的失敗卡）
  */
-export type AgentStatus = "attention" | "coding" | "reviewing" | "merging" | "waiting" | "done" | "idle";
+export type AgentStatus = "attention" | "coding" | "reviewing" | "merging" | "verifying" | "waiting" | "done" | "idle";
 
 /**
  * `moduleStates`：Coder 名下每個模組的狀態（見 deriveModuleState）。有傳就以
@@ -23,8 +23,8 @@ export function deriveAgentStatus(agent: AgentRow, cards: TaskRow[], moduleState
   if (agent.paused_task_id) return "attention";
   const mine = cards.filter((c) => c.agent_id === agent.id);
   if (mine.some((c) => c.status === "running")) {
-    // 同一個「執行中」依 Agent 種類換顏色與字：Coder 藍、Reviewer 黃、Orchestrator 綠。
-    return agent.kind === "reviewer" ? "reviewing" : agent.kind === "orchestrator" ? "merging" : "coding";
+    // 同一個「執行中」依 Agent 種類換顏色與字：Coder 藍、Reviewer 黃、Orchestrator 綠、Verifier 青。
+    return ({ reviewer: "reviewing", orchestrator: "merging", verifier: "verifying", coder: "coding" } as const)[agent.kind];
   }
   if (mine.some((c) => c.status === "queued")) return "waiting";
   if (moduleStates) {

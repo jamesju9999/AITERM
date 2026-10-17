@@ -22,6 +22,9 @@ export function computeEdges(agents: AgentRow[]): Edge[] {
     else if (orch) out.push({ from: c.id, to: orch.id });
   }
   if (reviewer && orch) out.push({ from: reviewer.id, to: orch.id });
+  // 驗收者驗的是協調者合併的結果。
+  const verifier = agents.find((a) => a.kind === "verifier");
+  if (orch && verifier) out.push({ from: orch.id, to: verifier.id });
   // 規格先行：有產出規格的工程師時，協調者會把拆出來的實作卡派給其他工程師。
   if (orch && agents.some((a) => a.kind === "coder" && a.produces_spec)) {
     for (const c of agents.filter((a) => a.kind === "coder" && !a.produces_spec)) {
@@ -37,6 +40,7 @@ export const EDGE_COLORS = {
   pass: "#22c55e",
   fix: "#f97316",
   dispatch: "#a855f7",
+  verify: "#14b8a6",
 } as const;
 
 /** 模組卡所屬的 Coder。review/fix 卡要透過 module_id 回推。 */
@@ -66,6 +70,10 @@ export function edgeActivity(edges: Edge[], agents: AgentRow[], tasks: TaskRow[]
       if (downstream.some((t) => t.from_spec && (t.status === "queued" || t.status === "running"))) {
         out.set(key, EDGE_COLORS.dispatch);
       }
+      continue;
+    }
+    if (kind.get(e.to) === "verifier") {
+      if (downstream.some((t) => t.status === "running")) out.set(key, EDGE_COLORS.verify);
       continue;
     }
     if (kind.get(e.to) === "orchestrator") {
@@ -123,6 +131,10 @@ export function diffPulses(prev: TaskRow[] | null, next: TaskRow[], agents: Agen
     // 協調者把拆出來的實作卡派給 Coder。
     if (!old && t.card_kind === "work" && t.from_spec && t.agent_id && orch) {
       out.push({ key: `${t.id}:dispatch`, from: orch.id, to: t.agent_id, color: EDGE_COLORS.dispatch, reverse: false });
+    }
+    // 合併完成、交給驗收者。
+    if (!old && t.card_kind === "verify" && orch && t.agent_id) {
+      out.push({ key: `${t.id}:verify`, from: orch.id, to: t.agent_id, color: EDGE_COLORS.verify, reverse: false });
     }
     if (!old && t.card_kind === "merge" && orch) {
       const sources = reviewer ? [reviewer.id] : agents.filter((a) => a.kind === "coder").map((a) => a.id);

@@ -34,6 +34,8 @@ vi.mock("../../ipc/agents", () => ({
   checkRepo: vi.fn().mockResolvedValue({ status: "ok", branch: "main" }),
   initRepo: vi.fn().mockResolvedValue(undefined),
   openRepo: vi.fn().mockResolvedValue(undefined),
+  verifyReport: vi.fn().mockResolvedValue({ report: null, images: {} }),
+  acceptVerification: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../ipc/projects", () => ({
   listProjects: vi.fn().mockResolvedValue([
@@ -57,7 +59,20 @@ vi.mock("../../ipc/bridge", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
 
-import { assignAgent, checkRepo, createAgent, initRepo, listAgents, mergeAgent, openRepo, overrideModule, resolveAgent, type AgentRow } from "../../ipc/agents";
+import {
+  acceptVerification,
+  assignAgent,
+  checkRepo,
+  createAgent,
+  initRepo,
+  listAgents,
+  mergeAgent,
+  openRepo,
+  overrideModule,
+  resolveAgent,
+  verifyReport,
+  type AgentRow,
+} from "../../ipc/agents";
 import { listTasks, listTokenUsage, markTaskDone, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { AgentCanvasView } from "./index";
@@ -142,6 +157,77 @@ describe("AgentCanvasView", () => {
     expect(screen.getByTestId("tokens-r1").textContent).toBe("Σ 250.0K token");
     expect(screen.getByTestId("chip-A").getAttribute("title")).toMatch(/Σ 1.25M token$/);
     expect(screen.getByTestId("ac-tokens").textContent).toBe("Σ 1.25M token");
+  });
+
+  describe("驗收者", () => {
+    const orch = agent({ id: "o1", kind: "orchestrator", name: "協調者", branch: "aiterm-integration" });
+    const ver = agent({ id: "v1", kind: "verifier", name: "驗收者" });
+    const modA = card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1" });
+    const merged = card({ id: "MG", title: "合併", status: "done", outcome: "success", card_kind: "merge", agent_id: "o1", finished_at: 10 });
+    const verify = (over: Partial<TaskWithAttachments>) =>
+      card({ id: "V", title: "驗收：合併結果", status: "done", outcome: "success", card_kind: "verify", agent_id: "v1", review_of: "MG", finished_at: 20, ...over });
+
+    it("Agent 池有驗收者，已放就不能再放", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), ver]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      const item = await screen.findByTestId("pool-verifier");
+      await waitFor(() => expect(item.getAttribute("aria-disabled")).toBe("true"));
+    });
+
+    it("合併完成、驗收中：頂列寫驗收中，協調者不放「合併分支」", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), orch, ver]);
+      vi.mocked(listTasks).mockResolvedValue([modA, merged, verify({ status: "running", outcome: null, finished_at: null })]);
+      view();
+      await waitFor(() => expect(screen.getByTestId("ac-summary").textContent).toMatch(/驗收中/));
+      expect(within(screen.getByTestId("agent-o1")).queryByText(/合併分支/)).toBeNull();
+      expect(within(screen.getByTestId("agent-v1")).getByText(/驗收合併結果中/)).toBeTruthy();
+    });
+
+    it("驗收要你決定：卡上可以放行，報告列出每項與截圖", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), orch, ver]);
+      vi.mocked(listTasks).mockResolvedValue([modA, merged, verify({ verdict: "attention", review_reasons: JSON.stringify(["整體樣式"]) })]);
+      vi.mocked(verifyReport).mockResolvedValue({
+        report: {
+          verdict: "fail",
+          project_type: "web",
+          items: [
+            { criterion: "登入成功", status: "pass", evidence: ["evidence/login.png"] },
+            { criterion: "整體樣式", status: "fail", evidence: ["evidence/style.png"], steps: "1. 打開首頁", actual: "版面跑掉" },
+            { criterion: "付款", status: "manual", evidence: [], notes: "要真實付款" },
+          ],
+        },
+        images: { "evidence/login.png": "data:image/png;base64,AAAA", "evidence/style.png": "data:image/png;base64,BBBB" },
+      });
+      view();
+      const node = await screen.findByTestId("agent-v1");
+      await waitFor(() => expect(within(node).getByText(/需要你決定/)).toBeTruthy());
+      expect(screen.getByTestId("ac-summary").textContent).toMatch(/驗收沒通過/);
+
+      fireEvent.click(within(node).getByText("驗收報告"));
+      const dlg = await screen.findByRole("dialog", { name: "驗收報告" });
+      await waitFor(() => expect(within(dlg).getByTestId("verify-summary").textContent).toMatch(/通過 1 · 沒通過 1 · 需你確認 1/));
+      expect(within(dlg).getAllByTestId(/^verify-item-/).map((e) => e.dataset.testid)).toEqual([
+        "verify-item-fail",
+        "verify-item-manual",
+        "verify-item-pass",
+      ]);
+      expect(within(dlg).getByText("版面跑掉")).toBeTruthy();
+      expect(within(dlg).getByText("要真實付款")).toBeTruthy();
+      expect(within(dlg).getByAltText("evidence/style.png").getAttribute("src")).toBe("data:image/png;base64,BBBB");
+
+      fireEvent.click(within(dlg).getByRole("button", { name: "放行" }));
+      await waitFor(() => expect(vi.mocked(acceptVerification)).toHaveBeenCalledWith("p1", "V"));
+    });
+
+    it("驗收通過：驗收者顯示通過，頂列照程式庫結果", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), orch, ver]);
+      vi.mocked(listTasks).mockResolvedValue([modA, { ...merged, verdict: "repo_merged" }, verify({ verdict: "pass" })]);
+      view();
+      const node = await screen.findByTestId("agent-v1");
+      await waitFor(() => expect(within(node).getByText(/驗收通過/)).toBeTruthy());
+      expect(screen.getByTestId("ac-summary").textContent).toMatch(/已合回程式庫/);
+    });
   });
 
   it("把模組拖到 Agent 上會指派給它", async () => {

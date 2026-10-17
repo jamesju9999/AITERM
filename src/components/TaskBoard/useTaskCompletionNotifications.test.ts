@@ -26,12 +26,14 @@ let taskFinishedHandler: ((e: { payload: unknown }) => void) | null = null;
 let attentionHandler: ((e: { payload: unknown }) => void) | null = null;
 let replyHandler: ((e: { payload: unknown }) => void) | null = null;
 let questionHandler: ((e: { payload: unknown }) => void) | null = null;
+let verifyHandler: ((e: { payload: unknown }) => void) | null = null;
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, handler: (e: { payload: unknown }) => void) => {
     if (event === "task-finished") taskFinishedHandler = handler;
     if (event === "agent-module-attention") attentionHandler = handler;
     if (event === "agent-reply-wait") replyHandler = handler;
     if (event === "agent-question") questionHandler = handler;
+    if (event === "agent-verify-attention") verifyHandler = handler;
     return Promise.resolve(() => {});
   }),
 }));
@@ -180,6 +182,20 @@ describe("useTaskCompletionNotifications", () => {
       expect(sendNotification).toHaveBeenCalledWith({ title: "番茄鐘網頁小工具", body: "Pomodoro · 在等你回覆" }),
     );
     await waitFor(() => expect(sendTelegramMessage).toHaveBeenCalledWith("💬 Pomodoro — 番茄鐘網頁小工具\n在等你回覆"));
+  });
+
+  it("驗收沒通過要你決定：桌面通知與 Telegram 寫出原因", async () => {
+    renderHook(() => useTaskCompletionNotifications(activeRef("other-tab")));
+    expect(verifyHandler).not.toBeNull();
+    verifyHandler!({ payload: { project_name: "Pomodoro", verify_id: "v1", unowned: 2 } });
+    await waitFor(() =>
+      expect(sendNotification).toHaveBeenCalledWith({ title: "⚠️ Pomodoro", body: "驗收沒通過，需要你決定：有 2 項找不到負責的模組" }),
+    );
+    await waitFor(() => expect(sendTelegramMessage).toHaveBeenCalledWith("⚠️ Pomodoro\n驗收沒通過，需要你決定：有 2 項找不到負責的模組"));
+    verifyHandler!({ payload: { project_name: "Pomodoro", verify_id: "v1", unowned: 0 } });
+    await waitFor(() =>
+      expect(sendNotification).toHaveBeenCalledWith({ title: "⚠️ Pomodoro", body: "驗收沒通過，需要你決定：連續退回超過上限" }),
+    );
   });
 
   it("Agent 提問時發桌面通知（Telegram 由後端送）", async () => {

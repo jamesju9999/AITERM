@@ -72,6 +72,21 @@ export function useTaskCompletionNotifications(activeIdRef: RefObject<string>): 
         }
       });
     });
+    // Agent 協作：驗收沒通過而且要你決定（有找不到負責模組的問題，或連續退回超過上限）。
+    const unVerify = listen<{ project_name: string; unowned: number }>("agent-verify-attention", (e) => {
+      const { project_name, unowned } = e.payload;
+      const why = unowned > 0 ? `有 ${unowned} 項找不到負責的模組` : "連續退回超過上限";
+      void getTaskBoardConfig().then((cfg) => {
+        if (cfg.notify_desktop_on_finish) {
+          void ensureNotificationPermission().then((granted) => {
+            if (granted) sendNotification({ title: `⚠️ ${project_name}`, body: `驗收沒通過，需要你決定：${why}` });
+          });
+        }
+        if (cfg.notify_telegram_on_finish) {
+          void sendTelegramMessage(`⚠️ ${project_name}\n驗收沒通過，需要你決定：${why}`).catch(() => {});
+        }
+      });
+    });
     // 派出去的 Agent 停下來等人回覆（後端 tasks::quota 偵測）。
     const unReply = listen<{ project_name: string; title: string }>("agent-reply-wait", (e) => {
       const { project_name, title } = e.payload;
@@ -102,11 +117,13 @@ export function useTaskCompletionNotifications(activeIdRef: RefObject<string>): 
     const stopQuestion = unlistenOnCleanup(unQuestion, "agent-question");
     const stopAttention = unlistenOnCleanup(unAttention, "agent-module-attention");
     const stopReply = unlistenOnCleanup(unReply, "agent-reply-wait");
+    const stopVerify = unlistenOnCleanup(unVerify, "agent-verify-attention");
     return () => {
       stopFinished();
       stopAttention();
       stopReply();
       stopQuestion();
+      stopVerify();
     };
   }, [activeIdRef]);
 }

@@ -13,6 +13,7 @@ import {
   openRepo,
   overrideModule,
   resolveAgent,
+  acceptVerification,
   updateAgent,
   type AgentKind,
   type AgentRow,
@@ -42,6 +43,7 @@ import { WorkflowIcon } from "../Icons";
 import { computeEdges, diffPulses, edgeActivity, type Pulse } from "./edges";
 import { idList } from "./prerequisites";
 import { QuestionInbox } from "./QuestionInbox";
+import { VerifyReportDialog } from "./VerifyReportDialog";
 import { answerQuestion, listQuestions, onQuestionsUpdated, type QuestionView } from "../../ipc/questions";
 import { projectSummary, type ProjectSummary } from "./projectSummary";
 import { formatTokens, sumUsage, totalTokens, usageBreakdown } from "./tokenUsage";
@@ -152,6 +154,8 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   const prevTasks = useRef<TaskWithAttachments[] | null>(null);
   const [newModule, setNewModule] = useState(false);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
+  /** 打開驗收報告的那張驗收卡。 */
+  const [verifyFor, setVerifyFor] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [merge, setMerge] = useState<Record<string, { text: string; conflict: boolean }>>({});
   /** 拖曳 Agent 卡片時的即時位置。放開才寫回資料庫。 */
@@ -549,8 +553,10 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   const edges = computeEdges(agents);
   const active = edgeActivity(edges, agents, tasks);
   const placed = (k: AgentKind) => agents.some((a) => a.kind === k);
-  const poolLabel = (k: AgentKind) => (k === "reviewer" ? t.ac_reviewer : k === "orchestrator" ? t.ac_orchestrator : t.ac_coder);
+  const poolLabel = (k: AgentKind) =>
+    ({ coder: t.ac_coder, reviewer: t.ac_reviewer, orchestrator: t.ac_orchestrator, verifier: t.ac_verifier })[k];
   const transcriptCard = transcriptFor ? tasks.find((x) => x.id === transcriptFor) : undefined;
+  const verifyCard = verifyFor ? tasks.find((x) => x.id === verifyFor) : undefined;
   const defaultName = (k: AgentKind) =>
     k === "coder" ? `${t.ac_coder}${agents.filter((a) => a.kind === "coder").length + 1}` : poolLabel(k);
 
@@ -649,6 +655,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
 
   const summary = useMemo(() => projectSummary(agents, tasks), [agents, tasks]);
   const hasOrchestrator = agents.some((a) => a.kind === "orchestrator");
+  const hasVerifier = agents.some((a) => a.kind === "verifier");
 
   // ── 活動記錄拖曳調整高度 ──────────────────────────────────────────────────
   const beginLogResize = (e: ReactMouseEvent) => {
@@ -688,6 +695,12 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
         return { text: `✓ ${t.ac_sum_integrated(sm.total)}`, tone: "ok" };
       case "in_repo":
         return { text: `✓ ${t.ac_sum_in_repo(sm.total)}`, tone: "ok" };
+      case "verifying":
+        return { text: t.ac_sum_verifying(sm.total), tone: "muted" };
+      case "verify_failed":
+        return { text: t.ac_sum_verify_failed(sm.items), tone: "bad" };
+      case "verify_attention":
+        return { text: `⚠ ${t.ac_sum_verify_attention}`, tone: "bad" };
       case "repo_pending": {
         const why = {
           repo_dirty: t.ac_repo_why_dirty,
@@ -773,7 +786,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
 
       <div className="ac-pool">
         <span className="ac-pool-label">{t.ac_pool}</span>
-        {(["coder", "reviewer", "orchestrator"] as const).map((k) => {
+        {(["coder", "reviewer", "orchestrator", "verifier"] as const).map((k) => {
           const disabled = k !== "coder" && placed(k);
           return (
             <div
@@ -784,10 +797,14 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
               title={disabled ? t.ac_already_placed : undefined}
               onMouseDown={disabled ? undefined : (e) => beginDrag(e, "pool", k)}
             >
-              <span className="ac-agent-ico">{k === "coder" ? "</>" : k === "reviewer" ? "✓?" : "⑂"}</span>
+              <span className="ac-agent-ico">{{ coder: "</>", reviewer: "✓?", orchestrator: "⑂", verifier: "☑" }[k]}</span>
               <div>
                 {poolLabel(k)}
-                <small>{disabled ? t.ac_already_placed : k === "coder" ? t.ac_coder_hint : k === "reviewer" ? t.ac_reviewer_hint : t.ac_orchestrator_hint}</small>
+                <small>
+                  {disabled
+                    ? t.ac_already_placed
+                    : { coder: t.ac_coder_hint, reviewer: t.ac_reviewer_hint, orchestrator: t.ac_orchestrator_hint, verifier: t.ac_verifier_hint }[k]}
+                </small>
               </div>
             </div>
           );
@@ -874,6 +891,9 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
                       coderIds={coderIds}
                       hasReviewer={hasReviewer}
                       hasOrchestrator={hasOrchestrator}
+                      hasVerifier={hasVerifier}
+                      onVerifyReport={setVerifyFor}
+                      onAcceptVerify={(id) => projectId && void run(() => acceptVerification(projectId, id))}
                       status={deriveAgentStatus(
                         a,
                         cardsOf(a.id),
@@ -1007,6 +1027,18 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
             setNewModule(false);
             void refresh();
           }}
+        />
+      )}
+      {verifyCard && projectId && (
+        <VerifyReportDialog
+          projectId={projectId}
+          taskId={verifyCard.id}
+          canAccept={verifyCard.verdict === "attention" || verifyCard.verdict === "fail"}
+          onAccept={() => {
+            setVerifyFor(null);
+            void run(() => acceptVerification(projectId, verifyCard.id));
+          }}
+          onClose={() => setVerifyFor(null)}
         />
       )}
       {transcriptCard && projectId && (

@@ -11,7 +11,7 @@ import { waitingPrerequisites } from "./prerequisites";
 import { shortBranch } from "./projectSummary";
 import { formatTokens, moduleCards, sumUsage, totalTokens, usageBreakdown, type UsageSum } from "./tokenUsage";
 
-const KIND_ICON: Record<AgentRow["kind"], string> = { coder: "</>", reviewer: "✓?", orchestrator: "⑂" };
+const KIND_ICON: Record<AgentRow["kind"], string> = { coder: "</>", reviewer: "✓?", orchestrator: "⑂", verifier: "☑" };
 
 const MODULE_CHIP: Record<ModuleState, { cls: string; icon: string }> = {
   planning: { cls: "ac-chip--queued", icon: "·" },
@@ -30,6 +30,16 @@ const MODULE_CHIP: Record<ModuleState, { cls: string; icon: string }> = {
 
 const shortSha = (s: string | null) => (s ? s.slice(0, 7) : "?");
 
+/** 審查／驗收卡的 review_reasons（JSON 字串陣列）。 */
+const reasonsOf = (c: TaskRow): string[] => {
+  try {
+    const v: unknown = JSON.parse(c.review_reasons ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+};
+
 export function AgentNode({
   agent,
   tasks,
@@ -37,6 +47,7 @@ export function AgentNode({
   coderIds,
   hasReviewer,
   hasOrchestrator,
+  hasVerifier = false,
   status,
   nowSecs,
   dropState,
@@ -57,6 +68,8 @@ export function AgentNode({
   question,
   onOpenQuestion,
   usage = {},
+  onVerifyReport,
+  onAcceptVerify,
 }: {
   agent: AgentRow;
   /** 這個專案所有未封存的卡片（節點自己挑出跟它有關的）。 */
@@ -67,6 +80,8 @@ export function AgentNode({
   hasReviewer: boolean;
   /** 有協調者時，工程師的分支由它合併，工程師卡上就不放「合併分支」。 */
   hasOrchestrator: boolean;
+  /** 有驗收者時，合併結果要驗收通過才更新程式庫，協調者卡上不放「合併分支」。 */
+  hasVerifier?: boolean;
   status: AgentStatus;
   nowSecs: number;
   dropState: "ok" | "bad" | null;
@@ -90,6 +105,10 @@ export function AgentNode({
   onOpenQuestion?: (id: number) => void;
   /** 每張卡的 token 用量（task id → 用量）。 */
   usage?: Record<string, TokenUsage>;
+  /** 驗收者：打開某張驗收卡的報告。 */
+  onVerifyReport?: (taskId: string) => void;
+  /** 驗收者：放行沒通過的驗收。 */
+  onAcceptVerify?: (taskId: string) => void;
 }) {
   const { t } = useLocale();
   const mine = tasks.filter((c) => c.agent_id === agent.id);
@@ -105,6 +124,7 @@ export function AgentNode({
     reviewing: t.ac_status_reviewing,
     // 同樣是 Orchestrator 在跑，拆解規格與合併分支是兩回事。
     merging: running?.card_kind === "plan" ? t.ac_status_splitting : t.ac_status_merging,
+    verifying: t.ac_status_verifying,
     waiting: t.ac_status_waiting,
     done: t.ac_status_done,
     idle: t.ac_status_idle,
@@ -148,8 +168,14 @@ export function AgentNode({
     !!agent.branch &&
     (status === "idle" || status === "done") &&
     (agent.kind === "orchestrator"
-      ? lastMerge?.verdict !== "repo_merged" || mergeConflict
+      ? (lastMerge?.verdict !== "repo_merged" && !(hasVerifier && !lastMerge?.verdict)) || mergeConflict
       : agent.kind === "coder" && !hasOrchestrator);
+
+  // ── Verifier：最後一張驗收卡 ─────────────────────────────────────────────
+  const lastVerify =
+    agent.kind === "verifier"
+      ? mine.filter((c) => c.card_kind === "verify" && c.status === "done").sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))[0]
+      : undefined;
 
   const runningLine = () => {
     if (!running) return null;
@@ -159,6 +185,8 @@ export function AgentNode({
       const module = byId(running.module_id);
       title = t.ac_reviewing_module(module?.title ?? running.title, agentName(module?.agent_id ?? null));
       snip = `git diff ${shortSha(running.start_sha)}..${shortSha(running.end_sha)}`;
+    } else if (agent.kind === "verifier") {
+      title = t.ac_verify_running;
     } else if (agent.kind === "orchestrator") {
       title = running.card_kind === "plan"
         ? t.ac_splitting_spec(byId(running.module_id)?.title ?? running.title)
@@ -168,7 +196,15 @@ export function AgentNode({
       <>
         <div className="ac-now">
           <span className="ac-now-title">
-            {agent.kind === "reviewer" ? "🔍" : agent.kind === "orchestrator" ? "⑂" : running.card_kind === "fix" ? "↺" : "▶"}{" "}
+            {agent.kind === "reviewer"
+              ? "🔍"
+              : agent.kind === "orchestrator"
+                ? "⑂"
+                : agent.kind === "verifier"
+                  ? "☑"
+                  : running.card_kind === "fix"
+                    ? "↺"
+                    : "▶"}{" "}
             <b>{title}</b>
           </span>
           {running.tab_id && (
@@ -216,6 +252,37 @@ export function AgentNode({
       return t.ac_no_work;
     }
     if (agent.kind === "reviewer") return queued.length ? t.ac_review_queue(queued.length) : t.ac_waiting_handoff;
+    if (agent.kind === "verifier") {
+      if (queued.length) return t.ac_verify_queue;
+      if (!lastVerify) return t.ac_verify_waiting;
+      const report = (
+        <button className="ac-link" onClick={() => onVerifyReport?.(lastVerify.id)}>
+          {t.ac_verify_report}
+        </button>
+      );
+      if (lastVerify.verdict === "pass") {
+        return (
+          <span>
+            <span className="ac-check">✓</span> {t.ac_verify_passed} · {report}
+          </span>
+        );
+      }
+      if (lastVerify.verdict === "attention") {
+        return (
+          <span>
+            <span className="ac-bad-text">⚠ {t.ac_verify_attention}</span> · {report}{" "}
+            <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={() => onAcceptVerify?.(lastVerify.id)}>
+              {t.ac_verify_accept}
+            </button>
+          </span>
+        );
+      }
+      return (
+        <span>
+          <span className="ac-bad-text">✗ {t.ac_verify_failed(reasonsOf(lastVerify).length)}</span> · {report}
+        </span>
+      );
+    }
     if (lastMerge && lastMerge.outcome === "success" && allPassed === allStates.length && queued.length === 0) {
       // verdict：合併卡結束後有沒有自動合回程式庫（見後端 workflow::fast_forward_repo）。
       const why = ({
@@ -224,6 +291,7 @@ export function AgentNode({
         repo_diverged: t.ac_repo_why_diverged,
       } as Record<string, string>)[lastMerge.verdict ?? ""];
       if (lastMerge.verdict === "repo_merged") return <span><span className="ac-check">✓</span> {t.ac_in_repo}</span>;
+      if (hasVerifier && !lastMerge.verdict) return t.ac_wait_verify;
       if (why) return <span className="ac-bad-text">{t.ac_repo_pending(why)}</span>;
       return <span><span className="ac-check">✓</span> {t.ac_integrated}</span>;
     }
@@ -333,9 +401,9 @@ export function AgentNode({
           </div>
         )}
 
-        {(agent.kind !== "reviewer" || mineUsage) && (
+        {(agent.kind === "coder" || agent.kind === "orchestrator" || mineUsage) && (
           <div className="ac-meta">
-            {agent.kind !== "reviewer" && (
+            {(agent.kind === "coder" || agent.kind === "orchestrator") && (
               <span title={agent.branch ?? undefined}>⑂ {agent.branch ? shortBranch(agent.branch) : "—"}</span>
             )}
             {mineUsage && (

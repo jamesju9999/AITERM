@@ -4,7 +4,7 @@ import type { MergeOutcome } from "./tasks";
 
 // ── Types（鏡射 Rust tasks/agents.rs 的 AgentRow）──────────────────────────
 
-export type AgentKind = "coder" | "reviewer" | "orchestrator";
+export type AgentKind = "coder" | "reviewer" | "orchestrator" | "verifier";
 
 export interface AgentRow {
   id: string;
@@ -105,3 +105,38 @@ export const initRepo = (path: string, projectId?: string): Promise<void> =>
 
 /** 在系統的檔案管理員打開程式庫資料夾。 */
 export const openRepo = (path: string): Promise<void> => invoke("agents_open_repo", { path });
+
+// ── 驗收（鏡射 Rust tasks/workflow.rs 的 VerifyReport）─────────────────────
+
+export interface VerifyItem {
+  criterion: string;
+  status: "pass" | "fail" | "manual";
+  module_id?: string | null;
+  /** 截圖路徑（相對於驗收卡資料夾）或指令輸出摘要。 */
+  evidence: string[];
+  steps?: string | null;
+  expected?: string | null;
+  actual?: string | null;
+  notes?: string | null;
+}
+
+export interface VerifyReport {
+  verdict: "pass" | "fail";
+  project_type?: string | null;
+  items: VerifyItem[];
+  notes?: string | null;
+}
+
+export interface VerifyReportView {
+  /** 驗收卡還沒寫出 verify.json 時是 null。 */
+  report: VerifyReport | null;
+  /** 證據路徑 → data URL（只有圖片）。 */
+  images: Record<string, string>;
+}
+
+export const verifyReport = (projectId: string, taskId: string): Promise<VerifyReportView> =>
+  invoke("agents_verify_report", { projectId, taskId });
+
+/** 放行沒通過的驗收：當成通過，程式庫更新到受驗版本。 */
+export const acceptVerification = (projectId: string, taskId: string): Promise<void> =>
+  invoke("agents_accept_verification", { projectId, taskId });
