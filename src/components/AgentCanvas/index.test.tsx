@@ -330,6 +330,14 @@ describe("AgentCanvasView", () => {
     }
   });
 
+  it("桌布空白時中間有「從團隊範本開始」", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    fireEvent.click(await screen.findByTestId("ac-templates-empty"));
+    expect(await screen.findByRole("dialog", { name: "團隊範本" })).toBeTruthy();
+  });
+
   it("團隊範本：存下桌布上的團隊，套用時用選的程式庫建立，已經有的審核者不重複", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "審核者", canvas_x: 400 })]);
     vi.mocked(listTasks).mockResolvedValue([]);

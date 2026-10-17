@@ -794,6 +794,12 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
           </button>
         )}
         <span className="ac-spacer" />
+        {/* 團隊範本是整個專案團隊的操作，放在頂列的專案動作這邊，不跟拖曳角色的 Agent 池混在一起。 */}
+        {projectId && (
+          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" data-testid="ac-templates" onClick={() => setTemplatesOpen(true)}>
+            {t.ac_tpl_button}
+          </button>
+        )}
         <button
           className={`aiterm-btn aiterm-btn--sm ${questions.length ? "aiterm-btn--primary" : "aiterm-btn--ghost"}`}
           data-testid="ac-inbox-button"
@@ -829,10 +835,6 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
             </div>
           );
         })}
-        <span className="ac-pool-sep" aria-hidden />
-        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" data-testid="ac-templates" onClick={() => setTemplatesOpen(true)}>
-          {t.ac_tpl_button}
-        </button>
         <span className="ac-pool-hint">{t.ac_pool_hint}</span>
       </div>
 
@@ -888,7 +890,20 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
 
         <div className="ac-canvas-wrap">
           <section className={`ac-canvas${hover?.kind === "canvas" && ghost?.kind === "pool" ? " ac-canvas--drop" : ""}`} data-drop="canvas" ref={canvasRef}>
-            {agents.length === 0 && <div className="ac-canvas-empty">{t.ac_empty_canvas}</div>}
+            {agents.length === 0 && (
+              <div className="ac-canvas-empty">
+                <div className="ac-canvas-empty-body">
+                  <span>{t.ac_empty_canvas}</span>
+                  <button
+                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                    data-testid="ac-templates-empty"
+                    onClick={() => setTemplatesOpen(true)}
+                  >
+                    {t.ac_tpl_start}
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="ac-sizer" style={{ width: world.w * zoom, height: world.h * zoom }}>
               <div
                 className="ac-world"
