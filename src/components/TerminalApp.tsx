@@ -77,7 +77,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     // Fall back to default tab type from settings
     const saved = localStorage.getItem(DEFAULT_TAB_STORAGE_KEY);
     const tabType: "terminal" | "database" = saved === "database" ? "database" : "terminal";
-    return [{ id: crypto.randomUUID(), title: tabType === "database" ? "Database" : "Terminal", type: tabType }];
+    return [{ id: crypto.randomUUID(), title: tabType === "database" ? t.database_tab : t.terminal_tab, type: tabType }];
   });
   const [activeId, setActiveId] = useState(tabs[0].id);
   // 首頁不是分頁，所以它不在 tabs 裡，而是一個「都不 active」的狀態。
@@ -520,9 +520,9 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
         const newId = crypto.randomUUID();
         setActiveId(newId);
         // 這條路徑是「關掉最後一個分頁時自動補一個」，不是使用者挑的，
-        // 所以算 default 來源：標題維持字面的 Terminal，不改名。
+        // 所以算 default 來源：標題用預設的終端機名稱，不改名。
         const bridged = defaultBridgeOnNewTabRef.current;
-        return [{ id: newId, title: "Terminal", type: "terminal", claudeBridge: bridged ? "default" as const : undefined }];
+        return [{ id: newId, title: t.terminal_tab, type: "terminal", claudeBridge: bridged ? "default" as const : undefined }];
       }
 
       // If closing active tab, switch to adjacent tab

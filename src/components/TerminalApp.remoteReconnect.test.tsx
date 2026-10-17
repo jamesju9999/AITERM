@@ -109,7 +109,7 @@ describe("TerminalApp: 遠端終端機工具列的「連線」按鈕就地重新
     // 得到。這跟既有的 TerminalApp.routeHintCloseGuard.test.tsx 是同一個
     // 前提，那邊用 HomeView 的 stub 按鈕切換，這裡因為沒有 mock
     // HomeView，改直接點側邊欄的分頁項目。
-    await userEvent.click(await screen.findByTitle(/^Switch to Tab \(Ctrl\+1\)/));
+    await userEvent.click(await screen.findByTitle(/^切換到分頁 \(Ctrl\+1\)/));
 
     const connectButtons = await screen.findAllByText(/^connect-button-/);
     expect(connectButtons).toHaveLength(1);
@@ -129,7 +129,7 @@ describe("TerminalApp: 遠端終端機工具列的「連線」按鈕就地重新
     renderApp();
 
     // 同上一個測試：先切到這個分頁，連線按鈕才點得到。
-    await userEvent.click(await screen.findByTitle(/^Switch to Tab \(Ctrl\+1\)/));
+    await userEvent.click(await screen.findByTitle(/^切換到分頁 \(Ctrl\+1\)/));
 
     const connectButtons = await screen.findAllByText(/^connect-button-/);
     await userEvent.click(connectButtons[0]);
@@ -153,7 +153,7 @@ describe("TerminalApp: 遠端終端機工具列的「連線」按鈕就地重新
     const beforeCount = screen.getAllByTestId(/remote-conn-/).length;
     expect(beforeCount).toBe(1);
 
-    await userEvent.click(await screen.findByTitle("New Tab (Ctrl+T)"));
+    await userEvent.click(await screen.findByTitle("新分頁 (Ctrl+T)"));
     await userEvent.click(await screen.findByText("pick-remote-terminal"));
 
     const fireConnected = await screen.findByText("fire-connected");
@@ -182,7 +182,7 @@ describe("TerminalApp: 遠端終端機工具列的「連線」按鈕就地重新
     );
     renderApp();
 
-    await userEvent.click(await screen.findByTitle(/^Switch to Tab \(Ctrl\+1\)/));
+    await userEvent.click(await screen.findByTitle(/^切換到分頁 \(Ctrl\+1\)/));
     const connectButtons = await screen.findAllByText(/^connect-button-/);
     await userEvent.click(connectButtons[0]);
     const fireConnected = await screen.findByText("fire-connected");

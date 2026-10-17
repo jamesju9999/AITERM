@@ -175,8 +175,8 @@ describe("TerminalApp: RouteHint pick awaits the close guard (Task 3)", () => {
     // handleCloseTab) plus the newly picked database tab. TabBar doesn't use
     // role="tab"; each real tab (excluding the Home button, Add-Tab button,
     // and Settings footer entry) carries this title.
-    await screen.findAllByTitle(/Switch to Tab/);
-    expect(screen.getAllByTitle(/Switch to Tab/).length).toBe(2);
+    await screen.findAllByTitle(/切換到分頁/);
+    expect(screen.getAllByTitle(/切換到分頁/).length).toBe(2);
   });
 
   it("guard 否決（LoopStudio 執行中，使用者按取消）：不開新分頁，維持原分頁", async () => {
@@ -193,14 +193,14 @@ describe("TerminalApp: RouteHint pick awaits the close guard (Task 3)", () => {
     });
 
     expect(screen.getByRole("heading", { level: 3 })).toHaveTextContent("Loop 正在執行中");
-    expect(screen.getAllByTitle(/Switch to Tab/).length).toBe(1);
+    expect(screen.getAllByTitle(/切換到分頁/).length).toBe(1);
 
     await userEvent.click(screen.getByRole("button", { name: "取消（繼續編輯）" }));
 
     // Cancelled: still exactly one tab, and the loop was never told to stop
     // (proof the cancel path really short-circuited handleRouteHintPick
     // before it reached handlePickerSelect).
-    expect(screen.getAllByTitle(/Switch to Tab/).length).toBe(1);
+    expect(screen.getAllByTitle(/切換到分頁/).length).toBe(1);
     expect(screen.queryByRole("heading", { level: 3 })).not.toBeInTheDocument();
     expect(fakeLoop.stop).not.toHaveBeenCalled();
   });

@@ -26,6 +26,7 @@ import {
   WorkflowIcon,
 } from "../Icons";
 import "./index.css";
+import { displayTabTitle } from "../../lib/tabTitle";
 
 export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base" | "mail" | "remote-terminal" | "agent-canvas";
 
@@ -310,10 +311,10 @@ export function TabBar({
             <button
               className="aiterm-sidebar-toggle-block"
               onClick={onToggle}
-              title="Close Sidebar (Ctrl+B)"
+              title={t.tabbar_sidebar_collapse}
             >
               <span className="aiterm-tab-icon"><PanelLeftCloseIcon size={18} /></span>
-              <span className="aiterm-tab-title">Collapse</span>
+              <span className="aiterm-tab-title">{t.tabbar_collapse}</span>
             </button>
           </>
         ) : (
@@ -386,7 +387,7 @@ export function TabBar({
             }}
             onDoubleClick={isSidebarOpen ? () => setEditingId(tab.id) : undefined}
             title={
-              (isSidebarOpen ? `Switch to Tab (Ctrl+${idx + 1}) — Double click to rename` : `${tab.title} (Ctrl+${idx + 1})`)
+              (isSidebarOpen ? t.tabbar_switch_tip(idx + 1) : `${displayTabTitle(tab, t)} (Ctrl+${idx + 1})`)
               + (tab.spawnedByAgent ? ` · ${t.tab_spawned_by_agent_hint}` : "")
             }
           >
@@ -431,7 +432,7 @@ export function TabBar({
                 <input
                   ref={editInputRef}
                   className="aiterm-tab-rename-input"
-                  defaultValue={tab.title}
+                  defaultValue={displayTabTitle(tab, t)}
                   onBlur={(e) => {
                     const val = e.currentTarget.value.trim();
                     if (val && onRename) onRename(tab.id, val);
@@ -450,7 +451,7 @@ export function TabBar({
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
-                <span className="aiterm-tab-title">{tab.title}</span>
+                <span className="aiterm-tab-title">{displayTabTitle(tab, t)}</span>
               )
             )}
             
@@ -461,7 +462,7 @@ export function TabBar({
                   e.stopPropagation();
                   onClose(tab.id);
                 }}
-                title="Close Tab (Ctrl+W)"
+                title={t.tabbar_close_tip}
               >
                 ✕
               </button>
@@ -470,9 +471,9 @@ export function TabBar({
         ))}
         
         {/* Add Tab Button */}
-        <button className="aiterm-tab-add-block" onClick={onAdd} title="New Tab (Ctrl+T)">
+        <button className="aiterm-tab-add-block" onClick={onAdd} title={t.tabbar_new_tab_tip}>
           <span style={{ fontSize: '18px' }}>+</span>
-          {isSidebarOpen && <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 600 }}>Add Tab</span>}
+          {isSidebarOpen && <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 600 }}>{t.tabbar_add_tab}</span>}
         </button>
       </div>
 
