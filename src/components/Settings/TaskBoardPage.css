@@ -1,34 +1,52 @@
-/* 這一頁原本完全沒有樣式表，靠瀏覽器預設值渲染——標籤與輸入框擠在同一
-   行、按鈕是系統原生樣子，跟其他設定頁完全不一致。類別命名與數值刻意
-   照 McpToolServerPage.css，兩頁並排看不出差別才算對齊。 */
+/* 跟「一般」設定頁同一套尺寸：h2 18px、分區 h3 14px、說明 12px 灰字；
+   開關做成跟一般頁單選卡片一樣的框，標題與說明上下排、說明對齊標題。 */
 
 .task-board-page {
-  padding: 24px;
-  max-width: 640px;
+  padding: 24px 32px;
+  max-width: 760px;
+}
+
+.task-board-page h2 {
+  color: #e6e6e6;
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 6px;
 }
 
 .task-board-desc {
-  color: var(--text-secondary, #888);
-  margin-bottom: 16px;
+  color: #777;
+  font-size: 12px;
+  margin: 0 0 24px;
 }
 
 .task-board-section {
-  margin: 20px 0;
+  margin-bottom: 28px;
 }
 
-/* 每個欄位自成一列：標籤在上、輸入框在下。原本標籤與輸入框是行內排列，
-   兩個欄位會黏成一長串（「同時執行上限 5 Claude Code 啟動指令 claude」），
-   讀不出哪個標籤對應哪個輸入框。 */
+.task-board-section h3 {
+  color: #ccc;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+.task-board-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 24px;
+}
+
 .task-board-field {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
 }
 
-.task-board-field > span {
+.task-board-label {
+  color: #e6e6e6;
   font-size: 13px;
-  color: var(--text-primary, #e6e6e6);
+  font-weight: 500;
 }
 
 .task-board-field input {
@@ -45,49 +63,75 @@
   outline: none;
 }
 
-.task-board-field input[type="number"] { width: 100px; }
-.task-board-field input[type="text"] { width: 100%; max-width: 320px; }
+.task-board-field input[type="number"] { width: 88px; }
+.task-board-field input[type="text"] { width: 100%; max-width: 320px; box-sizing: border-box; }
+
+.task-board-unit {
+  align-items: center;
+  color: #888;
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+}
 
 .task-board-hint {
+  color: #888;
   font-size: 12px;
-  color: var(--text-muted, #666);
+  line-height: 1.5;
+}
+
+.task-board-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-board-toggle {
+  align-items: flex-start;
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.task-board-toggle:hover {
+  border-color: #3a3a3a;
+}
+
+.task-board-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.task-board-toggle-label {
+  color: #e6e6e6;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.task-board-checkbox {
+  accent-color: var(--accent, #a855f7);
+  flex-shrink: 0;
+  height: 15px;
+  margin: 1px 0 0;
+  width: 15px;
+}
+
+.task-board-warning {
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 6px;
+  color: #eab308;
+  font-size: 12px;
+  margin: 8px 0 0;
+  padding: 8px 12px;
 }
 
 .task-board-actions {
   display: flex;
   gap: 8px;
-  margin-top: 16px;
-}
-
-.task-board-actions button {
-  background: #1a1a1a;
-  border: 1px solid #2e2e2e;
-  border-radius: 6px;
-  color: #e6e6e6;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 8px 16px;
-}
-
-.task-board-actions button:hover:not(:disabled) {
-  border-color: #2d5aab;
-}
-
-.task-board-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.task-board-field--checkbox {
-  flex-direction: row;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.task-board-checkbox {
-  accent-color: var(--accent, #a855f7);
-  width: 15px;
-  height: 15px;
-  margin: 0;
 }
