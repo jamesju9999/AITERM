@@ -880,22 +880,21 @@ export function AgentCanvasView({
               className={`ac-pool-item ac-pool-item--${k}${disabled ? " ac-pool-item--disabled" : ""}`}
               data-testid={`pool-${k}`}
               aria-disabled={disabled}
-              title={disabled ? t.ac_already_placed : undefined}
+              title={
+                disabled
+                  ? t.ac_already_placed
+                  : { coder: t.ac_coder_hint, reviewer: t.ac_reviewer_hint, orchestrator: t.ac_orchestrator_hint, verifier: t.ac_verifier_hint }[k]
+              }
               onMouseDown={disabled ? undefined : (e) => beginDrag(e, "pool", k)}
             >
               <span className="ac-agent-ico"><KindIcon kind={k} /></span>
-              {/* 已放上桌布的縮成一顆小標籤，視線留給還能拖的角色。 */}
+              {/* 每顆都是同高的單行標籤；已放上桌布的變淡、只留一個灰色小勾，視線留給還能拖的角色。
+                  各角色的用途說明放在提示裡。 */}
+              <span className="ac-pool-name">{poolLabel(k)}</span>
               {disabled ? (
-                <span className="ac-pool-placed">
-                  {poolLabel(k)} <span className="ac-check" aria-label={t.ac_already_placed}>✓</span>
-                </span>
+                <span className="ac-pool-done" aria-label={t.ac_already_placed}>✓</span>
               ) : (
-                <div>
-                  {poolLabel(k)}
-                  <small>
-                    {{ coder: t.ac_coder_hint, reviewer: t.ac_reviewer_hint, orchestrator: t.ac_orchestrator_hint, verifier: t.ac_verifier_hint }[k]}
-                  </small>
-                </div>
+                k === "coder" && <small>{t.ac_coder_hint}</small>
               )}
             </div>
           );
