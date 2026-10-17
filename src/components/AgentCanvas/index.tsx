@@ -46,6 +46,8 @@ import { computeEdges, diffPulses, edgeActivity, type Pulse } from "./edges";
 import { idList } from "./prerequisites";
 import { QuestionInbox } from "./QuestionInbox";
 import { VerifyReportDialog } from "./VerifyReportDialog";
+import { TeamTemplateDialog } from "./TeamTemplateDialog";
+import { toCreate } from "./teamTemplates";
 import { answerQuestion, listQuestions, onQuestionsUpdated, type QuestionView } from "../../ipc/questions";
 import { projectSummary, type ProjectSummary } from "./projectSummary";
 import { sumUsage } from "./tokenUsage";
@@ -159,6 +161,7 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
   const prevTasks = useRef<TaskWithAttachments[] | null>(null);
   const [newModule, setNewModule] = useState(false);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   /** 打開驗收報告的那張驗收卡。 */
   const [verifyFor, setVerifyFor] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -826,6 +829,9 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
             </div>
           );
         })}
+        <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" data-testid="ac-templates" onClick={() => setTemplatesOpen(true)}>
+          {t.ac_tpl_button}
+        </button>
         <span className="ac-pool-hint">{t.ac_pool_hint}</span>
       </div>
 
@@ -1044,6 +1050,21 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
             setNewModule(false);
             void refresh();
           }}
+        />
+      )}
+      {templatesOpen && projectId && (
+        <TeamTemplateDialog
+          agents={agents}
+          defaultRepo={agents[0]?.project_dir ?? ""}
+          onApply={async (tpl, repoDir) => {
+            // 新團隊擺在現有 Agent 下面，不疊在上面。
+            const y = agents.length ? Math.max(...agents.map((a) => a.canvas_y)) + 260 : 40;
+            for (const args of toCreate(tpl, agents, repoDir, 40, y)) {
+              await createAgent(projectId, args);
+            }
+            void refresh();
+          }}
+          onClose={() => setTemplatesOpen(false)}
         />
       )}
       {verifyCard && projectId && (

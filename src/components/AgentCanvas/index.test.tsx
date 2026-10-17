@@ -303,6 +303,26 @@ describe("AgentCanvasView", () => {
     }
   });
 
+  it("團隊範本：存下桌布上的團隊，套用時用選的程式庫建立，已經有的審核者不重複", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "審核者", canvas_x: 400 })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    fireEvent.click(await screen.findByTestId("ac-templates"));
+    const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    fireEvent.change(within(dlg).getByLabelText("範本名稱"), { target: { value: "標準團隊" } });
+    fireEvent.click(within(dlg).getByRole("button", { name: "存成範本" }));
+    const item = await within(dlg).findByTestId("tpl-標準團隊");
+    expect(item.textContent).toMatch(/Coder Agent1、審核者/);
+    const apply = within(item).getByRole("button", { name: "套用" });
+    await waitFor(() => expect(apply).not.toBeDisabled());
+    fireEvent.click(apply);
+    await waitFor(() => expect(createAgent).toHaveBeenCalledTimes(1));
+    expect(createAgent).toHaveBeenCalledWith(
+      "p1",
+      expect.objectContaining({ kind: "coder", name: "Coder Agent1", project_dir: "/repo/htbktw", canvas_x: 40, canvas_y: 300 }),
+    );
+  });
+
   it("可以自訂角色名稱與提示詞，存成我的角色後下次從選單帶入", async () => {
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
