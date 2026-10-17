@@ -199,6 +199,69 @@ pub fn join_args<const N: usize>(parts: [Option<String>; N]) -> Option<String> {
 pub const AUTONOMY_NOTE_ASK: &str = "（這是自動派工，旁邊沒有人會即時回答。需要人做決定時（需求不清、取捨會影響成果），\
 用 ask_human 工具提問，送出後結束這一輪回覆等答案，不要自己先決定；小細節自己採合理做法，記在文件或交件說明的「待確認事項」。）";
 
+/// Codex 卡片的提問版自主說明：ask_human 會等到有人回答才回傳（`codex exec` 結束這一輪就退出了）。
+pub const AUTONOMY_NOTE_ASK_WAIT: &str = "（這是自動派工，旁邊沒有人會即時回答。需要人做決定時（需求不清、取捨會影響成果），\
+用 ask_human 工具提問；工具會等到有人回答才回傳答案，照答案繼續做完。不要自己先決定；小細節自己採合理做法，記在文件或交件說明的「待確認事項」。）";
+
+/// Codex 卡片：把提問版說明換成「工具會等答案」的版本。
+pub fn codex_autonomy(prompt: &str) -> String {
+    prompt.replace(AUTONOMY_NOTE_ASK, AUTONOMY_NOTE_ASK_WAIT)
+}
+
+/// Codex 卡片結束時的判斷：額度用完就回佇列，否則照結果走（錯誤訊息換成 Codex 的）。
+pub(crate) enum CodexVerdict {
+    Requeue,
+    Outcome(monitor::TaskOutcome),
+}
+
+pub(crate) async fn codex_verdict(pool: &sqlx::SqlitePool, task_id: &str, outcome: monitor::TaskOutcome) -> CodexVerdict {
+    if !matches!(outcome, monitor::TaskOutcome::Failed(_)) {
+        return CodexVerdict::Outcome(outcome);
+    }
+    let path = store::get_task(pool, task_id).await.ok().flatten().and_then(|t| t.session_path);
+    let err = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| crate::tasks::codex::last_error(&t));
+    match err {
+        Some(crate::tasks::codex::CodexError::UsageLimit(_)) => {
+            match requeue_for_quota(pool, task_id, chrono::Utc::now().timestamp()).await {
+                Ok(()) => CodexVerdict::Requeue,
+                Err(e) => {
+                    eprintln!("requeue for quota {task_id}: {e}");
+                    CodexVerdict::Outcome(outcome)
+                }
+            }
+        }
+        Some(crate::tasks::codex::CodexError::Other(m)) => CodexVerdict::Outcome(monitor::TaskOutcome::Failed(m)),
+        None => CodexVerdict::Outcome(outcome),
+    }
+}
+
+/// 額度用完的 Codex 卡回到該 Agent 佇列最前面、標成接著做、記下等待時間；
+/// 排程器在 `RETRY_AFTER` 之內不會再派它（見 `quota_cooling`）。
+pub(crate) async fn requeue_for_quota(pool: &sqlx::SqlitePool, task_id: &str, now: i64) -> Result<(), sqlx::Error> {
+    let t = store::get_task(pool, task_id).await?.ok_or(sqlx::Error::RowNotFound)?;
+    let order = match t.agent_id.as_deref() {
+        Some(a) => crate::tasks::agents::first_queued_order(pool, a).await?.map(|f| f - 1.0).unwrap_or(t.sort_order),
+        None => t.sort_order,
+    };
+    sqlx::query(
+        "UPDATE tasks SET status = ?, resume_session = ?, sort_order = ?, tab_id = NULL,
+             reply_wait_at = NULL, quota_wait_at = ? WHERE id = ?",
+    )
+    .bind(store::STATUS_QUEUED)
+    .bind(t.session_id.is_some())
+    .bind(order)
+    .bind(now)
+    .bind(task_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// 佇列裡等額度的卡：記下的時間還沒滿 `RETRY_AFTER` 就先不派。
+pub(crate) fn quota_cooling(quota_wait_at: Option<i64>, now: i64) -> bool {
+    quota_wait_at.is_some_and(|at| now - at < crate::tasks::quota::RETRY_AFTER.as_secs() as i64)
+}
+
 /// Agent 卡的完整提示：角色前綴＋卡片內容；非互動卡最後再加自主說明（有 `ask_human` 時用提問版）。
 pub fn agent_prompt(prefix: &str, prompt: &str, interactive: bool, can_ask: bool) -> String {
     let p = with_role_prefix(prefix, prompt);
@@ -594,6 +657,48 @@ pub struct RealDispatcher {
     pub quota: Arc<crate::tasks::quota::QuotaState>,
 }
 
+impl RealDispatcher {
+    /// Codex 卡片的整行指令；提示詞寫進 `tasks/<id>/prompt.md`。
+    #[allow(clippy::too_many_arguments)]
+    async fn codex_launch(
+        &self,
+        project: &ProjectHandle,
+        task: &TaskRow,
+        agent: Option<&crate::tasks::agents::AgentRow>,
+        prompt: &str,
+        resume: Option<&str>,
+        ask_url: Option<&str>,
+        evidence: Option<&std::path::Path>,
+        browser: crate::tasks::ask::Browser,
+    ) -> Result<String, String> {
+        let dir = crate::tasks::task_dir(&project.path, &task.id);
+        let file = dir.join("prompt.md");
+        std::fs::create_dir_all(&dir)
+            .and_then(|_| std::fs::write(&file, prompt))
+            .map_err(|e| format!("寫入 Codex 提示詞失敗：{e}"))?;
+        let hook = self.quota.hook_base(&task.id).await.map(|b| crate::tasks::codex::hook_command(&b));
+        let playwright = evidence.map(|e| crate::tasks::ask::playwright_args(e, browser));
+        let off = if self.config.get().task_board.lean_agent_dispatch {
+            crate::tasks::codex::codex_home()
+                .and_then(|h| std::fs::read_to_string(h.join("config.toml")).ok())
+                .map(|t| crate::tasks::codex::user_mcp_servers(&t))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        crate::tasks::codex::launch_command(&crate::tasks::codex::CodexLaunch {
+            model: agent.and_then(|a| a.model.as_deref()),
+            prompt_file: &file,
+            resume_session: resume,
+            hook_command: hook.as_deref(),
+            ask_url,
+            playwright_args: playwright.as_deref(),
+            disable_mcp: &off,
+        })
+        .ok_or_else(|| format!("專案路徑含有單引號，無法派給 Codex：{}", file.display()))
+    }
+}
+
 #[async_trait::async_trait]
 impl Dispatcher for RealDispatcher {
     async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
@@ -613,26 +718,55 @@ impl Dispatcher for RealDispatcher {
             .collect::<Vec<_>>();
         let mut prompt = dispatch::build_prompt(&task.body, &attachments);
         let claude_cmd = self.config.get().task_board.claude_command;
+        // Agent 卡片：在 Agent 自己的 worktree 跑、提示詞加角色前綴，並且
+        // **不**寫卡片的 worktree 欄位——那兩欄是每卡隔離用的，有值會讓
+        // 看板顯示「合併回原分支」，而 Agent 的成果是整個分支一起合併。
+        let agent = match &task.agent_id {
+            Some(aid) => Some(
+                crate::tasks::agents::get_agent(&project.pool, aid)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("找不到指派的 Agent：{aid}"))?,
+            ),
+            None => None,
+        };
+        // 選了 Codex 的 Agent 的非互動卡片：用 `codex exec` 做（見 tasks::codex）。
+        let codex = !task.interactive && agent.as_ref().is_some_and(|a| a.cli == crate::tasks::agents::CLI_CODEX);
         // 只有指令確實是 claude 時才給 session id——別的指令接上這個旗標
         // 會直接啟動失敗（見 dispatch::looks_like_claude）。
         // 重啟時被中斷的卡片：接回原本的對話（同一個 session id）。
-        let resume = task.resume_session && task.session_id.is_some() && dispatch::looks_like_claude(&claude_cmd);
-        let session_id = if resume {
+        // Codex 自己產生 session id（SessionStart hook 回報），接著做時用卡片上記的那個。
+        let resume = task.resume_session
+            && task.session_id.is_some()
+            && (codex || dispatch::looks_like_claude(&claude_cmd));
+        let codex_resume = if codex && resume { task.session_id.clone() } else { None };
+        let session_id = if codex {
+            None
+        } else if resume {
             task.session_id.clone()
         } else {
             dispatch::looks_like_claude(&claude_cmd).then(|| uuid::Uuid::new_v4().to_string())
         };
+        // 能掛 ask_human／瀏覽器的卡：claude（有 session id）或 Codex。
+        let managed = session_id.is_some() || codex;
         // 非互動的 Agent 卡掛上 ask_human（需要人決定時提問）；驗收卡另外掛上
         // 瀏覽器工具。做不到就照舊派工（驗收者會把需要瀏覽器的條件標成 manual）。
         let is_verify = task.card_kind == crate::tasks::workflow::KIND_VERIFY && task.agent_id.is_some();
-        let ask_url = if session_id.is_some() && !task.interactive && task.agent_id.is_some() {
+        let ask_url = if managed && !task.interactive && task.agent_id.is_some() {
             self.quota.mcp_url(&task.id).await
         } else {
             None
         };
-        let evidence = (session_id.is_some() && is_verify).then(|| crate::tasks::workflow::evidence_dir(&project.path, &task.id));
+        let evidence = (managed && is_verify).then(|| crate::tasks::workflow::evidence_dir(&project.path, &task.id));
         let browser = if evidence.is_some() { crate::tasks::ask::detect_browser() } else { crate::tasks::ask::Browser::SystemChrome };
-        let ask_args = match crate::tasks::ask::mcp_config_json_for(ask_url.as_deref(), evidence.as_deref(), browser) {
+        if let Some(dir) = evidence.as_ref().filter(|_| codex) {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                eprintln!("evidence dir for {}: {e}", task.id);
+            }
+        }
+        // Claude 用 `--mcp-config` 檔；Codex 的 MCP 從 `-c` 給（見 codex::launch_command）。
+        let claude_mcp = if codex { None } else { crate::tasks::ask::mcp_config_json_for(ask_url.as_deref(), evidence.as_deref(), browser) };
+        let ask_args = match claude_mcp {
             Some(json) => {
                 let dir = crate::tasks::task_dir(&project.path, &task.id);
                 let path = dir.join("mcp.json");
@@ -652,7 +786,7 @@ impl Dispatcher for RealDispatcher {
             }
             None => None,
         };
-        let can_ask = ask_args.is_some() && ask_url.is_some();
+        let can_ask = if codex { ask_url.is_some() } else { ask_args.is_some() && ask_url.is_some() };
 
         let bridge_env = dispatch::resolve_bridge_env(
             &self.config,
@@ -660,18 +794,6 @@ impl Dispatcher for RealDispatcher {
             self.bridge.port(),
             self.secrets.get(crate::bridge::auth::BRIDGE_TOKEN_KEY).ok().flatten(),
         );
-        // Agent 卡片：在 Agent 自己的 worktree 跑、提示詞加角色前綴，並且
-        // **不**寫卡片的 worktree 欄位——那兩欄是每卡隔離用的，有值會讓
-        // 看板顯示「合併回原分支」，而 Agent 的成果是整個分支一起合併。
-        let agent = match &task.agent_id {
-            Some(aid) => Some(
-                crate::tasks::agents::get_agent(&project.pool, aid)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .ok_or_else(|| format!("找不到指派的 Agent：{aid}"))?,
-            ),
-            None => None,
-        };
         let readonly = task.card_kind == crate::tasks::workflow::KIND_REVIEW
             || task.card_kind == crate::tasks::workflow::KIND_PLAN
             || task.card_kind == crate::tasks::workflow::KIND_VERIFY;
@@ -764,15 +886,24 @@ impl Dispatcher for RealDispatcher {
         if resume {
             // 卡片內容已經在對話裡了，只要叫它接著做。驗收卡的埠剛重新挑過，要再告訴它一次。
             let ports_note = prompt.rfind("\n\n可用的埠：").map(|i| prompt[i..].to_string()).unwrap_or_default();
-            prompt = format!("{}{ports_note}", dispatch::RESUME_PROMPT);
+            let base = if codex { dispatch::RESUME_PROMPT_CODEX } else { dispatch::RESUME_PROMPT };
+            prompt = format!("{base}{ports_note}");
+        } else if codex {
+            prompt = codex_autonomy(&prompt);
         }
+        // Codex：提示詞寫成檔案，指令只叫它去讀；連同 hook、MCP 一起組成整行指令。
+        let codex_line = if codex {
+            Some(self.codex_launch(project, task, agent.as_ref(), &prompt, codex_resume.as_deref(), ask_url.as_deref(), evidence.as_deref(), browser).await?)
+        } else {
+            None
+        };
         let agent_ctx = agent.map(|a| (a.id, a.kind, effective_dir.clone()));
         let card_kind = task.card_kind.clone();
         let repo_dir = task.project_dir.clone();
         let effective_dir_str = effective_dir.to_string_lossy().into_owned();
         // 額度 hook 與 ask_human 都要先登記才收得到；登記發生在 claude 啟動之前
         // （見 spawn_and_run 的 on_spawned）。
-        let register = (quota_args.is_some() || can_ask).then(|| {
+        let register = (quota_args.is_some() || can_ask || codex).then(|| {
             let quota = self.quota.clone();
             let task_id = task.id.clone();
             let pool = project.pool.clone();
@@ -782,27 +913,47 @@ impl Dispatcher for RealDispatcher {
                 project_id: project.id.clone(),
                 agent_id: task.agent_id.clone(),
             };
-            move |tab_id: &str| quota.register(&task_id, tab_id, pool, label)
+            move |tab_id: &str| {
+                quota.register(&task_id, tab_id, pool, label);
+                if codex {
+                    quota.set_blocking_ask(&task_id);
+                }
+            }
         });
         drop(git_prep);
-        let spawned = dispatch::spawn_and_run(
-            &self.app,
-            &self.pty,
-            &effective_dir_str,
-            &claude_cmd,
-            session_id.as_deref(),
-            &prompt,
-            !task.interactive,
-            bridge_env,
-            extra_args.as_deref(),
-            resume,
-            |tab_id| {
-                if let Some(register) = register {
-                    register(tab_id);
-                }
-            },
-        )
-        .await;
+        let on_spawned = |tab_id: &str| {
+            if let Some(register) = register {
+                register(tab_id);
+            }
+        };
+        let spawned = match &codex_line {
+            Some(line) => {
+                let env = self
+                    .secrets
+                    .get(crate::tasks::codex::CODEX_ENV_KEY)
+                    .ok()
+                    .flatten()
+                    .map(|t| dispatch::parse_env_lines(&t))
+                    .unwrap_or_default();
+                dispatch::spawn_command(&self.app, &self.pty, &effective_dir_str, line, env, on_spawned).await
+            }
+            None => {
+                dispatch::spawn_and_run(
+                    &self.app,
+                    &self.pty,
+                    &effective_dir_str,
+                    &claude_cmd,
+                    session_id.as_deref(),
+                    &prompt,
+                    !task.interactive,
+                    bridge_env,
+                    extra_args.as_deref(),
+                    resume,
+                    on_spawned,
+                )
+                .await
+            }
+        };
         let (tab_id, disp) = match spawned {
             Ok(v) => v,
             Err(e) => {
@@ -886,6 +1037,24 @@ impl Dispatcher for RealDispatcher {
                 &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode, &waiting, &holding,
             ).await;
             quota.unregister(&task_id);
+            // Codex：結束碼非 0 時從對話記錄判斷是不是額度用完（不會觸發任何 hook）。
+            let outcome = if codex {
+                match codex_verdict(&pool, &task_id, outcome).await {
+                    CodexVerdict::Requeue => {
+                        if let Err(e) = crate::tasks::questions::cancel_open_for_task(&pool, &task_id).await {
+                            eprintln!("cancel questions {task_id}: {e}");
+                        }
+                        let _ = write_transcript(&pty, &project_path, &task_id, &tab_id);
+                        cancels.lock().remove(&task_id);
+                        let _ = app.emit("tasks-updated", ());
+                        wake.notify_one();
+                        return;
+                    }
+                    CodexVerdict::Outcome(o) => o,
+                }
+            } else {
+                outcome
+            };
             // 卡片結束了，它還沒回答的問題作廢（收件匣與 Telegram 會跟著更新）。
             match crate::tasks::questions::cancel_open_for_task(&pool, &task_id).await {
                 Ok(cancelled) if !cancelled.is_empty() => {
@@ -1006,9 +1175,18 @@ pub(crate) async fn recover_after_restart(
     let mut out = RecoverSummary::default();
     for t in running.iter().filter(|t| !t.interactive) {
         let Some(agent) = t.agent_id.as_deref() else { continue };
-        let resume = match (t.session_id.as_deref(), projects_root) {
-            (Some(sid), Some(root)) => crate::tasks::session_log::find_session_log(root, sid).is_some(),
-            _ => false,
+        let codex = crate::tasks::agents::get_agent(pool, agent)
+            .await?
+            .is_some_and(|a| a.cli == crate::tasks::agents::CLI_CODEX);
+        let resume = if codex {
+            // Codex 的記錄路徑由 SessionStart hook 記在卡片上；沒答的問題作廢（沒有人在等它了）。
+            crate::tasks::questions::cancel_open_for_task(pool, &t.id).await?;
+            t.session_id.is_some() && t.session_path.as_deref().is_some_and(|p| std::path::Path::new(p).is_file())
+        } else {
+            match (t.session_id.as_deref(), projects_root) {
+                (Some(sid), Some(root)) => crate::tasks::session_log::find_session_log(root, sid).is_some(),
+                _ => false,
+            }
         };
         let order = match crate::tasks::agents::first_queued_order(pool, agent).await? {
             Some(first) => first - 1.0,
@@ -1106,6 +1284,14 @@ async fn persist_outcome(
             .and_then(|main| crate::tasks::usage::session_usage(&main))
         {
             crate::tasks::usage::save(project_path, task_id, &u);
+        }
+    }
+    // Codex 卡片：用量在它自己的 rollout 裡（路徑由 SessionStart hook 記在 session_path）。
+    if let Ok(Some(t)) = store::get_task(pool, task_id).await {
+        if let Some(path) = t.session_path.filter(|p| crate::tasks::codex::is_rollout_path(p)) {
+            if let Some(u) = std::fs::read_to_string(&path).ok().and_then(|x| crate::tasks::codex::parse_usage(&x)) {
+                crate::tasks::usage::save(project_path, task_id, &u);
+            }
         }
     }
     let _ = store::finish_task(
@@ -1217,6 +1403,9 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
                     }
                 };
                 let mut heads = candidate_heads(&queued, &project_running, &paused, &blocked);
+                // 等額度的 Codex 卡：冷卻時間內這位 Agent 先不派（它的隊首就是那張卡）。
+                let now = chrono::Utc::now().timestamp();
+                heads.retain(|h| !quota_cooling(h.quota_wait_at, now));
                 // 用到 token 上限：Agent 卡先不派（已經在跑的照樣跑完），看板一般卡片不受影響。
                 match crate::tasks::budget::over_budget(&project.pool, &project.path).await {
                     Ok(true) => heads.retain(|h| h.agent_id.is_none()),
@@ -1932,6 +2121,28 @@ mod loop_tests {
         assert_eq!(titles(&all, "queued"), vec!["A"]);
     }
 
+    /// 額度用完回到佇列的 Codex 卡：冷卻 10 分鐘內這位 Agent 不派，其他 Agent 照常。
+    #[tokio::test]
+    async fn drain_once_lets_a_quota_waiting_codex_card_cool_down() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Codex").await;
+        let c2 = agent_in(&project, "Claude").await;
+        let a = card_for(&project, "A", &c1, false).await;
+        card_for(&project, "B", &c1, false).await;
+        card_for(&project, "D", &c2, false).await;
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query("UPDATE tasks SET quota_wait_at = ? WHERE id = ?").bind(now - 60).bind(&a).execute(&project.pool).await.unwrap();
+
+        drain_once(&reg, &NeverFinishes, 5).await;
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "running"), vec!["D"], "冷卻中的 Agent 連後面的 B 也不能先跑");
+
+        sqlx::query("UPDATE tasks SET quota_wait_at = ? WHERE id = ?").bind(now - 601).bind(&a).execute(&project.pool).await.unwrap();
+        drain_once(&reg, &NeverFinishes, 5).await;
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "running"), vec!["A", "D"], "滿 10 分鐘就重試");
+    }
+
     /// Agent 的互動卡片不能走「互動卡片無條件派工」那條捷徑，否則同一個
     /// Agent 會在同一個 worktree 裡同時跑兩個 claude。
     #[tokio::test]
@@ -2515,6 +2726,75 @@ mod persist_tests {
         }).await.unwrap()
     }
 
+    /// Codex 卡片結束碼非 0：從 rollout 判斷。額度用完 → 回佇列（接著做、記等待時間、排在這位 Agent 最前面）；
+    /// 其他錯誤 → 失敗並換成 Codex 的訊息；讀不到記錄 → 照原結果。
+    #[tokio::test]
+    async fn a_codex_card_that_hit_its_usage_limit_goes_back_to_the_queue() {
+        let pool = mem_pool().await;
+        let a = agent_named(&pool, "Codex").await;
+        let queued = store::create_task(&pool, "next", "", "/r", true, false).await.unwrap();
+        crate::tasks::agents::assign_task(&pool, &queued, Some(&a)).await.unwrap();
+        store::move_task(&pool, &queued, store::STATUS_QUEUED, 5.0).await.unwrap();
+        let id = running_agent_card(&pool, &a, false, Some("01a1"), 9.0).await;
+        let dir = tempfile::tempdir().unwrap();
+        let rollout = dir.path().join("rollout-2026-01a1.jsonl");
+        std::fs::write(&rollout, r#"{"type":"event_msg","payload":{"type":"task_complete","error":{"message":"You've hit your usage limit.","codex_error_info":"usage_limit_exceeded"}}}"#).unwrap();
+        store::set_session_path(&pool, &id, rollout.to_str().unwrap()).await.unwrap();
+
+        let ok = codex_verdict(&pool, &id, monitor::TaskOutcome::Success).await;
+        assert!(matches!(ok, CodexVerdict::Outcome(monitor::TaskOutcome::Success)), "成功就照走");
+        let v = codex_verdict(&pool, &id, monitor::TaskOutcome::Failed("exit 1".into())).await;
+        assert!(matches!(v, CodexVerdict::Requeue));
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!((row.status.as_str(), row.resume_session, row.tab_id.as_deref()), ("queued", true, None));
+        assert!(row.quota_wait_at.is_some(), "畫面要看得到在等額度");
+        assert!(row.sort_order < 5.0, "排在這位 Agent 原本的下一張前面");
+
+        std::fs::write(&rollout, r#"{"type":"event_msg","payload":{"type":"task_complete","error":{"message":"Model 'x' not found"}}}"#).unwrap();
+        match codex_verdict(&pool, &id, monitor::TaskOutcome::Failed("exit 1".into())).await {
+            CodexVerdict::Outcome(monitor::TaskOutcome::Failed(m)) => assert_eq!(m, "Model 'x' not found"),
+            _ => panic!("其他錯誤要失敗並帶 Codex 的訊息"),
+        }
+        std::fs::remove_file(&rollout).unwrap();
+        match codex_verdict(&pool, &id, monitor::TaskOutcome::Failed("exit 1".into())).await {
+            CodexVerdict::Outcome(monitor::TaskOutcome::Failed(m)) => assert_eq!(m, "exit 1"),
+            _ => panic!("讀不到記錄照原結果"),
+        }
+    }
+
+    #[test]
+    fn quota_cooling_lasts_the_retry_interval() {
+        assert!(!quota_cooling(None, 1000));
+        assert!(quota_cooling(Some(1000), 1000 + 599));
+        assert!(!quota_cooling(Some(1000), 1000 + 600));
+    }
+
+    /// App 重開：Codex 卡片看 SessionStart 記下的 rollout 在不在決定接著做；沒答的問題作廢。
+    #[tokio::test]
+    async fn after_a_restart_codex_cards_resume_from_their_rollout() {
+        let pool = mem_pool().await;
+        let a = agent_named(&pool, "Codex").await;
+        crate::tasks::agents::set_cli(&pool, &a, "codex").await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let rollout = dir.path().join("rollout-x-s1.jsonl");
+        std::fs::write(&rollout, "{}\n").unwrap();
+        let live = running_agent_card(&pool, &a, false, Some("s1"), 1.0).await;
+        store::set_session_path(&pool, &live, rollout.to_str().unwrap()).await.unwrap();
+        crate::tasks::questions::create(&pool, &live, Some(&a), &crate::tasks::questions::NewQuestion {
+            question: "Q?".into(), options: vec![], recommended: None, context: None,
+        }).await.unwrap();
+        let gone = running_agent_card(&pool, &a, false, Some("s2"), 2.0).await;
+        store::set_session_path(&pool, &gone, dir.path().join("rollout-missing.jsonl").to_str().unwrap()).await.unwrap();
+
+        // projects_root 給 None：Codex 卡不靠 Claude 的記錄資料夾。
+        let out = recover_after_restart(&pool, None).await.unwrap();
+        assert_eq!((out.resumed, out.restarted), (1, 1));
+        assert!(store::get_task(&pool, &live).await.unwrap().unwrap().resume_session);
+        assert!(!store::get_task(&pool, &gone).await.unwrap().unwrap().resume_session);
+        let status: String = sqlx::query_scalar("SELECT status FROM questions WHERE task_id = ?").bind(&live).fetch_one(&pool).await.unwrap();
+        assert_eq!(status, crate::tasks::questions::CANCELLED, "沒人在等的問題要作廢");
+    }
+
     #[tokio::test]
     async fn after_a_restart_agent_cards_resume_or_start_over_instead_of_being_cancelled() {
         let pool = mem_pool().await;
@@ -2735,6 +3015,9 @@ mod agent_dispatch_tests {
         // 掛上 ask_human 時：要決策的事用工具問，問完結束這一輪。
         let ask = agent_prompt("你是工程師", "做 A", false, true);
         assert!(ask.ends_with(AUTONOMY_NOTE_ASK) && AUTONOMY_NOTE_ASK.contains("ask_human"));
+        // Codex 卡片：工具會等答案，不能叫它「結束這一輪」（那樣 codex exec 就退出了）。
+        let codex = codex_autonomy(&ask);
+        assert!(codex.ends_with(AUTONOMY_NOTE_ASK_WAIT) && !codex.contains("結束這一輪"), "{codex}");
     }
 
     #[test]

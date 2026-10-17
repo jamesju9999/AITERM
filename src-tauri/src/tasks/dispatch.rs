@@ -129,6 +129,10 @@ pub fn launch_command_with(command: &str, session_id: Option<&str>, resume: bool
 pub const RESUME_PROMPT: &str = "AITerm 剛才重新啟動，你的工作被中斷了。請先檢查目前的進度（看檔案、git status），\
 接著把這張卡做完。如果你剛才在等 ask_human 的答案，就繼續等，不要自己決定。";
 
+/// Codex 卡片接著做的提示：沒答的問題在重開時已經作廢，需要的話重新問。
+pub const RESUME_PROMPT_CODEX: &str = "AITerm 剛才重新啟動，你的工作被中斷了。請先檢查目前的進度（看檔案、git status），\
+接著把這張卡做完。之前用 ask_human 問過但還沒拿到答案的問題已經取消；還需要的話請重新提問。";
+
 /// 信任畫面上「我信任這個資料夾」那一個選項的文字，**已去掉所有空白**。
 /// Claude Code 的 TUI 用游標移動排版，PTY 輸出裡一個空白位元組都沒有
 /// （實測），所以比對只能在去空白之後做。

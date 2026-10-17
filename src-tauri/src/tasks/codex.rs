@@ -27,6 +27,17 @@ pub struct CodexLaunch<'a> {
     pub disable_mcp: &'a [String],
 }
 
+/// 「Codex 環境變數」存在 keychain 的 key（內容是多行 `KEY=VALUE`）。
+pub const CODEX_ENV_KEY: &str = "task_board.codex_env";
+
+/// Codex 的設定資料夾：`$CODEX_HOME` 或 `~/.codex`。
+pub fn codex_home() -> Option<std::path::PathBuf> {
+    match std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
+        Some(v) => Some(std::path::PathBuf::from(v)),
+        None => dirs::home_dir().map(|h| h.join(".codex")),
+    }
+}
+
 /// 等人回答 ask_human 可能很久：工具逾時拉到一天。
 pub const ASK_TOOL_TIMEOUT_SECS: u64 = 86_400;
 

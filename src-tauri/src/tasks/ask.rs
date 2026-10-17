@@ -140,24 +140,29 @@ pub fn mcp_config_json_with(ask_url: Option<&str>, browser_out: Option<&std::pat
     mcp_config_json_for(ask_url, browser_out, Browser::SystemChrome)
 }
 
+/// Playwright MCP 的啟動參數（`npx` 之後那串）；Claude 與 Codex 的驗收卡共用。
+pub fn playwright_args(out: &std::path::Path, browser: Browser) -> Vec<String> {
+    let mut args = vec![
+        "-y".to_string(),
+        PLAYWRIGHT_MCP.into(),
+        "--headless".into(),
+        "--isolated".into(),
+        "--output-dir".into(),
+        out.to_string_lossy().into_owned(),
+    ];
+    if browser == Browser::Bundled {
+        args.extend(["--browser".to_string(), "chromium".to_string()]);
+    }
+    args
+}
+
 pub fn mcp_config_json_for(ask_url: Option<&str>, browser_out: Option<&std::path::Path>, browser: Browser) -> Option<String> {
     let mut servers = serde_json::Map::new();
     if let Some(url) = ask_url {
         servers.insert("aiterm".into(), json!({ "type": "http", "url": url }));
     }
     if let Some(out) = browser_out {
-        let mut args = vec![
-            "-y".to_string(),
-            PLAYWRIGHT_MCP.into(),
-            "--headless".into(),
-            "--isolated".into(),
-            "--output-dir".into(),
-            out.to_string_lossy().into_owned(),
-        ];
-        if browser == Browser::Bundled {
-            args.extend(["--browser".to_string(), "chromium".to_string()]);
-        }
-        servers.insert("playwright".into(), json!({ "command": "npx", "args": args }));
+        servers.insert("playwright".into(), json!({ "command": "npx", "args": playwright_args(out, browser) }));
     }
     (!servers.is_empty()).then(|| json!({ "mcpServers": servers }).to_string())
 }
