@@ -7,7 +7,11 @@ interface LocaleContextValue {
   setLocale: (l: Locale) => void;
 }
 
-const LocaleContext = createContext<LocaleContextValue | null>(null);
+// 開發模式改 i18n.ts 會熱更新這個模組；每次都 createContext 的話，main.tsx 手上舊的
+// Provider 跟新的 useLocale 就對不上，setLocale 掉進下面的空函式（點語言沒反應）。
+// 掛在 globalThis 上，熱更新前後用同一個 Context。
+const g = globalThis as { __aitermLocaleContext?: React.Context<LocaleContextValue | null> };
+const LocaleContext = (g.__aitermLocaleContext ??= createContext<LocaleContextValue | null>(null));
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(() => {
