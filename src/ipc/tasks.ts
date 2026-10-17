@@ -273,6 +273,10 @@ export const listArchivedTasks = (
   invoke("tasks_list_archived", { projectId, query, limit, offset });
 
 export const getTaskBoardConfig = (): Promise<TaskBoardConfig> => invoke("task_board_get_config");
+/** 「Codex 環境變數」有沒有設定（內容不回傳）。 */
+export const codexEnvStatus = (): Promise<boolean> => invoke("codex_env_status");
+/** 存「Codex 環境變數」（多行 KEY=VALUE）；空字串 = 清除。 */
+export const setCodexEnv = (text: string): Promise<void> => invoke("codex_env_set", { text });
 
 export const setTaskBoardConfig = (value: TaskBoardConfig): Promise<void> =>
   invoke("task_board_set_config", { value });

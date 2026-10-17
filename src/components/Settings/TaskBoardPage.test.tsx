@@ -6,13 +6,15 @@ import { LocaleProvider } from "../../contexts/LocaleContext";
 vi.mock("../../ipc/tasks", () => ({
   getTaskBoardConfig: vi.fn(),
   setTaskBoardConfig: vi.fn().mockResolvedValue(undefined),
+  codexEnvStatus: vi.fn().mockResolvedValue(false),
+  setCodexEnv: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../ipc/telegram", () => ({
   getTelegramConfig: vi.fn(),
 }));
 
-import { getTaskBoardConfig, setTaskBoardConfig } from "../../ipc/tasks";
+import { codexEnvStatus, getTaskBoardConfig, setCodexEnv, setTaskBoardConfig } from "../../ipc/tasks";
 import { getTelegramConfig } from "../../ipc/telegram";
 import { TaskBoardPage } from "./TaskBoardPage";
 
@@ -46,7 +48,7 @@ describe("TaskBoardPage", () => {
     const n = screen.getByDisplayValue("2");
     await user.clear(n);
     await user.type(n, "3");
-    await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
+    await user.click(screen.getByRole("button", { name: /^(儲存|Save)$/ }));
     await waitFor(() =>
       expect(setTaskBoardConfig).toHaveBeenCalledWith(
         expect.objectContaining({ max_concurrent: 3, claude_command: "claude" }),
@@ -61,7 +63,7 @@ describe("TaskBoardPage", () => {
     const checkbox = screen.getByRole("checkbox", { name: /建立獨立的 git worktree|isolated git worktree/ });
     expect(checkbox).toBeChecked();
     await user.click(checkbox);
-    await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
+    await user.click(screen.getByRole("button", { name: /^(儲存|Save)$/ }));
     await waitFor(() =>
       expect(setTaskBoardConfig).toHaveBeenCalledWith(
         expect.objectContaining({ isolate_with_worktree: false }),
@@ -76,7 +78,7 @@ describe("TaskBoardPage", () => {
     const checkbox = screen.getByRole("checkbox", { name: /精簡啟動|Lean start/ });
     expect(checkbox).toBeChecked();
     await user.click(checkbox);
-    await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
+    await user.click(screen.getByRole("button", { name: /^(儲存|Save)$/ }));
     await waitFor(() =>
       expect(setTaskBoardConfig).toHaveBeenCalledWith(expect.objectContaining({ lean_agent_dispatch: false })),
     );
@@ -118,7 +120,7 @@ describe("TaskBoardPage", () => {
     const checkbox = screen.getByRole("checkbox", { name: /自動關閉分頁|Auto-close tabs/ });
     expect(checkbox).toBeChecked();
     await user.click(checkbox);
-    await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
+    await user.click(screen.getByRole("button", { name: /^(儲存|Save)$/ }));
     await waitFor(() =>
       expect(setTaskBoardConfig).toHaveBeenCalledWith(
         expect.objectContaining({ auto_close_finished_tabs: false }),
@@ -162,11 +164,26 @@ describe("TaskBoardPage", () => {
     const n = screen.getByDisplayValue("20");
     await user.clear(n);
     await user.type(n, "5");
-    await user.click(screen.getByRole("button", { name: /儲存|Save/ }));
+    await user.click(screen.getByRole("button", { name: /^(儲存|Save)$/ }));
     await waitFor(() =>
       expect(setTaskBoardConfig).toHaveBeenCalledWith(
         expect.objectContaining({ stuck_timeout_secs: 300 }),
       ),
     );
+  });
+
+  it("Codex 環境變數：另外存、不回顯；已設定時可以清除", async () => {
+    vi.mocked(codexEnvStatus).mockResolvedValue(true);
+    const user = userEvent.setup();
+    view();
+    const box = await screen.findByLabelText(/Codex 環境變數|Codex environment variables/);
+    expect((box as HTMLTextAreaElement).value).toBe("");
+    expect(box.getAttribute("placeholder")).toMatch(/已設定|Set \(contents hidden\)/);
+    await user.type(box, "OMLX_API_KEY=k");
+    await user.click(screen.getByRole("button", { name: /儲存環境變數|Save variables/ }));
+    await waitFor(() => expect(setCodexEnv).toHaveBeenCalledWith("OMLX_API_KEY=k"));
+    expect(setTaskBoardConfig).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /^清除$|^Clear$/ }));
+    await waitFor(() => expect(setCodexEnv).toHaveBeenLastCalledWith(""));
   });
 });

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { getTaskBoardConfig, setTaskBoardConfig, type TaskBoardConfig } from "../../ipc/tasks";
+import { codexEnvStatus, getTaskBoardConfig, setCodexEnv, setTaskBoardConfig, type TaskBoardConfig } from "../../ipc/tasks";
 import { getTelegramConfig } from "../../ipc/telegram";
 import "./TaskBoardPage.css";
 
@@ -120,6 +120,7 @@ export function TaskBoardPage() {
           {toggle("isolate_with_worktree", t.board_settings_isolate, t.board_settings_isolate_hint)}
           {toggle("lean_agent_dispatch", t.board_settings_lean, t.board_settings_lean_hint, cfg.lean_agent_dispatch ?? true)}
         </div>
+        <CodexEnvField />
         {/* 關掉隔離之後，多張卡片會在同一個工作目錄互相覆蓋——Agent 會自己
             管 git，不代表兩個 Agent 同時改同一份檔案不會打架。只提醒，不代
             使用者改 max_concurrent。 */}
@@ -143,6 +144,63 @@ export function TaskBoardPage() {
           {saved ? `${t.board_settings_saved} ✓` : t.board_save}
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 派給 Codex 的 Agent 卡片要帶的環境變數（例如本機 oMLX 的 OMLX_API_KEY）。存在系統鑰匙圈，
+ * 內容不回顯；有自己的儲存鈕，跟上面的設定分開存。
+ */
+function CodexEnvField() {
+  const { t } = useLocale();
+  const [isSet, setIsSet] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    void codexEnvStatus().then(setIsSet).catch(() => setIsSet(false));
+  }, []);
+
+  const save = async (value: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await setCodexEnv(value);
+      setIsSet(!!value.trim());
+      setText("");
+      setMsg(value.trim() ? t.board_settings_codex_env_saved : t.board_settings_codex_env_cleared);
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="task-board-field task-board-codex-env">
+      <span className="task-board-label">{t.board_settings_codex_env}</span>
+      <textarea
+        aria-label={t.board_settings_codex_env}
+        rows={3}
+        spellCheck={false}
+        value={text}
+        placeholder={isSet ? t.board_settings_codex_env_set_placeholder : "OMLX_API_KEY=..."}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <span className="task-board-codex-env-row">
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy || !text.trim()} onClick={() => void save(text)}>
+          {t.board_settings_codex_env_save}
+        </button>
+        {isSet && (
+          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" disabled={busy} onClick={() => void save("")}>
+            {t.board_settings_codex_env_clear}
+          </button>
+        )}
+        {msg && <span className="task-board-hint">{msg}</span>}
+      </span>
+      <span className="task-board-hint">{t.board_settings_codex_env_hint}</span>
     </div>
   );
 }

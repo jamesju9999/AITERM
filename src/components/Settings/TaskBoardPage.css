@@ -64,6 +64,20 @@
 }
 
 .task-board-field input[type="number"] { width: 88px; }
+.task-board-field textarea {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: #e6e6e6;
+  font: 12px var(--mono, monospace);
+  max-width: 480px;
+  padding: 6px 10px;
+  resize: vertical;
+  width: 100%;
+}
+.task-board-codex-env { margin-top: 14px; }
+.task-board-codex-env-row { align-items: center; display: flex; gap: 8px; }
 .task-board-field input[type="text"] { width: 100%; max-width: 320px; box-sizing: border-box; }
 
 .task-board-unit {

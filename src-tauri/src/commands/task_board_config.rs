@@ -10,6 +10,24 @@ use tauri::State;
 use crate::config::types::TaskBoardConfig;
 use crate::config::ConfigStore;
 
+/// 「Codex 環境變數」有沒有設定（內容不回傳給前端，同其他金鑰）。
+#[tauri::command]
+pub fn codex_env_status(secrets: State<Arc<crate::secret::SecretStore>>) -> bool {
+    secrets.get(crate::tasks::codex::CODEX_ENV_KEY).ok().flatten().is_some_and(|t| !t.trim().is_empty())
+}
+
+/// 存「Codex 環境變數」（多行 `KEY=VALUE`）；空白 = 清除。
+#[tauri::command]
+pub fn codex_env_set(text: String, secrets: State<Arc<crate::secret::SecretStore>>) -> Result<(), String> {
+    if text.trim().is_empty() {
+        if !secrets.has(crate::tasks::codex::CODEX_ENV_KEY) {
+            return Ok(());
+        }
+        return secrets.delete(crate::tasks::codex::CODEX_ENV_KEY).map_err(|e| e.to_string());
+    }
+    secrets.set(crate::tasks::codex::CODEX_ENV_KEY, text.trim()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn task_board_get_config(config: State<Arc<ConfigStore>>) -> TaskBoardConfig {
     config.get().task_board
