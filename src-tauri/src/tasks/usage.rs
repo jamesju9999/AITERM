@@ -132,12 +132,25 @@ pub fn task_usage(
         }
     }
     let stored = session_path?;
+    // Codex 卡片：SessionStart hook 記下的是它自己的 rollout（格式跟 Claude 的不一樣）。
+    if crate::tasks::codex::is_rollout_path(stored) {
+        return std::fs::read_to_string(stored).ok().and_then(|t| crate::tasks::codex::parse_usage(&t));
+    }
     session_usage(&crate::tasks::resolve_stored_path(project_path, stored))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_running_codex_card_reads_usage_from_its_rollout() {
+        let dir = tempfile::tempdir().unwrap();
+        let rollout = dir.path().join("rollout-2026-x.jsonl");
+        std::fs::write(&rollout, r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":7}}}}"#).unwrap();
+        let u = task_usage(dir.path(), None, "t", Some("x"), rollout.to_str()).unwrap();
+        assert_eq!((u.input, u.cache_read, u.output, u.calls), (60, 40, 7, 1));
+    }
 
     fn line(id: &str, input: u64, cw: u64, cr: u64, out: u64) -> String {
         format!(
