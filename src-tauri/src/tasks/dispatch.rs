@@ -107,7 +107,14 @@ pub fn looks_like_claude(command: &str) -> bool {
 /// 呼叫端負責先用 `looks_like_claude` 決定要不要給 session id——這裡不再
 /// 判斷一次，免得兩處規則漂移。
 pub fn launch_command(command: &str, session_id: Option<&str>, extra: Option<&str>) -> String {
+    launch_command_with(command, session_id, false, extra)
+}
+
+/// `resume`：接回原本的對話（`--resume <id>`）而不是開新的（`--session-id <id>`）。
+/// 實測 `--resume` 會繼續寫在同一個 `<id>.jsonl`，對話記錄與 token 統計不用改。
+pub fn launch_command_with(command: &str, session_id: Option<&str>, resume: bool, extra: Option<&str>) -> String {
     let mut line = match session_id {
+        Some(sid) if resume => format!("{command} --resume {sid}"),
         Some(sid) => format!("{command} --session-id {sid}"),
         None => command.to_string(),
     };
@@ -117,6 +124,10 @@ pub fn launch_command(command: &str, session_id: Option<&str>, extra: Option<&st
     }
     line
 }
+
+/// App 重啟後接回對話時送的提示（取代原本的卡片內容——那些已經在對話裡了）。
+pub const RESUME_PROMPT: &str = "AITerm 剛才重新啟動，你的工作被中斷了。請先檢查目前的進度（看檔案、git status），\
+接著把這張卡做完。如果你剛才在等 ask_human 的答案，就繼續等，不要自己決定。";
 
 /// 信任畫面上「我信任這個資料夾」那一個選項的文字，**已去掉所有空白**。
 /// Claude Code 的 TUI 用游標移動排版，PTY 輸出裡一個空白位元組都沒有
@@ -364,6 +375,7 @@ pub async fn spawn_and_run(
     request_done_marker: bool,
     bridge_env: Option<(u16, String)>,
     extra_args: Option<&str>,
+    resume: bool,
     on_spawned: impl FnOnce(&str) + Send,
 ) -> Result<(String, DispatchResult), String> {
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
@@ -383,7 +395,7 @@ pub async fn spawn_and_run(
     // 送進終端機的是接好旗標的版本；下面的事件送的是原本的指令——分頁
     // 標題是 `Agent: <command>`（TerminalApp.tsx），把 UUID 塞進去會讓
     // 每個派工分頁的標題都拖著一串亂碼。
-    let launch = launch_command(claude_command, session_id, extra_args);
+    let launch = launch_command_with(claude_command, session_id, resume, extra_args);
     if let Err(e) = pty.write(&tab_id, format!("{launch}\r").as_bytes()) {
         let _ = pty.close(&tab_id);
         return Err(e.to_string());
@@ -595,6 +607,13 @@ mod tests {
             launch_command("claude", Some("3f2a"), Some(r#"--settings "/a b/s.json""#)),
             r#"claude --session-id 3f2a --settings "/a b/s.json""#
         );
+    }
+
+    #[test]
+    fn resuming_reuses_the_session_with_resume() {
+        assert_eq!(launch_command_with("claude", Some("3f2a"), true, Some("--model x")), "claude --resume 3f2a --model x");
+        assert_eq!(launch_command_with("claude", Some("3f2a"), false, None), "claude --session-id 3f2a");
+        assert!(RESUME_PROMPT.contains("重新啟動") && RESUME_PROMPT.contains("ask_human"));
     }
 
     #[test]

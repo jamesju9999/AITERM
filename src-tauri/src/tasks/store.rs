@@ -107,6 +107,8 @@ pub struct TaskRow {
     /// 派出去的 claude 結束一輪回覆後停下來等人的起始時間（unix 秒）。見
     /// docs/superpowers/specs/2026-10-16-agent-reply-wait-and-followups-design.md。
     pub reply_wait_at: Option<i64>,
+    /// App 重啟時被中斷、下次派工要用 `claude --resume` 接回原本的對話。
+    pub resume_session: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -663,6 +665,12 @@ pub async fn recover_orphaned_running(pool: &SqlitePool) -> Result<u64, sqlx::Er
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
+}
+
+/// 派工時用掉「接回原本的對話」這個標記：之後再被中斷就重新判斷。
+pub async fn clear_resume(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tasks SET resume_session = 0 WHERE id = ?").bind(id).execute(pool).await?;
+    Ok(())
 }
 
 pub async fn add_attachment(

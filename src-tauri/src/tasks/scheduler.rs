@@ -608,8 +608,13 @@ impl Dispatcher for RealDispatcher {
         let claude_cmd = self.config.get().task_board.claude_command;
         // 只有指令確實是 claude 時才給 session id——別的指令接上這個旗標
         // 會直接啟動失敗（見 dispatch::looks_like_claude）。
-        let session_id = dispatch::looks_like_claude(&claude_cmd)
-            .then(|| uuid::Uuid::new_v4().to_string());
+        // 重啟時被中斷的卡片：接回原本的對話（同一個 session id）。
+        let resume = task.resume_session && task.session_id.is_some() && dispatch::looks_like_claude(&claude_cmd);
+        let session_id = if resume {
+            task.session_id.clone()
+        } else {
+            dispatch::looks_like_claude(&claude_cmd).then(|| uuid::Uuid::new_v4().to_string())
+        };
         // 非互動的 Agent 卡掛上 ask_human（需要人決定時提問）；驗收卡另外掛上
         // 瀏覽器工具。做不到就照舊派工（驗收者會把需要瀏覽器的條件標成 manual）。
         let is_verify = task.card_kind == crate::tasks::workflow::KIND_VERIFY && task.agent_id.is_some();
@@ -678,10 +683,11 @@ impl Dispatcher for RealDispatcher {
             let wt = prepare_agent_worktree(&project.pool, &project.path, agent).await?;
             // 先跟上上一輪的整合結果、再合別位工程師的前置；之後才記 start_sha，
             // 審查範圍只含這張卡自己的改動。
-            if task.card_kind == crate::tasks::workflow::KIND_WORK || task.card_kind == crate::tasks::workflow::KIND_FIX {
+            // 接著做的卡片跳過：半成品還沒 commit，同步與合併會動到它，start_sha 也記過了。
+            if !resume && (task.card_kind == crate::tasks::workflow::KIND_WORK || task.card_kind == crate::tasks::workflow::KIND_FIX) {
                 sync_with_integration(&project.pool, task, &wt).await?;
             }
-            let merged = premerge_prerequisites(&project.pool, task, &wt).await?;
+            let merged = if resume { Vec::new() } else { premerge_prerequisites(&project.pool, task, &wt).await? };
             if !merged.is_empty() {
                 let json = serde_json::to_string(&merged).unwrap_or_default();
                 if let Err(e) = sqlx::query("UPDATE tasks SET premerged = ? WHERE id = ?")
@@ -693,13 +699,15 @@ impl Dispatcher for RealDispatcher {
                     eprintln!("set premerged {}: {e}", task.id);
                 }
             }
-            match crate::vcs::git::GitClient::new(wt.to_string_lossy().into_owned(), None).head_sha().await {
-                Ok(sha) => {
-                    if let Err(e) = store::set_start_sha(&project.pool, &task.id, &sha).await {
-                        eprintln!("set_start_sha {}: {e}", task.id);
+            if !resume {
+                match crate::vcs::git::GitClient::new(wt.to_string_lossy().into_owned(), None).head_sha().await {
+                    Ok(sha) => {
+                        if let Err(e) = store::set_start_sha(&project.pool, &task.id, &sha).await {
+                            eprintln!("set_start_sha {}: {e}", task.id);
+                        }
                     }
+                    Err(e) => eprintln!("head_sha for agent card {}: {e}", task.id),
                 }
-                Err(e) => eprintln!("head_sha for agent card {}: {e}", task.id),
             }
             prompt = agent_prompt(&agent.prompt_prefix, &prompt, task.interactive, can_ask);
             (wt, None)
@@ -735,6 +743,11 @@ impl Dispatcher for RealDispatcher {
         // 依角色指定的模型（只對 claude 指令加，看不出是 claude 就不動）。
         let model_args = if session_id.is_some() { model_flag(agent.as_ref().and_then(|a| a.model.as_deref())) } else { None };
         let extra_args = join_args([model_args, quota_args.clone(), ask_args]);
+        if resume {
+            // 卡片內容已經在對話裡了，只要叫它接著做。驗收卡的埠剛重新挑過，要再告訴它一次。
+            let ports_note = prompt.rfind("\n\n可用的埠：").map(|i| prompt[i..].to_string()).unwrap_or_default();
+            prompt = format!("{}{ports_note}", dispatch::RESUME_PROMPT);
+        }
         let agent_ctx = agent.map(|a| (a.id, a.kind, effective_dir.clone()));
         let card_kind = task.card_kind.clone();
         let repo_dir = task.project_dir.clone();
@@ -763,6 +776,7 @@ impl Dispatcher for RealDispatcher {
             !task.interactive,
             bridge_env,
             extra_args.as_deref(),
+            resume,
             |tab_id| {
                 if let Some(register) = register {
                     register(tab_id);
@@ -777,6 +791,15 @@ impl Dispatcher for RealDispatcher {
                 return Err(e);
             }
         };
+        if resume {
+            if let Err(e) = store::clear_resume(&project.pool, &task.id).await {
+                eprintln!("clear_resume {}: {e}", task.id);
+            }
+            // 中斷前還有沒回答的問題：恢復「等決策」，完成標記先不算結案。
+            if crate::tasks::questions::has_open(&project.pool, &task.id).await.unwrap_or(false) {
+                self.quota.set_asking(&task.id, true);
+            }
+        }
         // 卡片在進到這裡之前就已經被 `claim_for_dispatch` 標成 running 了
         // （見 drain_once）——這裡只補上分頁 id。順序不能倒過來：spawn 要
         // 等 claude 的 TUI 起來、最久 30 秒，那段期間卡片若還是 queued，
@@ -940,6 +963,59 @@ impl Dispatcher for RealDispatcher {
         });
         Ok(())
     }
+}
+
+/// App 重啟後怎麼處理上次還在執行的卡片（見
+/// docs/superpowers/specs/2026-10-17-agent-resume-after-restart-design.md）。
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct RecoverSummary {
+    /// 找得到對話記錄，下次派工用 `claude --resume` 接著做。
+    pub resumed: u64,
+    /// claude 沒啟動起來，回到佇列從頭再來。
+    pub restarted: u64,
+    /// 互動卡、看板一般卡片：照舊中斷。
+    pub cancelled: u64,
+}
+
+/// 非互動的 Agent 卡回到該 Agent 佇列的最前面（有對話記錄就標成接著做），Agent 不暫停；
+/// 其他卡片照舊收成 cancelled 並暫停 Agent。`projects_root` 是 `~/.claude/projects`。
+pub(crate) async fn recover_after_restart(
+    pool: &sqlx::SqlitePool,
+    projects_root: Option<&std::path::Path>,
+) -> Result<RecoverSummary, sqlx::Error> {
+    let running: Vec<TaskRow> = sqlx::query_as("SELECT * FROM tasks WHERE status = 'running'").fetch_all(pool).await?;
+    let mut out = RecoverSummary::default();
+    for t in running.iter().filter(|t| !t.interactive) {
+        let Some(agent) = t.agent_id.as_deref() else { continue };
+        let resume = match (t.session_id.as_deref(), projects_root) {
+            (Some(sid), Some(root)) => crate::tasks::session_log::find_session_log(root, sid).is_some(),
+            _ => false,
+        };
+        let order = match crate::tasks::agents::first_queued_order(pool, agent).await? {
+            Some(first) => first - 1.0,
+            None => t.sort_order,
+        };
+        sqlx::query(
+            "UPDATE tasks SET status = ?, resume_session = ?, sort_order = ?, tab_id = NULL,
+                 reply_wait_at = NULL, quota_wait_at = NULL WHERE id = ?",
+        )
+        .bind(store::STATUS_QUEUED)
+        .bind(resume)
+        .bind(order)
+        .bind(&t.id)
+        .execute(pool)
+        .await?;
+        if resume {
+            out.resumed += 1;
+        } else {
+            out.restarted += 1;
+        }
+    }
+    // 剩下的（互動卡、看板一般卡片）照舊。暫停一定要在 recover 之前：recover 之後就分不出
+    // 哪些卡片是「被重啟中斷的執行中」了。
+    crate::tasks::agents::pause_agents_of_orphaned_cards(pool).await?;
+    out.cancelled = store::recover_orphaned_running(pool).await?;
+    Ok(out)
 }
 
 /// Snapshot the tab's recent output to `<task_dir>/transcript.txt`. Best
@@ -1249,23 +1325,26 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
 
         // Startup recovery: clear orphaned `running` cards (their PTY died
         // with the previous process). 每個已開啟的專案各掃一次。
+        // 非互動的 Agent 卡接著做，其他照舊中斷。見 recover_after_restart。
         {
             let reg = app.state::<ProjectRegistry>();
-            let mut total = 0u64;
+            let root = crate::tasks::session_log::claude_projects_root();
+            let mut any = false;
             for project in reg.all() {
-                // 必須在 recover 之前：recover 之後就分不出哪些卡片是「被重啟
-                // 中斷的執行中」了。見 agents::pause_agents_of_orphaned_cards。
-                if let Err(e) = crate::tasks::agents::pause_agents_of_orphaned_cards(&project.pool).await {
-                    eprintln!("agent pause on recovery ({}): {e}", project.name);
-                }
-                match store::recover_orphaned_running(&project.pool).await {
-                    Ok(n) => total += n,
+                match recover_after_restart(&project.pool, root.as_deref()).await {
+                    Ok(s) if s != RecoverSummary::default() => {
+                        any = true;
+                        eprintln!(
+                            "task board ({}): after restart {} resumed, {} restarted, {} cancelled",
+                            project.name, s.resumed, s.restarted, s.cancelled
+                        );
+                    }
+                    Ok(_) => {}
                     Err(e) => eprintln!("task board recovery scan ({}): {e}", project.name),
                 }
             }
-            if total > 0 {
+            if any {
                 let _ = app.emit("tasks-updated", ());
-                eprintln!("task board: recovered {total} orphaned running card(s)");
             }
         }
 
@@ -1387,7 +1466,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
-            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None,
+            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false,
         }
     }
 
@@ -1551,7 +1630,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
-            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None,
+            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false,
         }
     }
 
@@ -2284,6 +2363,56 @@ mod persist_tests {
         assert_eq!(row.status, "done");
         assert_eq!(row.outcome.as_deref(), Some("cancelled"));
         assert!(row.session_path.is_some(), "session_path 沒被寫入");
+    }
+
+    /// 一張指派給 Agent、正在執行的卡片。
+    async fn running_agent_card(pool: &sqlx::SqlitePool, agent: &str, interactive: bool, sid: Option<&str>, order: f64) -> String {
+        let id = store::create_task(pool, "t", "", "/r", true, interactive).await.unwrap();
+        sqlx::query("UPDATE tasks SET agent_id = ?, status = 'running', session_id = ?, sort_order = ?, reply_wait_at = 5, quota_wait_at = 6 WHERE id = ?")
+            .bind(agent).bind(sid).bind(order).bind(&id).execute(pool).await.unwrap();
+        id
+    }
+
+    async fn agent_named(pool: &sqlx::SqlitePool, name: &str) -> String {
+        crate::tasks::agents::create_agent(pool, &crate::tasks::agents::NewAgent {
+            kind: "coder", name, role: "r", prompt_prefix: "", project_dir: "/r", canvas_x: 0.0, canvas_y: 0.0,
+        }).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn after_a_restart_agent_cards_resume_or_start_over_instead_of_being_cancelled() {
+        let pool = mem_pool().await;
+        let root = fake_projects_root("SID-LIVE", "{}\n");
+        let a1 = agent_named(&pool, "A1").await;
+        let a2 = agent_named(&pool, "A2").await;
+        let a3 = agent_named(&pool, "A3").await;
+        // A1：有對話記錄 → 接著做，排在它自己佇列的最前面。
+        let waiting = store::create_task(&pool, "下一張", "", "/r", true, false).await.unwrap();
+        sqlx::query("UPDATE tasks SET agent_id = ?, status = 'queued', sort_order = 10 WHERE id = ?").bind(&a1).bind(&waiting).execute(&pool).await.unwrap();
+        let live = running_agent_card(&pool, &a1, false, Some("SID-LIVE"), 50.0).await;
+        // A2：claude 沒啟動起來（沒有對話記錄）→ 從頭再來。
+        let never = running_agent_card(&pool, &a2, false, Some("SID-NONE"), 1.0).await;
+        // A3：互動卡 → 照舊中斷並暫停 Agent。
+        let inter = running_agent_card(&pool, &a3, true, Some("SID-LIVE"), 1.0).await;
+        // 看板一般卡片 → 照舊中斷。
+        let board = store::create_task(&pool, "看板", "", "/r", true, false).await.unwrap();
+        sqlx::query("UPDATE tasks SET status = 'running' WHERE id = ?").bind(&board).execute(&pool).await.unwrap();
+
+        let out = recover_after_restart(&pool, Some(root.path())).await.unwrap();
+        assert_eq!(out, RecoverSummary { resumed: 1, restarted: 1, cancelled: 2 });
+
+        let get = |id: String| { let pool = pool.clone(); async move { store::get_task(&pool, &id).await.unwrap().unwrap() } };
+        let l = get(live.clone()).await;
+        assert_eq!((l.status.as_str(), l.resume_session, l.reply_wait_at, l.quota_wait_at), ("queued", true, None, None));
+        assert!(l.sort_order < get(waiting).await.sort_order, "要排在同一位 Agent 原本的下一張之前");
+        let n = get(never).await;
+        assert_eq!((n.status.as_str(), n.resume_session), ("queued", false));
+        assert_eq!(get(inter.clone()).await.outcome.as_deref(), Some("cancelled"));
+        assert_eq!(get(board).await.outcome.as_deref(), Some("cancelled"));
+        let paused = |id: String| { let pool = pool.clone(); async move { crate::tasks::agents::get_agent(&pool, &id).await.unwrap().unwrap().paused_task_id } };
+        assert_eq!(paused(a1).await, None, "接著做的 Agent 不暫停");
+        assert_eq!(paused(a2).await, None);
+        assert_eq!(paused(a3).await.as_deref(), Some(inter.as_str()));
     }
 
     #[tokio::test]

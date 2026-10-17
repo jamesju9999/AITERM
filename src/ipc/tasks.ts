@@ -86,6 +86,8 @@ export interface TaskRow {
   premerged?: string | null;
   /** 派出去的 claude 結束一輪回覆後停下來等人（unix 秒）。 */
   reply_wait_at?: number | null;
+  /** App 重啟時被中斷，下次派工會用 `claude --resume` 接回原本的對話。 */
+  resume_session?: boolean;
 }
 
 export type CardKind = "work" | "review" | "fix" | "merge" | "plan" | "verify";
