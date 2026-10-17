@@ -829,7 +829,8 @@ export function AgentCanvasView({ isActive }: { isActive: boolean }) {
             </div>
           );
         })}
-        <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" data-testid="ac-templates" onClick={() => setTemplatesOpen(true)}>
+        <span className="ac-pool-sep" aria-hidden />
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" data-testid="ac-templates" onClick={() => setTemplatesOpen(true)}>
           {t.ac_tpl_button}
         </button>
         <span className="ac-pool-hint">{t.ac_pool_hint}</span>

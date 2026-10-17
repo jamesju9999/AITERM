@@ -233,6 +233,19 @@ describe("AgentCanvasView", () => {
       await waitFor(() => expect(vi.mocked(acceptVerification)).toHaveBeenCalledWith("p1", "V"));
     });
 
+    it("模組都審過了，審核者不再顯示「等待工程師交件」", async () => {
+      const rev = agent({ id: "r1", kind: "reviewer", name: "審核者" });
+      vi.mocked(listAgents).mockResolvedValue([agent(), rev]);
+      vi.mocked(listTasks).mockResolvedValue([
+        modA,
+        card({ id: "RA", title: "審查", status: "done", outcome: "success", card_kind: "review", module_id: "A", review_of: "A", agent_id: "r1", verdict: "pass" }),
+      ]);
+      view();
+      const node = await screen.findByTestId("agent-r1");
+      await waitFor(() => expect(within(node).getByText(/模組都審查通過了/)).toBeTruthy());
+      expect(within(node).queryByText(/等待工程師交件/)).toBeNull();
+    });
+
     it("驗收通過：驗收者顯示通過，頂列照程式庫結果", async () => {
       vi.mocked(listAgents).mockResolvedValue([agent(), orch, ver]);
       vi.mocked(listTasks).mockResolvedValue([modA, { ...merged, verdict: "repo_merged" }, verify({ verdict: "pass" })]);

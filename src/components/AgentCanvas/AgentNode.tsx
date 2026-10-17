@@ -157,7 +157,8 @@ export function AgentNode({
 
   // ── Orchestrator：所有 Coder 的模組 ───────────────────────────────────────
   const allModules = tasks.filter((c) => c.card_kind === "work" && c.agent_id && coderIds.has(c.agent_id));
-  const allStates = agent.kind === "orchestrator" ? allModules.map((m) => deriveModuleState(m, tasks, hasReviewer)) : [];
+  const allStates =
+    agent.kind === "orchestrator" || agent.kind === "reviewer" ? allModules.map((m) => deriveModuleState(m, tasks, hasReviewer)) : [];
   const allPassed = allStates.filter((s) => s === "passed").length;
   const allAttention = allStates.filter((s) => s === "attention" || s === "review_failed").length;
   const lastMerge = agent.kind === "orchestrator"
@@ -251,7 +252,18 @@ export function AgentNode({
       }
       return t.ac_no_work;
     }
-    if (agent.kind === "reviewer") return queued.length ? t.ac_review_queue(queued.length) : t.ac_waiting_handoff;
+    if (agent.kind === "reviewer") {
+      if (queued.length) return t.ac_review_queue(queued.length);
+      // 每個模組都審過了就不是「等交件」。
+      if (allStates.length > 0 && allPassed === allStates.length) {
+        return (
+          <span>
+            <span className="ac-check">✓</span> {t.ac_review_all_done}
+          </span>
+        );
+      }
+      return t.ac_waiting_handoff;
+    }
     if (agent.kind === "verifier") {
       if (queued.length) return t.ac_verify_queue;
       if (!lastVerify) return t.ac_verify_waiting;
@@ -401,14 +413,15 @@ export function AgentNode({
           </div>
         )}
 
-        {(agent.kind === "coder" || agent.kind === "orchestrator" || mineUsage) && (
+        {(agent.kind === "coder" || agent.kind === "orchestrator" || !!mineUsage?.cards) && (
           <div className="ac-meta">
             {(agent.kind === "coder" || agent.kind === "orchestrator") && (
               <span title={agent.branch ?? undefined}>⑂ {agent.branch ? shortBranch(agent.branch) : "—"}</span>
             )}
-            {mineUsage && (
+            {/* 一張都沒有對話記錄（例如早期的卡片）就不顯示，免得只剩一個「–」。 */}
+            {!!mineUsage?.cards && (
               <span className="ac-tokens" data-testid={`tokens-${agent.id}`} title={t.ac_tokens_tip(usageBreakdown(mineUsage))}>
-                {mineUsage.cards ? tokensText(mineUsage) : t.ac_tokens("—")}
+                {tokensText(mineUsage)}
               </span>
             )}
             {agent.kind === "coder" && (
