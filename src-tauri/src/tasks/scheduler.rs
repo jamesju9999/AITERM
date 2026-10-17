@@ -374,6 +374,9 @@ pub(crate) fn commit_message_for(card_kind: &str, title: &str) -> String {
 
 /// Reviewer 的受審目錄：`<專案>/agents/<reviewer>/reviews/<review_id>`，以
 /// detached worktree 指向被審版本（`task.end_sha`）。重試時舊的目錄先清掉。
+/// 派工準備階段的 git 操作一次一個，見 `RealDispatcher::dispatch`。
+static GIT_PREP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// 驗收卡提示最後附上的「可用的埠」。
 fn verify_ports_note(ports: &[u16]) -> String {
     let list = ports.iter().map(u16::to_string).collect::<Vec<_>>().join("、");
@@ -594,6 +597,10 @@ pub struct RealDispatcher {
 #[async_trait::async_trait]
 impl Dispatcher for RealDispatcher {
     async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
+        // 派工會同時進行（見 drain_once），但準備階段的 git 操作（建 worktree、開工前合併）
+        // 一次一個：同一個 repo 的多個 worktree 共用 .git，同時寫會撞到 git 的鎖檔。
+        // 等 claude 啟動那段（最久的部分）才放開。
+        let git_prep = GIT_PREP.lock().await;
         let attachments = store::list_attachments(&project.pool, &task.id)
             .await
             .map_err(|e| e.to_string())?
@@ -777,6 +784,7 @@ impl Dispatcher for RealDispatcher {
             };
             move |tab_id: &str| quota.register(&task_id, tab_id, pool, label)
         });
+        drop(git_prep);
         let spawned = dispatch::spawn_and_run(
             &self.app,
             &self.pty,
@@ -1166,105 +1174,119 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
     // 一般卡片：running 是跨專案的聯集（全域上限），queued 則每個專案
     // 交出 `candidate_heads`（未指派的隊首＋每個 Agent 的隊首）。專案之間
     // 依各自第一張候選的建立時間排序，專案內部維持 `sort_order`。
+    // 認領後的派工先收著，等這一輪再也認領不到卡片時一起跑：每張派工都要等 claude
+    // 啟動 15–20 秒，一張等一張的話好幾位工程師要很久才全部開工。認領當下卡片就已經是
+    // running，所以下一輪掃描照樣算進上限、同一位 Agent 也不會再拿到第二張。
     loop {
-        let mut running: Vec<TaskRow> = Vec::new();
-        let mut per_project: Vec<(String, Vec<TaskRow>)> = Vec::new();
-        for project in &projects {
-            // 閒著的工程師先接走別人還沒開始的實作卡，下面的隊首才會算到它。
-            if let Err(e) = crate::tasks::workflow::rebalance_idle_coders(&project.pool).await {
-                eprintln!("scheduler rebalance ({}): {e}", project.name);
-            }
-            let project_running = match store::list_by_status(&project.pool, store::STATUS_RUNNING).await {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("scheduler list running ({}): {e}", project.name);
-                    return;
+        let mut pending: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>> = Vec::new();
+        'scan: loop {
+            let mut running: Vec<TaskRow> = Vec::new();
+            let mut per_project: Vec<(String, Vec<TaskRow>)> = Vec::new();
+            for project in &projects {
+                // 閒著的工程師先接走別人還沒開始的實作卡，下面的隊首才會算到它。
+                if let Err(e) = crate::tasks::workflow::rebalance_idle_coders(&project.pool).await {
+                    eprintln!("scheduler rebalance ({}): {e}", project.name);
                 }
-            };
-            let queued = match store::list_by_status(&project.pool, store::STATUS_QUEUED).await {
-                Ok(q) => q,
-                Err(e) => {
-                    eprintln!("scheduler list queued ({}): {e}", project.name);
-                    return;
-                }
-            };
-            let paused: std::collections::HashSet<String> =
-                match crate::tasks::agents::paused_agent_ids(&project.pool).await {
-                    Ok(v) => v.into_iter().collect(),
+                let project_running = match store::list_by_status(&project.pool, store::STATUS_RUNNING).await {
+                    Ok(r) => r,
                     Err(e) => {
-                        eprintln!("scheduler list paused agents ({}): {e}", project.name);
-                        return;
+                        eprintln!("scheduler list running ({}): {e}", project.name);
+                        break 'scan;
                     }
                 };
-            let blocked = match crate::tasks::workflow::blocked_cards(&project.pool).await {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("scheduler blocked cards ({}): {e}", project.name);
-                    return;
+                let queued = match store::list_by_status(&project.pool, store::STATUS_QUEUED).await {
+                    Ok(q) => q,
+                    Err(e) => {
+                        eprintln!("scheduler list queued ({}): {e}", project.name);
+                        break 'scan;
+                    }
+                };
+                let paused: std::collections::HashSet<String> =
+                    match crate::tasks::agents::paused_agent_ids(&project.pool).await {
+                        Ok(v) => v.into_iter().collect(),
+                        Err(e) => {
+                            eprintln!("scheduler list paused agents ({}): {e}", project.name);
+                            break 'scan;
+                        }
+                    };
+                let blocked = match crate::tasks::workflow::blocked_cards(&project.pool).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("scheduler blocked cards ({}): {e}", project.name);
+                        break 'scan;
+                    }
+                };
+                let mut heads = candidate_heads(&queued, &project_running, &paused, &blocked);
+                // 用到 token 上限：Agent 卡先不派（已經在跑的照樣跑完），看板一般卡片不受影響。
+                match crate::tasks::budget::over_budget(&project.pool, &project.path).await {
+                    Ok(true) => heads.retain(|h| h.agent_id.is_none()),
+                    Ok(false) => {}
+                    Err(e) => eprintln!("scheduler budget ({}): {e}", project.name),
                 }
-            };
-            let mut heads = candidate_heads(&queued, &project_running, &paused, &blocked);
-            // 用到 token 上限：Agent 卡先不派（已經在跑的照樣跑完），看板一般卡片不受影響。
-            match crate::tasks::budget::over_budget(&project.pool, &project.path).await {
-                Ok(true) => heads.retain(|h| h.agent_id.is_none()),
-                Ok(false) => {}
-                Err(e) => eprintln!("scheduler budget ({}): {e}", project.name),
+                per_project.push((project.id.clone(), heads));
+                // 互動卡片不占名額——但 Agent 的互動卡片要占，見 `candidate_heads`。
+                running.extend(project_running.into_iter().filter(|t| !t.interactive || t.agent_id.is_some()));
             }
-            per_project.push((project.id.clone(), heads));
-            // 互動卡片不占名額——但 Agent 的互動卡片要占，見 `candidate_heads`。
-            running.extend(project_running.into_iter().filter(|t| !t.interactive || t.agent_id.is_some()));
-        }
 
-        let firsts = order_heads(
-            per_project
-                .iter()
-                .filter_map(|(pid, hs)| hs.first().map(|h| (pid.clone(), h.clone())))
-                .collect(),
-        );
-        let heads: Vec<(String, TaskRow)> = firsts
-            .into_iter()
-            .flat_map(|(pid, _)| {
+            let firsts = order_heads(
                 per_project
                     .iter()
-                    .find(|(p, _)| *p == pid)
-                    .map(|(_, hs)| hs.clone())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(move |h| (pid.clone(), h))
-            })
-            .collect();
-        let mut dispatched = false;
-        for (project_id, head) in heads {
-            if pick_next(&running, std::slice::from_ref(&head), max_concurrent).is_none() {
-                continue;
-            }
-            let Some(project) = reg.get(&project_id) else {
-                continue; // 專案在這一輪之間被關閉了
-            };
-            // 先原子地認領再去 spawn——理由見 store::claim_for_dispatch。
-            match store::claim_for_dispatch(&project.pool, &head.id).await {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(e) => {
-                    eprintln!("claim {} failed ({}): {e}", head.id, project.name);
-                    return;
+                    .filter_map(|(pid, hs)| hs.first().map(|h| (pid.clone(), h.clone())))
+                    .collect(),
+            );
+            let heads: Vec<(String, TaskRow)> = firsts
+                .into_iter()
+                .flat_map(|(pid, _)| {
+                    per_project
+                        .iter()
+                        .find(|(p, _)| *p == pid)
+                        .map(|(_, hs)| hs.clone())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(move |h| (pid.clone(), h))
+                })
+                .collect();
+            let mut dispatched = false;
+            for (project_id, head) in heads {
+                if pick_next(&running, std::slice::from_ref(&head), max_concurrent).is_none() {
+                    continue;
                 }
-            }
-            if let Err(e) = dispatcher.dispatch(&project, &head).await {
-                eprintln!("dispatch {} failed: {e}", head.id);
-                let _ = store::finish_task(&project.pool, &head.id, "failed", Some(&e), None).await;
-                // Agent 卡片派工失敗（例如 worktree 建不起來）跟執行失敗一樣
-                // 要暫停 Agent，否則下一輪會拿同一個壞掉的狀態派下一張。
-                if let Some(aid) = &head.agent_id {
-                    let _ = crate::tasks::agents::set_paused(&project.pool, aid, Some(&head.id)).await;
+                let Some(project) = reg.get(&project_id) else {
+                    continue; // 專案在這一輪之間被關閉了
+                };
+                // 先原子地認領再去 spawn——理由見 store::claim_for_dispatch。
+                match store::claim_for_dispatch(&project.pool, &head.id).await {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(e) => {
+                        eprintln!("claim {} failed ({}): {e}", head.id, project.name);
+                        break 'scan;
+                    }
                 }
+                pending.push(Box::pin(async move {
+                    if let Err(e) = dispatcher.dispatch(&project, &head).await {
+                        eprintln!("dispatch {} failed: {e}", head.id);
+                        let _ = store::finish_task(&project.pool, &head.id, "failed", Some(&e), None).await;
+                        // Agent 卡片派工失敗（例如 worktree 建不起來）跟執行失敗一樣
+                        // 要暫停 Agent，否則下一輪會拿同一個壞掉的狀態派下一張。
+                        if let Some(aid) = &head.agent_id {
+                            let _ = crate::tasks::agents::set_paused(&project.pool, aid, Some(&head.id)).await;
+                        }
+                    }
+                }));
+                dispatched = true;
+                break;
             }
-            dispatched = true;
+            if !dispatched {
+                break;
+            }
+        }
+        // 這一批都派出去了再重看一次：派工期間可能有卡片已經結束（測試用的假派工會立刻
+        // 結案），空出名額。一張都認領不到才收工。
+        if pending.is_empty() {
             break;
         }
-        if !dispatched {
-            return;
-        }
+        futures_util::future::join_all(pending).await;
     }
 }
 
@@ -2062,6 +2084,66 @@ mod loop_tests {
         assert_eq!(status_of("already-running"), "running");
         assert_eq!(status_of("blocked-auto"), "queued"); // cap=1 respected for the auto lane
         assert_eq!(status_of("chat"), "running"); // interactive bypassed the cap entirely
+    }
+
+    /// 好幾張卡可以同時開工時，派工要同時進行：每張都要等 claude 啟動 15–20 秒，
+    /// 一張等一張的話三位工程師要一分鐘才全部開工。同一位 Agent 仍然一次一張、上限照算。
+    #[tokio::test]
+    async fn cards_that_can_start_together_are_dispatched_concurrently() {
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let project = reg.create(parent.path(), "p", "").await.unwrap();
+        let mut coders = Vec::new();
+        for name in ["C1", "C2", "C3"] {
+            coders.push(crate::tasks::agents::create_agent(&project.pool, &crate::tasks::agents::NewAgent {
+                kind: "coder", name, role: "r", prompt_prefix: "", project_dir: "/r", canvas_x: 0.0, canvas_y: 0.0,
+            }).await.unwrap());
+        }
+        for (i, c) in coders.iter().enumerate() {
+            for j in 0..2 {
+                let id = store::create_task(&project.pool, &format!("{i}-{j}"), "", "/r", true, false).await.unwrap();
+                crate::tasks::agents::assign_task(&project.pool, &id, Some(c)).await.unwrap();
+            }
+        }
+
+        struct Slow {
+            in_flight: std::sync::atomic::AtomicUsize,
+            peak: std::sync::atomic::AtomicUsize,
+            started: std::sync::Mutex<Vec<String>>,
+        }
+        #[async_trait::async_trait]
+        impl Dispatcher for Slow {
+            async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
+                use std::sync::atomic::Ordering::SeqCst;
+                let now = self.in_flight.fetch_add(1, SeqCst) + 1;
+                self.peak.fetch_max(now, SeqCst);
+                self.started.lock().unwrap().push(task.title.clone());
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                self.in_flight.fetch_sub(1, SeqCst);
+                store::set_tab_id(&project.pool, &task.id, "tab").await.map_err(|e| e.to_string())
+            }
+        }
+        let d = Slow { in_flight: 0.into(), peak: 0.into(), started: std::sync::Mutex::new(vec![]) };
+        drain_once(&reg, &d, 5).await;
+
+        let mut started = d.started.lock().unwrap().clone();
+        started.sort();
+        assert_eq!(started, vec!["0-0", "1-0", "2-0"], "每位工程師一次一張");
+        assert_eq!(d.peak.load(std::sync::atomic::Ordering::SeqCst), 3, "三張要同時派");
+
+        // 上限照算：上限 1 時只派一張。
+        let reg2 = ProjectRegistry::new();
+        let p2 = reg2.create(parent.path(), "p2", "").await.unwrap();
+        for name in ["D1", "D2"] {
+            let c = crate::tasks::agents::create_agent(&p2.pool, &crate::tasks::agents::NewAgent {
+                kind: "coder", name, role: "r", prompt_prefix: "", project_dir: "/r", canvas_x: 0.0, canvas_y: 0.0,
+            }).await.unwrap();
+            let id = store::create_task(&p2.pool, name, "", "/r", true, false).await.unwrap();
+            crate::tasks::agents::assign_task(&p2.pool, &id, Some(&c)).await.unwrap();
+        }
+        let d2 = Slow { in_flight: 0.into(), peak: 0.into(), started: std::sync::Mutex::new(vec![]) };
+        drain_once(&reg2, &d2, 1).await;
+        assert_eq!(d2.started.lock().unwrap().len(), 1);
     }
 
     /// 專案用到 token 上限：Agent 卡不再派工，看板一般卡片照常。
