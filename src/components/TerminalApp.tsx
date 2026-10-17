@@ -908,8 +908,12 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                 <AgentCanvasView
                   isActive={isActive}
                   initialProjectId={tab.agentCanvasProjectId ?? null}
-                  onProjectChange={(projectId) =>
-                    setTabs((prev) => prev.map((t) => (t.id === tab.id ? { ...t, agentCanvasProjectId: projectId } : t)))
+                  onProjectChange={(projectId, projectName) =>
+                    setTabs((prev) =>
+                      prev.map((t) =>
+                        t.id === tab.id ? { ...t, agentCanvasProjectId: projectId, agentCanvasProjectName: projectName || undefined } : t,
+                      ),
+                    )
                   }
                 />
               ) : tab.type === "mail" ? (

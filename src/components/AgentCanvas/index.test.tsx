@@ -74,6 +74,7 @@ import {
   openRepo,
   overrideModule,
   resolveAgent,
+  updateAgent,
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
@@ -355,10 +356,11 @@ describe("AgentCanvasView", () => {
     );
     const select = (await screen.findByDisplayValue("Pomodoro")) as HTMLSelectElement;
     expect(select.value).toBe("p2");
-    expect(onProjectChange).not.toHaveBeenCalled();
+    // 名稱每次都回報（專案改名後標題跟上），id 不變。
+    await waitFor(() => expect(onProjectChange).toHaveBeenCalledWith("p2", "Pomodoro"));
     await waitFor(() => expect(listAgents).toHaveBeenCalledWith("p2"));
     fireEvent.change(select, { target: { value: "p1" } });
-    expect(onProjectChange).toHaveBeenCalledWith("p1");
+    expect(onProjectChange).toHaveBeenLastCalledWith("p1", "HTBKTW");
   });
 
   it("新分頁沒有記住的專案：用上次選的，並記到這個分頁上", async () => {
@@ -376,7 +378,7 @@ describe("AgentCanvasView", () => {
       </LocaleProvider>,
     );
     expect(((await screen.findByDisplayValue("Pomodoro")) as HTMLSelectElement).value).toBe("p2");
-    await waitFor(() => expect(onProjectChange).toHaveBeenCalledWith("p2"));
+    await waitFor(() => expect(onProjectChange).toHaveBeenCalledWith("p2", "Pomodoro"));
   });
 
   it("團隊範本：存下桌布上的團隊，套用時用選的程式庫建立，已經有的審核者不重複", async () => {
@@ -455,6 +457,36 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(resolveAgent).toHaveBeenCalledWith("p1", "a1", "retry"));
     fireEvent.click(within(node).getByText(/跳過|Skip/));
     await waitFor(() => expect(resolveAgent).toHaveBeenCalledWith("p1", "a1", "skip"));
+  });
+
+  it("活動記錄每一行有角色色點", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "R" })]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", status: "done", outcome: "success", agent_id: "a1", dispatched_at: 100, finished_at: 200 }),
+      card({ id: "B", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", dispatched_at: 300, finished_at: 400 }),
+    ]);
+    view();
+    await screen.findByTestId("agent-r1");
+    const log = document.querySelector(".ac-log") as HTMLElement;
+    await waitFor(() => expect(log.querySelector(".ac-log-dot--reviewer")).not.toBeNull());
+    expect(log.querySelector(".ac-log-dot--coder")).not.toBeNull();
+  });
+
+  it("自動排列：依流程由左到右寫回位置，工程師在最左、驗收者在最右", async () => {
+    vi.mocked(updateAgent).mockClear();
+    vi.mocked(listAgents).mockResolvedValue([
+      agent({ id: "v1", kind: "verifier", name: "V", canvas_x: 0, canvas_y: 0 }),
+      agent({ id: "a1", canvas_x: 900, canvas_y: 600 }),
+      agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 50, canvas_y: 900 }),
+    ]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    await screen.findByTestId("agent-v1");
+    fireEvent.click(screen.getByRole("button", { name: /自動排列|Arrange/ }));
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(3));
+    const x = (id: string) => vi.mocked(updateAgent).mock.calls.find(([, a]) => a.id === id)![1].canvas_x;
+    expect(x("a1")).toBeLessThan(x("r1"));
+    expect(x("r1")).toBeLessThan(x("v1"));
   });
 
   it("工程師卡底部顯示「模組 x/y」，分支名放在提示裡；圖示依角色", async () => {
@@ -842,7 +874,7 @@ describe("AgentCanvasView", () => {
       vi.mocked(listTasks).mockResolvedValue([]);
       view();
       const node = await screen.findByTestId("agent-a1");
-      expect(within(node).getByText(/· opus/)).toBeTruthy();
+      expect(within(node).getByText(/^opus$/)).toBeTruthy();
       fireEvent.click(within(node).getByRole("button", { name: /設定|Settings/ }));
       const dlg = await screen.findByRole("dialog");
       expect((within(dlg).getByLabelText(/^模型$|^Model$/) as HTMLInputElement).value).toBe("opus");

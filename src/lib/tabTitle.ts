@@ -20,10 +20,21 @@ const DEFAULT_TITLE_KEY: Partial<Record<Tab["type"], keyof Translations>> = {
 /**
  * 分頁標題是建立當下的語言存下來的；切換語言後，還是預設標題的分頁跟著換成現在的語言，
  * 使用者自己改過的標題照原樣顯示。
+ *
+ * Agent 協作分頁還沒改過名時帶上看板專案名稱：`short`（側邊欄，旁邊已經有圖示）只顯示
+ * 專案名，其他地方顯示「Agent 協作 · 專案名」，開兩個分頁才分得出來。
  */
-export function displayTabTitle(tab: Pick<Tab, "type" | "title">, t: Translations): string {
+export function displayTabTitle(
+  tab: Pick<Tab, "type" | "title" | "agentCanvasProjectName">,
+  t: Translations,
+  variant: "short" | "long" = "long",
+): string {
   const key = DEFAULT_TITLE_KEY[tab.type];
   if (!key) return tab.title;
   const isDefault = Object.values(translations).some((loc) => loc[key] === tab.title);
-  return isDefault ? (t[key] as string) : tab.title;
+  if (!isDefault) return tab.title;
+  const base = t[key] as string;
+  const project = tab.type === "agent-canvas" ? tab.agentCanvasProjectName : undefined;
+  if (!project) return base;
+  return variant === "short" ? project : `${base} · ${project}`;
 }

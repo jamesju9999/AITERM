@@ -22,4 +22,15 @@ describe("displayTabTitle", () => {
   it("別種分頁的預設標題不會被套用", () => {
     expect(displayTabTitle({ type: "terminal", title: "Database" }, zh)).toBe("Database");
   });
+
+  it("Agent 協作分頁帶上專案名稱：側邊欄只顯示專案名，其他地方是「Agent 協作 · 專案名」", () => {
+    const tab = { type: "agent-canvas" as const, title: "Agent Canvas", agentCanvasProjectName: "Ask Test" };
+    expect(displayTabTitle(tab, zh, "short")).toBe("Ask Test");
+    expect(displayTabTitle(tab, zh)).toBe("Agent 協作 · Ask Test");
+  });
+
+  it("改過名的 Agent 協作分頁不加專案名", () => {
+    const tab = { type: "agent-canvas" as const, title: "我的團隊", agentCanvasProjectName: "Ask Test" };
+    expect(displayTabTitle(tab, zh, "short")).toBe("我的團隊");
+  });
 });

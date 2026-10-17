@@ -185,6 +185,9 @@
 .ac-agent-name { flex: 1; min-width: 0; }
 .ac-agent-name b { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ac-agent-name > span { display: block; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-agent-name > .ac-agent-sub { display: flex; align-items: center; gap: 5px; }
+.ac-agent-role { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ac-model { flex: none; font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--border-color); color: var(--text-secondary); }
 .ac-badge {
   font-size: 10.5px;
   font-weight: 600;
@@ -278,6 +281,11 @@
 .ac-log-line--bad { color: #fca5a5; }
 .ac-log-time { color: var(--text-muted); margin-right: 8px; }
 .ac-log-empty { color: var(--text-muted); }
+/* 角色色點：跟卡片圖示同色，一眼看出是誰做的。 */
+.ac-log-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; background: #93c5fd; }
+.ac-log-dot--reviewer { background: #fde68a; }
+.ac-log-dot--orchestrator { background: #86efac; }
+.ac-log-dot--verifier { background: #5eead4; }
 
 .ac-toast {
   position: fixed;

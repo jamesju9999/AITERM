@@ -8,7 +8,7 @@ export const SESSION_TABS_KEY = "aiterm-session-tabs";
 // 存下來只會讓還原出來的分頁帶著假狀態。
 type SavedTab = Pick<
   Tab,
-  "title" | "type" | "dbConnectionId" | "cwd" | "aiSummary" | "suggestionGoal" | "suggestionMilestones" | "agentCanvasProjectId"
+  "title" | "type" | "dbConnectionId" | "cwd" | "aiSummary" | "suggestionGoal" | "suggestionMilestones" | "agentCanvasProjectId" | "agentCanvasProjectName"
 >;
 
 export function restoreSessionTabs(): Tab[] | null {
@@ -38,9 +38,10 @@ export function restoreSessionTabs(): Tab[] | null {
 }
 
 export function saveSessionTabs(tabs: Tab[]) {
-  const toSave: SavedTab[] = tabs.map(({ title, type, dbConnectionId, cwd, aiSummary, lastSessionSummary, suggestionGoal, suggestionMilestones, agentCanvasProjectId }) => ({
+  const toSave: SavedTab[] = tabs.map(({ title, type, dbConnectionId, cwd, aiSummary, lastSessionSummary, suggestionGoal, suggestionMilestones, agentCanvasProjectId, agentCanvasProjectName }) => ({
     title,
     agentCanvasProjectId,
+    agentCanvasProjectName,
     suggestionGoal,
     suggestionMilestones,
     type,

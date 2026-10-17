@@ -61,6 +61,8 @@ export interface Tab {
   suggestionMilestones?: MilestoneState;
   /** Agent 協作分頁：這個分頁選的看板專案。每個分頁各自記住，會持久化。 */
   agentCanvasProjectId?: string;
+  /** 上面那個專案的名稱，顯示在分頁標題上（會持久化）。 */
+  agentCanvasProjectName?: string;
   /** 這個終端機分頁目前實際所在的工作目錄。由 TerminalView 回報，會持久化。
    *  跟 initialCwd（開分頁時的起始目錄）是兩件事，不要混用。 */
   cwd?: string;
@@ -451,7 +453,7 @@ export function TabBar({
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
-                <span className="aiterm-tab-title">{displayTabTitle(tab, t)}</span>
+                <span className="aiterm-tab-title">{displayTabTitle(tab, t, "short")}</span>
               )
             )}
             

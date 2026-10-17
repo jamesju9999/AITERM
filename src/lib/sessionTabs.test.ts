@@ -11,10 +11,12 @@ describe("sessionTabs", () => {
   // 就把每個分頁的 cwd 覆蓋成同一個值——存下來的目錄活不過開機後兩秒。
   it("每個 Agent 協作分頁記住自己的看板專案，重開後各自還原", () => {
     saveSessionTabs([
-      { id: "a", title: "Agent 協作", type: "agent-canvas", agentCanvasProjectId: "p-ask" },
-      { id: "b", title: "Agent 協作", type: "agent-canvas", agentCanvasProjectId: "p-pomo" },
+      { id: "a", title: "Agent 協作", type: "agent-canvas", agentCanvasProjectId: "p-ask", agentCanvasProjectName: "Ask Test" },
+      { id: "b", title: "Agent 協作", type: "agent-canvas", agentCanvasProjectId: "p-pomo", agentCanvasProjectName: "Pomodoro" },
     ]);
     expect(restoreSessionTabs()!.map((t) => t.agentCanvasProjectId)).toEqual(["p-ask", "p-pomo"]);
+    // 名稱也要存：重開後專案清單還沒載入前，側邊欄就要顯示得出是哪個專案。
+    expect(restoreSessionTabs()!.map((t) => t.agentCanvasProjectName)).toEqual(["Ask Test", "Pomodoro"]);
   });
 
   it("還原時把存下的目錄當成 PTY 的起始目錄", () => {

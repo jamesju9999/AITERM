@@ -335,9 +335,10 @@ export function AgentNode({
             )}
             {agent.name}
           </b>
-          <span>
-            {agent.role}
-            {agent.model && <span className="ac-model"> · {agent.model}</span>}
+          {/* 角色名太長時只截角色，模型永遠看得到；完整角色名在提示裡。 */}
+          <span className="ac-agent-sub" title={agent.model ? `${agent.role} · ${agent.model}` : agent.role}>
+            <span className="ac-agent-role">{agent.role}</span>
+            {agent.model && <span className="ac-model">{agent.model}</span>}
           </span>
         </div>
         <span className="ac-badge">

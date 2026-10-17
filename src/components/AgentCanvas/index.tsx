@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { KindIcon } from "./KindIcon";
+import { autoLayout } from "./autoLayout";
 import { createPortal } from "react-dom";
 import { confirm } from "@tauri-apps/plugin-dialog";
 
@@ -153,7 +154,8 @@ export function AgentCanvasView({
   /** 這個分頁上次選的看板專案（每個分頁各自記住，見 Tab.agentCanvasProjectId）。 */
   initialProjectId?: string | null;
   /** 選了別的專案：寫回這個分頁。 */
-  onProjectChange?: (projectId: string) => void;
+  /** 專案名稱一起給：分頁標題要顯示它（專案改名後，下次打開會更新）。 */
+  onProjectChange?: (projectId: string, projectName: string) => void;
 }) {
   const { t } = useLocale();
   const [projects, setProjects] = useState<ProjectInfo[] | null>(null);
@@ -223,8 +225,8 @@ export function AgentCanvasView({
         const initial = initialProjectRef.current;
         const pick = [initial, readStoredProject()].map((id) => ok.find((p) => p.id === id)).find(Boolean) ?? ok[0];
         setProjectId((cur) => cur ?? pick?.id ?? null);
-        // 自動選到的也記到這個分頁上，之後別的分頁換專案不會影響它。
-        if (pick && pick.id !== initial) onProjectChangeRef.current?.(pick.id);
+        // 自動選到的也記到這個分頁上，之後別的分頁換專案不會影響它；名稱每次都回報，改過名的專案標題會跟上。
+        if (pick) onProjectChangeRef.current?.(pick.id, pick.name);
       })
       .catch((e) => setToast(errText(e)));
     getTaskBoardConfig()
@@ -361,11 +363,13 @@ export function AgentCanvasView({
   const agentName = useCallback((id: string | null) => agents.find((a) => a.id === id)?.name ?? "?", [agents]);
 
   const activity = useMemo(() => {
-    const ev: { at: number; text: string; kind: "start" | "ok" | "bad" | "dispatch" }[] = [];
+    const ev: { at: number; text: string; kind: "start" | "ok" | "bad" | "dispatch"; role?: AgentKind }[] = [];
     const titleOf = (id: string) => tasks.find((x) => x.id === id)?.title;
     for (const c of tasks) {
       if (!c.agent_id) continue;
       const who = agentName(c.agent_id);
+      const role = agents.find((a) => a.id === c.agent_id)?.kind;
+      const first = ev.length;
       const title = localizedCardTitle(c, t);
       // 派工過程（由系統決定，見 docs/superpowers/specs/2026-10-16-agent-task-dependencies-design.md §7）。
       if (c.from_spec && c.card_kind === "work") {
@@ -389,9 +393,10 @@ export function AgentCanvasView({
             ? { at: c.finished_at, text: t.ac_log_finished(who, title), kind: "ok" }
             : { at: c.finished_at, text: t.ac_log_failed(who, title), kind: "bad" },
         );
+      for (let i = first; i < ev.length; i++) ev[i].role = role;
     }
     return ev.sort((a, b) => b.at - a.at).slice(0, 40);
-  }, [tasks, agentName, t]);
+  }, [tasks, agents, agentName, t]);
 
   // ── 拖曳 ───────────────────────────────────────────────────────────────
 
@@ -631,6 +636,39 @@ export function AgentCanvasView({
     return true;
   }, [agents.length, nodeBounds]);
 
+  // 自動排列：位置先套到畫面上、逐一寫回；排完之後（下一次 render 量得到新位置）再全部顯示。
+  const [fitAfterArrange, setFitAfterArrange] = useState(0);
+  const arrange = useCallback(() => {
+    if (!projectId) return;
+    const root = canvasRef.current;
+    const pos = autoLayout(
+      agents.map((a) => {
+        const el = root?.querySelector<HTMLElement>(`[data-agent-id="${a.id}"]`);
+        return { id: a.id, kind: a.kind, x: a.canvas_x, y: a.canvas_y, w: el?.offsetWidth || NODE_W, h: el?.offsetHeight || NODE_H };
+      }),
+    );
+    const moved = agents.filter((a) => {
+      const p = pos.get(a.id);
+      return p && (p.x !== a.canvas_x || p.y !== a.canvas_y);
+    });
+    setAgents((prev) => prev.map((g) => ({ ...g, canvas_x: pos.get(g.id)?.x ?? g.canvas_x, canvas_y: pos.get(g.id)?.y ?? g.canvas_y })));
+    setFitAfterArrange((n) => n + 1);
+    if (moved.length === 0) return;
+    void run(() =>
+      Promise.all(
+        moved.map((a) => {
+          const p = pos.get(a.id)!;
+          return updateAgent(projectId, { id: a.id, name: a.name, role: a.role, prompt_prefix: a.prompt_prefix, canvas_x: p.x, canvas_y: p.y });
+        }),
+      ),
+    );
+  }, [agents, projectId, run]);
+  useEffect(() => {
+    if (fitAfterArrange) fitToView();
+    // 只在按了自動排列之後做一次，fitToView 本身變了不重做。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitAfterArrange]);
+
   /** 以畫面上的 (vx, vy) 為中心縮放。 */
   const zoomAround = useCallback((next: number, vx?: number, vy?: number) => {
     const el = canvasRef.current;
@@ -777,7 +815,7 @@ export function AgentCanvasView({
             onChange={(e) => {
               setProjectId(e.target.value);
               storeProject(e.target.value);
-              onProjectChange?.(e.target.value);
+              onProjectChange?.(e.target.value, projects?.find((p) => p.id === e.target.value)?.name ?? "");
               setMerge({});
             }}
           >
@@ -1008,6 +1046,9 @@ export function AgentCanvasView({
               <button className="ac-iconbtn ac-zoom-fit" onClick={() => fitToView()}>
                 {t.ac_zoom_fit}
               </button>
+              <button className="ac-iconbtn ac-zoom-fit" title={t.ac_arrange_tip} onClick={arrange}>
+                {t.ac_arrange}
+              </button>
             </div>
           )}
         </div>
@@ -1031,7 +1072,13 @@ export function AgentCanvasView({
           onClick={() => setLayout({ logCollapsed: !layout.logCollapsed })}
         >
           {layout.logCollapsed ? "▸" : "▾"} {t.ac_log_title}
-          {layout.logCollapsed && activity[0] && <span className="ac-log-latest">{activity[0].text}</span>}
+          {layout.logCollapsed && activity[0] && (
+            <span className="ac-log-latest">
+              <span className="ac-log-time">{new Date(activity[0].at * 1000).toLocaleTimeString()}</span>
+              {activity[0].role && <span className={`ac-log-dot ac-log-dot--${activity[0].role}`} aria-hidden />}
+              {activity[0].text}
+            </span>
+          )}
         </button>
         {!layout.logCollapsed && (
           <div className="ac-log-lines">
@@ -1039,6 +1086,7 @@ export function AgentCanvasView({
             {activity.map((ev, i) => (
               <div key={i} className={`ac-log-line ac-log-line--${ev.kind}`}>
                 <span className="ac-log-time">{new Date(ev.at * 1000).toLocaleTimeString()}</span>
+                {ev.role && <span className={`ac-log-dot ac-log-dot--${ev.role}`} aria-hidden />}
                 {ev.text}
               </div>
             ))}
