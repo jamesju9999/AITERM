@@ -374,6 +374,16 @@ pub(crate) fn commit_message_for(card_kind: &str, title: &str) -> String {
 
 /// Reviewer 的受審目錄：`<專案>/agents/<reviewer>/reviews/<review_id>`，以
 /// detached worktree 指向被審版本（`task.end_sha`）。重試時舊的目錄先清掉。
+/// 驗收卡提示最後附上的「可用的埠」。
+fn verify_ports_note(ports: &[u16]) -> String {
+    let list = ports.iter().map(u16::to_string).collect::<Vec<_>>().join("、");
+    let first = ports.first().map(u16::to_string).unwrap_or_default();
+    format!(
+        "\n\n可用的埠：{list}。伺服器只能用這些埠（例如 PORT={first}，或工具的 --port {first}），\
+         不要用預設埠，以免跟使用者正在跑的服務衝突。"
+    )
+}
+
 pub(crate) async fn prepare_review_worktree(
     project_storage_path: &std::path::Path,
     reviewer_id: &str,
@@ -431,6 +441,57 @@ pub(crate) async fn finalize_review_card(
     let repo = crate::vcs::git::GitClient::new(repo_dir.to_string(), None);
     if let Err(e) = repo.remove_worktree_force(&worktree.to_string_lossy()).await {
         eprintln!("remove review worktree {}: {e}", worktree.display());
+        let _ = std::fs::remove_dir_all(worktree);
+        let _ = repo.prune_worktrees().await;
+    }
+    outcome
+}
+
+/// 驗收卡結案（`finish_task` 之前）：讀 verify.json 寫入判定（reasons = 沒通過的
+/// 條件），失敗就暫停驗收者；收掉還佔著派工時給的埠的行程；最後清掉驗收目錄。
+pub(crate) async fn finalize_verify_card(
+    pool: &sqlx::SqlitePool,
+    project_storage_path: &std::path::Path,
+    verifier_id: &str,
+    task_id: &str,
+    repo_dir: &str,
+    worktree: &std::path::Path,
+    outcome: monitor::TaskOutcome,
+) -> monitor::TaskOutcome {
+    let outcome = if matches!(outcome, monitor::TaskOutcome::Success) {
+        let path = crate::tasks::workflow::verify_json_path(project_storage_path, task_id);
+        match std::fs::read_to_string(&path)
+            .map_err(|e| format!("找不到 {}：{e}", path.display()))
+            .and_then(|t| crate::tasks::workflow::parse_verify_json(&t))
+        {
+            Ok(report) => {
+                let verdict = crate::tasks::workflow::ReviewVerdict {
+                    verdict: report.verdict.clone(),
+                    reasons: report.items.iter().filter(|i| i.status == "fail").map(|i| i.criterion.clone()).collect(),
+                };
+                match crate::tasks::workflow::set_verdict(pool, task_id, &verdict).await {
+                    Ok(()) => monitor::TaskOutcome::Success,
+                    Err(e) => monitor::TaskOutcome::Failed(format!("寫入驗收結果失敗：{e}")),
+                }
+            }
+            Err(e) => monitor::TaskOutcome::Failed(format!("驗收沒有產出有效的 verify.json：{e}")),
+        }
+    } else {
+        outcome
+    };
+    if !matches!(outcome, monitor::TaskOutcome::Success) {
+        if let Err(e) = crate::tasks::agents::set_paused(pool, verifier_id, Some(task_id)).await {
+            eprintln!("pause verifier {verifier_id}: {e}");
+        }
+    }
+    let ports = crate::tasks::verify_ports::load_ports(&crate::tasks::task_dir(project_storage_path, task_id));
+    let stopped = tokio::task::spawn_blocking(move || crate::tasks::verify_ports::stop_listeners(&ports)).await.unwrap_or_default();
+    if !stopped.is_empty() {
+        log::info!("verify {task_id}: stopped leftover servers {stopped:?}");
+    }
+    let repo = crate::vcs::git::GitClient::new(repo_dir.to_string(), None);
+    if let Err(e) = repo.remove_worktree_force(&worktree.to_string_lossy()).await {
+        eprintln!("remove verify worktree {}: {e}", worktree.display());
         let _ = std::fs::remove_dir_all(worktree);
         let _ = repo.prune_worktrees().await;
     }
@@ -549,27 +610,36 @@ impl Dispatcher for RealDispatcher {
         // 會直接啟動失敗（見 dispatch::looks_like_claude）。
         let session_id = dispatch::looks_like_claude(&claude_cmd)
             .then(|| uuid::Uuid::new_v4().to_string());
-        // 非互動的 Agent 卡掛上 ask_human（需要人決定時提問）。做不到就照舊。
-        let ask_args = if session_id.is_some() && !task.interactive && task.agent_id.is_some() {
-            match self.quota.mcp_url(&task.id).await {
-                Some(url) => {
-                    let dir = crate::tasks::task_dir(&project.path, &task.id);
-                    let path = dir.join("mcp.json");
-                    match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, crate::tasks::ask::mcp_config_json(&url))) {
-                        Ok(()) => crate::tasks::quota::path_flag("--mcp-config", &path)
-                            .map(|f| format!("{f} --allowedTools {}", crate::tasks::ask::ALLOWED_TOOL)),
-                        Err(e) => {
-                            eprintln!("mcp config for {}: {e}", task.id);
-                            None
-                        }
-                    }
-                }
-                None => None,
-            }
+        // 非互動的 Agent 卡掛上 ask_human（需要人決定時提問）；驗收卡另外掛上
+        // 瀏覽器工具。做不到就照舊派工（驗收者會把需要瀏覽器的條件標成 manual）。
+        let is_verify = task.card_kind == crate::tasks::workflow::KIND_VERIFY && task.agent_id.is_some();
+        let ask_url = if session_id.is_some() && !task.interactive && task.agent_id.is_some() {
+            self.quota.mcp_url(&task.id).await
         } else {
             None
         };
-        let can_ask = ask_args.is_some();
+        let evidence = (session_id.is_some() && is_verify).then(|| crate::tasks::workflow::evidence_dir(&project.path, &task.id));
+        let ask_args = match crate::tasks::ask::mcp_config_json_with(ask_url.as_deref(), evidence.as_deref()) {
+            Some(json) => {
+                let dir = crate::tasks::task_dir(&project.path, &task.id);
+                let path = dir.join("mcp.json");
+                let written = std::fs::create_dir_all(&dir)
+                    .and_then(|_| evidence.as_ref().map_or(Ok(()), std::fs::create_dir_all))
+                    .and_then(|_| std::fs::write(&path, json));
+                match written {
+                    Ok(()) => crate::tasks::quota::path_flag("--mcp-config", &path).and_then(|f| {
+                        crate::tasks::ask::allowed_tools(ask_url.is_some(), evidence.is_some())
+                            .map(|t| format!("{f} --allowedTools {t}"))
+                    }),
+                    Err(e) => {
+                        eprintln!("mcp config for {}: {e}", task.id);
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+        let can_ask = ask_args.is_some() && ask_url.is_some();
 
         let bridge_env = dispatch::resolve_bridge_env(
             &self.config,
@@ -590,11 +660,18 @@ impl Dispatcher for RealDispatcher {
             None => None,
         };
         let readonly = task.card_kind == crate::tasks::workflow::KIND_REVIEW
-            || task.card_kind == crate::tasks::workflow::KIND_PLAN;
+            || task.card_kind == crate::tasks::workflow::KIND_PLAN
+            || task.card_kind == crate::tasks::workflow::KIND_VERIFY;
         let (effective_dir, worktree_info) = if let Some(agent) = agent.as_ref().filter(|_| readonly) {
-            // 審查卡、拆解卡：在受審版本的唯讀目錄跑，不記 start_sha（那兩欄存的是受審範圍）。
+            // 審查卡、拆解卡、驗收卡：在受審版本的唯讀目錄跑，不記 start_sha（那兩欄存的是受審範圍）。
             let wt = prepare_review_worktree(&project.path, &agent.id, task).await?;
             prompt = agent_prompt(&agent.prompt_prefix, &prompt, task.interactive, can_ask);
+            if is_verify {
+                // 埠在這時才挑：建卡到開工之間可能隔很久。結案時收掉還佔著這些埠的行程。
+                let ports = crate::tasks::verify_ports::pick_free_ports(3);
+                crate::tasks::verify_ports::save_ports(&crate::tasks::task_dir(&project.path, &task.id), &ports);
+                prompt.push_str(&verify_ports_note(&ports));
+            }
             (wt, None)
         } else if let Some(agent) = &agent {
             let wt = prepare_agent_worktree(&project.pool, &project.path, agent).await?;
@@ -785,6 +862,9 @@ impl Dispatcher for RealDispatcher {
                 }
                 Some((agent_id, _, worktree)) if card_kind == crate::tasks::workflow::KIND_PLAN => {
                     finalize_plan_card(&pool, &project_path, agent_id, &task_id, &repo_dir, worktree, outcome).await
+                }
+                Some((agent_id, _, worktree)) if card_kind == crate::tasks::workflow::KIND_VERIFY => {
+                    finalize_verify_card(&pool, &project_path, agent_id, &task_id, &repo_dir, worktree, outcome).await
                 }
                 Some((agent_id, _, worktree)) => {
                     let msg = commit_message_for(&card_kind, &task_title);
@@ -2715,6 +2795,66 @@ mod agent_dispatch_tests {
         }
         assert_eq!(agents::get_agent(&pool, &reviewer.id).await.unwrap().unwrap().paused_task_id.as_deref(), Some(card.id.as_str()));
         assert_eq!(store::get_task(&pool, &card.id).await.unwrap().unwrap().verdict, None);
+    }
+
+    #[tokio::test]
+    async fn a_verify_card_records_its_verdict_stops_leftover_servers_and_cleans_up() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let verifier = agent_for(&pool, repo.path()).await;
+        let card = review_card(&pool, repo.path(), &head(repo.path())).await;
+        let wt = prepare_review_worktree(storage.path(), &verifier.id, &card).await.unwrap();
+        let task_dir = crate::tasks::task_dir(storage.path(), &card.id);
+        let json = crate::tasks::workflow::verify_json_path(storage.path(), &card.id);
+        fs::write(&json, r#"{"verdict":"pass","items":[{"criterion":"登入","status":"fail","module_id":"m"},{"criterion":"付款","status":"manual"}]}"#).unwrap();
+        // 驗收者忘了關的伺服器。
+        let port = crate::tasks::verify_ports::pick_free_ports(1)[0];
+        crate::tasks::verify_ports::save_ports(&task_dir, &[port]);
+        #[cfg(unix)]
+        let mut server = StdCommand::new("python3")
+            .args(["-c", &format!("import socket,time\ns=socket.socket()\ns.bind(('127.0.0.1',{port}))\ns.listen()\ntime.sleep(60)")])
+            .spawn()
+            .unwrap();
+        #[cfg(unix)]
+        {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+
+        let out = finalize_verify_card(&pool, storage.path(), &verifier.id, &card.id, &repo.path().to_string_lossy(), &wt, monitor::TaskOutcome::Success).await;
+
+        assert!(matches!(out, monitor::TaskOutcome::Success));
+        let row = store::get_task(&pool, &card.id).await.unwrap().unwrap();
+        assert_eq!(row.verdict.as_deref(), Some("fail"), "有 fail 項就是 fail");
+        assert_eq!(row.review_reasons.as_deref(), Some(r#"["登入"]"#));
+        assert!(!wt.exists(), "驗收目錄要清掉");
+        #[cfg(unix)]
+        assert!(!server.wait().unwrap().success(), "留下來的伺服器要被結束");
+    }
+
+    #[tokio::test]
+    async fn a_verify_card_without_verify_json_fails_and_pauses_the_verifier() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let verifier = agent_for(&pool, repo.path()).await;
+        let card = review_card(&pool, repo.path(), &head(repo.path())).await;
+        let wt = prepare_review_worktree(storage.path(), &verifier.id, &card).await.unwrap();
+
+        let out = finalize_verify_card(&pool, storage.path(), &verifier.id, &card.id, &repo.path().to_string_lossy(), &wt, monitor::TaskOutcome::Success).await;
+
+        match out {
+            monitor::TaskOutcome::Failed(m) => assert!(m.contains("verify.json"), "{m}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(agents::get_agent(&pool, &verifier.id).await.unwrap().unwrap().paused_task_id.as_deref(), Some(card.id.as_str()));
+        assert!(!wt.exists());
     }
 
     #[tokio::test]

@@ -88,12 +88,69 @@ pub fn classify(msg: &Value) -> Rpc {
 
 /// 派工時給 claude 的 `--mcp-config` 檔案內容。
 pub fn mcp_config_json(url: &str) -> String {
-    json!({ "mcpServers": { "aiterm": { "type": "http", "url": url } } }).to_string()
+    mcp_config_json_with(Some(url), None).unwrap_or_default()
+}
+
+/// 驗收者用的瀏覽器工具（Playwright MCP）。版本釘死：工具參數在版本之間會改
+/// （實測 `browser_click` 的參數已改名成 `target`），不釘的話某天會突然壞掉。
+pub const PLAYWRIGHT_MCP: &str = "@playwright/mcp@0.0.83";
+/// `--allowedTools` 裡代表整個 playwright 伺服器的工具。
+pub const BROWSER_TOOLS: &str = "mcp__playwright";
+
+/// `--mcp-config` 的內容：`ask_url` 有值就放 ask_human；`browser_out` 有值就放
+/// 無頭、獨立設定檔的瀏覽器，截圖等輸出寫在那個資料夾（它只准寫那裡與工作目錄）。
+/// 兩個都沒有就是 `None`。
+pub fn mcp_config_json_with(ask_url: Option<&str>, browser_out: Option<&std::path::Path>) -> Option<String> {
+    let mut servers = serde_json::Map::new();
+    if let Some(url) = ask_url {
+        servers.insert("aiterm".into(), json!({ "type": "http", "url": url }));
+    }
+    if let Some(out) = browser_out {
+        servers.insert(
+            "playwright".into(),
+            json!({
+                "command": "npx",
+                "args": ["-y", PLAYWRIGHT_MCP, "--headless", "--isolated", "--output-dir", out.to_string_lossy()],
+            }),
+        );
+    }
+    (!servers.is_empty()).then(|| json!({ "mcpServers": servers }).to_string())
+}
+
+/// `--allowedTools` 的值；兩個都沒有就是 `None`。
+pub fn allowed_tools(ask: bool, browser: bool) -> Option<String> {
+    let tools: Vec<&str> = [(ask, ALLOWED_TOOL), (browser, BROWSER_TOOLS)].iter().filter(|(on, _)| *on).map(|(_, t)| *t).collect();
+    (!tools.is_empty()).then(|| tools.join(" "))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_verifier_gets_a_pinned_headless_isolated_browser() {
+        let out = std::path::Path::new("/p/tasks/v/evidence");
+        let v: Value = serde_json::from_str(&mcp_config_json_with(Some("http://x/mcp"), Some(out)).unwrap()).unwrap();
+        assert_eq!(v["mcpServers"]["aiterm"]["url"], "http://x/mcp");
+        assert_eq!(v["mcpServers"]["playwright"]["command"], "npx");
+        assert_eq!(
+            v["mcpServers"]["playwright"]["args"],
+            json!(["-y", "@playwright/mcp@0.0.83", "--headless", "--isolated", "--output-dir", "/p/tasks/v/evidence"])
+        );
+        let browser_only: Value = serde_json::from_str(&mcp_config_json_with(None, Some(out)).unwrap()).unwrap();
+        assert!(browser_only["mcpServers"].get("aiterm").is_none());
+        assert_eq!(mcp_config_json_with(None, None), None);
+        // 其他卡片的設定跟原本一模一樣。
+        assert_eq!(mcp_config_json("http://x/mcp"), r#"{"mcpServers":{"aiterm":{"type":"http","url":"http://x/mcp"}}}"#);
+    }
+
+    #[test]
+    fn allowed_tools_for_each_combination() {
+        assert_eq!(allowed_tools(true, false).as_deref(), Some("mcp__aiterm__ask_human"));
+        assert_eq!(allowed_tools(true, true).as_deref(), Some("mcp__aiterm__ask_human mcp__playwright"));
+        assert_eq!(allowed_tools(false, true).as_deref(), Some("mcp__playwright"));
+        assert_eq!(allowed_tools(false, false), None);
+    }
 
     #[test]
     fn handshake_and_tool_listing_follow_what_claude_code_sends() {
