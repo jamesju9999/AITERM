@@ -830,6 +830,35 @@ pub fn verify_body(modules: &[&TaskRow], spec_text: &str, json_path: &Path, evid
     s
 }
 
+/// 證據圖片單張上限：再大就不放進報告（多半是全頁長截圖）。
+const EVIDENCE_IMAGE_MAX: u64 = 5 * 1024 * 1024;
+
+/// 驗收報告要顯示的圖片：evidence 裡的 png/jpg，路徑相對於驗收卡資料夾 → data URL。
+/// 只收真的在卡片資料夾裡面的檔案（`../` 跳出去的不收）。
+pub fn evidence_images(task_dir: &Path, report: &VerifyReport) -> HashMap<String, String> {
+    use base64::Engine;
+    let Ok(root) = task_dir.canonicalize() else { return HashMap::new() };
+    let mut out = HashMap::new();
+    for e in report.items.iter().flat_map(|i| i.evidence.iter()) {
+        let lower = e.to_ascii_lowercase();
+        let mime = if lower.ends_with(".png") {
+            "image/png"
+        } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+            "image/jpeg"
+        } else {
+            continue;
+        };
+        let Ok(path) = task_dir.join(e).canonicalize() else { continue };
+        if !path.starts_with(&root) || std::fs::metadata(&path).map_or(true, |m| m.len() > EVIDENCE_IMAGE_MAX) {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&path) {
+            out.insert(e.clone(), format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)));
+        }
+    }
+    out
+}
+
 /// 驗收退回的修正卡內文。證據路徑相對於驗收卡資料夾，改寫成相對於專案資料夾。
 pub fn verify_fix_body(module: &TaskRow, items: &[&VerifyItem], verify_id: &str, round: usize) -> String {
     let mut s = format!(
@@ -2295,6 +2324,23 @@ mod tests {
         assert!(spec.contains("規格文件") && spec.contains("驗收條件是否具體") && spec.contains("git diff a..b"));
         assert!(spec.contains("請審查模組「M」"), "保留同一個開頭，代理（含驗收用的假 claude）才認得出是審查");
         assert_eq!(review_title(&m, true), "審查規格：M（修正後）");
+    }
+
+    #[test]
+    fn evidence_images_stay_inside_the_card_folder() {
+        let project = tempfile::tempdir().unwrap();
+        let dir = crate::tasks::task_dir(project.path(), "v");
+        std::fs::create_dir_all(dir.join("evidence")).unwrap();
+        std::fs::write(dir.join("evidence/ok.png"), [137u8, 80, 78, 71]).unwrap();
+        std::fs::write(dir.join("evidence/log.txt"), "x").unwrap();
+        std::fs::write(project.path().join("secret.png"), [1u8]).unwrap();
+        let report = parse_verify_json(
+            r#"{"verdict":"pass","items":[{"criterion":"a","status":"pass","evidence":["evidence/ok.png","evidence/log.txt","../../secret.png","evidence/missing.png","npm test 通過"]}]}"#,
+        )
+        .unwrap();
+        let images = evidence_images(&dir, &report);
+        assert_eq!(images.keys().collect::<Vec<_>>(), vec!["evidence/ok.png"]);
+        assert!(images["evidence/ok.png"].starts_with("data:image/png;base64,iVBORw"));
     }
 
     #[test]

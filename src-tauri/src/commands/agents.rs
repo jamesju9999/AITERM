@@ -307,6 +307,50 @@ pub async fn agents_override_module(
     Ok(())
 }
 
+/// 驗收報告：verify.json 的內容，加上證據圖片（證據路徑 → data URL）。
+/// 驗收卡還沒寫出 verify.json 時 `report` 是 `None`。
+#[derive(serde::Serialize)]
+pub struct VerifyReportView {
+    pub report: Option<crate::tasks::workflow::VerifyReport>,
+    pub images: std::collections::HashMap<String, String>,
+}
+
+#[tauri::command]
+pub async fn agents_verify_report(
+    project_id: String,
+    task_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<VerifyReportView, String> {
+    let p = project(&reg, &project_id)?;
+    let path = p.path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = std::fs::read_to_string(crate::tasks::workflow::verify_json_path(&path, &task_id))
+            .ok()
+            .and_then(|t| crate::tasks::workflow::parse_verify_json(&t).ok());
+        let images = report
+            .as_ref()
+            .map(|r| crate::tasks::workflow::evidence_images(&crate::tasks::task_dir(&path, &task_id), r))
+            .unwrap_or_default();
+        VerifyReportView { report, images }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// 放行一張沒通過的驗收：當成通過，程式庫更新到受驗版本。
+#[tauri::command]
+pub async fn agents_accept_verification(
+    project_id: String,
+    task_id: String,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::workflow::accept_verification(&p.pool, &task_id).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(())
+}
+
 /// 在系統的檔案管理員（Finder／檔案總管／Linux 預設）打開程式庫資料夾。
 #[tauri::command]
 pub fn agents_open_repo(path: String) -> Result<(), String> {
