@@ -61,14 +61,28 @@ pub async fn deliver_answer(app: &AppHandle, project_id: &str, id: i64, answer: 
         (store::STATUS_RUNNING, Some(tab)) => tab.to_string(),
         _ => return Err("提問的卡片已經結束，答案送不回去".into()),
     };
+    // Codex 卡片（`codex exec`）沒有對話可以打字：答案交給掛著等的 ask_human 請求。
+    // 沒人在等（例如 App 重開過）就不能往 shell 打字，回錯誤。
+    let quota = app.try_state::<Arc<crate::tasks::quota::QuotaState>>();
+    let blocking = quota.as_ref().is_some_and(|qs| qs.is_blocking_ask(&q.task_id));
+    if blocking && !quota.as_ref().is_some_and(|qs| qs.has_waiter(&q.task_id, id)) {
+        return Err("Agent 目前沒有在等這個答案".into());
+    }
     let row = questions::answer(&p.pool, id, answer, via)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("{} 已經回答過或已取消", q.label()))?;
 
-    let pty = app.state::<Arc<crate::pty::PtyManager>>();
-    let text = questions::answer_message(&row, &crate::pty::session::done_marker_instruction(&tab_id));
-    crate::tasks::dispatch::write_then_submit(&pty, &tab_id, &text).await?;
+    if blocking {
+        let given = quota.as_ref().is_some_and(|qs| qs.give_answer(&q.task_id, id, &questions::answer_text(&row)));
+        if !given {
+            return Err("Agent 目前沒有在等這個答案".into());
+        }
+    } else {
+        let pty = app.state::<Arc<crate::pty::PtyManager>>();
+        let text = questions::answer_message(&row, &crate::pty::session::done_marker_instruction(&tab_id));
+        crate::tasks::dispatch::write_then_submit(&pty, &tab_id, &text).await?;
+    }
 
     if !questions::has_open(&p.pool, &q.task_id).await.unwrap_or(false) {
         if let Some(quota) = app.try_state::<Arc<crate::tasks::quota::QuotaState>>() {

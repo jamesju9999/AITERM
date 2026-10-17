@@ -225,6 +225,11 @@ pub fn answer_message(q: &QuestionRow, marker_instruction: &str) -> String {
     )
 }
 
+/// Codex 卡片：答案直接當 ask_human 的工具結果回去（不必提醒完成標記——行程結束就是做完）。
+pub fn answer_text(q: &QuestionRow) -> String {
+    format!("{} 的回答：{}\n（請依這個答案繼續。）", q.label(), q.answer.as_deref().unwrap_or(""))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +338,7 @@ mod tests {
         let msg = answer_message(&row, "（印出 <<X>>）");
         assert!(msg.starts_with("Q-12 的回答：中文"), "{msg}");
         assert!(msg.contains("（印出 <<X>>）"));
+        // Codex 卡片：答案是工具結果，不提完成標記（行程結束就是做完）。
+        assert_eq!(answer_text(&row), "Q-12 的回答：中文\n（請依這個答案繼續。）");
     }
 }

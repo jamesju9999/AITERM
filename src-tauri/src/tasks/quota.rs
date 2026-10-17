@@ -149,6 +149,10 @@ struct Entry {
     reply_wait: bool,
     /// 有還沒回答的 `ask_human` 問題。
     asking: bool,
+    /// Codex 卡片：ask_human 掛著等答案（沒有對話可以把答案打進去）。
+    blocking_ask: bool,
+    /// 問題 id → 等答案的提問請求。解除登記時一起丟掉，等待端就會收到「已取消」。
+    waiters: HashMap<i64, tokio::sync::oneshot::Sender<String>>,
 }
 
 /// 執行中、由 AITerm 派出去的 claude 卡片，以及其中正在等額度或等人回覆的那些。
@@ -223,10 +227,25 @@ impl QuotaState {
         match crate::tasks::questions::create(&pool, task_id, label.agent_id.as_deref(), q).await {
             Ok(row) => {
                 self.set_asking(task_id, true);
+                // 先登記等待者再通知：通知之後馬上就可能有人回答。
+                let waiter = {
+                    let mut entries = self.entries.lock();
+                    entries.get_mut(task_id).filter(|e| e.blocking_ask).map(|e| {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        e.waiters.insert(row.id, tx);
+                        rx
+                    })
+                };
                 if let Some(f) = self.on_question.get() {
                     f(&label, &row);
                 }
-                (crate::tasks::questions::ask_reply(&row), false)
+                match waiter {
+                    Some(rx) => match rx.await {
+                        Ok(answer) => (answer, false),
+                        Err(_) => ("問題已取消（卡片已結束），不要再等這個答案。".into(), true),
+                    },
+                    None => (crate::tasks::questions::ask_reply(&row), false),
+                }
             }
             Err(e) => (format!("提問失敗：{e}"), true),
         }
@@ -254,8 +273,48 @@ impl QuotaState {
                 turn_pending: false,
                 reply_wait: false,
                 asking: false,
+                blocking_ask: false,
+                waiters: HashMap::new(),
             },
         );
+    }
+
+    /// 這張卡的 ask_human 要掛著等答案（Codex 卡片）。在 `register` 之後呼叫。
+    pub fn set_blocking_ask(&self, task_id: &str) {
+        if let Some(e) = self.entries.lock().get_mut(task_id) {
+            e.blocking_ask = true;
+        }
+    }
+
+    /// 把答案交給正在等的提問；有人在等就回 true（呼叫端就不必把答案打進分頁）。
+    pub fn give_answer(&self, task_id: &str, question_id: i64, text: &str) -> bool {
+        let tx = self.entries.lock().get_mut(task_id).and_then(|e| e.waiters.remove(&question_id));
+        tx.is_some_and(|tx| tx.send(text.to_string()).is_ok())
+    }
+
+    /// 這個問題有沒有提問請求正掛著等答案。
+    pub fn has_waiter(&self, task_id: &str, question_id: i64) -> bool {
+        self.entries.lock().get(task_id).is_some_and(|e| e.waiters.contains_key(&question_id))
+    }
+
+    /// 這張卡的提問是不是掛著等答案（Codex 卡片）。
+    pub fn is_blocking_ask(&self, task_id: &str) -> bool {
+        self.entries.lock().get(task_id).is_some_and(|e| e.blocking_ask)
+    }
+
+    /// Codex 的 SessionStart hook：記下對話 id 與記錄路徑。
+    async fn record_session(&self, task_id: &str, body: &serde_json::Value) {
+        let Some(pool) = self.entries.lock().get(task_id).map(|e| e.pool.clone()) else { return };
+        if let Some(sid) = body.get("session_id").and_then(|v| v.as_str()) {
+            if let Err(e) = store::set_session_id(&pool, task_id, sid).await {
+                eprintln!("codex session id {task_id}: {e}");
+            }
+        }
+        if let Some(path) = body.get("transcript_path").and_then(|v| v.as_str()) {
+            if let Err(e) = store::set_session_path(&pool, task_id, path).await {
+                eprintln!("codex session path {task_id}: {e}");
+            }
+        }
     }
 
     pub fn unregister(&self, task_id: &str) {
@@ -396,6 +455,7 @@ async fn start_server(state: Arc<QuotaState>) -> Result<(u16, String), String> {
             "stop-failure" if is_quota_failure(&json) => state.set_waiting(&task_id, true).await,
             "turn-end" => state.turn_ended(&task_id),
             "working" => state.working(&task_id).await,
+            "codex-session" => state.record_session(&task_id, &json).await,
             _ => {}
         }
         // Claude Code 會把回應當成 hook 輸出解析；空物件 = 沒有意見。
@@ -705,5 +765,69 @@ mod tests {
             "arguments":{"question":"還在嗎？"}}})).await.json().await.unwrap();
         assert_eq!(gone["result"]["isError"], true);
         assert_eq!(crate::tasks::questions::list_open(&pool).await.unwrap().len(), 1);
+    }
+
+    /// Codex 卡片（`codex exec`）沒有對話可以打字：ask_human 要掛著等答案，答案直接當工具結果回去。
+    #[tokio::test]
+    async fn a_codex_card_waits_on_ask_human_until_the_answer_arrives() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::dispatch_for_test(&pool, &id, "tab").await;
+        let state = QuotaState::new();
+        state.register(&id, "tab", pool.clone(), label());
+        state.set_blocking_ask(&id);
+        let url = state.mcp_url(&id).await.unwrap();
+        let call = |qid: i64, q: &str| {
+            let url = url.clone();
+            let body = serde_json::json!({"jsonrpc":"2.0","id":qid,"method":"tools/call","params":{"name":"ask_human","arguments":{"question":q}}});
+            tokio::spawn(async move { reqwest::Client::new().post(url).json(&body).send().await.unwrap().json::<serde_json::Value>().await.unwrap() })
+        };
+
+        let pending = call(1, "顏色？");
+        let q = loop {
+            if let Some(q) = crate::tasks::questions::list_open(&pool).await.unwrap().pop() {
+                break q;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert!(state.is_waiting(&id), "等答案時不判卡住");
+        assert!(!pending.is_finished(), "還沒回答就不能回傳");
+        assert!(state.is_blocking_ask(&id) && state.has_waiter(&id, q.id));
+        assert!(!state.has_waiter(&id, q.id + 99));
+        assert!(!state.give_answer(&id, q.id + 99, "x"), "別的問題沒人在等");
+        assert!(state.give_answer(&id, q.id, "Q1 的回答：藍色"));
+        let res = pending.await.unwrap();
+        assert_eq!(res["result"]["content"][0]["text"], "Q1 的回答：藍色");
+        assert_eq!(res["result"]["isError"], false);
+
+        // 卡片結束：還在等的提問收到「已取消」。
+        let pending = call(2, "還要嗎？");
+        while crate::tasks::questions::list_open(&pool).await.unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        state.unregister(&id);
+        let res = pending.await.unwrap();
+        assert_eq!(res["result"]["isError"], true);
+        assert!(res["result"]["content"][0]["text"].as_str().unwrap().contains("取消"));
+    }
+
+    /// Codex 的 SessionStart hook 回報對話 id 與記錄路徑，寫進卡片（接著做、token 統計用）。
+    #[tokio::test]
+    async fn the_codex_session_hook_records_the_session_on_the_card() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        let state = QuotaState::new();
+        state.register(&id, "tab", pool.clone(), label());
+        let base = state.hook_base(&id).await.unwrap();
+        reqwest::Client::new()
+            .post(format!("{base}/codex-session"))
+            .body(r#"{"session_id":"01a1-s","transcript_path":"/h/.codex/sessions/rollout-x-01a1-s.jsonl","hook_event_name":"SessionStart"}"#)
+            .send()
+            .await
+            .unwrap();
+        let row = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(row.session_id.as_deref(), Some("01a1-s"));
+        assert_eq!(row.session_path.as_deref(), Some("/h/.codex/sessions/rollout-x-01a1-s.jsonl"));
     }
 }
