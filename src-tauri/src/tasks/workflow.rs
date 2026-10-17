@@ -23,6 +23,8 @@ pub const KIND_FIX: &str = "fix";
 pub const KIND_MERGE: &str = "merge";
 /// Orchestrator 拆解一份通過審查的規格（見規格先行 spec）。
 pub const KIND_PLAN: &str = "plan";
+/// 驗收卡：驗收者在合併結果上建置、測試、操作。
+pub const KIND_VERIFY: &str = "verify";
 /// 一份規格最多拆成幾張實作卡。
 pub const MAX_PLAN_TASKS: usize = 20;
 /// 附在實作卡內文裡的規格全文上限（字元）。
@@ -713,6 +715,147 @@ fn find_kind<'a>(all: &'a [AgentRow], kind: &str) -> Option<&'a AgentRow> {
 }
 
 /// 一張 Agent 卡片結案（`finish_task` 之後）時呼叫：建立後續卡片。
+/// `<專案>/tasks/<verify_id>/verify.json`——驗收者寫判定的位置。
+pub fn verify_json_path(project_path: &Path, verify_id: &str) -> std::path::PathBuf {
+    crate::tasks::task_dir(project_path, verify_id).join("verify.json")
+}
+
+/// `<專案>/tasks/<verify_id>/evidence`——截圖等證據。也是 Playwright MCP 的
+/// `--output-dir`：它只准寫工作目錄與這個資料夾（實測）。
+pub fn evidence_dir(project_path: &Path, verify_id: &str) -> std::path::PathBuf {
+    crate::tasks::task_dir(project_path, verify_id).join("evidence")
+}
+
+/// verify.json 的一條驗收條件。`status`：pass／fail／manual（無法自動驗證）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct VerifyItem {
+    pub criterion: String,
+    pub status: String,
+    #[serde(default)]
+    pub module_id: Option<String>,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    #[serde(default)]
+    pub steps: Option<String>,
+    #[serde(default)]
+    pub expected: Option<String>,
+    #[serde(default)]
+    pub actual: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct VerifyReport {
+    pub verdict: String,
+    #[serde(default)]
+    pub project_type: Option<String>,
+    #[serde(default)]
+    pub items: Vec<VerifyItem>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// 解析 verify.json。有任何 `fail` 項就是 `fail`，不管它自己寫什麼。
+pub fn parse_verify_json(text: &str) -> Result<VerifyReport, String> {
+    let mut v: VerifyReport = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+    if !matches!(v.verdict.as_str(), "pass" | "fail") {
+        return Err(format!("verdict 必須是 pass 或 fail，收到 {}", v.verdict));
+    }
+    if let Some(bad) = v.items.iter().find(|i| !matches!(i.status.as_str(), "pass" | "fail" | "manual")) {
+        return Err(format!("status 必須是 pass、fail 或 manual，收到 {}", bad.status));
+    }
+    if v.items.iter().any(|i| i.status == "fail") {
+        v.verdict = "fail".into();
+    }
+    Ok(v)
+}
+
+fn take_chars(s: &str, n: usize) -> String {
+    let mut out: String = s.chars().take(n).collect();
+    if s.chars().count() > n {
+        out.push_str("…（略）");
+    }
+    out
+}
+
+/// 驗收卡的提示。可用的埠在派工時才附上（那時才知道哪些埠空著）。
+pub fn verify_body(modules: &[&TaskRow], spec_text: &str, json_path: &Path, evidence: &Path) -> String {
+    let mut s = String::from(
+        "你是驗收者。目前目錄是各工程師的成果合併之後的版本。請確認它真的能用：\
+         實際建置、執行、操作，照驗收條件逐條確認。\n\
+         - 不要修改、commit 或 push 任何檔案；安裝相依套件、建置產生的檔案沒關係。\n\
+         - 你只做判定，不修 bug。\n\n模組清單（module_id 用方括號裡的 id）：\n",
+    );
+    for m in modules {
+        s.push_str(&format!("- [{}] {}\n  需求：{}\n", m.id, m.title, take_chars(&m.body, 2000).replace('\n', "\n  ")));
+    }
+    if !spec_text.trim().is_empty() {
+        s.push_str(&format!("\n規格全文（照裡面的驗收條件逐條驗）：\n{spec_text}\n"));
+    } else {
+        s.push_str("\n沒有規格：請依各模組需求自己列出驗收條件，每條都要驗。\n");
+    }
+    s.push_str(&format!(
+        "\n先判斷專案類型，照下面的方式驗：\n\
+         - 網頁前端：啟動開發伺服器，用瀏覽器工具（mcp__playwright__ 開頭的工具）照驗收條件實際點擊、輸入、換頁；\
+         用 browser_console_messages 檢查主控台錯誤；每條條件用 browser_take_screenshot 截圖。\n\
+         - 後端 API：啟動服務，實際呼叫端點，檢查狀態碼與回應內容。\n\
+         - 全端：前後端都啟動，從瀏覽器操作，確認資料存進後端、重新整理後讀得回來。\n\
+         - 命令列工具：實際執行各種參數，檢查輸出與結束碼。\n\
+         - 函式庫：跑測試，再寫一小段程式實際呼叫公開介面（寫在目前目錄以外的暫存位置）。\n\
+         - Electron：用瀏覽器工具操作。\n\
+         - 其他桌面或手機 App（原生、Tauri、iOS、Android）：只做建置、測試、啟動不當掉；\
+         需要操作畫面的條件標成 manual。\n\
+         \n專案自己有測試就一定要跑。\n\
+         \n截圖一律存成這個資料夾底下的絕對路徑：{evidence}（例如 {evidence}/start.png）。存到別的地方會被拒絕。\n\
+         伺服器只能用下面「可用的埠」，驗收結束前把你啟動的伺服器、瀏覽器都關掉（browser_close）。\n\
+         瀏覽器工具或其他工具不能用時，把需要它的條件標成 manual 並寫原因，不能當成通過。\n\
+         \n完成後把結果寫成 JSON 檔到：{json}\n\
+         格式：\n\
+         {{\"verdict\": \"pass\" 或 \"fail\", \"project_type\": \"web\", \"items\": [\
+         {{\"criterion\": \"驗收條件\", \"status\": \"pass\" 或 \"fail\" 或 \"manual\", \
+         \"module_id\": \"出問題的模組 id（找不出來就省略）\", \
+         \"evidence\": [\"evidence/start.png\", \"指令輸出摘要\"], \
+         \"steps\": \"重現步驟（fail 必填）\", \"expected\": \"預期\", \"actual\": \"實際\", \
+         \"notes\": \"manual 的原因或其他說明\"}}], \"notes\": \"其他觀察\"}}\n\
+         任何一條 fail，verdict 就是 fail。manual 不算失敗，但一定要寫原因。\
+         evidence 裡的檔案路徑寫成相對於 {dir} 的路徑。\n",
+        evidence = evidence.display(),
+        json = json_path.display(),
+        dir = json_path.parent().map(|p| p.display().to_string()).unwrap_or_default(),
+    ));
+    s
+}
+
+/// 驗收退回的修正卡內文。證據路徑相對於驗收卡資料夾，改寫成相對於專案資料夾。
+pub fn verify_fix_body(module: &TaskRow, items: &[&VerifyItem], verify_id: &str, round: usize) -> String {
+    let mut s = format!(
+        "驗收沒有通過，請修正模組「{title}」（驗收退回第 {round} 輪，最多 {max} 輪）。\n驗收發現的問題：\n",
+        title = module.title,
+        max = MAX_FIX_ROUNDS,
+    );
+    for i in items {
+        s.push_str(&format!("\n- 條件：{}\n", i.criterion));
+        if let Some(v) = &i.steps {
+            s.push_str(&format!("  重現步驟：{}\n", v.replace('\n', "\n  ")));
+        }
+        if let Some(v) = &i.expected {
+            s.push_str(&format!("  預期：{v}\n"));
+        }
+        if let Some(v) = &i.actual {
+            s.push_str(&format!("  實際：{v}\n"));
+        }
+        for e in &i.evidence {
+            s.push_str(&format!("  證據：tasks/{verify_id}/{e}\n"));
+        }
+        if let Some(v) = &i.notes {
+            s.push_str(&format!("  說明：{v}\n"));
+        }
+    }
+    s.push_str(&format!("\n原始需求：\n{}\n", module.body));
+    s
+}
+
 pub async fn after_card_finished(
     pool: &SqlitePool,
     project_path: &Path,
@@ -1797,6 +1940,48 @@ mod tests {
         assert!(spec.contains("規格文件") && spec.contains("驗收條件是否具體") && spec.contains("git diff a..b"));
         assert!(spec.contains("請審查模組「M」"), "保留同一個開頭，代理（含驗收用的假 claude）才認得出是審查");
         assert_eq!(review_title(&m, true), "審查規格：M（修正後）");
+    }
+
+    #[test]
+    fn verify_json_items_decide_the_verdict() {
+        let ok = parse_verify_json(r#"{"verdict":"pass","items":[{"criterion":"a","status":"pass"},{"criterion":"b","status":"manual","notes":"要付款"}]}"#).unwrap();
+        assert_eq!(ok.verdict, "pass");
+        assert_eq!(ok.items.len(), 2);
+        let lied = parse_verify_json(r#"{"verdict":"pass","items":[{"criterion":"a","status":"fail","module_id":"m"}]}"#).unwrap();
+        assert_eq!(lied.verdict, "fail", "有 fail 項就以 items 為準");
+        assert!(parse_verify_json(r#"{"verdict":"maybe","items":[]}"#).is_err());
+        assert!(parse_verify_json(r#"{"verdict":"pass","items":[{"criterion":"a","status":"skipped"}]}"#).is_err());
+        assert!(parse_verify_json("\u{feff}{\"verdict\":\"pass\",\"items\":[]}").is_ok(), "BOM");
+    }
+
+    #[test]
+    fn the_verify_prompt_lists_modules_evidence_dir_and_project_types() {
+        let m = TaskRow { title: "計時器".into(), body: "按開始倒數".into(), ..test_row("m1") };
+        let body = verify_body(&[&m], "規格：倒數 25 分鐘", Path::new("/p/tasks/v/verify.json"), Path::new("/p/tasks/v/evidence"));
+        for needle in ["[m1] 計時器", "按開始倒數", "規格：倒數 25 分鐘", "/p/tasks/v/verify.json", "/p/tasks/v/evidence", "網頁前端", "manual", "module_id", "mcp__playwright"] {
+            assert!(body.contains(needle), "缺少 {needle}：{body}");
+        }
+        let no_spec = verify_body(&[&m], "", Path::new("/j"), Path::new("/e"));
+        assert!(!no_spec.contains("規格全文"), "沒有規格就不放規格段落");
+    }
+
+    #[test]
+    fn a_verification_fix_carries_the_failed_items() {
+        let m = TaskRow { title: "計時器".into(), body: "原始需求內容".into(), ..test_row("m1") };
+        let item = VerifyItem {
+            criterion: "按開始會倒數".into(),
+            status: "fail".into(),
+            module_id: Some("m1".into()),
+            evidence: vec!["evidence/start.png".into()],
+            steps: Some("1. 按開始".into()),
+            expected: Some("25:00 開始倒數".into()),
+            actual: Some("沒反應".into()),
+            notes: None,
+        };
+        let body = verify_fix_body(&m, &[&item], "v1", 1);
+        for needle in ["計時器", "按開始會倒數", "1. 按開始", "25:00 開始倒數", "沒反應", "tasks/v1/evidence/start.png", "第 1 輪", "原始需求內容"] {
+            assert!(body.contains(needle), "缺少 {needle}：{body}");
+        }
     }
 
     /// 模組鏈上的一張卡：種類、狀態、結果、判定、所屬模組、接在哪張後面。
