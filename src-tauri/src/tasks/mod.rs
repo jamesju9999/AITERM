@@ -21,6 +21,7 @@ pub mod ask;
 pub mod usage;
 pub mod verify_ports;
 pub mod budget;
+pub mod codex;
 
 use std::path::{Path, PathBuf};
 
