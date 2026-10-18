@@ -278,6 +278,15 @@ export const codexEnvStatus = (): Promise<boolean> => invoke("codex_env_status")
 /** 存「Codex 環境變數」（多行 KEY=VALUE）；空字串 = 清除。 */
 export const setCodexEnv = (text: string): Promise<void> => invoke("codex_env_set", { text });
 
+export interface CodexInfo {
+  models: { slug: string; name: string }[];
+  /** `codex login status` 的第一行；null = 跑不起來。 */
+  login: string | null;
+  error: string | null;
+}
+/** Agent 設定對話框選 Codex 時：OpenAI 的模型清單與登入狀態。 */
+export const codexInfo = (): Promise<CodexInfo> => invoke("codex_info");
+
 export const setTaskBoardConfig = (value: TaskBoardConfig): Promise<void> =>
   invoke("task_board_set_config", { value });
 

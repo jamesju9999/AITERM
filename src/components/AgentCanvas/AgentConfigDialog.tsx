@@ -3,6 +3,7 @@ import { confirm, open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { checkRepo, initRepo, type AgentCli, type AgentKind, type AgentRow, type RepoCheck } from "../../ipc/agents";
+import { codexInfo, type CodexInfo } from "../../ipc/tasks";
 import { usedDirs } from "../../ipc/projects";
 import { deleteCustomRole, loadCustomRoles, saveCustomRole, type CustomRole } from "./customRoles";
 import { builtinRoles, type RolePreset } from "./roles";
@@ -59,8 +60,24 @@ export function AgentConfigDialog({
   // 新的審核者、驗收者預設用 Sonnet：判定與照條件驗收不需要最貴的模型，可以改。
   const [model, setModel] = useState(agent?.model ?? (isNew && (kind === "reviewer" || kind === "verifier") ? "sonnet" : ""));
   const [cli, setCli] = useState<AgentCli>(agent?.cli ?? "claude");
-  // Codex 沿用使用者 ~/.codex/config.toml 的供應商，預設模型不一定存在於供應商上，所以必填。
+  // Codex 一律走 OpenAI；使用者 config.toml 的預設模型不一定是 ChatGPT 帳號能用的，所以必填。
   const modelMissing = cli === "codex" && !model.trim();
+  const [codex, setCodex] = useState<CodexInfo | null>(null);
+  useEffect(() => {
+    if (cli !== "codex" || codex) return;
+    let alive = true;
+    codexInfo()
+      .then((info) => {
+        if (!alive) return;
+        setCodex(info);
+        // 還沒填模型就先選清單第一個（Codex 自己的預設）。
+        if (info.models.length > 0) setModel((m) => (m.trim() ? m : info.models[0].slug));
+      })
+      .catch((e) => alive && setCodex({ models: [], login: null, error: String(e) }));
+    return () => {
+      alive = false;
+    };
+  }, [cli, codex]);
   const pickCli = (next: AgentCli) => {
     setCli(next);
     // Claude 的別名（sonnet…）對 Codex 沒有意義，切過去時清掉。
@@ -290,7 +307,7 @@ export function AgentConfigDialog({
             value={model}
             onChange={(e) => setModel(e.target.value)}
             placeholder={cli === "codex" ? t.ac_model_placeholder_codex : t.ac_model_placeholder}
-            list={cli === "codex" ? undefined : "ac-model-suggestions"}
+            list={cli === "codex" ? "ac-codex-models" : "ac-model-suggestions"}
             aria-label={t.ac_model}
             spellCheck={false}
           />
@@ -299,9 +316,28 @@ export function AgentConfigDialog({
               <option key={m} value={m} />
             ))}
           </datalist>
+          <datalist id="ac-codex-models">
+            {(codex?.models ?? []).map((m) => (
+              <option key={m.slug} value={m.slug}>
+                {m.name}
+              </option>
+            ))}
+          </datalist>
           <span className={`task-field-hint${modelMissing ? " ac-bad-text" : ""}`}>
             {cli === "codex" ? t.ac_model_hint_codex : t.ac_model_hint}
           </span>
+          {cli === "codex" && codex?.login && (
+            <span className="task-field-hint">
+              {t.ac_codex_login}
+              {codex.login}
+            </span>
+          )}
+          {cli === "codex" && codex?.error && (
+            <span className="task-field-hint ac-bad-text">
+              {t.ac_codex_info_error}
+              {codex.error}
+            </span>
+          )}
         </label>
         <div className="ac-role-save">
           <button

@@ -28,6 +28,57 @@ pub fn codex_env_set(text: String, secrets: State<Arc<crate::secret::SecretStore
     secrets.set(crate::tasks::codex::CODEX_ENV_KEY, text.trim()).map_err(|e| e.to_string())
 }
 
+/// Agent 設定對話框選 Codex 時要顯示的資訊：OpenAI 的模型清單與 `codex login status`。
+#[derive(serde::Serialize)]
+pub struct CodexInfo {
+    pub models: Vec<crate::tasks::codex::CodexModel>,
+    /// `codex login status` 的第一行（例如「Logged in using ChatGPT」）；跑不起來是 `None`。
+    pub login: Option<String>,
+    /// 讀不到模型清單的原因（沒裝 Codex 等）。
+    pub error: Option<String>,
+}
+
+/// 跑一個 codex 子指令。GUI App 的 PATH 不含 Homebrew／npm 的位置，所以 macOS／Linux 經登入 shell 找
+/// （派工分頁也是在使用者的 shell 裡跑 codex）；Windows 的 codex 是 npm 的 .cmd，經 cmd 跑。
+fn run_codex(args: &str) -> Result<String, String> {
+    #[cfg(windows)]
+    let out = {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("cmd").raw_arg(format!("/C codex {args}")).creation_flags(0x0800_0000).output()
+    };
+    #[cfg(not(windows))]
+    let out = {
+        let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+        std::process::Command::new(shell).arg("-lc").arg(format!("codex {args}")).stdin(std::process::Stdio::null()).output()
+    };
+    let out = out.map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    if out.status.success() {
+        Ok(text)
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(if err.is_empty() { format!("codex 結束碼 {}", out.status) } else { err })
+    }
+}
+
+#[tauri::command]
+pub async fn codex_info() -> CodexInfo {
+    tokio::task::spawn_blocking(|| {
+        // 值不是合法 TOML 時 codex 照字面用（`openai`），省得處理各 shell 的引號。
+        let models = run_codex("debug models -c model_provider=openai");
+        // `login status` 印在 stderr 或 stdout 都有可能，失敗時錯誤訊息就是狀態（例如 Not logged in）。
+        let login = match run_codex("login status 2>&1") {
+            Ok(t) | Err(t) => t.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string),
+        };
+        match models {
+            Ok(json) => CodexInfo { models: crate::tasks::codex::parse_models(&json), login, error: None },
+            Err(e) => CodexInfo { models: Vec::new(), login, error: Some(e) },
+        }
+    })
+    .await
+    .unwrap_or(CodexInfo { models: Vec::new(), login: None, error: Some("讀取 Codex 資訊失敗".into()) })
+}
+
 #[tauri::command]
 pub fn task_board_get_config(config: State<Arc<ConfigStore>>) -> TaskBoardConfig {
     config.get().task_board

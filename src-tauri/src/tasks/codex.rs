@@ -77,6 +77,9 @@ pub fn launch_command(o: &CodexLaunch) -> Option<String> {
     // 互動版的 `codex` 與 `codex resume` 都收 -s／-a（0.163.0 實測）。
     // `-a never`：沒有人在旁邊按核准；做不到的事模型自己會回報。
     parts.push("-s workspace-write -a never".into());
+    // 一律走 OpenAI 官方（用使用者 `codex login` 的帳號：ChatGPT 或 API key），
+    // 不吃 config.toml 的預設供應商——那可能是本機模型伺服器。
+    parts.push(config_arg("model_provider", &toml_str("openai"))?);
     parts.push(config_arg("sandbox_workspace_write.network_access", "true")?);
     if let Some(m) = o.model.map(str::trim).filter(|m| safe_model(m)) {
         parts.push(format!("-m {m}"));
@@ -200,6 +203,29 @@ pub fn user_mcp_servers(config_toml: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Codex 模型清單裡的一個模型（設定對話框的下拉選單用）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CodexModel {
+    pub slug: String,
+    pub name: String,
+}
+
+/// `codex debug models` 的 JSON：只留 `visibility == "list"` 的（Codex 自己的 /model 選單也只列這些）。
+pub fn parse_models(json: &str) -> Vec<CodexModel> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return Vec::new() };
+    let list = v.get("models").unwrap_or(&v);
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|m| m.get("visibility").and_then(|x| x.as_str()) == Some("list"))
+        .filter_map(|m| {
+            let slug = m.get("slug").and_then(|x| x.as_str())?.to_string();
+            let name = m.get("display_name").and_then(|x| x.as_str()).unwrap_or(&slug).to_string();
+            Some(CodexModel { slug, name })
+        })
+        .collect()
+}
+
 /// 卡片記的對話記錄路徑是不是 Codex 的 rollout（不是 Claude 的 JSONL）。
 pub fn is_rollout_path(p: &str) -> bool {
     Path::new(p)
@@ -225,13 +251,13 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_card_opens_the_tui_with_write_access_and_network() {
+    fn a_plain_card_opens_the_tui_on_openai_with_write_access_and_network() {
         let f = Path::new("/p/tasks/t1/prompt.md");
-        let line = launch_command(&CodexLaunch { model: Some("Qwen3.6-35B-A3B-4bit"), ..base(f) }).unwrap();
+        let line = launch_command(&CodexLaunch { model: Some("gpt-6-luna"), ..base(f) }).unwrap();
         assert_eq!(
             line,
-            "codex -s workspace-write -a never -c 'sandbox_workspace_write.network_access=true' \
-             -m Qwen3.6-35B-A3B-4bit '請讀 /p/tasks/t1/prompt.md 並照裡面的指示完成工作。'"
+            "codex -s workspace-write -a never -c 'model_provider=\"openai\"' -c 'sandbox_workspace_write.network_access=true' \
+             -m gpt-6-luna '請讀 /p/tasks/t1/prompt.md 並照裡面的指示完成工作。'"
         );
     }
 
@@ -343,6 +369,23 @@ mod tests {
         names.sort();
         assert_eq!(names, vec!["node_repl", "pencil"]);
         assert!(user_mcp_servers("not = [toml").is_empty());
+    }
+
+    #[test]
+    fn the_model_list_keeps_only_listed_models() {
+        // 0.163.0 `codex debug models -c model_provider="openai"` 的形狀（截掉無關欄位）。
+        let json = r#"{"models":[
+            {"slug":"gpt-6-luna","display_name":"GPT-6-Luna","visibility":"list"},
+            {"slug":"gpt-reserve","display_name":"GPT-Reserve","visibility":"hide"},
+            {"slug":"gpt-5.6-terra","visibility":"list"}]}"#;
+        assert_eq!(
+            parse_models(json),
+            vec![
+                CodexModel { slug: "gpt-6-luna".into(), name: "GPT-6-Luna".into() },
+                CodexModel { slug: "gpt-5.6-terra".into(), name: "gpt-5.6-terra".into() },
+            ]
+        );
+        assert!(parse_models("not json").is_empty());
     }
 
     #[test]

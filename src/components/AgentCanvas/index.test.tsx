@@ -24,6 +24,7 @@ vi.mock("../../ipc/tasks", () => ({
   }),
   readTranscript: vi.fn().mockResolvedValue(""),
   markTaskDone: vi.fn().mockResolvedValue(undefined),
+  codexInfo: vi.fn().mockResolvedValue({ models: [], login: null, error: null }),
 }));
 vi.mock("../../ipc/agents", () => ({
   listAgents: vi.fn(),
@@ -78,7 +79,7 @@ import {
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
-import { listTasks, listTokenUsage, markTaskDone, type TaskWithAttachments } from "../../ipc/tasks";
+import { codexInfo, listTasks, listTokenUsage, markTaskDone, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { listProjects } from "../../ipc/projects";
@@ -892,12 +893,49 @@ describe("AgentCanvasView", () => {
       fireEvent.click(within(dlg).getByRole("radio", { name: "Codex" }));
       const submit = within(dlg).getByRole("button", { name: /放上桌布|Place on canvas/ });
       await waitFor(() => expect(submit).toBeDisabled());
-      fireEvent.change(within(dlg).getByLabelText(/^模型$|^Model$/), { target: { value: "Qwen3.6-35B-A3B-4bit" } });
+      fireEvent.change(within(dlg).getByLabelText(/^模型$|^Model$/), { target: { value: "gpt-5.6-terra" } });
       await waitFor(() => expect(submit).not.toBeDisabled());
       fireEvent.click(submit);
       await waitFor(() =>
-        expect(createAgent).toHaveBeenCalledWith("p1", expect.objectContaining({ cli: "codex", model: "Qwen3.6-35B-A3B-4bit" })),
+        expect(createAgent).toHaveBeenCalledWith("p1", expect.objectContaining({ cli: "codex", model: "gpt-5.6-terra" })),
       );
+    });
+
+    it("選 Codex 時列出 OpenAI 的模型、預選第一個並顯示登入狀態", async () => {
+      vi.mocked(codexInfo).mockResolvedValueOnce({
+        models: [
+          { slug: "gpt-6-luna", name: "GPT-6-Luna" },
+          { slug: "gpt-5.6-terra", name: "GPT-5.6-Terra" },
+        ],
+        login: "Logged in using ChatGPT",
+        error: null,
+      });
+      vi.mocked(listAgents).mockResolvedValue([]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
+      const dlg = await screen.findByRole("dialog");
+      await within(dlg).findByText(/^✓/);
+      expect(codexInfo).not.toHaveBeenCalled();
+      fireEvent.click(within(dlg).getByRole("radio", { name: "Codex" }));
+      const model = within(dlg).getByLabelText(/^模型$|^Model$/) as HTMLInputElement;
+      await waitFor(() => expect(model.value).toBe("gpt-6-luna"));
+      expect(within(dlg).getByText(/Logged in using ChatGPT/)).toBeTruthy();
+      const opts = Array.from(document.querySelectorAll("#ac-codex-models option")).map((o) => (o as HTMLOptionElement).value);
+      expect(opts).toEqual(["gpt-6-luna", "gpt-5.6-terra"]);
+      expect(model.getAttribute("list")).toBe("ac-codex-models");
+    });
+
+    it("讀不到 Codex 模型清單時顯示原因", async () => {
+      vi.mocked(codexInfo).mockResolvedValueOnce({ models: [], login: null, error: "command not found: codex" });
+      vi.mocked(listAgents).mockResolvedValue([]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
+      const dlg = await screen.findByRole("dialog");
+      await within(dlg).findByText(/^✓/);
+      fireEvent.click(within(dlg).getByRole("radio", { name: "Codex" }));
+      expect(await within(dlg).findByText(/command not found: codex/)).toBeTruthy();
     });
 
     it("Codex 的卡片標出 Codex", async () => {

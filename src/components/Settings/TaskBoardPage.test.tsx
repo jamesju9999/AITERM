@@ -178,7 +178,8 @@ describe("TaskBoardPage", () => {
     view();
     const box = await screen.findByLabelText(/Codex 環境變數|Codex environment variables/);
     expect((box as HTMLTextAreaElement).value).toBe("");
-    expect(box.getAttribute("placeholder")).toMatch(/已設定|Set \(contents hidden\)/);
+    // 「已設定」要等狀態查回來才會出現；先找到欄位不代表狀態已經到了。
+    await waitFor(() => expect(box.getAttribute("placeholder")).toMatch(/已設定|Set \(contents hidden\)/));
     await user.type(box, "OMLX_API_KEY=k");
     await user.click(screen.getByRole("button", { name: /儲存環境變數|Save variables/ }));
     await waitFor(() => expect(setCodexEnv).toHaveBeenCalledWith("OMLX_API_KEY=k"));

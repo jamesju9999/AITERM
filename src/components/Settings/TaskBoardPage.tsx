@@ -186,7 +186,7 @@ function CodexEnvField() {
         rows={3}
         spellCheck={false}
         value={text}
-        placeholder={isSet ? t.board_settings_codex_env_set_placeholder : "OMLX_API_KEY=..."}
+        placeholder={isSet ? t.board_settings_codex_env_set_placeholder : "KEY=VALUE"}
         onChange={(e) => setText(e.target.value)}
       />
       <span className="task-board-codex-env-row">
