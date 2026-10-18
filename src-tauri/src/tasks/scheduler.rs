@@ -199,9 +199,11 @@ pub fn join_args<const N: usize>(parts: [Option<String>; N]) -> Option<String> {
 pub const AUTONOMY_NOTE_ASK: &str = "（這是自動派工，旁邊沒有人會即時回答。需要人做決定時（需求不清、取捨會影響成果），\
 用 ask_human 工具提問，送出後結束這一輪回覆等答案，不要自己先決定；小細節自己採合理做法，記在文件或交件說明的「待確認事項」。）";
 
-/// Codex 卡片的提問版自主說明：ask_human 會等到有人回答才回傳（`codex exec` 結束這一輪就退出了）。
+/// Codex 卡片的提問版自主說明：ask_human 會等到有人回答才回傳。
+/// 本機小模型拿到「已送出、請結束這一輪」常會自己猜答案繼續做（實測 Qwen3.6），所以不走 Claude 那套
+/// 「結束這一輪、答案之後打字進去」。也要點名工具：Codex 內建的 request_user_input 在自動派工下不能用。
 pub const AUTONOMY_NOTE_ASK_WAIT: &str = "（這是自動派工，旁邊沒有人會即時回答。需要人做決定時（需求不清、取捨會影響成果），\
-用 ask_human 工具提問；工具會等到有人回答才回傳答案，照答案繼續做完。不要自己先決定；小細節自己採合理做法，記在文件或交件說明的「待確認事項」。）";
+用 aiterm 的 ask_human 工具提問（不是 request_user_input）；工具會等到有人回答才回傳答案，照答案繼續做完。不要自己先決定；小細節自己採合理做法，記在文件或交件說明的「待確認事項」。）";
 
 /// Codex 卡片：把提問版說明換成「工具會等答案」的版本。
 pub fn codex_autonomy(prompt: &str) -> String {
@@ -214,8 +216,11 @@ pub(crate) enum CodexVerdict {
     Outcome(monitor::TaskOutcome),
 }
 
+///
+/// TUI 下結束碼一律是 0（`/exit` 是看守送的），所以成功也要看 rollout 最後一輪有沒有錯誤；
+/// 取消就照走。
 pub(crate) async fn codex_verdict(pool: &sqlx::SqlitePool, task_id: &str, outcome: monitor::TaskOutcome) -> CodexVerdict {
-    if !matches!(outcome, monitor::TaskOutcome::Failed(_)) {
+    if matches!(outcome, monitor::TaskOutcome::Cancelled) {
         return CodexVerdict::Outcome(outcome);
     }
     let path = store::get_task(pool, task_id).await.ok().flatten().and_then(|t| t.session_path);
@@ -730,7 +735,7 @@ impl Dispatcher for RealDispatcher {
             ),
             None => None,
         };
-        // 選了 Codex 的 Agent 的非互動卡片：用 `codex exec` 做（見 tasks::codex）。
+        // 選了 Codex 的 Agent 的非互動卡片：開 Codex 的 TUI 做（見 tasks::codex）。
         let codex = !task.interactive && agent.as_ref().is_some_and(|a| a.cli == crate::tasks::agents::CLI_CODEX);
         // 只有指令確實是 claude 時才給 session id——別的指令接上這個旗標
         // 會直接啟動失敗（見 dispatch::looks_like_claude）。
@@ -897,6 +902,16 @@ impl Dispatcher for RealDispatcher {
         } else {
             None
         };
+        // 看守用：派工當下卡片記的 rollout 與裡面已有的輪數（見 dispatch::watch_codex_tui）。
+        let codex_initial = codex.then(|| {
+            let path = task.session_path.clone().filter(|p| crate::tasks::codex::is_rollout_path(p));
+            let turns = path
+                .as_deref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .map(|t| crate::tasks::codex::completed_turns(&t))
+                .unwrap_or(0);
+            (path, turns)
+        });
         let agent_ctx = agent.map(|a| (a.id, a.kind, effective_dir.clone()));
         let card_kind = task.card_kind.clone();
         let repo_dir = task.project_dir.clone();
@@ -1033,11 +1048,25 @@ impl Dispatcher for RealDispatcher {
                 let task_id = task_id.clone();
                 move || quota.is_holding_marker(&task_id)
             };
+            // Codex（TUI）：做完不會自己退出，由看守在這一輪結束時送 `/exit`；行程退出後 watch 照常收。
+            let codex_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            if let Some(initial) = codex_initial {
+                let (pty, pool, task_id, tab_id, stop) =
+                    (pty.clone(), pool.clone(), task_id.clone(), tab_id.clone(), codex_stop.clone());
+                tauri::async_runtime::spawn(async move {
+                    let rollout = || {
+                        let (pool, task_id) = (pool.clone(), task_id.clone());
+                        async move { store::get_task(&pool, &task_id).await.ok().flatten().and_then(|t| t.session_path) }
+                    };
+                    dispatch::watch_codex_tui(&pty, &tab_id, initial, rollout, &stop).await;
+                });
+            }
             let outcome = monitor::watch_with_quota(
                 &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode, &waiting, &holding,
             ).await;
+            codex_stop.store(true, std::sync::atomic::Ordering::Relaxed);
             quota.unregister(&task_id);
-            // Codex：結束碼非 0 時從對話記錄判斷是不是額度用完（不會觸發任何 hook）。
+            // Codex：從對話記錄判斷最後一輪有沒有出錯、是不是額度用完（不會觸發任何 hook）。
             let outcome = if codex {
                 match codex_verdict(&pool, &task_id, outcome).await {
                     CodexVerdict::Requeue => {
@@ -2726,8 +2755,9 @@ mod persist_tests {
         }).await.unwrap()
     }
 
-    /// Codex 卡片結束碼非 0：從 rollout 判斷。額度用完 → 回佇列（接著做、記等待時間、排在這位 Agent 最前面）；
-    /// 其他錯誤 → 失敗並換成 Codex 的訊息；讀不到記錄 → 照原結果。
+    /// Codex 卡片結束時從 rollout 判斷（TUI 由看守送 `/exit`，結束碼一律 0，所以成功也要看）。
+    /// 額度用完 → 回佇列（接著做、記等待時間、排在這位 Agent 最前面）；其他錯誤 → 失敗並換成 Codex 的訊息；
+    /// 最後一輪沒錯誤或讀不到記錄 → 照原結果；取消 → 照走。
     #[tokio::test]
     async fn a_codex_card_that_hit_its_usage_limit_goes_back_to_the_queue() {
         let pool = mem_pool().await;
@@ -2741,20 +2771,26 @@ mod persist_tests {
         std::fs::write(&rollout, r#"{"type":"event_msg","payload":{"type":"task_complete","error":{"message":"You've hit your usage limit.","codex_error_info":"usage_limit_exceeded"}}}"#).unwrap();
         store::set_session_path(&pool, &id, rollout.to_str().unwrap()).await.unwrap();
 
-        let ok = codex_verdict(&pool, &id, monitor::TaskOutcome::Success).await;
-        assert!(matches!(ok, CodexVerdict::Outcome(monitor::TaskOutcome::Success)), "成功就照走");
-        let v = codex_verdict(&pool, &id, monitor::TaskOutcome::Failed("exit 1".into())).await;
-        assert!(matches!(v, CodexVerdict::Requeue));
+        let c = codex_verdict(&pool, &id, monitor::TaskOutcome::Cancelled).await;
+        assert!(matches!(c, CodexVerdict::Outcome(monitor::TaskOutcome::Cancelled)), "取消就照走");
+        assert_eq!(store::get_task(&pool, &id).await.unwrap().unwrap().status, "running");
+        let v = codex_verdict(&pool, &id, monitor::TaskOutcome::Success).await;
+        assert!(matches!(v, CodexVerdict::Requeue), "結束碼 0 也要認得額度用完");
         let row = store::get_task(&pool, &id).await.unwrap().unwrap();
         assert_eq!((row.status.as_str(), row.resume_session, row.tab_id.as_deref()), ("queued", true, None));
         assert!(row.quota_wait_at.is_some(), "畫面要看得到在等額度");
         assert!(row.sort_order < 5.0, "排在這位 Agent 原本的下一張前面");
 
         std::fs::write(&rollout, r#"{"type":"event_msg","payload":{"type":"task_complete","error":{"message":"Model 'x' not found"}}}"#).unwrap();
-        match codex_verdict(&pool, &id, monitor::TaskOutcome::Failed("exit 1".into())).await {
+        match codex_verdict(&pool, &id, monitor::TaskOutcome::Success).await {
             CodexVerdict::Outcome(monitor::TaskOutcome::Failed(m)) => assert_eq!(m, "Model 'x' not found"),
             _ => panic!("其他錯誤要失敗並帶 Codex 的訊息"),
         }
+        std::fs::write(&rollout, r#"{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"done"}}"#).unwrap();
+        assert!(matches!(
+            codex_verdict(&pool, &id, monitor::TaskOutcome::Success).await,
+            CodexVerdict::Outcome(monitor::TaskOutcome::Success)
+        ), "最後一輪沒錯誤就是成功");
         std::fs::remove_file(&rollout).unwrap();
         match codex_verdict(&pool, &id, monitor::TaskOutcome::Failed("exit 1".into())).await {
             CodexVerdict::Outcome(monitor::TaskOutcome::Failed(m)) => assert_eq!(m, "exit 1"),
@@ -3015,7 +3051,7 @@ mod agent_dispatch_tests {
         // 掛上 ask_human 時：要決策的事用工具問，問完結束這一輪。
         let ask = agent_prompt("你是工程師", "做 A", false, true);
         assert!(ask.ends_with(AUTONOMY_NOTE_ASK) && AUTONOMY_NOTE_ASK.contains("ask_human"));
-        // Codex 卡片：工具會等答案，不能叫它「結束這一輪」（那樣 codex exec 就退出了）。
+        // Codex 卡片：工具會等答案，不叫它「結束這一輪」（小模型會自己猜答案；這一輪結束看守就送 /exit）。
         let codex = codex_autonomy(&ask);
         assert!(codex.ends_with(AUTONOMY_NOTE_ASK_WAIT) && !codex.contains("結束這一輪"), "{codex}");
     }

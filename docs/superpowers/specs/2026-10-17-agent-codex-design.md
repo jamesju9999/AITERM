@@ -1,7 +1,7 @@
 # Agent 協作支援 Codex — 設計
 
 日期：2026-10-17
-狀態：已與使用者確認方向，待實作
+狀態：已實作；2026-10-18 依使用者要求改成 TUI 模式（見文末「修訂」）
 
 ## 目標
 
@@ -123,3 +123,20 @@ token：`usage::task_usage` 在 Claude 的路徑都找不到時，若卡片的 `
 - App 重開後 Codex 卡片接著做。
 
 Windows／Linux 只有單元測試，未實機。
+
+## 修訂（2026-10-18）：改用互動式 TUI
+
+使用者希望 Codex 卡片跟 Claude 卡片一樣開互動 TUI（看得到過程、可以插話）。用 codex-cli 0.163.0 實測後改成：
+
+| 項目 | 做法 | 實測 |
+|---|---|---|
+| 啟動 | `codex [resume <id>] -s workspace-write -a never -c ... "請讀 <prompt.md> …"`：第一句從參數帶入就開工 | 互動版 `codex`／`codex resume` 都收 `-s`／`-a` |
+| 判斷這一輪結束 | 看守（`dispatch::watch_codex_tui`）每秒讀 rollout，`task_complete` 比派工當下多就送 `/exit`（指令與 Enter 分兩次） | TUI 做完不退出；**出錯不觸發 Stop hook**，但成功、出錯都會寫 `task_complete` |
+| 接著做／重新派工 | 派工當下卡片記的 rollout 路徑與輪數當基準：同一個檔案只算多出來的輪數 | resume 寫回同一個 rollout |
+| 結案判斷 | `codex_verdict` 不再只看結束碼非 0：除了取消，一律讀 rollout 最後一輪的錯誤 | `/exit` 的結束碼一律 0 |
+| 信任畫面 | 「Trust this folder? › 1. Trust and continue」：畫面安靜後、游標在 Trust 上才按一次 Enter | `-c projects.<dir>.trust_level` 無效；記在**主程式庫**，同專案只問一次（與 exec 的行為相同） |
+| ask_human | 維持「等到答案才回傳」，不改成 Claude 式打字回答 | Qwen3.6 拿到「請結束這一輪」仍自己猜答案繼續做；提示要點名 aiterm 的 ask_human（內建 request_user_input 在自動派工不能用） |
+
+其他（hook 回報 session、token、額度回佇列、App 重開接著做、環境變數）不變。
+
+TUI 每次啟動會更新使用者 config 的 `[tui.model_availability_nux]` 計數，無害。

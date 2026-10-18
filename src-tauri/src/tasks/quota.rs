@@ -767,7 +767,7 @@ mod tests {
         assert_eq!(crate::tasks::questions::list_open(&pool).await.unwrap().len(), 1);
     }
 
-    /// Codex 卡片（`codex exec`）沒有對話可以打字：ask_human 要掛著等答案，答案直接當工具結果回去。
+    /// Codex 卡片的 ask_human 掛著等答案，答案直接當工具結果回去（不打字進 TUI：小模型會先自己猜答案）。
     #[tokio::test]
     async fn a_codex_card_waits_on_ask_human_until_the_answer_arrives() {
         let pool = mem_pool().await;

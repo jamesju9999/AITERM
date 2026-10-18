@@ -383,8 +383,8 @@ pub fn parse_env_lines(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// 只開分頁、打一行指令就回來（Codex 卡片：`codex exec` 從參數拿提示詞，不必等 TUI、
-/// 不打提示詞、也不要完成標記——行程結束就是做完）。
+/// 只開分頁、打一行指令就回來（Codex 卡片：`codex` 從參數拿第一句提示，不必等 TUI 再打字、
+/// 也不要完成標記——做完由 `watch_codex_tui` 送 `/exit`，行程結束就是做完）。
 pub async fn spawn_command(
     app: &AppHandle,
     pty: &PtyManager,
@@ -420,6 +420,58 @@ pub async fn spawn_command(
         eprintln!("emit mcp-coordination-tab-spawned failed: {e}");
     }
     Ok((tab_id, result))
+}
+
+/// Codex 卡片收尾的輪詢間隔。
+const CODEX_POLL_MS: u64 = 1_000;
+
+/// Codex 卡片（TUI）跑起來之後的看守：
+/// - 停在資料夾信任提示上（游標在「Trust and continue」）就按一次 Enter；
+/// - 對話記錄（rollout）多出新的 `task_complete`（這一輪結束，成功或出錯都算）就送 `/exit`
+///   讓 Codex 退出——之後結束碼由現有的 watch 收（結果再由 `codex_verdict` 看 rollout 判斷）。
+///
+/// TUI 做完不會自己退出，出錯也不觸發 Stop hook，所以只能看 rollout（0.163.0 實測）。
+/// `rollout_path` 每次輪詢重查（SessionStart hook 啟動後才回報路徑）。`initial` 是派工當下
+/// 卡片已記的路徑與那時的 `task_complete` 筆數：接著做時同一個檔案裡本來就有前幾輪的紀錄；
+/// 重新派工時舊路徑還沒被新的蓋掉，也不能把舊紀錄當成這一輪做完。
+/// `stop` 被設起來（watch 已經結束）或分頁不在了就收手。
+pub async fn watch_codex_tui<F, Fut>(
+    pty: &PtyManager,
+    tab_id: &str,
+    initial: (Option<String>, usize),
+    mut rollout_path: F,
+    stop: &std::sync::atomic::AtomicBool,
+) where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
+    use std::sync::atomic::Ordering;
+    // 信任畫面的位元組會留在輸出環裡，只按一次。
+    let mut trust_handled = false;
+    loop {
+        tokio::time::sleep(Duration::from_millis(CODEX_POLL_MS)).await;
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let Some(quiet) = pty.ms_since_output(tab_id) else { return };
+        // 畫面還在重畫時先別按（同 Claude 的信任畫面：太早送會被重畫吃掉）。
+        if !trust_handled
+            && quiet >= SETTLE_QUIET_MS
+            && pty.get_recent_output(tab_id, 16 * 1024).is_some_and(|s| crate::tasks::codex::trust_prompt_pending(&s))
+        {
+            let _ = pty.write(tab_id, b"\r");
+            trust_handled = true;
+            continue;
+        }
+        let Some(path) = rollout_path().await else { continue };
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let before = if initial.0.as_deref() == Some(path.as_str()) { initial.1 } else { 0 };
+        if crate::tasks::codex::completed_turns(&text) > before {
+            // 指令與 Enter 分兩次送：TUI 會把一次到齊的整串當成貼上（見 write_then_submit）。
+            let _ = write_then_submit(pty, tab_id, "/exit").await;
+            return;
+        }
+    }
 }
 
 /// Full dispatch: create a visible tab in `project_dir` running
@@ -1160,5 +1212,101 @@ Enter to confirm · Esc to cancel
             assert!(tokio::time::Instant::now() < deadline, "done-marker instruction was never sent: {output}");
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    async fn wait_for_file(path: &std::path::Path, secs: u64) -> Option<String> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(s) = std::fs::read_to_string(path) {
+                return Some(s);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        None
+    }
+
+    const TURN_DONE: &str = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n";
+
+    /// 假的 Codex：先畫信任畫面、讀一行（Enter），再讀一行（應該是 `/exit`）。
+    /// 看守要按 Enter 確認信任，rollout 多一筆 task_complete 之後送 `/exit`。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn codex_watch_confirms_trust_then_exits_once_a_turn_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().display();
+        let script = dir.path().join("fake-codex.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "printf 'Trust this folder?\\n\\342\\200\\272 1. Trust and continue\\n  2. Quit\\n'\n\
+                 read a; echo ok > {d}/trusted\nread b; printf '%s' \"$b\" > {d}/exited\n"
+            ),
+        )
+        .unwrap();
+        let rollout = dir.path().join("rollout-x.jsonl");
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+        pty.write(&tab, format!("sh {}\r", script.display()).as_bytes()).unwrap();
+
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let path = rollout.to_string_lossy().into_owned();
+        let watcher = watch_codex_tui(&pty, &tab, (None, 0), || {
+            let p = path.clone();
+            async move { Some(p) }
+        }, &stop);
+        let check = async {
+            assert!(wait_for_file(&dir.path().join("trusted"), 10).await.is_some(), "信任畫面沒有被確認");
+            assert!(!dir.path().join("exited").exists(), "還沒做完就送了 /exit");
+            std::fs::write(&rollout, TURN_DONE).unwrap();
+            wait_for_file(&dir.path().join("exited"), 10).await
+        };
+        let (_, exited) = tokio::join!(watcher, check);
+        assert_eq!(exited.as_deref(), Some("/exit"));
+    }
+
+    /// 接著做／重新派工：派工當下卡片上記的 rollout 裡本來就有幾輪紀錄，不能當成這一輪做完。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn codex_watch_ignores_turns_that_were_already_in_the_rollout() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().display();
+        let rollout = dir.path().join("rollout-x.jsonl");
+        std::fs::write(&rollout, TURN_DONE.repeat(2)).unwrap();
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+        pty.write(&tab, format!("read b; printf '%s' \"$b\" > {d}/exited\r").as_bytes()).unwrap();
+
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let path = rollout.to_string_lossy().into_owned();
+        let initial = (Some(path.clone()), 2);
+        let watcher = watch_codex_tui(&pty, &tab, initial, || {
+            let p = path.clone();
+            async move { Some(p) }
+        }, &stop);
+        let check = async {
+            tokio::time::sleep(Duration::from_millis(CODEX_POLL_MS * 3)).await;
+            assert!(!dir.path().join("exited").exists(), "舊的兩輪被當成這一輪做完了");
+            std::fs::OpenOptions::new().append(true).open(&rollout).unwrap()
+                .write_all(TURN_DONE.as_bytes()).unwrap();
+            wait_for_file(&dir.path().join("exited"), 10).await
+        };
+        use std::io::Write;
+        let (_, exited) = tokio::join!(watcher, check);
+        assert_eq!(exited.as_deref(), Some("/exit"));
+    }
+
+    /// watch 先結束了（取消、分頁被關）：看守要收手，不能永遠輪詢。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn codex_watch_stops_when_told_to() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        let done = tokio::time::timeout(
+            Duration::from_millis(CODEX_POLL_MS * 3),
+            watch_codex_tui(&pty, &tab, (None, 0), || async { None::<String> }, &stop),
+        )
+        .await;
+        assert!(done.is_ok());
     }
 }

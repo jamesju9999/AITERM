@@ -61,7 +61,7 @@ pub async fn deliver_answer(app: &AppHandle, project_id: &str, id: i64, answer: 
         (store::STATUS_RUNNING, Some(tab)) => tab.to_string(),
         _ => return Err("提問的卡片已經結束，答案送不回去".into()),
     };
-    // Codex 卡片（`codex exec`）沒有對話可以打字：答案交給掛著等的 ask_human 請求。
+    // Codex 卡片：答案交給掛著等的 ask_human 請求（不打字進 TUI）。
     // 沒人在等（例如 App 重開過）就不能往 shell 打字，回錯誤。
     let quota = app.try_state::<Arc<crate::tasks::quota::QuotaState>>();
     let blocking = quota.as_ref().is_some_and(|qs| qs.is_blocking_ask(&q.task_id));

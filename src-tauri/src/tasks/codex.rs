@@ -1,6 +1,6 @@
-//! Agent 卡改用 Codex 做事時的專屬部分：組 `codex exec` 指令、解析 Codex 的對話記錄
-//! （rollout JSONL）。見 docs/superpowers/specs/2026-10-17-agent-codex-design.md；
-//! 每一條行為都是用 codex-cli 0.148.0 實測過的（記憶 project_codex_dispatch_probe）。
+//! Agent 卡改用 Codex 做事時的專屬部分：組互動式 `codex`（TUI）指令、認信任畫面、解析
+//! Codex 的對話記錄（rollout JSONL）。見 docs/superpowers/specs/2026-10-17-agent-codex-design.md；
+//! 每一條行為都是實測過的（0.148.0 exec、0.163.0 TUI；記憶 project_codex_dispatch_probe）。
 //!
 //! 指令是打進使用者 shell 的一行字。`-c` 的值用單引號包住、裡面的 TOML 字串用雙引號：
 //! zsh／bash／fish／PowerShell 7 都照字面傳。值裡出現單引號就放棄（回 `None`）。
@@ -15,7 +15,7 @@ pub struct CodexLaunch<'a> {
     pub model: Option<&'a str>,
     /// 卡片內容寫在這個檔案裡；指令只叫 Codex 去讀它（避免多行內容在各 shell 的引號問題）。
     pub prompt_file: &'a Path,
-    /// 有值 = `codex exec resume <id>` 接著做。
+    /// 有值 = `codex resume <id>` 接著做。
     pub resume_session: Option<&'a str>,
     /// SessionStart hook 要執行的指令（`hook_command` 的結果）。
     pub hook_command: Option<&'a str>,
@@ -62,9 +62,11 @@ fn config_arg(key: &str, value: &str) -> Option<String> {
     (!kv.contains('\'')).then(|| format!("-c '{kv}'"))
 }
 
-/// 整行 `codex exec ...`。任何一段無法安全放進 shell 就回 `None`（呼叫端把派工標成失敗並說明）。
+/// 整行互動式 `codex ...`（TUI，跟 Claude 卡片一樣看得到過程、可以插話）。
+/// 第一句提示從參數帶入就開工；做完由 `CodexCloser` 送 `/exit` 收掉。
+/// 任何一段無法安全放進 shell 就回 `None`（呼叫端把派工標成失敗並說明）。
 pub fn launch_command(o: &CodexLaunch) -> Option<String> {
-    let mut parts: Vec<String> = vec!["codex".into(), "exec".into()];
+    let mut parts: Vec<String> = vec!["codex".into()];
     if let Some(sid) = o.resume_session {
         if !plain_key(sid) {
             return None;
@@ -72,8 +74,9 @@ pub fn launch_command(o: &CodexLaunch) -> Option<String> {
         parts.push("resume".into());
         parts.push(sid.into());
     }
-    // `codex exec resume` 沒有 --sandbox，兩種都用設定值指定。
-    parts.push(config_arg("sandbox_mode", &toml_str("workspace-write"))?);
+    // 互動版的 `codex` 與 `codex resume` 都收 -s／-a（0.163.0 實測）。
+    // `-a never`：沒有人在旁邊按核准；做不到的事模型自己會回報。
+    parts.push("-s workspace-write -a never".into());
     parts.push(config_arg("sandbox_workspace_write.network_access", "true")?);
     if let Some(m) = o.model.map(str::trim).filter(|m| safe_model(m)) {
         parts.push(format!("-m {m}"));
@@ -139,6 +142,28 @@ pub fn parse_usage(text: &str) -> Option<TokenUsage> {
     })
 }
 
+/// rollout 裡 `task_complete` 的筆數：每一輪結束（成功或出錯）各一筆。
+/// TUI 做完不退出、出錯也不觸發 Stop hook，所以「這一輪結束了」只看這個（0.163.0 實測）。
+pub fn completed_turns(text: &str) -> usize {
+    text.lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok())
+        .filter(|v| v.pointer("/payload/type").and_then(|t| t.as_str()) == Some("task_complete"))
+        .count()
+}
+
+/// 畫面停在 Codex 的資料夾信任提示、而且游標在「Trust and continue」上時回傳 `true`
+/// （呼叫端送一個 Enter）。`screen` 是去掉 ANSI 的輸出；游標定位碼被剝掉後各行會黏在一起，
+/// 所以拿掉所有空白再比對，並且只看最後一次出現提示之後的部分。
+///
+/// 信任紀錄寫在**主程式庫**（不是各個 worktree），所以同一個專案只會問一次（實測）。
+/// 游標不在「Trust」上（例如選項被改過順序）就什麼都不送——寧可卡住，也不要按到 Quit。
+pub fn trust_prompt_pending(screen: &str) -> bool {
+    let flat: String = screen.chars().filter(|c| !c.is_whitespace()).collect();
+    let Some(at) = flat.rfind("Trustthisfolder?") else { return false };
+    let tail = &flat[at..];
+    tail.contains("\u{203a}1.Trustandcontinue")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodexError {
     /// 額度用完（`codex_error_info == "usage_limit_exceeded"`）；字串是 Codex 的訊息（含恢復時間）。
@@ -146,7 +171,8 @@ pub enum CodexError {
     Other(String),
 }
 
-/// rollout 最後一筆 `task_complete` 帶的錯誤。出錯與額度用完都**不會**觸發 Stop hook，只能從這裡判斷。
+/// rollout 最後一筆 `task_complete` 帶的錯誤。出錯與額度用完都**不會**觸發 Stop hook，只能從這裡判斷
+/// （TUI 下結束碼也是 0——`/exit` 是我們送的）。
 pub fn last_error(text: &str) -> Option<CodexError> {
     let mut out = None;
     for line in text.lines() {
@@ -199,12 +225,12 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_card_runs_exec_with_write_access_and_network() {
+    fn a_plain_card_opens_the_tui_with_write_access_and_network() {
         let f = Path::new("/p/tasks/t1/prompt.md");
         let line = launch_command(&CodexLaunch { model: Some("Qwen3.6-35B-A3B-4bit"), ..base(f) }).unwrap();
         assert_eq!(
             line,
-            "codex exec -c 'sandbox_mode=\"workspace-write\"' -c 'sandbox_workspace_write.network_access=true' \
+            "codex -s workspace-write -a never -c 'sandbox_workspace_write.network_access=true' \
              -m Qwen3.6-35B-A3B-4bit '請讀 /p/tasks/t1/prompt.md 並照裡面的指示完成工作。'"
         );
     }
@@ -213,7 +239,7 @@ mod tests {
     fn resuming_puts_the_session_right_after_resume() {
         let f = Path::new("/p/prompt.md");
         let line = launch_command(&CodexLaunch { resume_session: Some("01a14a6c-f298-70c0"), ..base(f) }).unwrap();
-        assert!(line.starts_with("codex exec resume 01a14a6c-f298-70c0 -c "), "{line}");
+        assert!(line.starts_with("codex resume 01a14a6c-f298-70c0 -s workspace-write -a never "), "{line}");
         assert!(launch_command(&CodexLaunch { resume_session: Some("x; rm -rf /"), ..base(f) }).is_none());
     }
 
@@ -286,6 +312,28 @@ mod tests {
         }
         let other = r#"{"type":"event_msg","payload":{"type":"task_complete","error":{"message":"Model 'x' not found"}}}"#;
         assert_eq!(last_error(other), Some(CodexError::Other("Model 'x' not found".into())));
+    }
+
+    #[test]
+    fn every_turn_end_counts_whether_it_succeeded_or_failed() {
+        assert_eq!(completed_turns(OK_ROLLOUT), 1);
+        assert_eq!(completed_turns(&format!("{OK_ROLLOUT}\n{LIMIT_ROLLOUT}")), 2);
+        assert_eq!(completed_turns("{\"type\":\"session_meta\",\"payload\":{}}\nnot json"), 0);
+    }
+
+    // 0.163.0 的信任畫面經 strip_ansi 之後的樣子（游標定位碼剝掉、各行黏在一起）。
+    const TRUST_SCREEN: &str = "\u{203a} Ask Codex to do anything ? for shortcuts /p/r1 Folder access /p/r1 \
+        Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. \
+        Your trust decision will be saved.\u{203a} 1. Trust and continue                    2. Quitenter continue \u{b7} esc quit";
+
+    #[test]
+    fn the_trust_screen_is_confirmed_only_when_the_cursor_is_on_trust() {
+        assert!(trust_prompt_pending(TRUST_SCREEN));
+        let on_quit = TRUST_SCREEN.replace("\u{203a} 1. Trust", "1. Trust").replace("2. Quit", "\u{203a} 2. Quit");
+        assert!(!trust_prompt_pending(&on_quit), "游標在 Quit 上不能按 Enter");
+        assert!(!trust_prompt_pending("\u{203a} Ask Codex to do anything"));
+        // 提到這句話但沒有選項（例如模型的回覆）不算。
+        assert!(!trust_prompt_pending("I saw a \"Trust this folder?\" prompt earlier."));
     }
 
     #[test]
