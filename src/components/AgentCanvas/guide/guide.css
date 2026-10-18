@@ -146,3 +146,11 @@
 @media (max-width: 520px) {
   .ac-help-dl div { grid-template-columns: 1fr; gap: 0; }
 }
+
+/* 流程卡住的提示用警示色（琥珀），跟「下一步」的主題色分開。 */
+.ac-hint--stuck {
+  --accent: #f59e0b;
+  --accent-border: rgba(245, 158, 11, 0.55);
+  --accent-bg: rgba(245, 158, 11, 0.16);
+}
+.ac-hint-ring--stuck { --accent: #f59e0b; }

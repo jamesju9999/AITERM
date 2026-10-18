@@ -18,8 +18,11 @@ export function GuideChecklist({ done, onHide }: { done: readonly StepId[]; onHi
     merged: [t.ac_check_merged, t.ac_check_merged_how],
     verified: [t.ac_check_verified, t.ac_check_verified_how],
   };
-  const count = STEP_IDS.filter((s) => done.includes(s)).length;
-  const current = STEP_IDS.find((s) => !done.includes(s));
+  // 依序打勾：前一步沒完成，後面的步驟就算在別的專案做過也先不勾（進度照樣記著，
+  // 前面補上時會一起亮起來）——否則會出現第 1 步沒勾、第 2 步卻打勾的怪畫面。
+  const firstOpen = STEP_IDS.findIndex((s) => !done.includes(s));
+  const count = firstOpen === -1 ? STEP_IDS.length : firstOpen;
+  const current = firstOpen === -1 ? undefined : STEP_IDS[firstOpen];
 
   if (collapsed) {
     return (
@@ -49,7 +52,8 @@ export function GuideChecklist({ done, onHide }: { done: readonly StepId[]; onHi
       </div>
       <ol className="ac-steps-list">
         {STEP_IDS.map((s) => {
-          const state = done.includes(s) ? "done" : s === current ? "now" : "todo";
+          const i = STEP_IDS.indexOf(s);
+          const state = i < count ? "done" : s === current ? "now" : "todo";
           return (
             <li key={s} className={`ac-steps-item ac-steps-item--${state}`} data-step={s} data-state={state}>
               <span className="ac-steps-mark" aria-hidden>

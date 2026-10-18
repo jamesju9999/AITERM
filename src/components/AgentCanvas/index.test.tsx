@@ -1070,6 +1070,9 @@ describe("AgentCanvasView", () => {
 });
 
 describe("教學輔助", () => {
+  // 前面的測試設了待決策的問題（mockResolvedValue 不會被 clearAllMocks 清掉），
+  // 有問題時「回答問題」的提示會排在最前面。
+  beforeEach(() => vi.mocked(listQuestions).mockResolvedValue([]));
   const GUIDE = "aiterm.agentCanvas.guide";
   const setGuide = (over: Record<string, unknown>) =>
     localStorage.setItem(GUIDE, JSON.stringify({ tourSeen: true, checklistHidden: true, hintsOff: true, done: [], dismissedHints: [], ...over }));
@@ -1126,6 +1129,22 @@ describe("教學輔助", () => {
     expect(await screen.findByTestId("ac-checklist")).toBeTruthy();
   });
 
+  it("上手清單依序打勾：前面沒完成，後面在別的專案做過也先不勾", async () => {
+    // 別的專案已經新增過模組、放過審核者，但這台電腦還沒放過工程師。
+    setGuide({ checklistHidden: false, done: ["module", "reviewer"] });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const list = await screen.findByTestId("ac-checklist");
+    const state = (s: string) => list.querySelector(`[data-step="${s}"]`)?.getAttribute("data-state");
+    expect(state("coder")).toBe("now");
+    expect(state("module")).toBe("todo");
+    expect(state("reviewer")).toBe("todo");
+    expect(within(list).getByText("0/8")).toBeTruthy();
+    // 進度照樣記著沒被清掉，前面補上時會一起亮起來。
+    expect(stored().done).toEqual(["module", "reviewer"]);
+  });
+
   it("情境提示指向下一步；關掉的那一項不再出現", async () => {
     setGuide({ hintsOff: false });
     // jsdom 沒有版面，給目標一個在畫面裡的位置。
@@ -1141,6 +1160,30 @@ describe("教學輔助", () => {
       fireEvent.click(within(hint).getByRole("button", { name: "不再提示這一項" }));
       expect(screen.queryByTestId("ac-hint-add_module")).toBeNull();
       expect(stored().dismissedHints).toEqual(["add_module"]);
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("Agent 暫停時優先提示「需要你處理」；「×」只關這一次，不記進進度", async () => {
+    setGuide({ hintsOff: false });
+    const rect = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockReturnValue({ left: 10, top: 10, right: 110, bottom: 60, width: 100, height: 50, x: 10, y: 10, toJSON: () => ({}) });
+    try {
+      vi.mocked(listAgents).mockResolvedValue([agent({ paused_task_id: "t1" })]);
+      vi.mocked(listTasks).mockResolvedValue([card({ id: "t1", card_kind: "work", agent_id: "a1", status: "done", outcome: "failed" })]);
+      const first = view();
+      const hint = await screen.findByTestId("ac-hint-agent_paused");
+      expect(hint.className).toContain("ac-hint--stuck");
+      expect(hint.textContent).toMatch(/需要你處理/);
+      expect(hint.textContent).toMatch(/按「重試」或「跳過」/);
+      fireEvent.click(within(hint).getByRole("button", { name: "先不提示" }));
+      expect(screen.queryByTestId("ac-hint-agent_paused")).toBeNull();
+      expect(stored().dismissedHints).toEqual([]);
+      first.unmount();
+      view();
+      expect(await screen.findByTestId("ac-hint-agent_paused")).toBeTruthy();
     } finally {
       rect.mockRestore();
     }

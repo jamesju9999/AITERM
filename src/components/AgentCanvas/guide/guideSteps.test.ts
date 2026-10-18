@@ -12,7 +12,7 @@ import {
   type GuideCard,
 } from "./guideSteps";
 
-const ag = (id: string, kind: GuideAgent["kind"]): GuideAgent => ({ id, kind });
+const ag = (id: string, kind: GuideAgent["kind"], paused_task_id: string | null = null): GuideAgent => ({ id, kind, paused_task_id });
 const cd = (over: Partial<GuideCard>): GuideCard => ({ card_kind: "work", agent_id: null, status: "planning", outcome: null, ...over });
 
 beforeEach(() => localStorage.clear());
@@ -109,5 +109,18 @@ describe("contextHint", () => {
     const agents = [ag("c1", "coder"), ag("c2", "coder")];
     const tasks = [cd({ agent_id: "c1" }), cd({ card_kind: "review" }), cd({ status: "done" })];
     expect(contextHint(agents, tasks)?.id).toBe("add_reviewer");
+  });
+
+  it("流程卡住的提示最優先：先回答問題，再處理暫停的 Agent，再處理審核一直不過的模組", () => {
+    const agents = [ag("c1", "coder"), ag("c2", "coder", "t9"), ag("r", "reviewer")];
+    const tasks = [cd({ agent_id: "c1" }), cd({ agent_id: "c2" })];
+    expect(contextHint(agents, tasks, { openQuestions: 2, attentionOwners: ["c1"] })).toEqual({ id: "answer_question", anchor: { guide: "inbox" }, occurrence: "q2" });
+    expect(contextHint(agents, tasks, { openQuestions: 0, attentionOwners: ["c1"] })).toEqual({ id: "agent_paused", anchor: { agent: "c2" }, occurrence: "c2:t9" });
+    const running = [ag("c1", "coder"), ag("c2", "coder"), ag("r", "reviewer")];
+    expect(contextHint(running, tasks, { openQuestions: 0, attentionOwners: ["c1"] })).toEqual({ id: "module_attention", anchor: { agent: "c1" }, occurrence: "c1" });
+    // 不在桌布上的 Agent（被刪了）不指。
+    expect(contextHint(running, tasks, { openQuestions: 0, attentionOwners: ["gone"] })?.id).toBe("add_orchestrator");
+    // 暫停的不一定是工程師；也不需要有工程師。
+    expect(contextHint([ag("r", "reviewer", "t1")], [])).toEqual({ id: "agent_paused", anchor: { agent: "r" }, occurrence: "r:t1" });
   });
 });

@@ -60,7 +60,7 @@ import { GuideChecklist } from "./guide/GuideChecklist";
 import { GuideHelp } from "./guide/GuideHelp";
 import { GuideHint } from "./guide/GuideHint";
 import { GuideTour } from "./guide/GuideTour";
-import { contextHint, loadGuide, observedSteps, saveGuide, withObserved, type GuideState } from "./guide/guideSteps";
+import { STUCK_HINTS, contextHint, loadGuide, observedSteps, saveGuide, withObserved, type GuideState } from "./guide/guideSteps";
 import "./index.css";
 
 /** 跟看板、TabBar 同一個門檻：小於這個位移是點擊，不是拖曳。 */
@@ -385,7 +385,19 @@ export function AgentCanvasView({
     setTouring(false);
     updateGuide((g) => (g.tourSeen ? g : { ...g, tourSeen: true }));
   };
-  const hint = useMemo(() => contextHint(agents, tasks), [agents, tasks]);
+  const hint = useMemo(() => {
+    const reviewer = agents.some((a) => a.kind === "reviewer");
+    const attentionOwners = tasks
+      .filter((c) => c.card_kind === "work" && c.agent_id && deriveModuleState(c, tasks, reviewer) === "attention")
+      .map((c) => c.agent_id as string);
+    const openQuestions = questions.filter((q) => q.project_id === projectId).length;
+    return contextHint(agents, tasks, { openQuestions, attentionOwners });
+  }, [agents, tasks, questions, projectId]);
+  /** 這次畫面關掉的「卡住」提示（不記進進度：下次狀況再發生要再提醒）。 */
+  const [dismissedStuck, setDismissedStuck] = useState<string[]>([]);
+  const hintKey = hint ? `${hint.id}:${hint.occurrence ?? ""}` : "";
+  const hintDismissed =
+    !!hint && (STUCK_HINTS.includes(hint.id) ? dismissedStuck.includes(hintKey) : guide.dismissedHints.includes(hint.id));
 
   const library = useMemo(
     () =>
@@ -1172,12 +1184,16 @@ export function AgentCanvasView({
         hint &&
         !showTour &&
         !guide.hintsOff &&
-        !guide.dismissedHints.includes(hint.id) &&
+        !hintDismissed &&
         // 有對話框開著時不冒提示，免得浮在對話框上面。
         !(config || newModule || templatesOpen || briefOpen || verifyFor || transcriptCard || helpOpen || inbox.open) && (
           <GuideHint
             hint={hint}
-            onDismiss={() => updateGuide((g) => ({ ...g, dismissedHints: [...g.dismissedHints, hint.id] }))}
+            onDismiss={() =>
+              STUCK_HINTS.includes(hint.id)
+                ? setDismissedStuck((d) => [...d, hintKey])
+                : updateGuide((g) => ({ ...g, dismissedHints: [...g.dismissedHints, hint.id] }))
+            }
           />
         )}
       {briefOpen && projectId && (

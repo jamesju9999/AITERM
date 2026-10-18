@@ -2,7 +2,7 @@ import { useLayoutEffect, useState } from "react";
 
 import { useLocale } from "../../../contexts/LocaleContext";
 import { SparklesIcon } from "../../Icons";
-import type { Hint } from "./guideSteps";
+import { STUCK_HINTS, type Hint } from "./guideSteps";
 import "./guide.css";
 
 /** 卡片最寬多少（實際寬度跟著文字走，放置時用這個值預留空間）。 */
@@ -69,12 +69,16 @@ export function GuideHint({ hint, onDismiss }: { hint: Hint; onDismiss: () => vo
     add_reviewer: t.ac_hint_add_reviewer,
     add_orchestrator: t.ac_hint_add_orchestrator,
     add_verifier: t.ac_hint_add_verifier,
+    answer_question: t.ac_hint_answer_question,
+    agent_paused: t.ac_hint_agent_paused,
+    module_attention: t.ac_hint_module_attention,
   }[hint.id];
+  const stuck = STUCK_HINTS.includes(hint.id);
   return (
     <>
-      <div className="ac-hint-ring" style={pos.ring} aria-hidden />
+      <div className={`ac-hint-ring${stuck ? " ac-hint-ring--stuck" : ""}`} style={pos.ring} aria-hidden />
       <div
-        className={`ac-hint ac-hint--${pos.side}`}
+        className={`ac-hint ac-hint--${pos.side}${stuck ? " ac-hint--stuck" : ""}`}
         data-testid={`ac-hint-${hint.id}`}
         role="note"
         style={{ left: pos.left, top: pos.top, maxWidth: W }}
@@ -84,10 +88,15 @@ export function GuideHint({ hint, onDismiss }: { hint: Hint; onDismiss: () => vo
           <SparklesIcon size={14} />
         </span>
         <span className="ac-hint-body">
-          <span className="ac-hint-label">{t.ac_hint_label}</span>
+          <span className="ac-hint-label">{stuck ? t.ac_hint_label_stuck : t.ac_hint_label}</span>
           <span className="ac-hint-text">{text}</span>
         </span>
-        <button className="ac-hint-close" aria-label={t.ac_hint_close} title={t.ac_hint_close} onClick={onDismiss}>
+        <button
+          className="ac-hint-close"
+          aria-label={stuck ? t.ac_hint_close_once : t.ac_hint_close}
+          title={stuck ? t.ac_hint_close_once : t.ac_hint_close}
+          onClick={onDismiss}
+        >
           ×
         </button>
       </div>

@@ -310,6 +310,13 @@ pub fn agent_prompt(prefix: &str, prompt: &str, interactive: bool, can_ask: bool
     }
 }
 
+/// 派工時 Agent 卡實際送出的提示：角色前綴 → 共同的專案背景（專案簡介＋團隊分工，
+/// 平行的 Agent 才有全貌）→ 卡片內容 → 自主說明。
+pub async fn agent_card_prompt(pool: &sqlx::SqlitePool, task: &TaskRow, prefix: &str, prompt: &str, can_ask: bool) -> String {
+    let context = crate::tasks::context::project_context(pool, task).await;
+    agent_prompt(prefix, &format!("{context}{prompt}"), task.interactive, can_ask)
+}
+
 /// Agent 的 worktree：已經有就沿用，沒有就在 `<專案>/agents/<id>/worktree`
 /// 以 `aiterm-agent/<id>` 從 `agent.project_dir` 目前的 HEAD 建立，並寫回
 /// agents 表。
@@ -881,17 +888,13 @@ impl Dispatcher for RealDispatcher {
             self.bridge.port(),
             self.secrets.get(crate::bridge::auth::BRIDGE_TOKEN_KEY).ok().flatten(),
         );
-        // 每張 Agent 卡前面放共同的專案背景（專案簡介＋團隊分工），平行的 Agent 才有全貌。
-        if agent.is_some() {
-            prompt = format!("{}{prompt}", crate::tasks::context::project_context(&project.pool, task).await);
-        }
         let readonly = task.card_kind == crate::tasks::workflow::KIND_REVIEW
             || task.card_kind == crate::tasks::workflow::KIND_PLAN
             || task.card_kind == crate::tasks::workflow::KIND_VERIFY;
         let (effective_dir, worktree_info) = if let Some(agent) = agent.as_ref().filter(|_| readonly) {
             // 審查卡、拆解卡、驗收卡：在受審版本的唯讀目錄跑，不記 start_sha（那兩欄存的是受審範圍）。
             let wt = prepare_review_worktree(&project.path, &agent.id, task).await?;
-            prompt = agent_prompt(&agent.prompt_prefix, &prompt, task.interactive, can_ask);
+            prompt = agent_card_prompt(&project.pool, task, &agent.prompt_prefix, &prompt, can_ask).await;
             if is_verify {
                 // 埠在這時才挑：建卡到開工之間可能隔很久。結案時收掉還佔著這些埠的行程。
                 let ports = crate::tasks::verify_ports::pick_free_ports(3);
@@ -929,7 +932,7 @@ impl Dispatcher for RealDispatcher {
                     Err(e) => eprintln!("head_sha for agent card {}: {e}", task.id),
                 }
             }
-            prompt = agent_prompt(&agent.prompt_prefix, &prompt, task.interactive, can_ask);
+            prompt = agent_card_prompt(&project.pool, task, &agent.prompt_prefix, &prompt, can_ask).await;
             (wt, None)
         } else {
             let isolate = resolve_isolation(
@@ -3215,6 +3218,38 @@ mod agent_dispatch_tests {
         let stored = agents::get_agent(&pool, &agent.id).await.unwrap().unwrap();
         let again = prepare_agent_worktree(&pool, storage.path(), &stored).await.unwrap();
         assert_eq!(head(&again), work_sha, "重新接上後要回到原本分支的最新 commit");
+    }
+
+    /// 派工送出的提示要帶著專案背景（專案簡介＋團隊分工），而且順序是
+    /// 角色前綴 → 專案背景 → 卡片內容 → 自主說明。
+    #[tokio::test]
+    async fn agent_card_prompts_carry_the_project_brief_and_team_map() {
+        let pool = mem_pool().await;
+        let repo = tempfile::tempdir().unwrap();
+        let c1 = coder(&pool, repo.path(), "工程師1").await;
+        let c2 = coder(&pool, repo.path(), "工程師2").await;
+        let dir = repo.path().to_string_lossy().into_owned();
+        let timer = store::create_task(&pool, "計時器", "做計時器", &dir, true, false).await.unwrap();
+        agents::assign_task(&pool, &timer, Some(&c1.id)).await.unwrap();
+        let stats = store::create_task(&pool, "統計頁", "做統計頁", &dir, true, false).await.unwrap();
+        agents::assign_task(&pool, &stats, Some(&c2.id)).await.unwrap();
+        crate::tasks::context::set_brief(&pool, Some("番茄鐘網頁 App，React＋Vite")).await.unwrap();
+        let card = store::get_task(&pool, &stats).await.unwrap().unwrap();
+
+        let p = agent_card_prompt(&pool, &card, "你是工程師", "做統計頁", false).await;
+        let at = |needle: &str| p.find(needle).unwrap_or_else(|| panic!("缺少「{needle}」：\n{p}"));
+        assert!(at("你是工程師") < at("## 專案背景"));
+        assert!(at("## 專案背景") < at("番茄鐘網頁 App，React＋Vite"));
+        assert!(at("「計時器」：工程師1") < at("「統計頁」：工程師2"));
+        assert!(p.contains("「統計頁」：工程師2，排隊中　← 你這張卡"), "{p}");
+        assert!(at("← 你這張卡") < at("做統計頁"));
+        assert!(p.ends_with(AUTONOMY_NOTE), "{p}");
+
+        // 沒有簡介、也沒有任何已指派的模組：不加任何東西。
+        let empty = mem_pool().await;
+        let lone = store::create_task(&empty, "x", "做 x", &dir, true, false).await.unwrap();
+        let lone = store::get_task(&empty, &lone).await.unwrap().unwrap();
+        assert_eq!(agent_card_prompt(&empty, &lone, "", "做 x", false).await, format!("做 x\n\n{AUTONOMY_NOTE}"));
     }
 
     async fn coder(pool: &sqlx::SqlitePool, repo: &std::path::Path, name: &str) -> agents::AgentRow {

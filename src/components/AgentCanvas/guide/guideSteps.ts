@@ -8,16 +8,30 @@ import type { TaskRow } from "../../../ipc/tasks";
 export const STEP_IDS = ["coder", "module", "assign", "reviewer", "orchestrator", "verifier", "merged", "verified"] as const;
 export type StepId = (typeof STEP_IDS)[number];
 
-export const HINT_IDS = ["add_module", "assign_module", "add_reviewer", "add_orchestrator", "add_verifier"] as const;
+export const HINT_IDS = [
+  "add_module",
+  "assign_module",
+  "add_reviewer",
+  "add_orchestrator",
+  "add_verifier",
+  "answer_question",
+  "agent_paused",
+  "module_attention",
+] as const;
 export type HintId = (typeof HINT_IDS)[number];
 
-export type GuideAgent = Pick<AgentRow, "id" | "kind">;
+/** 流程卡住的提示：每次發生都要再提醒，所以「×」只關這一次，不記進 `dismissedHints`。 */
+export const STUCK_HINTS: readonly HintId[] = ["answer_question", "agent_paused", "module_attention"];
+
+export type GuideAgent = Pick<AgentRow, "id" | "kind"> & { paused_task_id?: string | null };
 export type GuideCard = Pick<TaskRow, "card_kind" | "agent_id" | "status" | "outcome">;
 
 /** 指向哪裡：`guide` = 有 `data-guide` 的元素；`agent` = 那位 Agent 的卡片。 */
 export interface Hint {
   id: HintId;
   anchor: { guide: string } | { agent: string };
+  /** 流程卡住的提示才有：同一次狀況的識別，「×」只關掉這一次（換一次狀況會再出現）。 */
+  occurrence?: string;
 }
 
 /** 進度全域、只增不減，存在這台電腦（跟團隊範本、我的角色一樣）。 */
@@ -82,11 +96,30 @@ export function withObserved(state: GuideState, observed: Set<StepId>): GuideSta
   return { ...state, done: STEP_IDS.filter((s) => state.done.includes(s) || observed.has(s)) };
 }
 
+/** 卡住的狀態：要用到模組狀態（`deriveModuleState`）與問題清單，由呼叫端算好傳進來。 */
+export interface StuckState {
+  /** 這個專案還沒回答的問題數。 */
+  openQuestions: number;
+  /** 有模組審核退回超過上限、等人處理的工程師。 */
+  attentionOwners: string[];
+}
+
 /**
- * 目前這個專案卡在哪一步，回傳最多一個提示（依序取第一個成立的）。跟全域進度
- * 無關，所以新專案仍然有引導。沒有工程師時不給——空桌布有自己的引導。
+ * 目前這個專案卡在哪裡，回傳最多一個提示（依序取第一個成立的）。流程卡住的提示
+ * 最優先：有人在等你回答、有 Agent 暫停、有模組審核一直不過；其次才是下一步要放什麼。
+ * 跟全域進度無關，所以新專案仍然有引導。沒有工程師時不給下一步提示——空桌布有自己的引導。
  */
-export function contextHint(agents: GuideAgent[], tasks: GuideCard[]): Hint | null {
+export function contextHint(
+  agents: GuideAgent[],
+  tasks: GuideCard[],
+  stuck: StuckState = { openQuestions: 0, attentionOwners: [] },
+): Hint | null {
+  if (stuck.openQuestions > 0) return { id: "answer_question", anchor: { guide: "inbox" }, occurrence: `q${stuck.openQuestions}` };
+  const paused = agents.find((a) => a.paused_task_id);
+  if (paused) return { id: "agent_paused", anchor: { agent: paused.id }, occurrence: `${paused.id}:${paused.paused_task_id}` };
+  const owner = stuck.attentionOwners.find((id) => agents.some((a) => a.id === id));
+  if (owner) return { id: "module_attention", anchor: { agent: owner }, occurrence: owner };
+
   const coders = agents.filter((a) => a.kind === "coder");
   if (coders.length === 0) return null;
   const work = tasks.filter((c) => c.card_kind === "work");
