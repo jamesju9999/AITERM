@@ -1207,24 +1207,30 @@ fn coder_head(tasks: &[TaskRow], coder_id: &str) -> String {
 }
 
 /// 合併卡做完時：有模組的每位工程師，最新版本是不是都已經在整合分支（`worktree` 的 HEAD）裡。
-/// 回傳漏掉的工程師名字。
+/// 回傳漏掉的工程師名字，以及這組版本的合併紀錄（`last_merge_signature` 的格式）。
 ///
 /// 不能只信協調者的回報：實際發生過它誤讀 `git merge-base --is-ancestor` 的輸出，以為分支早就合過，
 /// 什麼都沒合就回報完成。那組版本接著被 `last_merge_signature` 記成「合過了」，之後修正卡沒有新 commit
 /// 時就再也不會建合併卡，整個流程停在驗收退回、畫面上卻看不出原因。
-pub async fn unmerged_coders(pool: &SqlitePool, worktree: &Path) -> Result<Vec<String>, sqlx::Error> {
+pub async fn unmerged_coders(pool: &SqlitePool, worktree: &Path) -> Result<(Vec<String>, String), sqlx::Error> {
     let all_agents = agents::list_agents(pool).await?;
     let tasks = store::list_tasks(pool).await?;
     let git = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
     let mut missing = Vec::new();
+    let mut sig_parts = Vec::new();
     for c in all_agents.iter().filter(|a| a.kind == "coder") {
         let has_module = tasks.iter().any(|t| t.card_kind == KIND_WORK && t.agent_id.as_deref() == Some(c.id.as_str()));
+        if !has_module {
+            continue;
+        }
         let head = coder_head(&tasks, &c.id);
-        if has_module && !head.is_empty() && !git.is_ancestor_of_head(&head).await {
+        if !head.is_empty() && !git.is_ancestor_of_head(&head).await {
             missing.push(c.name.clone());
         }
+        sig_parts.push(format!("{}:{head}", c.id));
     }
-    Ok(missing)
+    sig_parts.sort();
+    Ok((missing, sig_parts.join(";")))
 }
 
 /// 所有模組都通過、而且沒有任何 Coder／Reviewer 還在忙時，替 Orchestrator
@@ -1272,6 +1278,7 @@ pub async fn maybe_enqueue_merge(pool: &SqlitePool) -> Result<Option<String>, sq
     }
 
     // signature：每個 Coder 分支目前的 HEAD（最新成功的 work/fix 卡的 end_sha）。
+    // 格式要跟 `unmerged_coders` 回傳的一樣（合併卡通過檢查後會用它記回去）。
     let mut entries: Vec<(String, String, Vec<String>)> = Vec::new();
     let mut sig_parts: Vec<String> = Vec::new();
     for c in &coders {

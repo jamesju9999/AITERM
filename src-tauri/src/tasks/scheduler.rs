@@ -374,6 +374,7 @@ pub(crate) async fn finalize_agent_card(
 /// 合併卡：照一般 Agent 卡結案（commit、記 `end_sha`），成功的話再確認每位工程師的最新版本真的
 /// 在整合分支裡（見 `workflow::unmerged_coders`）。有漏的就改判失敗、暫停協調者，並忘掉上次的合併
 /// 版本紀錄——使用者重試這張卡會再檢查一次；跳過的話，下一輪會重新建合併卡。
+/// 檢查通過就把這組版本記回去：重試成功之後不會再多建一張合併卡。
 pub(crate) async fn finalize_merge_card(
     pool: &sqlx::SqlitePool,
     agent_id: &str,
@@ -387,11 +388,11 @@ pub(crate) async fn finalize_merge_card(
         return outcome;
     }
     match crate::tasks::workflow::unmerged_coders(pool, worktree).await {
-        Ok(missing) if !missing.is_empty() => {
+        Ok((missing, _)) if !missing.is_empty() => {
             if let Err(e) = crate::tasks::agents::set_paused(pool, agent_id, Some(task_id)).await {
                 eprintln!("pause agent {agent_id}: {e}");
             }
-            if let Err(e) = crate::tasks::agents::clear_merge_signature(pool, agent_id).await {
+            if let Err(e) = crate::tasks::agents::set_merge_signature(pool, agent_id, None).await {
                 eprintln!("clear merge signature {agent_id}: {e}");
             }
             monitor::TaskOutcome::Failed(format!(
@@ -399,7 +400,12 @@ pub(crate) async fn finalize_merge_card(
                 missing.join("、")
             ))
         }
-        Ok(_) => outcome,
+        Ok((_, signature)) => {
+            if let Err(e) = crate::tasks::agents::set_merge_signature(pool, agent_id, Some(&signature)).await {
+                eprintln!("record merge signature {agent_id}: {e}");
+            }
+            outcome
+        }
         Err(e) => {
             eprintln!("check merge {task_id}: {e}");
             outcome
@@ -3346,6 +3352,11 @@ mod agent_dispatch_tests {
         git(&["merge", "-q", "--no-edit", "coder"]);
         let ok = finalize_merge_card(&pool, &orch, &merge, "Integrate", repo.path(), monitor::TaskOutcome::Success).await;
         assert!(matches!(ok, monitor::TaskOutcome::Success), "{ok:?}");
+        // 重試成功要把這組版本記回去，否則接著又會多建一張合併卡（實機發生過）。
+        assert_eq!(
+            agents::get_agent(&pool, &orch).await.unwrap().unwrap().last_merge_signature,
+            Some(format!("{}:{coder_head}", coder.id))
+        );
     }
 
     #[tokio::test]
