@@ -109,7 +109,9 @@
 }
 .ac-module:hover { border-color: var(--accent); }
 .ac-module-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ac-add { margin: 0 10px 10px; }
+.ac-lib-foot { display: flex; align-items: stretch; gap: 6px; padding: 0 12px 12px; }
+.ac-lib-foot .ac-add { flex: 1; margin: 0; }
+.ac-lib-foot .ac-lib-toggle { border: 1px solid var(--ac-edge); border-radius: 8px; padding: 0 9px; }
 
 .ac-canvas {
   position: relative;

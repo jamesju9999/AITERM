@@ -924,14 +924,6 @@ export function AgentCanvasView({
           <aside className={`ac-lib${hover?.kind === "library" ? " ac-lib--drop" : ""}`} data-drop="library">
             <div className="ac-lib-head">
               <h2>{t.ac_library}</h2>
-              <button
-                className="ac-iconbtn ac-lib-toggle"
-                title={t.ac_lib_collapse}
-                aria-label={t.ac_lib_collapse}
-                onClick={() => setLayout({ libCollapsed: true })}
-              >
-                «
-              </button>
             </div>
             <div className="ac-lib-sub">{t.ac_library_sub}</div>
             <div className="ac-lib-list">
@@ -948,9 +940,20 @@ export function AgentCanvasView({
                 </div>
               ))}
             </div>
-            <button className="aiterm-btn aiterm-btn--secondary ac-add" disabled={!projectId} onClick={() => setNewModule(true)}>
-              {t.ac_add_module}
-            </button>
+            {/* 收合鈕跟收合後的「» 模組庫」在同一個位置（左下角），可以原地來回切換。 */}
+            <div className="ac-lib-foot">
+              <button
+                className="ac-iconbtn ac-lib-toggle"
+                title={t.ac_lib_collapse}
+                aria-label={t.ac_lib_collapse}
+                onClick={() => setLayout({ libCollapsed: true })}
+              >
+                «
+              </button>
+              <button className="aiterm-btn aiterm-btn--secondary ac-add" disabled={!projectId} onClick={() => setNewModule(true)}>
+                {t.ac_add_module}
+              </button>
+            </div>
           </aside>
         )}
 
