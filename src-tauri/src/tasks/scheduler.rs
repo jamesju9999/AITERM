@@ -236,6 +236,9 @@ pub(crate) enum CodexVerdict {
 ///
 /// TUI 下結束碼一律是 0（`/exit` 是看守送的），所以成功也要看 rollout 最後一輪有沒有錯誤；
 /// 取消就照走。
+/// 送出 `/exit` 之後等 Codex 退出多久，再通知 watch 做完了。
+const CODEX_EXIT_GRACE_SECS: u64 = 3;
+
 pub(crate) const CODEX_NOT_STARTED: &str =
     "Codex 沒有啟動（沒有收到對話開始的回報）。請在終端機確認 codex 指令可以執行、已經 codex login，並看分頁裡的錯誤訊息。";
 
@@ -1126,17 +1129,24 @@ impl Dispatcher for RealDispatcher {
                 let task_id = task_id.clone();
                 move || quota.is_holding_marker(&task_id)
             };
-            // Codex（TUI）：做完不會自己退出，由看守在這一輪結束時送 `/exit`；行程退出後 watch 照常收。
+            // Codex（TUI）：做完不會自己退出，由看守在這一輪結束時送 `/exit`，再直接通知 watch 做完了
+            // （結束碼在 Windows 上判斷不了，見 dispatch::watch_codex_tui）。非 0 的結束碼仍由 watch 收成失敗。
             let codex_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
             if let Some(initial) = codex_initial {
-                let (pty, pool, task_id, tab_id, stop) =
-                    (pty.clone(), pool.clone(), task_id.clone(), tab_id.clone(), codex_stop.clone());
+                let (pty, pool, task_id, tab_id, stop, cancels) =
+                    (pty.clone(), pool.clone(), task_id.clone(), tab_id.clone(), codex_stop.clone(), cancels.clone());
                 tauri::async_runtime::spawn(async move {
                     let rollout = || {
                         let (pool, task_id) = (pool.clone(), task_id.clone());
                         async move { store::get_task(&pool, &task_id).await.ok().flatten().and_then(|t| t.session_path) }
                     };
-                    dispatch::watch_codex_tui(&pty, &tab_id, initial, rollout, &stop).await;
+                    if dispatch::watch_codex_tui(&pty, &tab_id, initial, rollout, &stop).await {
+                        // 給 Codex 一點時間收尾、退出（rollout 的最後幾筆在退出時寫完）。
+                        tokio::time::sleep(Duration::from_secs(CODEX_EXIT_GRACE_SECS)).await;
+                        if let Some(tx) = cancels.lock().remove(&task_id) {
+                            let _ = tx.send(monitor::WatchControl::MarkDone);
+                        }
+                    }
                 });
             }
             let outcome = monitor::watch_with_quota(

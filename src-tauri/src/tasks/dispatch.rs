@@ -404,6 +404,7 @@ pub async fn spawn_command(
     )
     .map_err(|e| e.to_string())?;
     on_spawned(&tab_id);
+    wait_for_shell_prompt(pty, &tab_id).await;
     let result = DispatchResult {
         bell_baseline: pty.bell_count(&tab_id).unwrap_or(0),
         marker_baseline: pty.marker_count(&tab_id).unwrap_or(0),
@@ -435,13 +436,18 @@ const CODEX_POLL_MS: u64 = 1_000;
 /// 卡片已記的路徑與那時的 `task_complete` 筆數：接著做時同一個檔案裡本來就有前幾輪的紀錄；
 /// 重新派工時舊路徑還沒被新的蓋掉，也不能把舊紀錄當成這一輪做完。
 /// `stop` 被設起來（watch 已經結束）或分頁不在了就收手。
+///
+/// 回傳 `true` = 這一輪結束、已經送出 `/exit`。呼叫端據此直接通知 watch「做完了」：
+/// 不能只靠結束碼——Windows 的 PowerShell 第一次畫提示字元就送 `D;0`，開始監看時結束碼
+/// 已經是 0，Codex 正常退出還是 0，「結束碼有變化」永遠不成立（實機）。
 pub async fn watch_codex_tui<F, Fut>(
     pty: &PtyManager,
     tab_id: &str,
     initial: (Option<String>, usize),
     mut rollout_path: F,
     stop: &std::sync::atomic::AtomicBool,
-) where
+) -> bool
+where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Option<String>>,
 {
@@ -451,9 +457,9 @@ pub async fn watch_codex_tui<F, Fut>(
     loop {
         tokio::time::sleep(Duration::from_millis(CODEX_POLL_MS)).await;
         if stop.load(Ordering::Relaxed) {
-            return;
+            return false;
         }
-        let Some(quiet) = pty.ms_since_output(tab_id) else { return };
+        let Some(quiet) = pty.ms_since_output(tab_id) else { return false };
         // 畫面還在重畫時先別按（同 Claude 的信任畫面：太早送會被重畫吃掉）。
         if !trust_handled
             && quiet >= SETTLE_QUIET_MS
@@ -469,8 +475,32 @@ pub async fn watch_codex_tui<F, Fut>(
         if crate::tasks::codex::completed_turns(&text) > before {
             // 指令與 Enter 分兩次送：TUI 會把一次到齊的整串當成貼上（見 write_then_submit）。
             let _ = write_then_submit(pty, tab_id, "/exit").await;
+            return true;
+        }
+    }
+}
+
+/// shell 就緒的等待上限。
+const SHELL_READY_TIMEOUT_MS: u64 = 15_000;
+/// 沒有結束碼可看的 shell（zsh 啟動時不送 `D`）：輸出安靜這麼久就當作提示字元畫好了。
+const SHELL_READY_QUIET_MS: u64 = 1_500;
+
+/// 等 shell 畫好第一個提示字元再打指令。PowerShell 第一次畫提示字元會送 OSC 133 `D;0`：
+/// 指令打得比它早，watch 開始時結束碼還是 `None`，接著到的 `D;0` 就被當成「指令做完、成功」，
+/// 卡片瞬間完成、分頁被關、Codex 根本沒啟動（Windows 實機）。等到結束碼出現（PowerShell），
+/// 或有輸出之後安靜下來（zsh／bash 啟動時不送 `D`），再加一小段讓提示字元畫完。
+pub(crate) async fn wait_for_shell_prompt(pty: &PtyManager, tab_id: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(SHELL_READY_TIMEOUT_MS);
+    while tokio::time::Instant::now() < deadline {
+        if pty.last_exit_code(tab_id).is_some() {
+            tokio::time::sleep(Duration::from_millis(300)).await;
             return;
         }
+        let printed = pty.get_recent_raw(tab_id, 1).is_some_and(|b| !b.is_empty());
+        if printed && pty.ms_since_output(tab_id).unwrap_or(0) >= SHELL_READY_QUIET_MS {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
     }
 }
 
@@ -1260,8 +1290,9 @@ Enter to confirm · Esc to cancel
             std::fs::write(&rollout, TURN_DONE).unwrap();
             wait_for_file(&dir.path().join("exited"), 10).await
         };
-        let (_, exited) = tokio::join!(watcher, check);
+        let (done, exited) = tokio::join!(watcher, check);
         assert_eq!(exited.as_deref(), Some("/exit"));
+        assert!(done, "送出 /exit 要回報做完（呼叫端據此通知 watch，不靠結束碼）");
     }
 
     /// 接著做／重新派工：派工當下卡片上記的 rollout 裡本來就有幾輪紀錄，不能當成這一輪做完。
@@ -1307,6 +1338,31 @@ Enter to confirm · Esc to cancel
             watch_codex_tui(&pty, &tab, (None, 0), || async { None::<String> }, &stop),
         )
         .await;
-        assert!(done.is_ok());
+        assert_eq!(done.ok(), Some(false), "收手不是做完");
+    }
+
+    /// 提示字元還沒畫好就打指令，Windows 的 PowerShell 接著送的 `D;0` 會被當成指令做完。
+    /// 有結束碼的 shell 等到結束碼出現；沒有的（zsh）等輸出安靜下來。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn waits_for_the_shell_prompt_before_typing() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+        let t0 = tokio::time::Instant::now();
+        wait_for_shell_prompt(&pty, &tab).await;
+        let waited = t0.elapsed();
+        assert!(pty.get_recent_raw(&tab, 1).is_some_and(|b| !b.is_empty()), "還沒有任何輸出就放行了");
+        assert!(waited < Duration::from_millis(SHELL_READY_TIMEOUT_MS), "沒有提早放行，等到了上限：{waited:?}");
+
+        // 已經有結束碼的 session（PowerShell 的情況）：不必再等安靜，馬上放行。
+        pty.write(&tab, b"true\r").unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while pty.last_exit_code(&tab).is_none() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(pty.last_exit_code(&tab).is_some(), "測試前提：shell 會回報結束碼");
+        let t0 = tokio::time::Instant::now();
+        wait_for_shell_prompt(&pty, &tab).await;
+        assert!(t0.elapsed() < Duration::from_millis(SHELL_READY_QUIET_MS), "有結束碼就不用等安靜：{:?}", t0.elapsed());
     }
 }
