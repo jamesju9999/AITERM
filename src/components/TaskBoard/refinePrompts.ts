@@ -84,7 +84,7 @@ function extractTitle(head: string[]): string | null {
 }
 
 /** 模型有時候還是會包 ```；剝掉最外層那一層。 */
-function stripFence(text: string): string {
+export function stripFence(text: string): string {
   const m = /^\s*```[^\n]*\n([\s\S]*?)\n?```\s*$/.exec(text);
   return m ? m[1] : text;
 }

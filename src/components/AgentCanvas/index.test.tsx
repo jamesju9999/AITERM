@@ -52,6 +52,16 @@ vi.mock("../../ipc/projects", () => ({
   usedLabels: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../../ipc/provider", () => ({ listProviders: vi.fn().mockResolvedValue([]) }));
+vi.mock("../../ipc/ai", async () => ({
+  ...(await vi.importActual<typeof import("../../ipc/ai")>("../../ipc/ai")),
+  invokeAiComplete: vi.fn(),
+}));
+// ModelPickerButton 會拉配額資訊。
+vi.mock("../../ipc/usage", () => ({
+  usageQuota: vi.fn().mockResolvedValue({ status: "not_applicable", provider_id: "x" }),
+  usageQuotaAll: vi.fn().mockResolvedValue([]),
+  primaryWindow: () => null,
+}));
 vi.mock("../../ipc/questions", async () => {
   const actual = await vi.importActual<typeof import("../../ipc/questions")>("../../ipc/questions");
   return {
@@ -85,6 +95,8 @@ import { codexInfo, getProjectBrief, listTasks, listTokenUsage, markTaskDone, se
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { listProjects } from "../../ipc/projects";
+import { invokeAiComplete } from "../../ipc/ai";
+import { listProviders } from "../../ipc/provider";
 import { AgentCanvasView } from "./index";
 
 const agent = (over: Partial<AgentRow> = {}): AgentRow => ({
@@ -1194,5 +1206,59 @@ describe("專案簡介", () => {
     fireEvent.click(within(dlg).getByRole("button", { name: "儲存" }));
     await waitFor(() => expect(setProjectBrief).toHaveBeenCalledWith("p1", null));
     await waitFor(() => expect(screen.getByTestId("ac-brief").textContent).not.toContain("✓"));
+  });
+});
+
+describe("專案簡介的 AI 潤飾", () => {
+  it("用選的模型把草稿改寫成簡介；可以還原；儲存的是改寫後的內容", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(getProjectBrief).mockResolvedValue(null);
+    vi.mocked(listProviders).mockResolvedValue([
+      { id: "p-a", display_name: "Provider A", provider_type: "anthropic", base_url: null, oauth_client_id: null, model: "m",
+        supports_json_mode: true, has_api_key: true, is_default: true, auth_method: null },
+    ]);
+    vi.mocked(invokeAiComplete).mockResolvedValue({ content: "```\n目標：\n- 個人用番茄鐘\n技術選型：\n- React\n```" } as never);
+    view();
+    fireEvent.click(await screen.findByTestId("ac-brief"));
+    const dlg = await screen.findByRole("dialog", { name: "專案簡介" });
+    const box = within(dlg).getByRole("textbox", { name: "專案簡介" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(box).not.toBeDisabled());
+    const refine = within(dlg).getByTestId("brief-refine");
+    expect(refine).toBeDisabled(); // 沒有草稿不能潤飾
+    fireEvent.change(box, { target: { value: "我要做番茄鐘 用react" } });
+    await waitFor(() => expect(refine).not.toBeDisabled());
+    fireEvent.click(refine);
+    await waitFor(() => expect(box.value).toBe("目標：\n- 個人用番茄鐘\n技術選型：\n- React"));
+    const [messages, system, , provider] = vi.mocked(invokeAiComplete).mock.calls[0];
+    expect(messages[0].content).toContain("我要做番茄鐘 用react");
+    expect(system).toMatch(/專案簡介/);
+    expect(provider).toBe("p-a");
+
+    fireEvent.click(within(dlg).getByTestId("brief-refine-undo"));
+    expect(box.value).toBe("我要做番茄鐘 用react");
+    fireEvent.click(refine);
+    await waitFor(() => expect(box.value).toContain("個人用番茄鐘"));
+    fireEvent.click(within(dlg).getByRole("button", { name: "儲存" }));
+    await waitFor(() => expect(setProjectBrief).toHaveBeenCalledWith("p1", "目標：\n- 個人用番茄鐘\n技術選型：\n- React"));
+  });
+
+  it("AI 回空的或出錯：內容不動，顯示錯誤", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(getProjectBrief).mockResolvedValue("原本的");
+    vi.mocked(invokeAiComplete).mockResolvedValueOnce({ content: "  " } as never).mockRejectedValueOnce("network down");
+    view();
+    fireEvent.click(await screen.findByTestId("ac-brief"));
+    const dlg = await screen.findByRole("dialog", { name: "專案簡介" });
+    const box = within(dlg).getByRole("textbox", { name: "專案簡介" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(box.value).toBe("原本的"));
+    fireEvent.click(within(dlg).getByTestId("brief-refine"));
+    expect(await within(dlg).findByText("AI 沒有回覆任何內容，請再試一次")).toBeTruthy();
+    expect(box.value).toBe("原本的");
+    fireEvent.click(within(dlg).getByTestId("brief-refine"));
+    expect(await within(dlg).findByText(/network down/)).toBeTruthy();
+    expect(box.value).toBe("原本的");
+    expect(within(dlg).queryByTestId("brief-refine-undo")).toBeNull();
   });
 });

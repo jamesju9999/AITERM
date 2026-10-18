@@ -655,3 +655,4 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-brief { width: min(640px, calc(100vw - 32px)); }
 .ac-brief-text { width: 100%; min-height: 220px; resize: vertical; font-size: 13px; line-height: 1.55; }
 .ac-brief-count { text-align: right; font: 11px var(--mono); color: var(--text-muted); margin-top: 4px; }
+.ac-brief-tools { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
