@@ -2,9 +2,11 @@
 //! Codex 的對話記錄（rollout JSONL）。見 docs/superpowers/specs/2026-10-17-agent-codex-design.md；
 //! 每一條行為都是實測過的（0.148.0 exec、0.163.0 TUI；記憶 project_codex_dispatch_probe）。
 //!
-//! 指令是打進使用者 shell 的一行字。`-c` 的值用單引號包住、裡面的 TOML 字串用雙引號：
-//! zsh／bash／fish／PowerShell 7 都照字面傳。值裡出現單引號就放棄（回 `None`）。
-//! PowerShell 5.1 傳給外部程式時會吃掉內層雙引號——Windows 未實機驗證。
+//! 指令是打進使用者 shell 的一行字，可能是 zsh、bash、fish、PowerShell 5.1／7 或 cmd。
+//! 為了在每一種都照字面傳：每個參數外層用雙引號，裡面的 TOML 字串用 literal 字串（單引號），
+//! 所以參數裡**沒有內層雙引號**——PowerShell 5.1 傳給外部程式時會把內層雙引號吃掉。
+//! 會被某個 shell 在雙引號裡展開的字元（`$` `` ` `` `!` `%`）、引號本身、換行一律拒絕（回 `None`），
+//! 呼叫端把派工標成失敗並說明。
 
 use std::path::Path;
 
@@ -12,6 +14,8 @@ use crate::tasks::usage::TokenUsage;
 
 /// Playwright MCP 的版本跟 Claude 卡片用的一樣（見 `tasks::ask`）。
 pub struct CodexLaunch<'a> {
+    /// 要執行的程式（`codex`，Windows 上可能是 `codex.cmd`，見 `program`）。
+    pub program: &'a str,
     pub model: Option<&'a str>,
     /// 卡片內容寫在這個檔案裡；指令只叫 Codex 去讀它（避免多行內容在各 shell 的引號問題）。
     pub prompt_file: &'a Path,
@@ -41,9 +45,37 @@ pub fn codex_home() -> Option<std::path::PathBuf> {
 /// 等人回答 ask_human 可能很久：工具逾時拉到一天。
 pub const ASK_TOOL_TIMEOUT_SECS: u64 = 86_400;
 
-/// TOML 的基本字串：`"..."`，跳脫 `\` 與 `"`。
-pub fn toml_str(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+/// 要打進 shell 的 codex 程式名稱。Windows 上用 npm 裝的 codex 有 `codex.ps1` 與 `codex.cmd`，
+/// PowerShell 會先挑 `.ps1`，而 Windows 預設的執行原則會擋掉它——所以 PATH 裡沒有 `codex.exe`
+/// 但有 `codex.cmd` 時明講 `codex.cmd`。其他平台就是 `codex`。
+pub fn program() -> String {
+    #[cfg(windows)]
+    {
+        let dirs: Vec<std::path::PathBuf> =
+            std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+        let has = |name: &str| dirs.iter().any(|d| d.join(name).is_file());
+        if !has("codex.exe") && has("codex.cmd") {
+            return "codex.cmd".into();
+        }
+    }
+    "codex".into()
+}
+
+/// 雙引號裡仍會被某個 shell 動到的字元：bash/zsh 的 `$` `` ` `` `!`、cmd 的 `%`，加上引號與換行。
+fn shell_safe(s: &str) -> bool {
+    !s.chars().any(|c| matches!(c, '"' | '$' | '`' | '!' | '%' | '\n' | '\r'))
+        // 結尾的 `\` 會跳脫收尾的雙引號（bash 與 Windows 的參數解析都是）。
+        && !s.ends_with('\\')
+}
+
+/// 一個 shell 參數：`"..."`。
+fn shell_arg(s: &str) -> Option<String> {
+    shell_safe(s).then(|| format!("\"{s}\""))
+}
+
+/// TOML 的 literal 字串：`'...'`（反斜線照字面，Windows 路徑不必跳脫）。不能含單引號。
+pub fn toml_lit(s: &str) -> Option<String> {
+    (!s.contains('\'') && shell_safe(s)).then(|| format!("'{s}'"))
 }
 
 /// MCP 伺服器名稱只收英數、`_`、`-`：它是 `-c` 路徑的一段，其他字元要加引號才合法。
@@ -56,17 +88,19 @@ fn safe_model(m: &str) -> bool {
     !m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']' | ':' | '/'))
 }
 
-/// `-c '<key>=<value>'`；值裡有單引號就 `None`。
+/// `-c "<key>=<value>"`。
 fn config_arg(key: &str, value: &str) -> Option<String> {
-    let kv = format!("{key}={value}");
-    (!kv.contains('\'')).then(|| format!("-c '{kv}'"))
+    Some(format!("-c {}", shell_arg(&format!("{key}={value}"))?))
 }
 
 /// 整行互動式 `codex ...`（TUI，跟 Claude 卡片一樣看得到過程、可以插話）。
 /// 第一句提示從參數帶入就開工；做完由 `CodexCloser` 送 `/exit` 收掉。
 /// 任何一段無法安全放進 shell 就回 `None`（呼叫端把派工標成失敗並說明）。
 pub fn launch_command(o: &CodexLaunch) -> Option<String> {
-    let mut parts: Vec<String> = vec!["codex".into()];
+    if !o.program.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) {
+        return None;
+    }
+    let mut parts: Vec<String> = vec![o.program.into()];
     if let Some(sid) = o.resume_session {
         if !plain_key(sid) {
             return None;
@@ -79,41 +113,37 @@ pub fn launch_command(o: &CodexLaunch) -> Option<String> {
     parts.push("-s workspace-write -a never".into());
     // 一律走 OpenAI 官方（用使用者 `codex login` 的帳號：ChatGPT 或 API key），
     // 不吃 config.toml 的預設供應商——那可能是本機模型伺服器。
-    parts.push(config_arg("model_provider", &toml_str("openai"))?);
+    parts.push(config_arg("model_provider", &toml_lit("openai")?)?);
     parts.push(config_arg("sandbox_workspace_write.network_access", "true")?);
     if let Some(m) = o.model.map(str::trim).filter(|m| safe_model(m)) {
         parts.push(format!("-m {m}"));
     }
     if let Some(hook) = o.hook_command {
         parts.push("--dangerously-bypass-hook-trust".into());
-        let v = format!("[{{hooks=[{{type=\"command\",command={}}}]}}]", toml_str(hook));
+        let v = format!("[{{hooks=[{{type='command',command={}}}]}}]", toml_lit(hook)?);
         parts.push(config_arg("hooks.SessionStart", &v)?);
     }
     if let Some(url) = o.ask_url {
-        parts.push(config_arg("mcp_servers.aiterm.url", &toml_str(url))?);
-        parts.push(config_arg("mcp_servers.aiterm.default_tools_approval_mode", &toml_str("approve"))?);
+        parts.push(config_arg("mcp_servers.aiterm.url", &toml_lit(url)?)?);
+        parts.push(config_arg("mcp_servers.aiterm.default_tools_approval_mode", &toml_lit("approve")?)?);
         parts.push(config_arg("mcp_servers.aiterm.tool_timeout_sec", &ASK_TOOL_TIMEOUT_SECS.to_string())?);
     }
     if let Some(args) = o.playwright_args {
-        let arr = format!("[{}]", args.iter().map(|a| toml_str(a)).collect::<Vec<_>>().join(","));
-        parts.push(config_arg("mcp_servers.playwright.command", &toml_str("npx"))?);
+        let arr = format!("[{}]", args.iter().map(|a| toml_lit(a)).collect::<Option<Vec<_>>>()?.join(","));
+        parts.push(config_arg("mcp_servers.playwright.command", &toml_lit("npx")?)?);
         parts.push(config_arg("mcp_servers.playwright.args", &arr)?);
-        parts.push(config_arg("mcp_servers.playwright.default_tools_approval_mode", &toml_str("approve"))?);
+        parts.push(config_arg("mcp_servers.playwright.default_tools_approval_mode", &toml_lit("approve")?)?);
     }
     for name in o.disable_mcp.iter().filter(|n| plain_key(n)) {
         parts.push(config_arg(&format!("mcp_servers.{name}.enabled"), "false")?);
     }
     let file = o.prompt_file.to_str()?;
-    let prompt = format!("請讀 {file} 並照裡面的指示完成工作。");
-    if prompt.contains('\'') {
-        return None;
-    }
-    parts.push(format!("'{prompt}'"));
+    parts.push(shell_arg(&format!("請讀 {file} 並照裡面的指示完成工作。"))?);
     Some(parts.join(" "))
 }
 
 /// SessionStart hook：把 Codex 給的 JSON（含 session_id、transcript_path）原封不動 POST 回 AITerm。
-/// 刻意不含任何引號（它會被放進 TOML 字串、再放進 shell 單引號裡）。
+/// 刻意不含任何引號（它會被放進 TOML literal 字串、再放進 shell 雙引號裡）。
 pub fn hook_command(base: &str) -> String {
     let curl = if cfg!(windows) { "curl.exe" } else { "curl" };
     format!("{curl} -s -m 5 -X POST -H Content-Type:application/json --data-binary @- {base}/codex-session")
@@ -240,6 +270,7 @@ mod tests {
 
     fn base<'a>(file: &'a Path) -> CodexLaunch<'a> {
         CodexLaunch {
+            program: "codex",
             model: None,
             prompt_file: file,
             resume_session: None,
@@ -250,15 +281,35 @@ mod tests {
         }
     }
 
+    /// 每個參數外層是雙引號、裡面沒有任何雙引號：PowerShell 5.1 會吃掉內層雙引號。
+    fn assert_no_inner_double_quotes(line: &str) {
+        for part in line.split(" -c ").skip(1) {
+            let arg = part.split("\" ").next().unwrap().trim_start_matches('"').trim_end_matches('"');
+            assert!(!arg.contains('"'), "參數裡有內層雙引號：{arg}");
+        }
+    }
+
     #[test]
     fn a_plain_card_opens_the_tui_on_openai_with_write_access_and_network() {
         let f = Path::new("/p/tasks/t1/prompt.md");
         let line = launch_command(&CodexLaunch { model: Some("gpt-6-luna"), ..base(f) }).unwrap();
         assert_eq!(
             line,
-            "codex -s workspace-write -a never -c 'model_provider=\"openai\"' -c 'sandbox_workspace_write.network_access=true' \
-             -m gpt-6-luna '請讀 /p/tasks/t1/prompt.md 並照裡面的指示完成工作。'"
+            "codex -s workspace-write -a never -c \"model_provider='openai'\" -c \"sandbox_workspace_write.network_access=true\" \
+             -m gpt-6-luna \"請讀 /p/tasks/t1/prompt.md 並照裡面的指示完成工作。\""
         );
+        assert_no_inner_double_quotes(&line);
+    }
+
+    #[test]
+    fn windows_paths_keep_their_backslashes() {
+        let f = Path::new(r"C:\Users\me\Ask Test\tasks\t1\prompt.md");
+        let line = launch_command(&CodexLaunch { program: "codex.cmd", ..base(f) }).unwrap();
+        assert!(line.starts_with("codex.cmd -s "), "{line}");
+        assert!(line.ends_with(r#""請讀 C:\Users\me\Ask Test\tasks\t1\prompt.md 並照裡面的指示完成工作。""#), "{line}");
+        let pw = vec![r"--output-dir=C:\Users\me\evidence".to_string()];
+        let line = launch_command(&CodexLaunch { playwright_args: Some(&pw), ..base(f) }).unwrap();
+        assert!(line.contains(r#"-c "mcp_servers.playwright.args=['--output-dir=C:\Users\me\evidence']""#), "{line}");
     }
 
     #[test]
@@ -273,9 +324,10 @@ mod tests {
     fn ask_human_is_approved_and_may_wait_a_day() {
         let f = Path::new("/p/prompt.md");
         let line = launch_command(&CodexLaunch { ask_url: Some("http://127.0.0.1:9/mcp/s/t"), ..base(f) }).unwrap();
-        assert!(line.contains("-c 'mcp_servers.aiterm.url=\"http://127.0.0.1:9/mcp/s/t\"'"), "{line}");
-        assert!(line.contains("-c 'mcp_servers.aiterm.default_tools_approval_mode=\"approve\"'"), "{line}");
-        assert!(line.contains("-c 'mcp_servers.aiterm.tool_timeout_sec=86400'"), "{line}");
+        assert!(line.contains("-c \"mcp_servers.aiterm.url='http://127.0.0.1:9/mcp/s/t'\""), "{line}");
+        assert!(line.contains("-c \"mcp_servers.aiterm.default_tools_approval_mode='approve'\""), "{line}");
+        assert!(line.contains("-c \"mcp_servers.aiterm.tool_timeout_sec=86400\""), "{line}");
+        assert_no_inner_double_quotes(&line);
     }
 
     #[test]
@@ -286,10 +338,11 @@ mod tests {
         let line = launch_command(&CodexLaunch { hook_command: Some(&hook), ..base(f) }).unwrap();
         assert!(line.contains("--dangerously-bypass-hook-trust"), "{line}");
         assert!(
-            line.contains(&format!("-c 'hooks.SessionStart=[{{hooks=[{{type=\"command\",command=\"{hook}\"}}]}}]'")),
+            line.contains(&format!("-c \"hooks.SessionStart=[{{hooks=[{{type='command',command='{hook}'}}]}}]\"")),
             "{line}"
         );
         assert!(hook.ends_with("http://127.0.0.1:9/quota/s/t/codex-session"));
+        assert_no_inner_double_quotes(&line);
     }
 
     #[test]
@@ -298,10 +351,11 @@ mod tests {
         let args = vec!["-y".to_string(), "@playwright/mcp@0.0.83".to_string(), "--headless".to_string()];
         let off = vec!["pencil".to_string(), "bad name".to_string()];
         let line = launch_command(&CodexLaunch { playwright_args: Some(&args), disable_mcp: &off, ..base(f) }).unwrap();
-        assert!(line.contains("-c 'mcp_servers.playwright.args=[\"-y\",\"@playwright/mcp@0.0.83\",\"--headless\"]'"), "{line}");
-        assert!(line.contains("-c 'mcp_servers.playwright.default_tools_approval_mode=\"approve\"'"), "{line}");
-        assert!(line.contains("-c 'mcp_servers.pencil.enabled=false'"), "{line}");
+        assert!(line.contains("-c \"mcp_servers.playwright.args=['-y','@playwright/mcp@0.0.83','--headless']\""), "{line}");
+        assert!(line.contains("-c \"mcp_servers.playwright.default_tools_approval_mode='approve'\""), "{line}");
+        assert!(line.contains("-c \"mcp_servers.pencil.enabled=false\""), "{line}");
         assert!(!line.contains("bad name"), "名稱有空白的不能放進設定路徑：{line}");
+        assert_no_inner_double_quotes(&line);
     }
 
     #[test]
@@ -309,8 +363,18 @@ mod tests {
         let f = Path::new("/p/prompt.md");
         let line = launch_command(&CodexLaunch { model: Some("gpt;rm -rf"), ..base(f) }).unwrap();
         assert!(!line.contains(" -m "), "不合法的模型名不加：{line}");
-        assert!(launch_command(&base(Path::new("/p/it's/prompt.md"))).is_none(), "路徑有單引號就不派");
-        assert_eq!(toml_str(r#"a"b\c"#), r#""a\"b\\c""#);
+        // 單引號只在 TOML literal 字串裡不行；提示詞那個參數外層是雙引號，可以有單引號。
+        assert!(launch_command(&base(Path::new("/p/it's/prompt.md"))).is_some());
+        let pw = vec!["it's".to_string()];
+        assert!(launch_command(&CodexLaunch { playwright_args: Some(&pw), ..base(f) }).is_none());
+        // 各 shell 在雙引號裡還會展開的字元：bash/zsh 的 $ ` !、cmd 的 %。
+        for bad in ["/p/$HOME/prompt.md", "/p/`id`/prompt.md", "/p/a!b/prompt.md", "/p/%PATH%/prompt.md", "/p/a\"b/prompt.md"] {
+            assert!(launch_command(&base(Path::new(bad))).is_none(), "{bad} 要拒絕");
+        }
+        assert!(launch_command(&CodexLaunch { program: "codex; rm", ..base(f) }).is_none());
+        // 結尾的反斜線會跳脫收尾的雙引號。
+        let pw = vec![r"--output-dir=C:\evidence\".to_string()];
+        assert!(launch_command(&CodexLaunch { playwright_args: Some(&pw), ..base(f) }).is_none());
     }
 
     // 下面兩份是探勘時真實的 rollout 行（codex-cli 0.148.0），只截掉無關欄位。

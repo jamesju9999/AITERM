@@ -733,7 +733,9 @@ impl RealDispatcher {
         } else {
             Vec::new()
         };
+        let program = crate::tasks::codex::program();
         crate::tasks::codex::launch_command(&crate::tasks::codex::CodexLaunch {
+            program: &program,
             model: agent.and_then(|a| a.model.as_deref()),
             prompt_file: &file,
             resume_session: resume,
@@ -742,7 +744,12 @@ impl RealDispatcher {
             playwright_args: playwright.as_deref(),
             disable_mcp: &off,
         })
-        .ok_or_else(|| format!("專案路徑含有單引號，無法派給 Codex：{}", file.display()))
+        .ok_or_else(|| {
+            format!(
+                "無法派給 Codex：路徑或設定裡有 shell 無法安全傳遞的字元（引號、$、%、!、`）：{}",
+                file.display()
+            )
+        })
     }
 }
 
