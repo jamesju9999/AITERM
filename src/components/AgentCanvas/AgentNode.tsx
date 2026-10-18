@@ -323,6 +323,7 @@ export function AgentNode({
   return (
     <div
       className={`ac-agent ac-agent--${agent.kind} ac-agent--${status}${dropState ? ` ac-agent--drop-${dropState}` : ""}`}
+      data-guide-agent={agent.id}
       data-agent-id={agent.id}
       data-testid={`agent-${agent.id}`}
       style={{ left: agent.canvas_x, top: agent.canvas_y }}

@@ -54,6 +54,11 @@ import { answerQuestion, listQuestions, onQuestionsUpdated, type QuestionView } 
 import { projectSummary, type ProjectSummary } from "./projectSummary";
 import { sumUsage } from "./tokenUsage";
 import { TokenBudgetChip } from "./TokenBudgetChip";
+import { GuideChecklist } from "./guide/GuideChecklist";
+import { GuideHelp } from "./guide/GuideHelp";
+import { GuideHint } from "./guide/GuideHint";
+import { GuideTour } from "./guide/GuideTour";
+import { contextHint, loadGuide, observedSteps, saveGuide, withObserved, type GuideState } from "./guide/guideSteps";
 import "./index.css";
 
 /** 跟看板、TabBar 同一個門檻：小於這個位移是點擊，不是拖曳。 */
@@ -206,6 +211,17 @@ export function AgentCanvasView({
   /** 所有專案還沒回答的 Agent 問題（收件匣）。 */
   const [questions, setQuestions] = useState<QuestionView[]>([]);
   const [inbox, setInbox] = useState<{ open: boolean; focus: number | null }>({ open: false, focus: null });
+  /** 教學輔助的進度（全域，存在這台電腦）。 */
+  const [guide, setGuide] = useState<GuideState>(() => loadGuide());
+  const updateGuide = useCallback((f: (g: GuideState) => GuideState) => {
+    setGuide((g) => {
+      const next = f(g);
+      if (next !== g) saveGuide(next);
+      return next;
+    });
+  }, []);
+  const [touring, setTouring] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const setLayout = (patch: Partial<Layout>) =>
     setLayoutState((cur) => {
       const next = { ...cur, ...patch };
@@ -348,6 +364,20 @@ export function AgentCanvasView({
     },
     [refresh],
   );
+
+  // 上手清單：在任何專案看到某一步完成就記下（只增不減）。
+  const observed = useMemo(() => observedSteps(agents, tasks), [agents, tasks]);
+  const guideDone = useMemo(() => withObserved(guide, observed), [guide, observed]);
+  useEffect(() => {
+    if (guideDone !== guide) saveGuide(guideDone);
+  }, [guideDone, guide]);
+  // 第一次打開（有專案、分頁在前景）自動跑一次導覽；之後只有從「?」重看。
+  const showTour = isActive && (touring || (!!projectId && !guide.tourSeen));
+  const endTour = () => {
+    setTouring(false);
+    updateGuide((g) => (g.tourSeen ? g : { ...g, tourSeen: true }));
+  };
+  const hint = useMemo(() => contextHint(agents, tasks), [agents, tasks]);
 
   const library = useMemo(
     () =>
@@ -858,21 +888,31 @@ export function AgentCanvasView({
         <span className="ac-spacer" />
         {/* 團隊範本是整個專案團隊的操作，放在頂列的專案動作這邊，不跟拖曳角色的 Agent 池混在一起。 */}
         {projectId && (
-          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" data-testid="ac-templates" onClick={() => setTemplatesOpen(true)}>
+          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" data-testid="ac-templates" data-guide="templates" onClick={() => setTemplatesOpen(true)}>
             {t.ac_tpl_button}
           </button>
         )}
         <button
           className={`aiterm-btn aiterm-btn--sm ${questions.length ? "aiterm-btn--primary" : "aiterm-btn--ghost"}`}
           data-testid="ac-inbox-button"
+          data-guide="inbox"
           onClick={() => setInbox({ open: !inbox.open, focus: null })}
         >
           {t.ac_inbox_button(questions.length)}
         </button>
         {cap !== null && <span className="ac-ctl">{t.ac_cap(cap)}</span>}
+        <button
+          className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm ac-help-btn"
+          data-guide="help"
+          aria-label={t.ac_help_button}
+          title={t.ac_help_button}
+          onClick={() => setHelpOpen(true)}
+        >
+          ?
+        </button>
       </div>
 
-      <div className="ac-pool">
+      <div className="ac-pool" data-guide="pool">
         <span className="ac-pool-label">{t.ac_pool}</span>
         {(["coder", "reviewer", "orchestrator", "verifier"] as const).map((k) => {
           const disabled = k !== "coder" && placed(k);
@@ -881,6 +921,7 @@ export function AgentCanvasView({
               key={k}
               className={`ac-pool-item ac-pool-item--${k}${disabled ? " ac-pool-item--disabled" : ""}`}
               data-testid={`pool-${k}`}
+              data-guide={`pool-${k}`}
               aria-disabled={disabled}
               title={
                 disabled
@@ -906,7 +947,7 @@ export function AgentCanvasView({
 
       <div className={`ac-main${layout.libCollapsed ? " ac-main--lib-collapsed" : ""}`}>
         {layout.libCollapsed ? (
-          <aside className={`ac-lib ac-lib--rail${hover?.kind === "library" ? " ac-lib--drop" : ""}`} data-drop="library">
+          <aside className={`ac-lib ac-lib--rail${hover?.kind === "library" ? " ac-lib--drop" : ""}`} data-drop="library" data-guide="library">
             <button
               className="ac-iconbtn ac-lib-toggle"
               title={t.ac_lib_expand}
@@ -921,7 +962,7 @@ export function AgentCanvasView({
             </span>
           </aside>
         ) : (
-          <aside className={`ac-lib${hover?.kind === "library" ? " ac-lib--drop" : ""}`} data-drop="library">
+          <aside className={`ac-lib${hover?.kind === "library" ? " ac-lib--drop" : ""}`} data-drop="library" data-guide="library">
             <div className="ac-lib-head">
               <h2>{t.ac_library}</h2>
             </div>
@@ -957,7 +998,10 @@ export function AgentCanvasView({
           </aside>
         )}
 
-        <div className="ac-canvas-wrap">
+        <div className="ac-canvas-wrap" data-guide="canvas">
+          {!guide.checklistHidden && (
+            <GuideChecklist done={guideDone.done} onHide={() => updateGuide((g) => ({ ...g, checklistHidden: true }))} />
+          )}
           <section className={`ac-canvas${hover?.kind === "canvas" && ghost?.kind === "pool" ? " ac-canvas--drop" : ""}`} data-drop="canvas" ref={canvasRef}>
             {agents.length === 0 && (
               <div className="ac-canvas-empty">
@@ -1063,7 +1107,7 @@ export function AgentCanvasView({
         </div>
       </div>
 
-      <div className={`ac-log${layout.logCollapsed ? " ac-log--collapsed" : ""}`}>
+      <div className={`ac-log${layout.logCollapsed ? " ac-log--collapsed" : ""}`} data-guide="log">
         {!layout.logCollapsed && (
           <div
             className="ac-log-resize"
@@ -1102,6 +1146,35 @@ export function AgentCanvasView({
           </div>
         )}
       </div>
+
+      {showTour && <GuideTour onDone={endTour} />}
+      {isActive &&
+        hint &&
+        !showTour &&
+        !guide.hintsOff &&
+        !guide.dismissedHints.includes(hint.id) &&
+        // 有對話框開著時不冒提示，免得浮在對話框上面。
+        !(config || newModule || templatesOpen || verifyFor || transcriptCard || helpOpen || inbox.open) && (
+          <GuideHint
+            hint={hint}
+            onDismiss={() => updateGuide((g) => ({ ...g, dismissedHints: [...g.dismissedHints, hint.id] }))}
+          />
+        )}
+      {helpOpen && (
+        <GuideHelp
+          hintsOn={!guide.hintsOff}
+          onToggleHints={(on) => updateGuide((g) => ({ ...g, hintsOff: !on }))}
+          onReplayTour={() => {
+            setHelpOpen(false);
+            setTouring(true);
+          }}
+          onShowChecklist={() => {
+            setHelpOpen(false);
+            updateGuide((g) => ({ ...g, checklistHidden: false }));
+          }}
+          onClose={() => setHelpOpen(false)}
+        />
+      )}
 
       {inbox.open && (
         <QuestionInbox

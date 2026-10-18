@@ -1,0 +1,91 @@
+/* Agent 協作的教學輔助：導覽、上手清單、情境提示、說明面板 */
+
+/* A 導覽：整片擋住操作，聚光燈用大範圍 box-shadow 壓暗其他地方。 */
+.ac-tour { position: fixed; inset: 0; z-index: 1000; }
+.ac-tour-block { position: absolute; inset: 0; }
+.ac-tour-spot {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  transition: left 0.2s, top 0.2s, width 0.2s, height 0.2s;
+}
+.ac-tour-tip {
+  position: absolute;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent-border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--text-primary);
+  font-size: 13px;
+  user-select: none;
+}
+.ac-tour-head { display: flex; align-items: baseline; gap: 8px; }
+.ac-tour-count { margin-left: auto; font: 11px var(--mono); color: var(--text-muted); }
+.ac-tour-tip p { margin: 6px 0 10px; line-height: 1.55; color: var(--text-secondary, var(--text-primary)); }
+.ac-tour-actions { display: flex; align-items: center; gap: 6px; }
+
+/* B 上手清單：桌布右上角，跟右下角的縮放工具列同一套外觀。 */
+.ac-steps {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 6;
+  width: 250px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--ac-edge);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  font-size: 12.5px;
+}
+.ac-steps--pill { width: auto; padding: 5px 10px; cursor: pointer; color: var(--text-primary); }
+.ac-steps-head { display: flex; align-items: center; gap: 6px; }
+.ac-steps-count { font: 11px var(--mono); color: var(--text-muted); }
+.ac-steps-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.ac-steps-item { display: flex; gap: 6px; line-height: 1.45; }
+.ac-steps-item small { display: block; color: var(--text-muted); font-size: 11.5px; }
+.ac-steps-mark { width: 14px; flex: none; text-align: center; }
+.ac-steps-item--done { color: var(--text-muted); }
+.ac-steps-item--done .ac-steps-mark { color: #86efac; }
+.ac-steps-item--now { color: var(--text-primary); font-weight: 600; }
+.ac-steps-item--now small { font-weight: 400; }
+.ac-steps-item--now .ac-steps-mark { color: var(--accent); }
+.ac-steps-item--todo { color: var(--text-muted); }
+.ac-steps-done { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: #86efac; }
+
+/* C 情境提示 */
+.ac-hint {
+  position: fixed;
+  z-index: 900;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 6px 6px 10px;
+  border-radius: 8px;
+  background: var(--accent-bg);
+  border: 1px dashed var(--accent-border);
+  backdrop-filter: blur(6px);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  animation: ac-hint-in 0.25s ease-out;
+}
+@keyframes ac-hint-in { from { opacity: 0; transform: translateY(4px); } }
+
+/* D 說明面板 */
+.ac-help { width: min(640px, calc(100vw - 32px)); }
+.ac-help-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ac-help-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.ac-help-body { max-height: 60vh; overflow: auto; display: grid; gap: 12px; font-size: 13px; line-height: 1.55; }
+.ac-help-body h4 { margin: 0 0 4px; font-size: 13px; }
+.ac-help-flow { margin: 0; padding-left: 20px; }
+.ac-help-dl { margin: 0; display: grid; gap: 4px; }
+.ac-help-dl div { display: grid; grid-template-columns: minmax(110px, auto) 1fr; gap: 10px; }
+.ac-help-dl dt { font-weight: 600; }
+.ac-help-dl dd { margin: 0; color: var(--text-muted); }
+@media (max-width: 520px) {
+  .ac-help-dl div { grid-template-columns: 1fr; gap: 0; }
+}

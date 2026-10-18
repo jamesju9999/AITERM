@@ -130,6 +130,11 @@ beforeEach(() => {
   tasksUpdated = null;
   try {
     localStorage.clear();
+    // 教學輔助預設「都看過、都關了」，既有測試不受導覽遮罩與提示影響；教學輔助自己的測試再清掉。
+    localStorage.setItem(
+      "aiterm.agentCanvas.guide",
+      JSON.stringify({ tourSeen: true, checklistHidden: true, hintsOff: true, done: [], dismissedHints: [] }),
+    );
   } catch {
     // ignore
   }
@@ -1047,5 +1052,104 @@ describe("AgentCanvasView", () => {
       fireEvent.click(hint);
       expect((await screen.findByTestId("question-5")).className).toContain("ac-q--focus");
     });
+  });
+});
+
+describe("教學輔助", () => {
+  const GUIDE = "aiterm.agentCanvas.guide";
+  const setGuide = (over: Record<string, unknown>) =>
+    localStorage.setItem(GUIDE, JSON.stringify({ tourSeen: true, checklistHidden: true, hintsOff: true, done: [], dismissedHints: [], ...over }));
+  const stored = () => JSON.parse(localStorage.getItem(GUIDE) ?? "{}") as Record<string, unknown>;
+
+  it("第一次打開自動跑導覽；略過後不再自動出現，可以從「?」重看", async () => {
+    localStorage.removeItem(GUIDE);
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    const first = view();
+    let tour = await screen.findByTestId("ac-tour");
+    expect(within(tour).getByText("加入角色")).toBeTruthy();
+    expect(within(tour).getByText("1 / 7")).toBeTruthy();
+    fireEvent.click(within(tour).getByRole("button", { name: "下一步" }));
+    expect(within(tour).getByText("團隊範本")).toBeTruthy();
+    fireEvent.click(within(tour).getByRole("button", { name: "略過" }));
+    expect(screen.queryByTestId("ac-tour")).toBeNull();
+    expect(stored().tourSeen).toBe(true);
+    first.unmount();
+
+    view();
+    await screen.findByTestId("ac-templates");
+    expect(screen.queryByTestId("ac-tour")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "說明" }));
+    const help = await screen.findByRole("dialog", { name: "Agent 協作怎麼運作" });
+    fireEvent.click(within(help).getByRole("button", { name: "重看導覽" }));
+    tour = await screen.findByTestId("ac-tour");
+    expect(screen.queryByRole("dialog", { name: "Agent 協作怎麼運作" })).toBeNull();
+    // 最後一步是「完成」。
+    for (let i = 0; i < 6; i++) fireEvent.click(within(tour).getByRole("button", { name: "下一步" }));
+    fireEvent.click(within(tour).getByRole("button", { name: "完成" }));
+    expect(screen.queryByTestId("ac-tour")).toBeNull();
+  });
+
+  it("上手清單依桌布狀態打勾；關掉後從「?」打開", async () => {
+    setGuide({ checklistHidden: false });
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([card({ id: "m1", card_kind: "work", agent_id: "a1", status: "queued" })]);
+    view();
+    const list = await screen.findByTestId("ac-checklist");
+    await waitFor(() => expect(list.querySelector('[data-step="assign"]')?.getAttribute("data-state")).toBe("done"));
+    expect(list.querySelector('[data-step="coder"]')?.getAttribute("data-state")).toBe("done");
+    expect(list.querySelector('[data-step="module"]')?.getAttribute("data-state")).toBe("done");
+    expect(list.querySelector('[data-step="reviewer"]')?.getAttribute("data-state")).toBe("now");
+    expect(within(list).getByText(/把「審核者」拖到桌布上/)).toBeTruthy();
+    expect(within(list).getByText("3/8")).toBeTruthy();
+    expect(stored().done).toEqual(["coder", "module", "assign"]);
+
+    fireEvent.click(within(list).getByRole("button", { name: "關閉上手清單" }));
+    expect(screen.queryByTestId("ac-checklist")).toBeNull();
+    expect(stored().checklistHidden).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "說明" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "打開上手清單" }));
+    expect(await screen.findByTestId("ac-checklist")).toBeTruthy();
+  });
+
+  it("情境提示指向下一步；關掉的那一項不再出現", async () => {
+    setGuide({ hintsOff: false });
+    // jsdom 沒有版面，給目標一個在畫面裡的位置。
+    const rect = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockReturnValue({ left: 10, top: 10, right: 110, bottom: 60, width: 100, height: 50, x: 10, y: 10, toJSON: () => ({}) });
+    try {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      const hint = await screen.findByTestId("ac-hint-add_module");
+      expect(hint.textContent).toMatch(/在模組庫新增模組/);
+      fireEvent.click(within(hint).getByRole("button", { name: "不再提示這一項" }));
+      expect(screen.queryByTestId("ac-hint-add_module")).toBeNull();
+      expect(stored().dismissedHints).toEqual(["add_module"]);
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("「?」裡關掉情境提示就不再出現", async () => {
+    setGuide({ hintsOff: false });
+    const rect = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockReturnValue({ left: 10, top: 10, right: 110, bottom: 60, width: 100, height: 50, x: 10, y: 10, toJSON: () => ({}) });
+    try {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      await screen.findByTestId("ac-hint-add_module");
+      fireEvent.click(screen.getByRole("button", { name: "說明" }));
+      const help = await screen.findByRole("dialog");
+      fireEvent.click(within(help).getByLabelText("顯示情境提示"));
+      fireEvent.click(within(help).getByRole("button", { name: "關閉" }));
+      expect(screen.queryByTestId("ac-hint-add_module")).toBeNull();
+      expect(stored().hintsOff).toBe(true);
+    } finally {
+      rect.mockRestore();
+    }
   });
 });
