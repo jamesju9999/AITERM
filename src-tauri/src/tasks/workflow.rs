@@ -1430,7 +1430,7 @@ pub async fn override_module(pool: &SqlitePool, module_id: &str) -> Result<(), s
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
 
@@ -2586,7 +2586,7 @@ mod tests {
         assert_eq!(module_state(&m, &chain, true), ModuleState::FixQueued);
     }
 
-    fn test_row(id: &str) -> TaskRow {
+    pub(crate) fn test_row(id: &str) -> TaskRow {
         TaskRow {
             id: id.into(), title: id.into(), body: "需求".into(), project_dir: "/r".into(), status: "done".into(),
             parallel_ok: true, interactive: false, sort_order: 0.0, outcome: Some("success".into()), tab_id: None,

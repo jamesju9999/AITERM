@@ -881,6 +881,10 @@ impl Dispatcher for RealDispatcher {
             self.bridge.port(),
             self.secrets.get(crate::bridge::auth::BRIDGE_TOKEN_KEY).ok().flatten(),
         );
+        // 每張 Agent 卡前面放共同的專案背景（專案簡介＋團隊分工），平行的 Agent 才有全貌。
+        if agent.is_some() {
+            prompt = format!("{}{prompt}", crate::tasks::context::project_context(&project.pool, task).await);
+        }
         let readonly = task.card_kind == crate::tasks::workflow::KIND_REVIEW
             || task.card_kind == crate::tasks::workflow::KIND_PLAN
             || task.card_kind == crate::tasks::workflow::KIND_VERIFY;

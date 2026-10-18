@@ -17,6 +17,8 @@ vi.mock("../../ipc/tasks", () => ({
   listTokenUsage: vi.fn().mockResolvedValue({}),
   getTokenBudget: vi.fn().mockResolvedValue(null),
   setTokenBudget: vi.fn().mockResolvedValue(undefined),
+  getProjectBrief: vi.fn().mockResolvedValue(null),
+  setProjectBrief: vi.fn().mockResolvedValue(undefined),
   getTaskBoardConfig: vi.fn().mockResolvedValue({ max_concurrent: 3 }),
   onTasksUpdated: vi.fn((cb: () => void) => {
     tasksUpdated = cb;
@@ -79,7 +81,7 @@ import {
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
-import { codexInfo, listTasks, listTokenUsage, markTaskDone, type TaskWithAttachments } from "../../ipc/tasks";
+import { codexInfo, getProjectBrief, listTasks, listTokenUsage, markTaskDone, setProjectBrief, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { listProjects } from "../../ipc/projects";
@@ -1068,7 +1070,7 @@ describe("教學輔助", () => {
     const first = view();
     let tour = await screen.findByTestId("ac-tour");
     expect(within(tour).getByText("加入角色")).toBeTruthy();
-    expect(within(tour).getByText("1 / 7")).toBeTruthy();
+    expect(within(tour).getByText("1 / 8")).toBeTruthy();
     fireEvent.click(within(tour).getByRole("button", { name: "下一步" }));
     expect(within(tour).getByText("團隊範本")).toBeTruthy();
     fireEvent.click(within(tour).getByRole("button", { name: "略過" }));
@@ -1085,7 +1087,7 @@ describe("教學輔助", () => {
     tour = await screen.findByTestId("ac-tour");
     expect(screen.queryByRole("dialog", { name: "Agent 協作怎麼運作" })).toBeNull();
     // 最後一步是「完成」。
-    for (let i = 0; i < 6; i++) fireEvent.click(within(tour).getByRole("button", { name: "下一步" }));
+    for (let i = 0; i < 7; i++) fireEvent.click(within(tour).getByRole("button", { name: "下一步" }));
     fireEvent.click(within(tour).getByRole("button", { name: "完成" }));
     expect(screen.queryByTestId("ac-tour")).toBeNull();
   });
@@ -1151,5 +1153,46 @@ describe("教學輔助", () => {
     } finally {
       rect.mockRestore();
     }
+  });
+});
+
+describe("專案簡介", () => {
+  it("打開會載入現有內容，儲存送出去掉頭尾空白的內容，按鈕標上已寫", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(getProjectBrief).mockResolvedValue(null);
+    view();
+    const btn = await screen.findByTestId("ac-brief");
+    expect(btn.textContent).not.toContain("✓");
+    vi.mocked(getProjectBrief).mockResolvedValue("舊的簡介");
+    fireEvent.click(btn);
+    const dlg = await screen.findByRole("dialog", { name: "專案簡介" });
+    const box = within(dlg).getByRole("textbox", { name: "專案簡介" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(box.value).toBe("舊的簡介"));
+    fireEvent.change(box, { target: { value: "  番茄鐘 App，React＋Vite  " } });
+    expect(within(dlg).getByText("22 字")).toBeTruthy();
+    fireEvent.click(within(dlg).getByRole("button", { name: "儲存" }));
+    await waitFor(() => expect(setProjectBrief).toHaveBeenCalledWith("p1", "番茄鐘 App，React＋Vite"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "專案簡介" })).toBeNull());
+    expect(screen.getByTestId("ac-brief").textContent).toContain("✓");
+  });
+
+  it("清空就刪除；超過 2000 字會提醒", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(getProjectBrief).mockResolvedValue("有內容");
+    view();
+    await waitFor(() => expect(screen.getByTestId("ac-brief").textContent).toContain("✓"));
+    fireEvent.click(screen.getByTestId("ac-brief"));
+    const dlg = await screen.findByRole("dialog", { name: "專案簡介" });
+    const box = within(dlg).getByRole("textbox", { name: "專案簡介" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(box.value).toBe("有內容"));
+    fireEvent.change(box, { target: { value: "字".repeat(2001) } });
+    expect(within(dlg).getByText(/超過 2000 字了/)).toBeTruthy();
+    fireEvent.change(box, { target: { value: "   " } });
+    expect(within(dlg).queryByText(/超過 2000 字了/)).toBeNull();
+    fireEvent.click(within(dlg).getByRole("button", { name: "儲存" }));
+    await waitFor(() => expect(setProjectBrief).toHaveBeenCalledWith("p1", null));
+    await waitFor(() => expect(screen.getByTestId("ac-brief").textContent).not.toContain("✓"));
   });
 });

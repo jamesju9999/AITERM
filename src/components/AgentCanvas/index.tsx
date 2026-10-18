@@ -27,6 +27,7 @@ import {
   listTokenUsage,
   getTokenBudget,
   setTokenBudget,
+  getProjectBrief,
   markTaskDone,
   onTasksUpdated,
   type MergeOutcome,
@@ -54,6 +55,7 @@ import { answerQuestion, listQuestions, onQuestionsUpdated, type QuestionView } 
 import { projectSummary, type ProjectSummary } from "./projectSummary";
 import { sumUsage } from "./tokenUsage";
 import { TokenBudgetChip } from "./TokenBudgetChip";
+import { ProjectBriefDialog } from "./ProjectBriefDialog";
 import { GuideChecklist } from "./guide/GuideChecklist";
 import { GuideHelp } from "./guide/GuideHelp";
 import { GuideHint } from "./guide/GuideHint";
@@ -178,6 +180,9 @@ export function AgentCanvasView({
   /** 專案的 token 上限；同樣記著是哪個專案的。 */
   const [budgetOf, setBudgetOf] = useState<{ projectId: string; budget: number | null } | null>(null);
   const [cap, setCap] = useState<number | null>(null);
+  /** 專案有沒有寫簡介；同樣記著是哪個專案的。 */
+  const [briefOf, setBriefOf] = useState<{ projectId: string; set: boolean } | null>(null);
+  const [briefOpen, setBriefOpen] = useState(false);
   const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000));
   const [config, setConfig] = useState<{ kind: AgentKind; agent: AgentRow | null; x: number; y: number } | null>(null);
   /** 一次性的交接光點；每顆約 1.2 秒後移除。 */
@@ -290,6 +295,9 @@ export function AgentCanvasView({
         .catch(() => {});
       getTokenBudget(projectId)
         .then((budget) => alive && setBudgetOf({ projectId, budget }))
+        .catch(() => {});
+      getProjectBrief(projectId)
+        .then((b) => alive && setBriefOf({ projectId, set: !!b?.trim() }))
         .catch(() => {});
     };
     load();
@@ -892,6 +900,18 @@ export function AgentCanvasView({
             {t.ac_tpl_button}
           </button>
         )}
+        {projectId && (
+          <button
+            className={`aiterm-btn aiterm-btn--ghost aiterm-btn--sm${briefOf?.projectId === projectId && briefOf.set ? "" : " ac-brief-btn--empty"}`}
+            data-testid="ac-brief"
+            data-guide="brief"
+            title={briefOf?.projectId === projectId && briefOf.set ? t.ac_brief_set : t.ac_brief_unset}
+            onClick={() => setBriefOpen(true)}
+          >
+            {t.ac_brief_button}
+            {briefOf?.projectId === projectId && briefOf.set && <span className="ac-brief-mark"> ✓</span>}
+          </button>
+        )}
         <button
           className={`aiterm-btn aiterm-btn--sm ${questions.length ? "aiterm-btn--primary" : "aiterm-btn--ghost"}`}
           data-testid="ac-inbox-button"
@@ -1154,12 +1174,19 @@ export function AgentCanvasView({
         !guide.hintsOff &&
         !guide.dismissedHints.includes(hint.id) &&
         // 有對話框開著時不冒提示，免得浮在對話框上面。
-        !(config || newModule || templatesOpen || verifyFor || transcriptCard || helpOpen || inbox.open) && (
+        !(config || newModule || templatesOpen || briefOpen || verifyFor || transcriptCard || helpOpen || inbox.open) && (
           <GuideHint
             hint={hint}
             onDismiss={() => updateGuide((g) => ({ ...g, dismissedHints: [...g.dismissedHints, hint.id] }))}
           />
         )}
+      {briefOpen && projectId && (
+        <ProjectBriefDialog
+          projectId={projectId}
+          onSaved={(b) => setBriefOf({ projectId, set: !!b })}
+          onClose={() => setBriefOpen(false)}
+        />
+      )}
       {helpOpen && (
         <GuideHelp
           hintsOn={!guide.hintsOff}

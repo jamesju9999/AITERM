@@ -4,7 +4,7 @@ import { useLocale } from "../../../contexts/LocaleContext";
 import { clampSpot } from "./tourGeometry";
 import "./guide.css";
 
-const STEPS = ["pool", "templates", "library", "canvas", "inbox", "log", "help"] as const;
+const STEPS = ["pool", "templates", "brief", "library", "canvas", "inbox", "log", "help"] as const;
 type TourStep = (typeof STEPS)[number];
 
 const find = (id: string) => document.querySelector<HTMLElement>(`[data-guide="${id}"]`);
@@ -54,6 +54,7 @@ export function GuideTour({ onDone }: { onDone: () => void }) {
   const text: Record<TourStep, [string, string]> = {
     pool: [t.ac_guide_pool_title, t.ac_guide_pool_body],
     templates: [t.ac_guide_templates_title, t.ac_guide_templates_body],
+    brief: [t.ac_guide_brief_title, t.ac_guide_brief_body],
     library: [t.ac_guide_library_title, t.ac_guide_library_body],
     canvas: [t.ac_guide_canvas_title, t.ac_guide_canvas_body],
     inbox: [t.ac_guide_inbox_title, t.ac_guide_inbox_body],

@@ -140,6 +140,13 @@ export const getTokenBudget = (projectId: string): Promise<number | null> => inv
 export const setTokenBudget = (projectId: string, budget: number | null): Promise<void> =>
   invoke("tasks_set_token_budget", { projectId, budget });
 
+/** 專案簡介（null = 沒寫）。每張 Agent 卡派工時放在提示前面，連同自動產生的團隊分工。 */
+export const getProjectBrief = (projectId: string): Promise<string | null> => invoke("tasks_get_project_brief", { projectId });
+
+/** 設定專案簡介；空白或 null 刪除。 */
+export const setProjectBrief = (projectId: string, brief: string | null): Promise<void> =>
+  invoke("tasks_set_project_brief", { projectId, brief });
+
 export const createTask = (
   projectId: string,
   args: {

@@ -93,6 +93,20 @@ pub async fn tasks_set_token_budget(
     Ok(())
 }
 
+/// 專案簡介（`None` = 沒寫）。每張 Agent 卡派工時放在提示前面。
+#[tauri::command]
+pub async fn tasks_get_project_brief(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Option<String>, String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::context::get_brief(&p.pool).await.map_err(|e| e.to_string())
+}
+
+/// 設定專案簡介（空白 = 刪除）。只影響之後派工的卡。
+#[tauri::command]
+pub async fn tasks_set_project_brief(project_id: String, brief: Option<String>, reg: State<'_, ProjectRegistry>) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::context::set_brief(&p.pool, brief.as_deref()).await.map_err(|e| e.to_string())
+}
+
 #[derive(Serialize)]
 pub struct TaskWithAttachments {
     #[serde(flatten)]

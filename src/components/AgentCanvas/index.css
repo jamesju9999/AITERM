@@ -648,3 +648,10 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-tpl-item { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 10px; }
 .ac-tpl-item > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ac-tpl-item small { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 專案簡介 */
+.ac-brief-btn--empty { opacity: 0.75; }
+.ac-brief-mark { color: #86efac; }
+.ac-brief { width: min(640px, calc(100vw - 32px)); }
+.ac-brief-text { width: 100%; min-height: 220px; resize: vertical; font-size: 13px; line-height: 1.55; }
+.ac-brief-count { text-align: right; font: 11px var(--mono); color: var(--text-muted); margin-top: 4px; }
