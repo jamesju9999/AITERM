@@ -56,24 +56,81 @@
 .ac-steps-item--todo { color: var(--text-muted); }
 .ac-steps-done { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: #86efac; }
 
-/* C 情境提示 */
+/* C 情境提示：實心小卡＋指向目標的箭頭，目標外圍一圈呼吸光暈。 */
 .ac-hint {
   position: fixed;
   z-index: 900;
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  padding: 6px 6px 6px 10px;
+  gap: 10px;
+  width: max-content;
+  padding: 10px 8px 10px 10px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, var(--bg-secondary)), var(--bg-secondary) 70%);
+  border: 1px solid var(--accent-border);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.03) inset, 0 0 24px color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-primary);
+  animation: ac-hint-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ac-hint--right { animation-name: ac-hint-in-right; }
+@keyframes ac-hint-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes ac-hint-in-right { from { opacity: 0; transform: translateX(6px); } }
+
+/* 箭頭：跟卡片同色同框的小方塊轉 45 度，只露出朝向目標的兩條邊。 */
+.ac-hint-arrow {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-secondary));
+  border: 1px solid var(--accent-border);
+  transform: rotate(45deg);
+}
+.ac-hint--right .ac-hint-arrow { left: -6px; top: 16px; border-top-color: transparent; border-right-color: transparent; }
+.ac-hint--below .ac-hint-arrow { top: -6px; left: 22px; border-bottom-color: transparent; border-right-color: transparent; }
+
+.ac-hint-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
   border-radius: 8px;
   background: var(--accent-bg);
-  border: 1px dashed var(--accent-border);
-  backdrop-filter: blur(6px);
-  color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.45;
-  animation: ac-hint-in 0.25s ease-out;
+  color: var(--accent);
 }
-@keyframes ac-hint-in { from { opacity: 0; transform: translateY(4px); } }
+.ac-hint-body { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.ac-hint-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; color: var(--accent); }
+.ac-hint-text { font-size: 12.5px; line-height: 1.5; text-wrap: pretty; }
+.ac-hint-close {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ac-hint-close:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-primary); }
+
+.ac-hint-ring {
+  position: fixed;
+  z-index: 899;
+  border-radius: 10px;
+  border: 1.5px solid var(--accent);
+  pointer-events: none;
+  animation: ac-hint-ring 2.2s ease-out infinite;
+}
+@keyframes ac-hint-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); opacity: 1; }
+  70% { box-shadow: 0 0 0 10px transparent; opacity: 0.6; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ac-hint, .ac-hint-ring { animation: none; }
+}
 
 /* D 說明面板 */
 .ac-help { width: min(640px, calc(100vw - 32px)); }
