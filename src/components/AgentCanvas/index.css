@@ -507,7 +507,8 @@
 /* 程式庫狀態：選完資料夾立刻告訴使用者能不能用，不能用就給一鍵修正 */
 .ac-repo-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; margin-top: 2px; }
 .ac-repo-status--ok { color: #86efac; }
-.ac-repo-status--missing { color: #fca5a5; }
+.ac-repo-status--missing,
+.ac-repo-status--board_folder { color: #fca5a5; }
 .ac-repo-status--not_repo,
 .ac-repo-status--no_commits { color: #fde68a; }
 

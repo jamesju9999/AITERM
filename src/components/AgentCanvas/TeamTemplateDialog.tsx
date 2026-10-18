@@ -3,18 +3,23 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { checkRepo, type AgentRow, type RepoCheck } from "../../ipc/agents";
+import { RepoStatus } from "./RepoStatus";
+import { confirmInitRepo } from "./repoInit";
 import { deleteTemplate, loadTemplates, saveTemplate, snapshot, type TeamTemplate } from "./teamTemplates";
 
 /**
  * 團隊範本：把桌布上的團隊存起來，或把存好的團隊一次放到這個專案。套用時所有 Agent
- * 用同一個程式庫（要是已經有 commit 的 git repo）。
+ * 用同一個程式庫（要是已經有 commit 的 git repo；還不是的話這裡就能一鍵初始化——
+ * 套用範本通常是在空桌布上，沒有別的地方可以初始化）。
  */
 export function TeamTemplateDialog({
+  projectId,
   agents,
   defaultRepo,
   onApply,
   onClose,
 }: {
+  projectId: string;
   agents: AgentRow[];
   defaultRepo: string;
   onApply: (tpl: TeamTemplate, repoDir: string) => Promise<void>;
@@ -28,6 +33,8 @@ export function TeamTemplateDialog({
   const repo = edited ?? defaultRepo;
   const setRepo = setEdited;
   const [check, setCheck] = useState<RepoCheck | null>(null);
+  const [checkRev, setCheckRev] = useState(0);
+  const [initing, setIniting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,8 +47,16 @@ export function TeamTemplateDialog({
     return () => {
       alive = false;
     };
-  }, [repo]);
+  }, [repo, checkRev]);
   const repoOk = !!repo.trim() && check?.status === "ok";
+
+  const fixRepo = async () => {
+    setIniting(true);
+    setError(null);
+    setError(await confirmInitRepo(t, repo.trim(), check?.status, projectId));
+    setIniting(false);
+    setCheckRev((n) => n + 1);
+  };
 
   const pick = async () => {
     try {
@@ -110,7 +125,8 @@ export function TeamTemplateDialog({
               {t.ac_tpl_browse}
             </button>
           </div>
-          {repo.trim() && check && !repoOk && <span className="task-field-hint ac-bad-text">{t.ac_tpl_repo_bad}</span>}
+          {repo.trim() && check && <RepoStatus repo={check} busy={initing} onFix={() => void fixRepo()} />}
+          {!repo.trim() && <span className="task-field-hint">{t.ac_tpl_repo_pick}</span>}
         </label>
 
         {templates.length === 0 ? (

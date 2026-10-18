@@ -101,7 +101,8 @@ export type RepoCheck =
   | { status: "ok"; branch: string | null }
   | { status: "missing" }
   | { status: "not_repo" }
-  | { status: "no_commits" };
+  | { status: "no_commits" }
+  | { status: "board_folder" };
 
 export const checkRepo = (path: string): Promise<RepoCheck> => invoke("agents_check_repo", { path });
 

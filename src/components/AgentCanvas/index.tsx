@@ -1149,6 +1149,7 @@ export function AgentCanvasView({
       )}
       {templatesOpen && projectId && (
         <TeamTemplateDialog
+          projectId={projectId}
           agents={agents}
           defaultRepo={agents[0]?.project_dir ?? ""}
           onApply={async (tpl, repoDir) => {

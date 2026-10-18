@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { checkRepo, initRepo, type AgentCli, type AgentKind, type AgentRow, type RepoCheck } from "../../ipc/agents";
+import { checkRepo, type AgentCli, type AgentKind, type AgentRow, type RepoCheck } from "../../ipc/agents";
 import { codexInfo, type CodexInfo } from "../../ipc/tasks";
 import { usedDirs } from "../../ipc/projects";
 import { deleteCustomRole, loadCustomRoles, saveCustomRole, type CustomRole } from "./customRoles";
+import { RepoStatus } from "./RepoStatus";
+import { confirmInitRepo } from "./repoInit";
 import { builtinRoles, type RolePreset } from "./roles";
 
 export interface AgentConfigValues {
@@ -124,16 +126,9 @@ export function AgentConfigDialog({
   }, [isNew, dir, repoRev]);
 
   const fixRepo = async () => {
-    const path = dir.trim();
-    const msg = repo?.status === "no_commits" ? t.ac_repo_first_commit_confirm(path) : t.ac_repo_init_confirm(path);
-    if (!(await confirm(msg, { kind: "info" }))) return;
     setRepoBusy(true);
     setError(null);
-    try {
-      await initRepo(path, projectId);
-    } catch (e) {
-      setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
-    }
+    setError(await confirmInitRepo(t, dir.trim(), repo?.status, projectId));
     setRepoBusy(false);
     setRepoRev((n) => n + 1);
   };
@@ -385,25 +380,7 @@ export function AgentConfigDialog({
                   ))}
                 </div>
               )}
-              {dir.trim() && repo && (
-                <div className={`ac-repo-status ac-repo-status--${repo.status}`} data-testid="repo-status" role="status">
-                  {repo.status === "ok" && <span>✓ {t.ac_repo_ok(repo.branch)}</span>}
-                  {repo.status === "missing" && <span>✗ {t.ac_repo_missing}</span>}
-                  {(repo.status === "not_repo" || repo.status === "no_commits") && (
-                    <>
-                      <span>⚠ {repo.status === "not_repo" ? t.ac_repo_not_repo : t.ac_repo_no_commits}</span>
-                      <button
-                        type="button"
-                        className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
-                        disabled={repoBusy}
-                        onClick={() => void fixRepo()}
-                      >
-                        {repoBusy ? t.ac_repo_initing : repo.status === "not_repo" ? t.ac_repo_init : t.ac_repo_first_commit}
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
+              {dir.trim() && repo && <RepoStatus repo={repo} busy={repoBusy} onFix={() => void fixRepo()} />}
             </>
           ) : (
             <div className="ac-readonly" title={t.ac_repo_locked}>

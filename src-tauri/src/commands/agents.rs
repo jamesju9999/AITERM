@@ -69,6 +69,9 @@ pub async fn agents_create(
         crate::tasks::repo_check::RepoCheck::NoCommits => {
             return Err(format!("這個 git repo 還沒有任何 commit：{}", args.project_dir))
         }
+        crate::tasks::repo_check::RepoCheck::BoardFolder => {
+            return Err(format!("這是看板專案資料夾，不是程式碼：{}", args.project_dir))
+        }
     }
     let id = agents::create_agent(
         &p.pool,

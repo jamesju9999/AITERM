@@ -21,6 +21,16 @@ pub enum RepoCheck {
     NotRepo,
     /// 是 git repo 但還沒有任何 commit。可以一鍵建立第一個 commit。
     NoCommits,
+    /// 還不能用，而且這是 AITerm 的看板專案資料夾（有 `.aitprj`），不是程式碼。
+    /// 不提供初始化——在這裡 init 會把 tasks.db 與派工紀錄收進版控。
+    BoardFolder,
+}
+
+/// 資料夾最上層有 `.aitprj` 檔＝看板專案資料夾。
+fn is_board_folder(path: &Path) -> bool {
+    std::fs::read_dir(path).is_ok_and(|rd| {
+        rd.flatten().any(|e| e.path().extension().is_some_and(|x| x == "aitprj") && e.path().is_file())
+    })
 }
 
 pub async fn check_repo(path: &str) -> RepoCheck {
@@ -29,10 +39,14 @@ pub async fn check_repo(path: &str) -> RepoCheck {
     }
     match VcsManager::detect_repo(path).await {
         Ok(info) if info.vcs_type == VcsType::Git => {}
+        _ if is_board_folder(Path::new(path)) => return RepoCheck::BoardFolder,
         _ => return RepoCheck::NotRepo,
     }
     let client = GitClient::new(path.to_string(), None);
     if client.head_sha().await.is_err() {
+        if is_board_folder(Path::new(path)) {
+            return RepoCheck::BoardFolder;
+        }
         return RepoCheck::NoCommits;
     }
     RepoCheck::Ok { branch: client.current_branch().await.ok().filter(|b| !b.is_empty() && b != "HEAD") }
@@ -48,6 +62,7 @@ pub async fn init_repo(path: &str, board: Option<&Path>) -> Result<(), String> {
     match check_repo(path).await {
         RepoCheck::Ok { .. } => return Ok(()),
         RepoCheck::Missing => return Err(format!("資料夾不存在：{path}")),
+        RepoCheck::BoardFolder => return Err(format!("這是看板專案資料夾，不是程式碼：{path}")),
         RepoCheck::NotRepo => GitClient::new(path.to_string(), None).init().await?,
         RepoCheck::NoCommits => {}
     }
@@ -167,6 +182,30 @@ mod tests {
         fs::write(board.join("tasks.db"), "changed").unwrap();
         let st = Command::new("git").args(["status", "--porcelain"]).current_dir(dir.path()).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&st.stdout), "", "看板更新不能讓程式庫變髒");
+    }
+
+    /// 實機：團隊範本選到看板專案資料夾（ARESGUI.aitprj＋tasks.db），只看得到
+    /// 「不是 git repo」，照提示初始化就會把 tasks.db commit 進去。
+    #[tokio::test]
+    async fn a_board_project_folder_is_reported_and_never_initialised() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("ARESGUI.aitprj"), "{}").unwrap();
+        fs::write(dir.path().join("tasks.db"), "db").unwrap();
+        let p = dir.path().to_string_lossy().into_owned();
+        assert_eq!(check_repo(&p).await, RepoCheck::BoardFolder);
+        assert!(init_repo(&p, None).await.is_err());
+        assert!(!dir.path().join(".git").exists(), "不能 git init");
+
+        git(dir.path(), &["init", "-q"]);
+        assert_eq!(check_repo(&p).await, RepoCheck::BoardFolder, "init 過但沒 commit 也一樣");
+        assert!(init_repo(&p, None).await.is_err());
+        let head = Command::new("git").args(["rev-parse", "--verify", "HEAD"]).current_dir(dir.path()).output().unwrap();
+        assert!(!head.status.success(), "不能建第一個 commit");
+
+        // 同名但是資料夾的不算；已經是可用的程式庫也照常回 Ok（不擋已經在用的設定）。
+        let code = tempfile::tempdir().unwrap();
+        fs::create_dir_all(code.path().join("x.aitprj")).unwrap();
+        assert_eq!(check_repo(&code.path().to_string_lossy()).await, RepoCheck::NotRepo);
     }
 
     #[test]

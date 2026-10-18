@@ -417,6 +417,45 @@ describe("AgentCanvasView", () => {
     );
   });
 
+  /** 實機：空桌布套用範本，選的資料夾還不是程式庫，只叫人「先放一位 Agent 初始化」。 */
+  it("團隊範本：空桌布選的資料夾還不是程式庫，在對話框裡直接初始化再套用", async () => {
+    localStorage.setItem(
+      "aiterm.agentCanvas.teamTemplates",
+      JSON.stringify([{ name: "小隊", agents: [{ kind: "coder", name: "工程師1", role: "", prompt_prefix: "", model: "", produces_spec: false, dx: 0, dy: 0 }] }]),
+    );
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "not_repo" }).mockResolvedValue({ status: "ok", branch: "main" });
+    view();
+    fireEvent.click(await screen.findByTestId("ac-templates-empty"));
+    const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    expect(within(dlg).getByText(/按「選擇…」挑 Agent 要寫程式的資料夾/)).toBeTruthy();
+    fireEvent.click(within(dlg).getByRole("button", { name: "選擇…" }));
+    const apply = within(await within(dlg).findByTestId("tpl-小隊")).getByRole("button", { name: "套用" });
+    fireEvent.click(await within(dlg).findByRole("button", { name: "初始化為 git repo" }));
+    await waitFor(() => expect(initRepo).toHaveBeenCalledWith("/repo", "p1"));
+    await waitFor(() => expect(apply).not.toBeDisabled());
+    fireEvent.click(apply);
+    await waitFor(() => expect(createAgent).toHaveBeenCalledWith("p1", expect.objectContaining({ name: "工程師1", project_dir: "/repo" })));
+  });
+
+  it("團隊範本：選到看板專案資料夾要說清楚，而且不給初始化", async () => {
+    localStorage.setItem(
+      "aiterm.agentCanvas.teamTemplates",
+      JSON.stringify([{ name: "小隊", agents: [{ kind: "coder", name: "工程師1", role: "", prompt_prefix: "", model: "", produces_spec: false, dx: 0, dy: 0 }] }]),
+    );
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "board_folder" });
+    view();
+    fireEvent.click(await screen.findByTestId("ac-templates-empty"));
+    const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    fireEvent.click(within(dlg).getByRole("button", { name: "選擇…" }));
+    expect((await within(dlg).findByTestId("repo-status")).textContent).toMatch(/看板專案資料夾，不是程式碼/);
+    expect(within(dlg).queryByRole("button", { name: /初始化|第一個 commit/ })).toBeNull();
+    expect(within(within(dlg).getByTestId("tpl-小隊")).getByRole("button", { name: "套用" })).toBeDisabled();
+  });
+
   it("可以自訂角色名稱與提示詞，存成我的角色後下次從選單帶入", async () => {
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
