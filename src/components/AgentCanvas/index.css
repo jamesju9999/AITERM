@@ -7,6 +7,8 @@
   --ac-coding: #3b82f6;
   --ac-done: #22c55e;
   --ac-fail: #ef4444;
+  /* 分區靠底色深淺，不靠實線：工具區、模組庫、活動記錄比桌布亮一階，交界只留這條很淡的線。 */
+  --ac-edge: rgba(255, 255, 255, 0.05);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) 120px;
   height: 100%;
@@ -30,9 +32,8 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 8px 14px;
+  padding: 8px 14px 4px;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
 }
 .ac-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 600; }
 .ac-title-icon { flex: none; color: #e879f9; }
@@ -60,8 +61,9 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 4px 14px 8px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--ac-edge);
 }
 .ac-pool-label { font-size: 12px; color: var(--text-secondary); font-weight: 600; }
 .ac-pool-item {
@@ -90,7 +92,7 @@
   flex-direction: column;
   min-height: 0;
   background: var(--bg-secondary);
-  border-right: 1px solid var(--border-color);
+  border-right: 1px solid var(--ac-edge);
 }
 .ac-lib--drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
 .ac-lib h2 { margin: 12px 12px 2px; font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; }
@@ -116,7 +118,15 @@
   background-color: var(--bg-primary);
   background-image: radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
   background-size: 22px 22px;
+  /* 桌布本來就能拖曳平移，捲軸平常不顯示，滑鼠移到桌布上才淡淡出現。 */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
 }
+.ac-canvas:hover { scrollbar-color: rgba(255, 255, 255, 0.16) transparent; }
+.ac-canvas::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+.ac-canvas::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+.ac-canvas:hover::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.16); }
+.ac-canvas::-webkit-scrollbar-corner { background: transparent; }
 .ac-canvas--drop { box-shadow: inset 0 0 0 2px var(--accent); }
 .ac-canvas-empty {
   position: absolute;
@@ -281,7 +291,7 @@
 .ac-merge-msg--bad { color: #fca5a5; }
 
 /* 活動記錄 */
-.ac-log { border-top: 1px solid var(--border-color); background: var(--bg-secondary); display: flex; flex-direction: column; min-height: 0; }
+.ac-log { border-top: 1px solid var(--ac-edge); background: var(--bg-secondary); display: flex; flex-direction: column; min-height: 0; }
 .ac-log-title { font-size: 11px; color: var(--text-muted); padding: 6px 14px 2px; letter-spacing: 0.06em; text-transform: uppercase; }
 .ac-log-lines { flex: 1; overflow: auto; padding: 0 14px 6px; font: 11.5px var(--mono); }
 .ac-log-line { white-space: nowrap; color: var(--text-secondary); }
@@ -500,15 +510,28 @@
 .ac-repo-status--no_commits { color: #fde68a; }
 
 /* 版面可調：模組庫收合、活動記錄收合／拖曳高度、桌布縮放 */
-.ac-main--lib-collapsed { grid-template-columns: 34px minmax(0, 1fr); }
+/* 收合時模組庫不佔一欄（原本是一條貫穿整個高度的窄條加直線），改成浮在桌布左下角的小按鈕，
+   跟右下角的縮放工具列對稱；放左上角會壓到排在那裡的 Agent 卡。 */
+.ac-main { position: relative; }
+.ac-main--lib-collapsed { grid-template-columns: minmax(0, 1fr); }
 .ac-lib-head { display: flex; align-items: center; justify-content: space-between; padding-right: 6px; }
 .ac-lib-toggle { font-size: 14px; line-height: 1; }
-.ac-lib--rail { align-items: center; padding-top: 8px; gap: 10px; }
+.ac-lib--rail {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 6;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px 3px 4px;
+  border: 1px solid var(--ac-edge);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
 .ac-lib-rail-label {
-  writing-mode: vertical-rl;
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--text-muted);
-  letter-spacing: 0.08em;
   white-space: nowrap;
 }
 
@@ -526,7 +549,7 @@
   padding: 3px 4px;
   border-radius: 8px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--ac-edge);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 .ac-zoom-pct { min-width: 40px; text-align: center; font: 11px var(--mono); color: var(--text-muted); }
