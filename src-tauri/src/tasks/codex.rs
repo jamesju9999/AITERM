@@ -19,6 +19,9 @@ pub struct CodexLaunch<'a> {
     pub model: Option<&'a str>,
     /// 卡片內容寫在這個檔案裡；指令只叫 Codex 去讀它（避免多行內容在各 shell 的引號問題）。
     pub prompt_file: &'a Path,
+    /// 工作資料夾以外、Codex 也要能讀寫的資料夾（`--add-dir`）：卡片資料夾（提示檔、驗收證據）。
+    /// Windows 的沙箱連「讀」工作資料夾以外的檔案都會擋（實機：讀 prompt.md 被拒）。
+    pub add_dirs: &'a [&'a Path],
     /// 有值 = `codex resume <id>` 接著做。
     pub resume_session: Option<&'a str>,
     /// SessionStart hook 要執行的指令（`hook_command` 的結果）。
@@ -115,6 +118,9 @@ pub fn launch_command(o: &CodexLaunch) -> Option<String> {
     // 不吃 config.toml 的預設供應商——那可能是本機模型伺服器。
     parts.push(config_arg("model_provider", &toml_lit("openai")?)?);
     parts.push(config_arg("sandbox_workspace_write.network_access", "true")?);
+    for dir in o.add_dirs {
+        parts.push(format!("--add-dir {}", shell_arg(dir.to_str()?)?));
+    }
     if let Some(m) = o.model.map(str::trim).filter(|m| safe_model(m)) {
         parts.push(format!("-m {m}"));
     }
@@ -143,10 +149,12 @@ pub fn launch_command(o: &CodexLaunch) -> Option<String> {
 }
 
 /// SessionStart hook：把 Codex 給的 JSON（含 session_id、transcript_path）原封不動 POST 回 AITerm。
-/// 刻意不含任何引號（它會被放進 TOML literal 字串、再放進 shell 雙引號裡）。
+/// 刻意不含任何引號（它會被放進 TOML literal 字串、再放進 shell 雙引號裡），也不用 `--data-binary @-`：
+/// Windows 的 Codex 用 PowerShell 跑 hook，`@` 在 PowerShell 是特殊語法（實機 hook exited with code 1）。
+/// `-T -` 一樣從 stdin 讀、`-X POST` 把方法改回 POST（AITerm 的 hook 伺服器收 chunked）。
 pub fn hook_command(base: &str) -> String {
     let curl = if cfg!(windows) { "curl.exe" } else { "curl" };
-    format!("{curl} -s -m 5 -X POST -H Content-Type:application/json --data-binary @- {base}/codex-session")
+    format!("{curl} -s -m 5 -X POST -H Content-Type:application/json -T - {base}/codex-session")
 }
 
 /// rollout 裡最後一筆有內容的 `token_count`：`total_token_usage` 是累計值。
@@ -361,6 +369,7 @@ mod tests {
             program: "codex",
             model: None,
             prompt_file: file,
+            add_dirs: &[],
             resume_session: None,
             hook_command: None,
             ask_url: None,
@@ -401,6 +410,16 @@ mod tests {
     }
 
     #[test]
+    fn the_card_folder_is_added_so_windows_can_read_the_prompt() {
+        let f = Path::new(r"C:\P\tasks\t1\prompt.md");
+        let dir = Path::new(r"C:\P\tasks\t1");
+        let line = launch_command(&CodexLaunch { add_dirs: &[dir], ..base(f) }).unwrap();
+        assert!(line.contains(r#" --add-dir "C:\P\tasks\t1" "#), "{line}");
+        let bad = Path::new("/p/$x");
+        assert!(launch_command(&CodexLaunch { add_dirs: &[bad], ..base(f) }).is_none());
+    }
+
+    #[test]
     fn resuming_puts_the_session_right_after_resume() {
         let f = Path::new("/p/prompt.md");
         let line = launch_command(&CodexLaunch { resume_session: Some("01a14a6c-f298-70c0"), ..base(f) }).unwrap();
@@ -430,6 +449,7 @@ mod tests {
             "{line}"
         );
         assert!(hook.ends_with("http://127.0.0.1:9/quota/s/t/codex-session"));
+        assert!(!hook.contains('@') && !hook.contains('$'), "PowerShell 會把 @、$ 當成語法：{hook}");
         assert_no_inner_double_quotes(&line);
     }
 

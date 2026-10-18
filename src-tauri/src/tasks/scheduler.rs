@@ -769,6 +769,7 @@ impl RealDispatcher {
         let program = crate::tasks::codex::program();
         crate::tasks::codex::launch_command(&crate::tasks::codex::CodexLaunch {
             program: &program,
+            add_dirs: &[dir.as_path()],
             model: codex_model(task, agent),
             prompt_file: &file,
             resume_session: resume,
