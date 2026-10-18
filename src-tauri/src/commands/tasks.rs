@@ -675,7 +675,12 @@ pub fn resolve_transcript(
         let p = resolved.display();
         match fs::read_to_string(&resolved) {
             Ok(raw) => {
-                let rendered = crate::tasks::session_log::render_session_log(&raw);
+                // Codex 卡片記的是它自己的 rollout，格式跟 Claude 的 session 記錄不同。
+                let rendered = if crate::tasks::codex::is_rollout_path(stored) {
+                    crate::tasks::codex::render_rollout(&raw)
+                } else {
+                    crate::tasks::session_log::render_session_log(&raw)
+                };
                 if !rendered.trim().is_empty() {
                     return rendered;
                 }
@@ -994,6 +999,18 @@ mod transcript_for_row_tests {
     }
 
     /// 這一組測試存在的理由：專案資料夾搬走後，卡片的對話記錄仍然要讀得到。
+    /// Codex 卡片的 `session_path` 是它的 rollout：要用 Codex 的格式渲染，不能退回只剩退出畫面的終端機擷取。
+    #[test]
+    fn a_codex_rollout_is_rendered_instead_of_the_terminal_capture() {
+        let dir = tempfile::tempdir().unwrap();
+        let rollout = dir.path().join("rollout-2026-10-18T10-22-45-01a1.jsonl");
+        std::fs::write(&rollout, r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"完成了"}]}}"#).unwrap();
+        let capture = dir.path().join("transcript.txt");
+        std::fs::write(&capture, "Token usage: total=19,083").unwrap();
+        let text = resolve_transcript(dir.path(), rollout.to_str(), capture.to_str());
+        assert_eq!(text, "Codex：完成了\n");
+    }
+
     /// 存絕對路徑時，搬遷後 `session_path` 指向舊位置，讀不到就默默退回終端機文字。
     #[test]
     fn a_relative_session_path_still_resolves_after_the_project_folder_moves() {

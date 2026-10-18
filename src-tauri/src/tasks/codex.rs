@@ -256,6 +256,94 @@ pub fn parse_models(json: &str) -> Vec<CodexModel> {
         .collect()
 }
 
+/// 把 Codex 的 rollout 渲染成跟 Claude 卡片同一套格式的逐輪純文字（見 `session_log::render_session_log`）：
+/// `使用者：`／`Codex：`、`〔工具〕名稱` 加參數、`〔結果〕` 加輸出。
+///
+/// 只看 `response_item`：`message`（user／assistant；developer 是系統指示、跳過）、
+/// `function_call`（參數是 JSON 字串）、`custom_tool_call`（新模型用的 exec 之類，參數是一段文字）與兩種
+/// `*_output`。思考過程（`reasoning`）跳過。Codex 自己塞進對話的 `<environment_context>` 等也跳過。
+/// 解析失敗的行跳過，不中止整份。
+pub fn render_rollout(jsonl: &str) -> String {
+    use crate::tasks::session_log::{indent_continuation, push_line, truncate_chars, BLOCK_MAX_CHARS};
+    let block = |s: &str| indent_continuation(&truncate_chars(s, BLOCK_MAX_CHARS));
+    let mut out = String::new();
+    for line in jsonl.lines() {
+        let Ok(rec) = serde_json::from_str::<serde_json::Value>(line.trim()) else { continue };
+        if rec.get("type").and_then(|t| t.as_str()) != Some("response_item") {
+            continue;
+        }
+        let Some(p) = rec.get("payload") else { continue };
+        match p.get("type").and_then(|t| t.as_str()) {
+            Some("message") => {
+                let speaker = match p.get("role").and_then(|r| r.as_str()) {
+                    Some("user") => "使用者",
+                    Some("assistant") => "Codex",
+                    _ => continue,
+                };
+                for part in p.get("content").and_then(|c| c.as_array()).into_iter().flatten() {
+                    let text = part.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
+                    if text.is_empty() || (speaker == "使用者" && text.starts_with('<')) {
+                        continue;
+                    }
+                    push_line(&mut out, &format!("{speaker}：{text}"));
+                }
+            }
+            Some("function_call") => {
+                let name = p.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                push_line(&mut out, &format!("〔工具〕{name}"));
+                let raw = p.get("arguments").and_then(|a| a.as_str()).unwrap_or("");
+                match serde_json::from_str::<serde_json::Value>(raw) {
+                    Ok(serde_json::Value::Object(args)) => {
+                        for (k, v) in args {
+                            let v = match v {
+                                serde_json::Value::String(s) => s,
+                                other => other.to_string(),
+                            };
+                            push_line(&mut out, &format!("  {k}: {}", block(&v)));
+                        }
+                    }
+                    _ if !raw.trim().is_empty() => push_line(&mut out, &format!("  {}", block(raw))),
+                    _ => {}
+                }
+            }
+            Some("custom_tool_call") => {
+                let name = p.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                push_line(&mut out, &format!("〔工具〕{name}"));
+                let input = p.get("input").and_then(|i| i.as_str()).unwrap_or("").trim();
+                if !input.is_empty() {
+                    push_line(&mut out, &format!("  {}", block(input)));
+                }
+            }
+            Some("function_call_output") | Some("custom_tool_call_output") => {
+                let text = match p.get("output") {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(serde_json::Value::Array(parts)) => parts
+                        .iter()
+                        .filter_map(|x| x.get("text").and_then(|t| t.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    _ => String::new(),
+                };
+                // Codex 在輸出前面加一段「Chunk ID／Wall time／Process exited with code N／Output:」，
+                // 只留真正的輸出；結束碼不是 0 就標成失敗。
+                let failed = text
+                    .lines()
+                    .find_map(|l| l.strip_prefix("Process exited with code "))
+                    .is_some_and(|c| c.trim() != "0");
+                let body = text.split_once("Output:\n").map(|(_, b)| b).unwrap_or(&text).trim();
+                let label = if failed { "〔結果·失敗〕" } else { "〔結果〕" };
+                if body.is_empty() {
+                    push_line(&mut out, &format!("{label}（無輸出）"));
+                } else {
+                    push_line(&mut out, &format!("{label}{}", block(body)));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// 卡片記的對話記錄路徑是不是 Codex 的 rollout（不是 Claude 的 JSONL）。
 pub fn is_rollout_path(p: &str) -> bool {
     Path::new(p)
@@ -450,6 +538,39 @@ mod tests {
             ]
         );
         assert!(parse_models("not json").is_empty());
+    }
+
+    // 0.163.0 真實 rollout 的 response_item（Qwen 的 function_call 與 gpt-6-luna 的 custom_tool_call），截掉無關欄位。
+    const TURN_ROLLOUT: &str = r#"{"type":"session_meta","payload":{"id":"x"}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/w</cwd>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"請讀 /p/prompt.md 並照裡面的指示完成工作。"}]}}
+{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"想一下"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"先讀提示檔。"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\": \"cat /p/prompt.md\"}","call_id":"c1"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"Chunk ID: fde43a\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 181\nOutput:\n新增 config.json"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\": \"git commit\"}","call_id":"c2"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"c2","output":"Chunk ID: a\nProcess exited with code 128\nOutput:\nfatal: not a git repository"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"const r = await tools.mcp__aiterm__ask_human({question:\"light 還是 dark？\"});","call_id":"c3"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"c3","output":[{"type":"input_text","text":"Script completed\nWall time 5.0 seconds\nOutput:\n"},{"type":"input_text","text":"Q-3 的回答：dark"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"完成"}}"#;
+
+    #[test]
+    fn a_rollout_renders_like_a_claude_transcript() {
+        let text = render_rollout(TURN_ROLLOUT);
+        assert_eq!(
+            text,
+            "使用者：請讀 /p/prompt.md 並照裡面的指示完成工作。\n\
+             Codex：先讀提示檔。\n\
+             〔工具〕exec_command\n  cmd: cat /p/prompt.md\n\
+             〔結果〕新增 config.json\n\
+             〔工具〕exec_command\n  cmd: git commit\n\
+             〔結果·失敗〕fatal: not a git repository\n\
+             〔工具〕exec\n  const r = await tools.mcp__aiterm__ask_human({question:\"light 還是 dark？\"});\n\
+             〔結果〕Q-3 的回答：dark\n"
+        );
+        assert_eq!(render_rollout("not json\n{}"), "");
     }
 
     #[test]

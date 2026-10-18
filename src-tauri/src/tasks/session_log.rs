@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 /// 上限只是為了不讓一個 500 行的 `Write` 或一份整檔 `cat` 撐爆記錄（工作報告
 /// 也是拿這份文字去餵模型）；原始資料完整躺在 `session.jsonl`，要調整隨時
 /// 可以，丟掉的救不回來，所以寧可放寬。
-const BLOCK_MAX_CHARS: usize = 2000;
+pub(crate) const BLOCK_MAX_CHARS: usize = 2000;
 
 /// 把 Claude Code 的 session JSONL 渲染成逐輪對話純文字。
 ///
@@ -78,21 +78,21 @@ pub fn render_session_log(jsonl: &str) -> String {
     out
 }
 
-fn push_line(out: &mut String, line: &str) {
+pub(crate) fn push_line(out: &mut String, line: &str) {
     out.push_str(line);
     out.push('\n');
 }
 
 /// 多行內容的第二行起縮排兩格，這樣內容裡剛好以 `使用者：` 或 `〔工具〕`
 /// 開頭的行不會被誤認成獨立的一筆記錄。
-fn indent_continuation(text: &str) -> String {
+pub(crate) fn indent_continuation(text: &str) -> String {
     text.replace('\n', "\n  ")
 }
 
 /// 超過 `max` 個字元就截斷，並在尾端標出截掉幾個字元。
 ///
 /// 按字元算，不能用 `&s[..max]`——中文每字 3 個位元組，切在字元中間會 panic。
-fn truncate_chars(s: &str, max: usize) -> String {
+pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
     let total = s.chars().count();
     if total <= max {
         return s.to_string();
