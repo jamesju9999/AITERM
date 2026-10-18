@@ -35,7 +35,28 @@ describe("UsagePage 配額區塊", () => {
     render(<UsagePage />);
     expect(await screen.findByText("anthropic-pro")).toBeInTheDocument();
     expect(screen.getByText("Claude Pro")).toBeInTheDocument();
-    expect(screen.getAllByTestId("quota-badge")).toHaveLength(2);
+    expect(screen.getAllByTestId("quota-window")).toHaveLength(2);
+    expect(screen.getByText(/^(5 小時|5 hours)$/)).toBeInTheDocument();
+    expect(screen.getByText(/^(已用 7%|7% used)$/)).toBeInTheDocument();
+  });
+
+  it("Copilot 顯示剩餘次數，方案代碼寫成人話", async () => {
+    mockQuotaAll.mockResolvedValue([
+      { status: "ok", quota: { provider_id: "Github", plan: "yearly_subscriber_quota", fetched_at: 0,
+        windows: [{ label: "premium", used_percent: 18, resets_at: null, severity: "normal",
+                    detail: "246/300", is_primary: true }] } },
+    ]);
+    render(<UsagePage />);
+    expect(await screen.findByText(/^(剩 246 \/ 300|246 \/ 300 left)$/)).toBeInTheDocument();
+    expect(screen.getByText(/^(年訂閱|Yearly)$/)).toBeInTheDocument();
+    expect(screen.getByText(/^(進階請求|Premium requests)$/)).toBeInTheDocument();
+    expect(screen.queryByText("yearly_subscriber_quota")).not.toBeInTheDocument();
+  });
+
+  it("沒有任何訂閱型供應商時說明原因", async () => {
+    mockQuotaAll.mockResolvedValue([{ status: "not_applicable", provider_id: "ollama-local" }]);
+    render(<UsagePage />);
+    expect(await screen.findByText(/沒有可查詢額度|No subscription providers/)).toBeInTheDocument();
   });
 
   it("沒有配額概念的 provider 不列在配額區", async () => {
