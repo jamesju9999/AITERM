@@ -3002,6 +3002,9 @@ mod prepare_worktree_tests {
 
     fn init_repo(dir: &std::path::Path) {
         StdCommand::new("git").args(["init", "-q"]).current_dir(dir).status().unwrap();
+        // Windows 的 git 預設 core.autocrlf=true：checkout／merge 出來的檔案變成 CRLF，
+        // 下面比對 "hello\n" 的斷言就會在 Windows CI 上失敗（不是功能壞了）。
+        StdCommand::new("git").args(["config", "core.autocrlf", "false"]).current_dir(dir).status().unwrap();
         StdCommand::new("git").args(["config", "user.email", "test@test.com"]).current_dir(dir).status().unwrap();
         StdCommand::new("git").args(["config", "user.name", "Test"]).current_dir(dir).status().unwrap();
         fs::write(dir.join("a.txt"), "hello\n").unwrap();
@@ -3089,6 +3092,9 @@ mod agent_dispatch_tests {
 
     fn init_repo(dir: &std::path::Path) {
         StdCommand::new("git").args(["init", "-q"]).current_dir(dir).status().unwrap();
+        // Windows 的 git 預設 core.autocrlf=true：checkout／merge 出來的檔案變成 CRLF，
+        // 下面比對 "hello\n" 的斷言就會在 Windows CI 上失敗（不是功能壞了）。
+        StdCommand::new("git").args(["config", "core.autocrlf", "false"]).current_dir(dir).status().unwrap();
         StdCommand::new("git").args(["config", "user.email", "test@test.com"]).current_dir(dir).status().unwrap();
         StdCommand::new("git").args(["config", "user.name", "Test"]).current_dir(dir).status().unwrap();
         fs::write(dir.join("a.txt"), "hello\n").unwrap();
