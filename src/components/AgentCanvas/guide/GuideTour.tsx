@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useState } from "react";
 
 import { useLocale } from "../../../contexts/LocaleContext";
+import { clampSpot } from "./tourGeometry";
 import "./guide.css";
 
 const STEPS = ["pool", "templates", "library", "canvas", "inbox", "log", "help"] as const;
@@ -10,7 +11,6 @@ const find = (id: string) => document.querySelector<HTMLElement>(`[data-guide="$
 
 const TIP_W = 320;
 const TIP_H = 170;
-
 /**
  * 步驟導覽：逐一圈出畫面上的區塊並說明。目標靠 `data-guide` 標記；開始時找不到的
  * 步驟（例如還沒選專案時沒有範本鈕）直接略過。任何方式結束都呼叫 `onDone`。
@@ -75,16 +75,14 @@ export function GuideTour({ onDone }: { onDone: () => void }) {
     left = Math.min(Math.max(16, rect.left), Math.max(16, vw - TIP_W - 16));
   }
 
+  // 框比目標每邊大 4px，但夾在視窗內——貼著視窗邊的目標（角色列延伸到右緣）框線才不會被切掉。
+  const spot = rect && clampSpot(rect, vw, vh);
+
   return (
     <div className="ac-tour" role="region" aria-label={t.ac_guide_region} data-testid="ac-tour">
       {/* 導覽期間擋住底下的操作。 */}
       <div className="ac-tour-block" />
-      {rect && (
-        <div
-          className="ac-tour-spot"
-          style={{ left: rect.left - 4, top: rect.top - 4, width: rect.width + 8, height: rect.height + 8 }}
-        />
-      )}
+      {spot && <div className="ac-tour-spot" style={spot} />}
       <div className="ac-tour-tip" style={{ left, top, width: TIP_W }}>
         <div className="ac-tour-head">
           <b>{title}</b>
