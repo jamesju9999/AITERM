@@ -371,6 +371,42 @@ pub(crate) async fn finalize_agent_card(
     }
 }
 
+/// 合併卡：照一般 Agent 卡結案（commit、記 `end_sha`），成功的話再確認每位工程師的最新版本真的
+/// 在整合分支裡（見 `workflow::unmerged_coders`）。有漏的就改判失敗、暫停協調者，並忘掉上次的合併
+/// 版本紀錄——使用者重試這張卡會再檢查一次；跳過的話，下一輪會重新建合併卡。
+pub(crate) async fn finalize_merge_card(
+    pool: &sqlx::SqlitePool,
+    agent_id: &str,
+    task_id: &str,
+    commit_message: &str,
+    worktree: &std::path::Path,
+    outcome: monitor::TaskOutcome,
+) -> monitor::TaskOutcome {
+    let outcome = finalize_agent_card(pool, agent_id, task_id, commit_message, worktree, outcome).await;
+    if !matches!(outcome, monitor::TaskOutcome::Success) {
+        return outcome;
+    }
+    match crate::tasks::workflow::unmerged_coders(pool, worktree).await {
+        Ok(missing) if !missing.is_empty() => {
+            if let Err(e) = crate::tasks::agents::set_paused(pool, agent_id, Some(task_id)).await {
+                eprintln!("pause agent {agent_id}: {e}");
+            }
+            if let Err(e) = crate::tasks::agents::clear_merge_signature(pool, agent_id).await {
+                eprintln!("clear merge signature {agent_id}: {e}");
+            }
+            monitor::TaskOutcome::Failed(format!(
+                "協調者回報合併完成，但這些工程師的最新版本不在整合分支裡：{}",
+                missing.join("、")
+            ))
+        }
+        Ok(_) => outcome,
+        Err(e) => {
+            eprintln!("check merge {task_id}: {e}");
+            outcome
+        }
+    }
+}
+
 /// 工程師卡開工前，把協調者最後一次成功合併的結果合進來（通常是快轉）：一輪合併完、
 /// 同一個專案開新一輪時，工程師要從整合後的版本開始，而不是自己的舊分支。
 /// 回傳有沒有合進新東西。衝突：還原、回 Err（派工失敗、工程師暫停）。
@@ -1106,6 +1142,10 @@ impl Dispatcher for RealDispatcher {
                 }
                 Some((agent_id, _, worktree)) if card_kind == crate::tasks::workflow::KIND_VERIFY => {
                     finalize_verify_card(&pool, &project_path, agent_id, &task_id, &repo_dir, worktree, outcome).await
+                }
+                Some((agent_id, _, worktree)) if card_kind == crate::tasks::workflow::KIND_MERGE => {
+                    let msg = commit_message_for(&card_kind, &task_title);
+                    finalize_merge_card(&pool, agent_id, &task_id, &msg, worktree, outcome).await
                 }
                 Some((agent_id, _, worktree)) => {
                     let msg = commit_message_for(&card_kind, &task_title);
@@ -3263,6 +3303,49 @@ mod agent_dispatch_tests {
         assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Module: A 模組");
         assert_eq!(store::get_task(&pool, &task).await.unwrap().unwrap().end_sha.as_deref(), Some(end.as_str()));
         assert_eq!(agents::get_agent(&pool, &agent.id).await.unwrap().unwrap().paused_task_id, None);
+    }
+
+    /// 協調者回報合併完成，但工程師的最新版本不在整合分支裡（實際發生過：它誤以為早就合過）：
+    /// 改判失敗、暫停協調者、忘掉上次的合併版本紀錄；真的合進去之後重試就通過。
+    #[tokio::test]
+    async fn a_merge_that_left_a_coder_branch_out_fails_and_forgets_the_signature() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let git = |args: &[&str]| assert!(StdCommand::new("git").args(args).current_dir(repo.path()).status().unwrap().success());
+        let integration = head(repo.path());
+        git(&["checkout", "-q", "-b", "coder"]);
+        fs::write(repo.path().join("config.json"), "{}").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "Module: 設定檔"]);
+        let coder_head = head(repo.path());
+        git(&["checkout", "-q", "-"]);
+        assert_eq!(head(repo.path()), integration);
+
+        let pool = mem_pool().await;
+        let coder = agent_for(&pool, repo.path()).await;
+        let module = card(&pool).await;
+        agents::assign_task(&pool, &module, Some(&coder.id)).await.unwrap();
+        store::dispatch_for_test(&pool, &module, "tab").await;
+        store::set_end_sha(&pool, &module, &coder_head).await.unwrap();
+        store::finish_task(&pool, &module, "success", None, None).await.unwrap();
+        let orch = agents::create_agent(&pool, &agents::NewAgent {
+            kind: "orchestrator", name: "O", role: "r", prompt_prefix: "", project_dir: &repo.path().to_string_lossy(),
+            canvas_x: 0.0, canvas_y: 0.0,
+        }).await.unwrap();
+        sqlx::query("UPDATE agents SET last_merge_signature = 'sig' WHERE id = ?").bind(&orch).execute(&pool).await.unwrap();
+        let merge = card(&pool).await;
+
+        match finalize_merge_card(&pool, &orch, &merge, "Integrate", repo.path(), monitor::TaskOutcome::Success).await {
+            monitor::TaskOutcome::Failed(m) => assert!(m.contains("C1"), "{m}"),
+            other => panic!("沒合進去不能算成功：{other:?}"),
+        }
+        let o = agents::get_agent(&pool, &orch).await.unwrap().unwrap();
+        assert_eq!(o.paused_task_id.as_deref(), Some(merge.as_str()), "協調者要暫停等使用者處理");
+        assert_eq!(o.last_merge_signature, None, "要忘掉這組版本，下一輪才會重新建合併卡");
+
+        git(&["merge", "-q", "--no-edit", "coder"]);
+        let ok = finalize_merge_card(&pool, &orch, &merge, "Integrate", repo.path(), monitor::TaskOutcome::Success).await;
+        assert!(matches!(ok, monitor::TaskOutcome::Success), "{ok:?}");
     }
 
     #[tokio::test]

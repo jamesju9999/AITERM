@@ -181,6 +181,12 @@ pub async fn set_produces_spec(pool: &SqlitePool, id: &str, value: bool) -> Resu
 }
 
 /// `Some(task_id)` 暫停、`None` 解除暫停。
+/// 忘掉「上次為哪組模組版本建過合併卡」：那次合併沒有真的合進去時，下一輪才會重新建合併卡。
+pub async fn clear_merge_signature(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE agents SET last_merge_signature = NULL WHERE id = ?").bind(id).execute(pool).await?;
+    Ok(())
+}
+
 pub async fn set_paused(pool: &SqlitePool, id: &str, task_id: Option<&str>) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE agents SET paused_task_id = ? WHERE id = ?")
         .bind(task_id)

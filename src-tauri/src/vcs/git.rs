@@ -456,6 +456,14 @@ impl GitClient {
         .map(|_| ())
     }
 
+    /// `rev` 是不是目前 HEAD 的祖先（含 HEAD 本身），也就是「已經合進來了」。
+    /// 查不到 `rev` 也回 `false`。
+    pub async fn is_ancestor_of_head(&self, rev: &str) -> bool {
+        self.git(&["merge-base".to_string(), "--is-ancestor".to_string(), rev.to_string(), "HEAD".to_string()])
+            .await
+            .is_ok()
+    }
+
     /// 這個倉庫是不是停在「合併進行中」（`MERGE_HEAD` 還在）。
     ///
     /// `git merge` 遇到衝突會把倉庫留在這個狀態直到有人收尾。在這種狀態上

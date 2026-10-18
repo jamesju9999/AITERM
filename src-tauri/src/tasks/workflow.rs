@@ -1187,6 +1187,41 @@ async fn fast_forward_repo(repo_dir: &str, end_sha: Option<&str>) -> &'static st
     }
 }
 
+/// 工程師分支目前的版本：最新一張成功的 work／fix 卡的 `end_sha`（沒有就是空字串）。
+fn coder_head(tasks: &[TaskRow], coder_id: &str) -> String {
+    tasks
+        .iter()
+        .filter(|t| {
+            t.agent_id.as_deref() == Some(coder_id)
+                && (t.card_kind == KIND_WORK || t.card_kind == KIND_FIX)
+                && t.outcome.as_deref() == Some("success")
+        })
+        .max_by_key(|t| t.finished_at.unwrap_or(0))
+        .and_then(|t| t.end_sha.clone())
+        .unwrap_or_default()
+}
+
+/// 合併卡做完時：有模組的每位工程師，最新版本是不是都已經在整合分支（`worktree` 的 HEAD）裡。
+/// 回傳漏掉的工程師名字。
+///
+/// 不能只信協調者的回報：實際發生過它誤讀 `git merge-base --is-ancestor` 的輸出，以為分支早就合過，
+/// 什麼都沒合就回報完成。那組版本接著被 `last_merge_signature` 記成「合過了」，之後修正卡沒有新 commit
+/// 時就再也不會建合併卡，整個流程停在驗收退回、畫面上卻看不出原因。
+pub async fn unmerged_coders(pool: &SqlitePool, worktree: &Path) -> Result<Vec<String>, sqlx::Error> {
+    let all_agents = agents::list_agents(pool).await?;
+    let tasks = store::list_tasks(pool).await?;
+    let git = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
+    let mut missing = Vec::new();
+    for c in all_agents.iter().filter(|a| a.kind == "coder") {
+        let has_module = tasks.iter().any(|t| t.card_kind == KIND_WORK && t.agent_id.as_deref() == Some(c.id.as_str()));
+        let head = coder_head(&tasks, &c.id);
+        if has_module && !head.is_empty() && !git.is_ancestor_of_head(&head).await {
+            missing.push(c.name.clone());
+        }
+    }
+    Ok(missing)
+}
+
 /// 所有模組都通過、而且沒有任何 Coder／Reviewer 還在忙時，替 Orchestrator
 /// 建一張合併卡。同一組模組版本只建一次（`last_merge_signature`）。
 /// 回傳新卡的 id。
@@ -1239,16 +1274,7 @@ pub async fn maybe_enqueue_merge(pool: &SqlitePool) -> Result<Option<String>, sq
         if mine.is_empty() {
             continue;
         }
-        let head = tasks
-            .iter()
-            .filter(|t| {
-                t.agent_id.as_deref() == Some(c.id.as_str())
-                    && (t.card_kind == KIND_WORK || t.card_kind == KIND_FIX)
-                    && t.outcome.as_deref() == Some("success")
-            })
-            .max_by_key(|t| t.finished_at.unwrap_or(0))
-            .and_then(|t| t.end_sha.clone())
-            .unwrap_or_default();
+        let head = coder_head(&tasks, &c.id);
         sig_parts.push(format!("{}:{head}", c.id));
         let branch = c.branch.clone().unwrap_or_else(|| agents::branch_name(&c.id));
         entries.push((c.name.clone(), branch, mine.iter().map(|m| m.title.clone()).collect()));
