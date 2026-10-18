@@ -236,12 +236,25 @@ pub(crate) enum CodexVerdict {
 ///
 /// TUI 下結束碼一律是 0（`/exit` 是看守送的），所以成功也要看 rollout 最後一輪有沒有錯誤；
 /// 取消就照走。
+pub(crate) const CODEX_NOT_STARTED: &str =
+    "Codex 沒有啟動（沒有收到對話開始的回報）。請在終端機確認 codex 指令可以執行、已經 codex login，並看分頁裡的錯誤訊息。";
+
 pub(crate) async fn codex_verdict(pool: &sqlx::SqlitePool, task_id: &str, outcome: monitor::TaskOutcome) -> CodexVerdict {
     if matches!(outcome, monitor::TaskOutcome::Cancelled) {
         return CodexVerdict::Outcome(outcome);
     }
-    let path = store::get_task(pool, task_id).await.ok().flatten().and_then(|t| t.session_path);
-    let err = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| crate::tasks::codex::last_error(&t));
+    let path = store::get_task(pool, task_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|t| t.session_path)
+        .filter(|p| crate::tasks::codex::is_rollout_path(p));
+    // 一直沒收到 SessionStart（沒有 rollout）= Codex 根本沒開始對話：指令一跑就出錯退出（沒裝、沒登入、
+    // 參數被 shell 弄壞……）。shell 不一定回報非 0（Windows 實測卡片變成「完成」），不能算成功。
+    let Some(path) = path else {
+        return CodexVerdict::Outcome(monitor::TaskOutcome::Failed(CODEX_NOT_STARTED.into()));
+    };
+    let err = std::fs::read_to_string(path).ok().and_then(|t| crate::tasks::codex::last_error(&t));
     match err {
         Some(crate::tasks::codex::CodexError::UsageLimit(_)) => {
             match requeue_for_quota(pool, task_id, chrono::Utc::now().timestamp()).await {
@@ -2863,8 +2876,18 @@ mod persist_tests {
         std::fs::remove_file(&rollout).unwrap();
         match codex_verdict(&pool, &id, monitor::TaskOutcome::Failed("exit 1".into())).await {
             CodexVerdict::Outcome(monitor::TaskOutcome::Failed(m)) => assert_eq!(m, "exit 1"),
-            _ => panic!("讀不到記錄照原結果"),
+            _ => panic!("記錄檔讀不到（路徑有回報過）照原結果"),
         }
+        // 從來沒有回報過 rollout：Codex 沒啟動。就算 shell 回報結束碼 0 也不能算成功（Windows 實測）。
+        sqlx::query("UPDATE tasks SET session_path = NULL WHERE id = ?").bind(&id).execute(&pool).await.unwrap();
+        match codex_verdict(&pool, &id, monitor::TaskOutcome::Success).await {
+            CodexVerdict::Outcome(monitor::TaskOutcome::Failed(m)) => assert_eq!(m, CODEX_NOT_STARTED),
+            _ => panic!("Codex 沒啟動不能算成功"),
+        }
+        assert!(matches!(
+            codex_verdict(&pool, &id, monitor::TaskOutcome::Cancelled).await,
+            CodexVerdict::Outcome(monitor::TaskOutcome::Cancelled)
+        ), "使用者自己停掉的照走");
     }
 
     #[test]
