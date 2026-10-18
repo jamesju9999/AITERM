@@ -621,6 +621,7 @@ pub(crate) async fn finalize_verify_card(
                 let verdict = crate::tasks::workflow::ReviewVerdict {
                     verdict: report.verdict.clone(),
                     reasons: report.items.iter().filter(|i| i.status == "fail").map(|i| i.criterion.clone()).collect(),
+                    provides: None,
                 };
                 match crate::tasks::workflow::set_verdict(pool, task_id, &verdict).await {
                     Ok(()) => monitor::TaskOutcome::Success,
@@ -1824,7 +1825,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
-            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None,
+            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None, provides: None,
         }
     }
 
@@ -1988,7 +1989,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
-            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None,
+            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None, provides: None,
         }
     }
 

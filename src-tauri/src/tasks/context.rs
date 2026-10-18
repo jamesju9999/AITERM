@@ -108,6 +108,10 @@ pub fn team_map(task: &TaskRow, tasks: &[TaskRow], agents: &[AgentRow]) -> Strin
         let deps = if deps.is_empty() { String::new() } else { format!("；相依 {}", deps.join("、")) };
         let me = if Some(m.id.as_str()) == mine { "　← 你這張卡" } else { "" };
         out.push_str(&format!("- 「{}」：{}，{}{}{}\n", m.title, owner_of(m.agent_id.as_deref()), state, deps, me));
+        // 審核通過時審核者寫的交件摘要：別人可以直接拿來用的東西。
+        if let Some(p) = m.provides.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            out.push_str(&format!("  提供：{p}\n"));
+        }
     }
     if !others.is_empty() {
         out.push_str(&format!("- 其他模組：{}\n", others.iter().map(|t| format!("「{t}」")).collect::<Vec<_>>().join("、")));
@@ -210,6 +214,21 @@ mod tests {
         let merge = TaskRow { card_kind: "merge".into(), ..test_row("mg") };
         assert!(!team_map(&merge, &tasks, &agents).contains("你這張卡"));
         assert_eq!(team_map(&merge, &[], &agents), "");
+    }
+
+    #[test]
+    fn finished_modules_show_what_they_provide() {
+        let agents = vec![agent("c1", "coder", "工程師1"), agent("c2", "coder", "工程師2")];
+        let timer = TaskRow {
+            provides: Some("src/hooks/useTimer.ts 的 useTimer()，回傳剩餘秒數與 start／pause".into()),
+            ..module("m1", "計時器", "c1", 1.0)
+        };
+        let stats = TaskRow { provides: Some("   ".into()), ..module("m2", "統計頁", "c2", 2.0) };
+        let map = team_map(&stats, &[timer, stats.clone()], &agents);
+        assert_eq!(
+            map,
+            "- 「計時器」：工程師1，排隊中\n  提供：src/hooks/useTimer.ts 的 useTimer()，回傳剩餘秒數與 start／pause\n- 「統計頁」：工程師2，排隊中　← 你這張卡\n",
+        );
     }
 
     #[test]

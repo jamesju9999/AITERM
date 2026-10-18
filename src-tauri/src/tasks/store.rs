@@ -115,6 +115,9 @@ pub struct TaskRow {
     /// 一般卡片選 Codex 時的模型（Codex 一定要指定，見 `codex::launch_command`）。
     #[sqlx(default)]
     pub model: Option<String>,
+    /// 模組卡：審核通過時審核者寫的交件摘要（對外提供了什麼）。見 `workflow::set_verdict`。
+    #[sqlx(default)]
+    pub provides: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

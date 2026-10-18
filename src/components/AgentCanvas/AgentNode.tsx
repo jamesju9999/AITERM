@@ -402,7 +402,7 @@ export function AgentNode({
                 <span
                   key={m.id}
                   className={`ac-chip ${cls}${draggable ? " ac-chip--draggable" : ""}${waiting.length ? " ac-chip--waiting" : ""}`}
-                  title={`${m.title} · ${label}${mUsage?.cards ? ` · ${tokensText(mUsage)}` : ""}`}
+                  title={`${m.title} · ${label}${mUsage?.cards ? ` · ${tokensText(mUsage)}` : ""}${m.provides ? `\n${t.ac_provides(m.provides)}` : ""}`}
                   data-testid={`chip-${m.id}`}
                   data-state={s}
                   onMouseDown={draggable ? (e) => onChipMouseDown(e, m.id) : undefined}

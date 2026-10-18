@@ -57,6 +57,8 @@ export interface TaskRow {
   cli?: string | null;
   /** 一般卡片選 Codex 時的模型。 */
   model?: string | null;
+  /** 模組卡：審核通過時審核者寫的交件摘要（對外提供了什麼），團隊分工裡給其他工程師看。 */
+  provides?: string | null;
   /** 指派給哪個 Agent（Agent 協作）。`null` = 一般卡片。 */
   agent_id: string | null;
   /** Agent 卡片在 Agent 分支上的 commit 範圍起點／終點。 */

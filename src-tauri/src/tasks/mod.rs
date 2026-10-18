@@ -219,6 +219,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         // 一般卡片也能選 Codex（Agent 卡看 Agent 自己的設定）。NULL = Claude Code。
         "ALTER TABLE tasks ADD COLUMN cli TEXT",
         "ALTER TABLE tasks ADD COLUMN model TEXT",
+        // 模組卡：審核通過時審核者寫的「這個模組對外提供了什麼」，團隊分工裡給其他工程師看。
+        "ALTER TABLE tasks ADD COLUMN provides TEXT",
     ] {
         let _ = sqlx::query(ddl).execute(pool).await;
     }

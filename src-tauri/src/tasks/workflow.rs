@@ -209,8 +209,12 @@ pub fn review_body(module: &TaskRow, reviewed: &TaskRow, json_path: &Path, previ
     s.push_str(&format!(
         "\n{rule}\n\
          審查完成後，把結果寫成 JSON 檔到：{path}\n\
-         格式：{{\"verdict\": \"pass\" 或 \"fail\", \"reasons\": [\"…\"]}}\n",
+         格式：{{\"verdict\": \"pass\" 或 \"fail\", \"reasons\": [\"…\"], \"provides\": \"…\"}}\n\
+         provides（判定 pass 時必填）：用一兩句、{limit} 字以內，寫這個{what}完成後對其他模組提供了什麼——\
+         可以直接使用的函式、元件、API、資料結構或檔案位置（例如「src/hooks/useTimer.ts 的 useTimer()，回傳剩餘秒數與 start／pause」）。\
+         這會給之後開工的工程師參考，只寫怎麼用，不要寫過程。判定 fail 時可以省略。\n",
         path = json_path.display(),
+        limit = PROVIDES_LIMIT / 2,
     ));
     s
 }
@@ -1389,6 +1393,9 @@ pub struct ReviewVerdict {
     pub verdict: String,
     #[serde(default)]
     pub reasons: Vec<String>,
+    /// 通過時審核者寫的交件摘要：這個模組對外提供了什麼。
+    #[serde(default)]
+    pub provides: Option<String>,
 }
 
 pub fn parse_review_json(text: &str) -> Result<ReviewVerdict, String> {
@@ -1399,6 +1406,9 @@ pub fn parse_review_json(text: &str) -> Result<ReviewVerdict, String> {
     }
 }
 
+/// 交件摘要的上限（字元）：每張卡的團隊分工都會帶著它。
+pub const PROVIDES_LIMIT: usize = 200;
+
 pub async fn set_verdict(pool: &SqlitePool, task_id: &str, v: &ReviewVerdict) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE tasks SET verdict = ?, review_reasons = ? WHERE id = ?")
         .bind(&v.verdict)
@@ -1406,6 +1416,18 @@ pub async fn set_verdict(pool: &SqlitePool, task_id: &str, v: &ReviewVerdict) ->
         .bind(task_id)
         .execute(pool)
         .await?;
+    // 審查通過：交件摘要記到模組卡上（最後一次通過的為準），團隊分工會附上。
+    let provides = v.provides.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    if let (true, Some(p)) = (v.verdict == "pass", provides) {
+        let p: String = p.chars().take(PROVIDES_LIMIT).collect();
+        sqlx::query(
+            "UPDATE tasks SET provides = ? WHERE id = (SELECT module_id FROM tasks WHERE id = ? AND card_kind = 'review')",
+        )
+        .bind(p)
+        .bind(task_id)
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }
 
@@ -1470,7 +1492,7 @@ pub(crate) mod tests {
     /// 模擬 Reviewer 跑完一張審查卡並給出判定。
     async fn finish_review(pool: &SqlitePool, review_id: &str, verdict: &str) {
         store::dispatch_for_test(pool, review_id, "tab-r").await;
-        set_verdict(pool, review_id, &ReviewVerdict { verdict: verdict.into(), reasons: vec!["理由".into()] }).await.unwrap();
+        set_verdict(pool, review_id, &ReviewVerdict { verdict: verdict.into(), reasons: vec!["理由".into()], provides: None }).await.unwrap();
         store::finish_task(pool, review_id, "success", None, None).await.unwrap();
     }
 
@@ -1663,6 +1685,42 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn review_json_carries_what_the_module_provides() {
+        let v = parse_review_json(r#"{"verdict":"pass","reasons":[],"provides":"useTimer()"}"#).unwrap();
+        assert_eq!(v.provides.as_deref(), Some("useTimer()"));
+        assert_eq!(parse_review_json(r#"{"verdict":"fail","reasons":["x"]}"#).unwrap().provides, None);
+        let body = review_body(&test_row("m"), &test_row("w"), Path::new("/p/review.json"), None);
+        assert!(body.contains("\"provides\""), "{body}");
+        assert!(body.contains("判定 pass 時必填"), "{body}");
+    }
+
+    /// 通過時交件摘要記到模組卡；不通過、空白、驗收卡都不動；太長截斷；再通過一次以新的為準。
+    #[tokio::test]
+    async fn a_passing_review_records_what_the_module_provides() {
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        let m = store::create_task(&pool, "計時器", "做計時器", "/r", true, false).await.unwrap();
+        let review = store::create_task(&pool, "審查", "", "/r", true, false).await.unwrap();
+        sqlx::query("UPDATE tasks SET card_kind = 'review', module_id = ? WHERE id = ?").bind(&m).bind(&review).execute(&pool).await.unwrap();
+        let verify = store::create_task(&pool, "驗收", "", "/r", true, false).await.unwrap();
+        sqlx::query("UPDATE tasks SET card_kind = 'verify', module_id = ? WHERE id = ?").bind(&m).bind(&verify).execute(&pool).await.unwrap();
+        let provides = |_step: &'static str| async { store::get_task(&pool, &m).await.unwrap().unwrap().provides };
+        let verdict = |v: &str, p: Option<&str>| ReviewVerdict { verdict: v.into(), reasons: vec![], provides: p.map(String::from) };
+
+        set_verdict(&pool, &review, &verdict("fail", Some("不該記"))).await.unwrap();
+        assert_eq!(provides("fail").await, None);
+        set_verdict(&pool, &review, &verdict("pass", Some("   "))).await.unwrap();
+        assert_eq!(provides("blank").await, None);
+        set_verdict(&pool, &review, &verdict("pass", Some(" useTimer() "))).await.unwrap();
+        assert_eq!(provides("pass").await.as_deref(), Some("useTimer()"));
+        set_verdict(&pool, &verify, &verdict("pass", Some("驗收卡不該動"))).await.unwrap();
+        assert_eq!(provides("verify").await.as_deref(), Some("useTimer()"));
+        let long = "字".repeat(PROVIDES_LIMIT + 5);
+        set_verdict(&pool, &review, &verdict("pass", Some(&long))).await.unwrap();
+        assert_eq!(provides("long").await.unwrap().chars().count(), PROVIDES_LIMIT);
+    }
+
+    #[test]
     fn review_json_parsing_accepts_pass_and_fail_only() {
         assert_eq!(parse_review_json(r#"{"verdict":"pass"}"#).unwrap().reasons, Vec::<String>::new());
         assert_eq!(parse_review_json("\u{feff}{\"verdict\":\"fail\",\"reasons\":[\"x\"]}").unwrap().reasons, vec!["x"]);
@@ -1822,7 +1880,7 @@ pub(crate) mod tests {
         std::fs::write(&path, json).unwrap();
         let report = parse_verify_json(json).unwrap();
         store::dispatch_for_test(pool, verify_id, "tab-v").await;
-        set_verdict(pool, verify_id, &ReviewVerdict { verdict: report.verdict, reasons: vec![] }).await.unwrap();
+        set_verdict(pool, verify_id, &ReviewVerdict { verdict: report.verdict, reasons: vec![], provides: None }).await.unwrap();
         store::finish_task(pool, verify_id, "success", None, None).await.unwrap();
     }
 
@@ -2595,7 +2653,7 @@ pub(crate) mod tests {
             use_bridge: false, bridge_tiers: None, label: None, worktree_path: None, worktree_branch: None,
             isolate_worktree: None, agent_id: None, start_sha: None, end_sha: None, card_kind: "work".into(),
             module_id: None, review_of: None, verdict: None, review_reasons: None, module_override: false,
-            is_spec: false, from_spec: None, quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None,
+            is_spec: false, from_spec: None, quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None, provides: None,
         }
     }
 }

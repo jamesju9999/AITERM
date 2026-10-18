@@ -1211,6 +1211,19 @@ describe("教學輔助", () => {
   });
 });
 
+describe("交件摘要", () => {
+  it("模組 chip 的提示顯示審核者寫的交件摘要", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "m1", title: "計時器", card_kind: "work", agent_id: "a1", status: "done", outcome: "success", provides: "useTimer()，回傳剩餘秒數" }),
+      card({ id: "m2", title: "統計頁", card_kind: "work", agent_id: "a1", status: "queued" }),
+    ]);
+    view();
+    expect((await screen.findByTestId("chip-m1")).getAttribute("title")).toContain("\n提供：useTimer()，回傳剩餘秒數");
+    expect(screen.getByTestId("chip-m2").getAttribute("title")).not.toContain("提供：");
+  });
+});
+
 describe("專案簡介", () => {
   it("打開會載入現有內容，儲存送出去掉頭尾空白的內容，按鈕標上已寫", async () => {
     vi.mocked(listAgents).mockResolvedValue([]);
