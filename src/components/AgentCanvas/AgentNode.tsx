@@ -158,7 +158,9 @@ export function AgentNode({
   // ── Orchestrator：所有 Coder 的模組 ───────────────────────────────────────
   const allModules = tasks.filter((c) => c.card_kind === "work" && c.agent_id && coderIds.has(c.agent_id));
   const allStates =
-    agent.kind === "orchestrator" || agent.kind === "reviewer" ? allModules.map((m) => deriveModuleState(m, tasks, hasReviewer)) : [];
+    agent.kind === "orchestrator" || agent.kind === "reviewer" || agent.kind === "verifier"
+      ? allModules.map((m) => deriveModuleState(m, tasks, hasReviewer))
+      : [];
   const allPassed = allStates.filter((s) => s === "passed").length;
   const allAttention = allStates.filter((s) => s === "attention" || s === "review_failed").length;
   const lastMerge = agent.kind === "orchestrator"
@@ -289,9 +291,12 @@ export function AgentNode({
           </span>
         );
       }
+      // 退回後模組都又通過了 = 修正做完，在等協調者重新合併；還有沒通過的才是「修正中」。
+      const n = reasonsOf(lastVerify).length;
+      const fixed = allStates.length > 0 && allPassed === allStates.length;
       return (
         <span>
-          <span className="ac-bad-text">✗ {t.ac_verify_failed(reasonsOf(lastVerify).length)}</span> · {report}
+          <span className="ac-bad-text">✗ {fixed ? t.ac_verify_fixed(n) : t.ac_verify_failed(n)}</span> · {report}
         </span>
       );
     }

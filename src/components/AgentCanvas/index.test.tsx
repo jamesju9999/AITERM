@@ -192,6 +192,21 @@ describe("AgentCanvasView", () => {
       expect(within(screen.getByTestId("agent-v1")).getByText(/驗收合併結果中/)).toBeTruthy();
     });
 
+    it("驗收退回：修正還在做寫「修正中」，做完了寫「等待重新合併」", async () => {
+      const failed = verify({ verdict: "fail", review_reasons: JSON.stringify(["導覽列"]) });
+      const fix = card({ id: "F", title: "修正：A 登入", status: "running", outcome: null, card_kind: "fix", agent_id: "a1", module_id: "A", review_of: "A" });
+      vi.mocked(listAgents).mockResolvedValue([agent(), orch, ver]);
+      vi.mocked(listTasks).mockResolvedValue([modA, merged, failed, fix]);
+      const { unmount } = view();
+      await waitFor(() => expect(within(screen.getByTestId("agent-v1")).getByText(/工程師修正中/)).toBeTruthy());
+      unmount();
+
+      vi.mocked(listTasks).mockResolvedValue([modA, merged, failed, { ...fix, status: "done", outcome: "success", finished_at: 30 }]);
+      view();
+      await waitFor(() => expect(within(screen.getByTestId("agent-v1")).getByText(/修正已完成，等待重新合併/)).toBeTruthy());
+      expect(screen.getByTestId("ac-summary").textContent).toMatch(/等待重新合併/);
+    });
+
     it("驗收要你決定：卡上可以放行，報告列出每項與截圖", async () => {
       vi.mocked(listAgents).mockResolvedValue([agent(), orch, ver]);
       vi.mocked(listTasks).mockResolvedValue([modA, merged, verify({ verdict: "attention", review_reasons: JSON.stringify(["整體樣式"]) })]);

@@ -895,6 +895,34 @@ pub fn verify_fix_body(module: &TaskRow, items: &[&VerifyItem], verify_id: &str,
     s
 }
 
+/// 退回協調者的整合問題：驗收發現、但不屬於任何一個模組的項目。
+pub fn integration_fix_body(items: &[VerifyItem], verify_id: &str, round: usize) -> String {
+    let mut s = format!(
+        "你是協調者。驗收沒有通過（驗收退回第 {round} 輪，最多 {max} 輪），下面這些問題不屬於單一模組，\
+         是合併之後的整合問題。請在目前目錄（整合分支）修正並 commit，不要 push。\n驗收發現的問題：\n",
+        max = MAX_FIX_ROUNDS,
+    );
+    for i in items {
+        s.push_str(&format!("\n- 條件：{}\n", i.criterion));
+        if let Some(v) = &i.steps {
+            s.push_str(&format!("  重現步驟：{}\n", v.replace('\n', "\n  ")));
+        }
+        if let Some(v) = &i.expected {
+            s.push_str(&format!("  預期：{v}\n"));
+        }
+        if let Some(v) = &i.actual {
+            s.push_str(&format!("  實際：{v}\n"));
+        }
+        for e in &i.evidence {
+            s.push_str(&format!("  證據：tasks/{verify_id}/{e}\n"));
+        }
+        if let Some(v) = &i.notes {
+            s.push_str(&format!("  說明：{v}\n"));
+        }
+    }
+    s
+}
+
 pub async fn after_card_finished(
     pool: &SqlitePool,
     project_path: &Path,
@@ -1097,7 +1125,8 @@ async fn verify_fail_streak(pool: &SqlitePool) -> Result<usize, sqlx::Error> {
     Ok(verdicts.iter().take_while(|v| v.as_deref() != Some("pass")).count())
 }
 
-/// 驗收沒通過：依模組開修正卡給原工程師；找不到模組的項目、或超過輪數，交給使用者。
+/// 驗收沒通過：依模組開修正卡給原工程師。全部都找不到模組的項目是整合問題（合併後才出現的），
+/// 退回協調者在整合分支修，修完重新驗收。超過輪數、或協調者不在／暫停中，交給使用者。
 async fn on_verify_failed(pool: &SqlitePool, project_path: &Path, verify: &TaskRow) -> Result<Vec<WorkflowEvent>, sqlx::Error> {
     let report = std::fs::read_to_string(verify_json_path(project_path, &verify.id))
         .ok()
@@ -1120,6 +1149,32 @@ async fn on_verify_failed(pool: &SqlitePool, project_path: &Path, verify: &TaskR
     }
     let streak = verify_fail_streak(pool).await?;
     let attention = WorkflowEvent::VerifyAttention { verify_id: verify.id.clone(), unowned };
+    let orch = find_kind(&all_agents, "orchestrator").filter(|o| o.paused_task_id.is_none());
+    if owned.is_empty() && unowned > 0 && streak <= MAX_FIX_ROUNDS {
+        if let Some(orch) = orch {
+            // 合併卡做完會自動建新的驗收卡（見 after_card_finished 的 KIND_MERGE），也會過合併防呆。
+            let title = format!("修正：合併結果（驗收退回第 {streak} 輪）");
+            let body = integration_fix_body(&failed, &verify.id, streak);
+            insert_card(
+                pool,
+                &NewCard {
+                    title: &title,
+                    body: &body,
+                    project_dir: &orch.project_dir,
+                    agent_id: &orch.id,
+                    card_kind: KIND_MERGE,
+                    module_id: None,
+                    review_of: None,
+                    start_sha: None,
+                    end_sha: None,
+                    sort_order: queued_tail(pool).await?,
+                    from_spec: None,
+                },
+            )
+            .await?;
+            return Ok(vec![]);
+        }
+    }
     if owned.is_empty() || streak > MAX_FIX_ROUNDS {
         sqlx::query("UPDATE tasks SET verdict = 'attention' WHERE id = ?").bind(&verify.id).execute(pool).await?;
         return Ok(vec![attention]);
@@ -1152,6 +1207,11 @@ async fn on_verify_failed(pool: &SqlitePool, project_path: &Path, verify: &TaskR
             },
         )
         .await?;
+    }
+    // 修正完一定要重新合併、重新驗收：修正卡就算沒有新 commit（例如工程師檢查後認為不用改），
+    // 分支版本跟上次合併一樣，不忘掉合併紀錄的話就不會再建合併卡，流程停在「驗收退回」。
+    if let Some(orch) = orch {
+        agents::set_merge_signature(pool, &orch.id, None).await?;
     }
     Ok(if unowned > 0 { vec![attention] } else { vec![] })
 }
@@ -1874,11 +1934,34 @@ mod tests {
         assert_eq!(of_kind(&tasks, KIND_MERGE).len(), 1, "修好之前不會再合併");
     }
 
+    /// 沒有一項屬於模組：是合併後的整合問題，退回協調者在整合分支修；修完的合併卡會再建驗收卡。
     #[tokio::test]
-    async fn a_failure_nobody_owns_stops_for_the_user() {
+    async fn a_failure_nobody_owns_goes_back_to_the_orchestrator() {
         let pool = mem_pool().await;
         let project = tempfile::tempdir().unwrap();
         let (_c1, _c2, _m1, _m2, verify) = verified_round(&pool, project.path()).await;
+        let json = r#"{"verdict":"fail","items":[{"criterion":"兩頁共用導覽列","status":"fail","actual":"about.html 載入兩次 nav.js"},{"criterion":"b","status":"fail","module_id":"no-such-module"}]}"#;
+        finish_verify(&pool, project.path(), &verify, json).await;
+        let events = after_card_finished(&pool, project.path(), &verify).await.unwrap();
+
+        let tasks = all(&pool).await;
+        assert!(of_kind(&tasks, KIND_FIX).is_empty());
+        let orch = agents::list_agents(&pool).await.unwrap().into_iter().find(|a| a.kind == "orchestrator").unwrap();
+        let fix = of_kind(&tasks, KIND_MERGE).into_iter().find(|m| m.status == STATUS_QUEUED).expect("要開一張修正用的合併卡");
+        assert_eq!(fix.agent_id.as_deref(), Some(orch.id.as_str()));
+        assert!(fix.title.contains("驗收退回第 1 輪"), "{}", fix.title);
+        assert!(fix.body.contains("about.html 載入兩次 nav.js") && fix.body.contains("整合分支"), "{}", fix.body);
+        assert_eq!(store::get_task(&pool, &verify).await.unwrap().unwrap().verdict.as_deref(), Some("fail"));
+        assert!(events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failure_nobody_owns_stops_for_the_user_when_the_orchestrator_is_paused() {
+        let pool = mem_pool().await;
+        let project = tempfile::tempdir().unwrap();
+        let (_c1, _c2, _m1, _m2, verify) = verified_round(&pool, project.path()).await;
+        let orch = agents::list_agents(&pool).await.unwrap().into_iter().find(|a| a.kind == "orchestrator").unwrap();
+        agents::set_paused(&pool, &orch.id, Some("x")).await.unwrap();
         let json = r#"{"verdict":"fail","items":[{"criterion":"a","status":"fail"},{"criterion":"b","status":"fail","module_id":"no-such-module"}]}"#;
         finish_verify(&pool, project.path(), &verify, json).await;
         let events = after_card_finished(&pool, project.path(), &verify).await.unwrap();
@@ -1886,6 +1969,27 @@ mod tests {
         assert!(of_kind(&all(&pool).await, KIND_FIX).is_empty());
         assert_eq!(store::get_task(&pool, &verify).await.unwrap().unwrap().verdict.as_deref(), Some("attention"));
         assert_eq!(events, vec![WorkflowEvent::VerifyAttention { verify_id: verify, unowned: 2 }]);
+    }
+
+    /// 修正卡沒有新 commit 時分支版本跟上次合併一樣；派修正卡時要忘掉合併紀錄，修完才會重新合併、驗收。
+    #[tokio::test]
+    async fn fixes_after_a_failed_verification_always_lead_to_a_new_merge() {
+        let pool = mem_pool().await;
+        let project = tempfile::tempdir().unwrap();
+        let (_c1, _c2, m1, _m2, verify) = verified_round(&pool, project.path()).await;
+        let json = format!(r#"{{"verdict":"fail","items":[{{"criterion":"a","status":"fail","module_id":"{m1}"}}]}}"#);
+        finish_verify(&pool, project.path(), &verify, &json).await;
+        after_card_finished(&pool, project.path(), &verify).await.unwrap();
+        let fix = of_kind(&all(&pool).await, KIND_FIX)[0].id.clone();
+        // 修正沒有改任何東西：end_sha 跟模組原本的一樣（e1）。
+        finish_fix(&pool, &fix, "e1").await;
+        after_card_finished(&pool, project.path(), &fix).await.unwrap();
+        let review = of_kind(&all(&pool).await, KIND_REVIEW).into_iter().find(|r| r.review_of.as_deref() == Some(fix.as_str())).unwrap().id.clone();
+        finish_review(&pool, &review, "pass").await;
+        after_card_finished(&pool, project.path(), &review).await.unwrap();
+
+        let tasks = all(&pool).await;
+        assert_eq!(of_kind(&tasks, KIND_MERGE).len(), 2, "修正完要重新合併（才會重新驗收）");
     }
 
     #[tokio::test]

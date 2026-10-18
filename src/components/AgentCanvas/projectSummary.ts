@@ -15,7 +15,8 @@ export type ProjectSummary =
   | { kind: "repo_pending"; total: number; reason: "repo_dirty" | "repo_merge_in_progress" | "repo_diverged" }
   /** 有驗收者：合併完成，驗收還沒開始或進行中。 */
   | { kind: "verifying"; total: number }
-  /** 驗收沒通過，已退回工程師修正。`items` = 沒通過的條件數。 */
+  /** 驗收沒通過、修正都做完了（模組全部重新通過），在等重新合併。`items` = 沒通過的條件數。
+   *  修正還在做的時候模組沒有全部通過，會是 `working`，不會走到這裡。 */
   | { kind: "verify_failed"; total: number; items: number }
   /** 驗收沒通過，要你決定（放行或自己處理）。 */
   | { kind: "verify_attention"; total: number };
