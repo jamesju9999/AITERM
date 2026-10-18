@@ -249,8 +249,13 @@ pub fn merge_body(entries: &[(String, String, Vec<String>)]) -> String {
     for (name, branch, modules) in entries {
         s.push_str(&format!("- {branch}（{name}：{}）\n", modules.join("、")));
     }
+    // 每個分支都直接 git merge，不要自己先判斷「是不是已經合過」：協調者兩次用
+    // merge-base --is-ancestor 串在一行裡檢查，只印出其中一個分支的結果，卻當成兩個都合過、
+    // 什麼都沒合就回報完成（實機）。合過的分支 git 自己會回 Already up to date。
     s.push_str(
-        "\n每合併一個分支就處理衝突：先理解雙方的意圖再解決，然後 commit。\n\
+        "\n每個分支都直接執行 `git merge --no-edit <分支>`，不要自己先判斷「是不是已經合過」——\
+         已經合過的分支 git 會回 Already up to date，照常往下一個。\n\
+         每合併一個分支就處理衝突：先理解雙方的意圖再解決，然後 commit。\n\
          全部合併完成後，如果專案有測試就跑一次。不要 push。\n",
     );
     s
@@ -1752,6 +1757,16 @@ mod tests {
         store::dispatch_for_test(pool, verify_id, "tab-v").await;
         set_verdict(pool, verify_id, &ReviewVerdict { verdict: report.verdict, reasons: vec![] }).await.unwrap();
         store::finish_task(pool, verify_id, "success", None, None).await.unwrap();
+    }
+
+    #[test]
+    fn the_merge_body_has_every_branch_merged_without_judging_first() {
+        let body = merge_body(&[
+            ("C1".into(), "aiterm-agent/c1".into(), vec!["A".into()]),
+            ("C2".into(), "aiterm-agent/c2".into(), vec!["B".into(), "C".into()]),
+        ]);
+        assert!(body.contains("- aiterm-agent/c1（C1：A）") && body.contains("- aiterm-agent/c2（C2：B、C）"), "{body}");
+        assert!(body.contains("git merge --no-edit <分支>") && body.contains("不要自己先判斷"), "{body}");
     }
 
     #[tokio::test]
