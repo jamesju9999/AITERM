@@ -109,6 +109,12 @@ pub struct TaskRow {
     pub reply_wait_at: Option<i64>,
     /// App 重啟時被中斷、下次派工要用 `claude --resume` 接回原本的對話。
     pub resume_session: bool,
+    /// 一般卡片用哪個 AI 工具：`codex`，或 `None`＝Claude Code。Agent 卡看 Agent 的設定，不看這裡。
+    #[sqlx(default)]
+    pub cli: Option<String>,
+    /// 一般卡片選 Codex 時的模型（Codex 一定要指定，見 `codex::launch_command`）。
+    #[sqlx(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -170,6 +176,7 @@ pub async fn clone_task_fields(pool: &SqlitePool, src_id: &str) -> Result<String
         create_task(pool, &src.title, &src.body, &src.project_dir, src.parallel_ok, src.interactive)
             .await?;
     set_label(pool, &new_id, src.label.as_deref()).await?;
+    set_cli_model(pool, &new_id, src.cli.as_deref(), src.model.as_deref()).await?;
     Ok(new_id)
 }
 
@@ -573,6 +580,19 @@ pub async fn set_end_sha(pool: &SqlitePool, id: &str, sha: &str) -> Result<(), s
 }
 
 /// 設定單張卡片的 worktree 隔離覆寫值。`None` 寫回 NULL＝沿用全域設定。
+/// 一般卡片的 AI 工具與模型。`cli` 不是 `codex` 一律存 NULL（Claude Code），模型也跟著清掉。
+pub async fn set_cli_model(pool: &SqlitePool, id: &str, cli: Option<&str>, model: Option<&str>) -> Result<(), sqlx::Error> {
+    let codex = cli == Some(crate::tasks::agents::CLI_CODEX);
+    let model = model.map(str::trim).filter(|m| codex && !m.is_empty());
+    sqlx::query("UPDATE tasks SET cli = ?, model = ? WHERE id = ?")
+        .bind(codex.then_some(crate::tasks::agents::CLI_CODEX))
+        .bind(model)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn set_isolate_worktree(
     pool: &SqlitePool,
     id: &str,
@@ -1281,7 +1301,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clone_task_fields_errors_when_source_is_missing() {
+    async fn clone_task_fields_keeps_the_ai_tool() {
+        let pool = mem_pool().await;
+        let src = create_task(&pool, "t", "b", "/r", true, false).await.unwrap();
+        set_cli_model(&pool, &src, Some("codex"), Some("gpt-6-luna")).await.unwrap();
+        let copy = get_task(&pool, &clone_task_fields(&pool, &src).await.unwrap()).await.unwrap().unwrap();
+        assert_eq!((copy.cli.as_deref(), copy.model.as_deref()), (Some("codex"), Some("gpt-6-luna")));
+    }
+
+    #[tokio::test]
+        async fn clone_task_fields_errors_when_source_is_missing() {
         let pool = mem_pool().await;
         assert!(clone_task_fields(&pool, "nope").await.is_err());
     }

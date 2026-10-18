@@ -238,6 +238,11 @@ export function TaskCard({
         {card.interactive && (
           <span className="task-badge task-badge--interactive">{t.board_badge_interactive}</span>
         )}
+        {!card.agent_id && !card.interactive && card.cli === "codex" && (
+          <span className="task-badge task-badge--interactive" data-testid="task-codex-badge">
+            Codex{card.model ? ` · ${card.model}` : ""}
+          </span>
+        )}
         {agentName && (
           <span className="task-badge task-badge--interactive" data-testid="task-agent-badge">
             🤖 {agentName}

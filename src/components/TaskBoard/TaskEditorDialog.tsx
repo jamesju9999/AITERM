@@ -7,10 +7,12 @@ import { usedDirs, usedLabels } from "../../ipc/projects";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import {
   addAttachment,
+  codexInfo,
   createTask,
   removeAttachment,
   updateTask,
   type AttachmentRow,
+  type CodexInfo,
   type TaskWithAttachments,
 } from "../../ipc/tasks";
 import { useRefineTask } from "./useRefineTask";
@@ -45,6 +47,25 @@ export function TaskEditorDialog({
   const [label, setLabel] = useState(card?.label ?? "");
   const [parallelOk, setParallelOk] = useState(card?.parallel_ok ?? true);
   const [interactive, setInteractive] = useState(card?.interactive ?? false);
+  // AI 工具：互動卡片要人接手，只走 Claude Code；Codex 一定要指定模型。
+  const [cli, setCli] = useState<"claude" | "codex">(card?.cli === "codex" ? "codex" : "claude");
+  const [model, setModel] = useState(card?.model ?? "");
+  const useCodex = cli === "codex" && !interactive;
+  const [codex, setCodex] = useState<CodexInfo | null>(null);
+  useEffect(() => {
+    if (!useCodex || codex) return;
+    let alive = true;
+    codexInfo()
+      .then((info) => {
+        if (!alive) return;
+        setCodex(info);
+        if (info.models.length > 0) setModel((m) => (m.trim() ? m : info.models[0].slug));
+      })
+      .catch((e) => alive && setCodex({ models: [], login: null, error: String(e) }));
+    return () => {
+      alive = false;
+    };
+  }, [useCodex, codex]);
   // 三態：沿用全域 / 一定隔離 / 一定不隔離。null 是「沿用」，跟 false 不同義。
   const [isolateChoice, setIsolateChoice] = useState<"inherit" | "on" | "off">(() => {
     if (card?.isolate_worktree === true) return "on";
@@ -202,6 +223,7 @@ export function TaskEditorDialog({
         };
       })();
       const labelArg = label.trim() || null;
+      const cliArgs = useCodex ? { cli: "codex", model: model.trim() } : { cli: null, model: null };
       if (isEdit) {
         await updateTask(projectId, {
           id: card.id,
@@ -213,6 +235,7 @@ export function TaskEditorDialog({
           label: labelArg,
           isolate_worktree: isolateChoice === "inherit" ? null : isolateChoice === "on",
           ...bridgeArgs,
+          ...cliArgs,
         });
       } else {
         const newId = await createTask(projectId, {
@@ -224,6 +247,7 @@ export function TaskEditorDialog({
           label: labelArg,
           isolate_worktree: isolateChoice === "inherit" ? null : isolateChoice === "on",
           ...bridgeArgs,
+          ...cliArgs,
         });
         for (const f of pendingFiles) {
           const bytes = new Uint8Array(await f.arrayBuffer());
@@ -410,6 +434,47 @@ export function TaskEditorDialog({
 
         {!interactive && (
           <>
+            <label className="task-field">
+              <span className="task-field-label">{t.ac_cli}</span>
+              <select data-testid="task-cli-select" value={cli} onChange={(e) => setCli(e.target.value as "claude" | "codex")}>
+                <option value="claude">Claude Code</option>
+                <option value="codex">Codex</option>
+              </select>
+            </label>
+            {useCodex && (
+              <label className="task-field">
+                <span className="task-field-label">{t.ac_model}</span>
+                <input
+                  className="task-field-input"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={t.ac_model_placeholder_codex}
+                  list="task-codex-models"
+                  aria-label={t.ac_model}
+                  spellCheck={false}
+                />
+                <datalist id="task-codex-models">
+                  {(codex?.models ?? []).map((m) => (
+                    <option key={m.slug} value={m.slug}>
+                      {m.name}
+                    </option>
+                  ))}
+                </datalist>
+                <span className={`task-field-hint${model.trim() ? "" : " task-field-hint--bad"}`}>{t.ac_model_hint_codex}</span>
+                {codex?.login && (
+                  <span className="task-field-hint">
+                    {t.ac_codex_login}
+                    {codex.login}
+                  </span>
+                )}
+                {codex?.error && (
+                  <span className="task-field-hint task-field-hint--bad">
+                    {t.ac_codex_info_error}
+                    {codex.error}
+                  </span>
+                )}
+              </label>
+            )}
             <label className="task-field task-field--checkbox">
               <input
                 type="checkbox"
@@ -438,7 +503,7 @@ export function TaskEditorDialog({
 
         </div>
 
-        {bridgeRunning && (
+        {bridgeRunning && !useCodex && (
           <div className="task-dialog-group">
           <label className="task-field">
             <span className="task-field-label">{t.task_bridge_label}</span>
@@ -509,7 +574,7 @@ export function TaskEditorDialog({
           </button>
           <button
             className="aiterm-btn aiterm-btn--primary"
-            disabled={busy || !title.trim() || !dir.trim()}
+            disabled={busy || !title.trim() || !dir.trim() || (useCodex && !model.trim())}
             onClick={() => void save()}
           >
             {t.board_save}

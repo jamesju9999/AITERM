@@ -199,6 +199,23 @@ pub fn join_args<const N: usize>(parts: [Option<String>; N]) -> Option<String> {
 pub const AUTONOMY_NOTE_ASK: &str = "（這是自動派工，旁邊沒有人會即時回答。需要人做決定時（需求不清、取捨會影響成果），\
 用 ask_human 工具提問，送出後結束這一輪回覆等答案，不要自己先決定；小細節自己採合理做法，記在文件或交件說明的「待確認事項」。）";
 
+/// 這張卡要不要用 Codex 做：非互動卡片才行；Agent 卡看 Agent 的設定，一般卡片看卡片自己的。
+pub(crate) fn uses_codex(task: &TaskRow, agent: Option<&crate::tasks::agents::AgentRow>) -> bool {
+    !task.interactive
+        && match agent {
+            Some(a) => a.cli == crate::tasks::agents::CLI_CODEX,
+            None => task.cli.as_deref() == Some(crate::tasks::agents::CLI_CODEX),
+        }
+}
+
+/// Codex 卡片的模型：Agent 卡用 Agent 的，一般卡片用卡片的。
+pub(crate) fn codex_model<'a>(task: &'a TaskRow, agent: Option<&'a crate::tasks::agents::AgentRow>) -> Option<&'a str> {
+    match agent {
+        Some(a) => a.model.as_deref(),
+        None => task.model.as_deref(),
+    }
+}
+
 /// Codex 卡片的提問版自主說明：ask_human 會等到有人回答才回傳。
 /// 本機小模型拿到「已送出、請結束這一輪」常會自己猜答案繼續做（實測 Qwen3.6），所以不走 Claude 那套
 /// 「結束這一輪、答案之後打字進去」。也要點名工具：Codex 內建的 request_user_input 在自動派工下不能用。
@@ -736,7 +753,7 @@ impl RealDispatcher {
         let program = crate::tasks::codex::program();
         crate::tasks::codex::launch_command(&crate::tasks::codex::CodexLaunch {
             program: &program,
-            model: agent.and_then(|a| a.model.as_deref()),
+            model: codex_model(task, agent),
             prompt_file: &file,
             resume_session: resume,
             hook_command: hook.as_deref(),
@@ -784,8 +801,7 @@ impl Dispatcher for RealDispatcher {
             ),
             None => None,
         };
-        // 選了 Codex 的 Agent 的非互動卡片：開 Codex 的 TUI 做（見 tasks::codex）。
-        let codex = !task.interactive && agent.as_ref().is_some_and(|a| a.cli == crate::tasks::agents::CLI_CODEX);
+        let codex = uses_codex(task, agent.as_ref());
         // 只有指令確實是 claude 時才給 session id——別的指令接上這個旗標
         // 會直接啟動失敗（見 dispatch::looks_like_claude）。
         // 重啟時被中斷的卡片：接回原本的對話（同一個 session id）。
@@ -1777,7 +1793,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
-            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false,
+            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None,
         }
     }
 
@@ -1941,7 +1957,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
-            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false,
+            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None,
         }
     }
 
@@ -3316,6 +3332,38 @@ mod agent_dispatch_tests {
         assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Module: A 模組");
         assert_eq!(store::get_task(&pool, &task).await.unwrap().unwrap().end_sha.as_deref(), Some(end.as_str()));
         assert_eq!(agents::get_agent(&pool, &agent.id).await.unwrap().unwrap().paused_task_id, None);
+    }
+
+    /// 一般卡片也能選 Codex；Agent 卡只看 Agent 的設定；互動卡片一律 Claude Code。
+    #[tokio::test]
+    async fn plain_cards_can_pick_codex_and_agent_cards_follow_their_agent() {
+        let repo = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let id = card(&pool).await;
+        let plain = || async { store::get_task(&pool, &id).await.unwrap().unwrap() };
+        assert!(!uses_codex(&plain().await, None), "預設是 Claude Code");
+
+        store::set_cli_model(&pool, &id, Some("codex"), Some(" gpt-6-luna ")).await.unwrap();
+        let t = plain().await;
+        assert!(uses_codex(&t, None));
+        assert_eq!(codex_model(&t, None), Some("gpt-6-luna"));
+        store::set_interactive(&pool, &id, true).await.unwrap();
+        assert!(!uses_codex(&plain().await, None), "互動卡片要人接手，不走 Codex");
+        store::set_interactive(&pool, &id, false).await.unwrap();
+
+        // 不認得的工具名稱存成 Claude Code，模型一起清掉。
+        store::set_cli_model(&pool, &id, Some("gemini"), Some("x")).await.unwrap();
+        let t = plain().await;
+        assert_eq!((t.cli.as_deref(), t.model.as_deref()), (None, None));
+
+        // Agent 卡：卡片自己的設定不算，看 Agent。
+        store::set_cli_model(&pool, &id, Some("codex"), Some("gpt-6-luna")).await.unwrap();
+        let agent = agent_for(&pool, repo.path()).await;
+        assert!(!uses_codex(&plain().await, Some(&agent)), "Agent 是 Claude Code");
+        agents::set_cli(&pool, &agent.id, "codex").await.unwrap();
+        let agent = agents::get_agent(&pool, &agent.id).await.unwrap().unwrap();
+        assert!(uses_codex(&plain().await, Some(&agent)));
+        assert_eq!(codex_model(&plain().await, Some(&agent)), None, "模型也看 Agent 的");
     }
 
     /// 協調者回報合併完成，但工程師的最新版本不在整合分支裡（實際發生過：它誤以為早就合過）：

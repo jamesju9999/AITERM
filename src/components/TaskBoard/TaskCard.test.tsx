@@ -405,3 +405,26 @@ describe("TaskCard 的 Agent 徽章", () => {
     expect(screen.queryByTestId("task-agent-badge")).toBeNull();
   });
 });
+
+describe("TaskCard 的 Codex 徽章", () => {
+  const show = (over: Partial<TaskWithAttachments>) =>
+    render(
+      <LocaleProvider>
+        <TaskCard projectId="p1" card={card(over)} onEdit={vi.fn()} onViewTranscript={vi.fn()}
+          onEditLabel={vi.fn()} onChanged={vi.fn()} />
+      </LocaleProvider>,
+    );
+
+  it("一般卡片選了 Codex 標出工具與模型", () => {
+    show({ cli: "codex", model: "gpt-6-luna" });
+    expect(screen.getByTestId("task-codex-badge")).toHaveTextContent("Codex · gpt-6-luna");
+  });
+
+  it("Claude Code 卡片、互動卡片不標", () => {
+    const { unmount } = show({});
+    expect(screen.queryByTestId("task-codex-badge")).toBeNull();
+    unmount();
+    show({ cli: "codex", model: "gpt-6-luna", interactive: true });
+    expect(screen.queryByTestId("task-codex-badge")).toBeNull();
+  });
+});

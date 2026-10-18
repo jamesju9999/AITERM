@@ -53,6 +53,10 @@ export interface TaskRow {
   worktree_branch: string | null;
   /** `null` 代表沿用全域的 isolate_with_worktree 設定。 */
   isolate_worktree: boolean | null;
+  /** 一般卡片用哪個 AI 工具：`codex`，或 `null`＝Claude Code。Agent 卡看 Agent 的設定。 */
+  cli?: string | null;
+  /** 一般卡片選 Codex 時的模型。 */
+  model?: string | null;
   /** 指派給哪個 Agent（Agent 協作）。`null` = 一般卡片。 */
   agent_id: string | null;
   /** Agent 卡片在 Agent 分支上的 commit 範圍起點／終點。 */
@@ -148,6 +152,8 @@ export const createTask = (
     bridge_tiers: string | null;
     label: string | null;
     isolate_worktree: boolean | null;
+    cli?: string | null;
+    model?: string | null;
   },
 ): Promise<string> => invoke("tasks_create", { projectId, args });
 
@@ -167,6 +173,8 @@ export const updateTask = (
     bridge_tiers: string | null;
     label: string | null;
     isolate_worktree: boolean | null;
+    cli?: string | null;
+    model?: string | null;
   },
 ): Promise<void> => invoke("tasks_update", { projectId, args });
 
