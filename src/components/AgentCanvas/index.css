@@ -674,12 +674,15 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-pool-sep { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--ac-edge); }
 .ac-pool-item--skill { padding-left: 10px; border-style: dashed; }
 .ac-skill-ico { font-size: 14px; line-height: 1; }
-.ac-db-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; margin-top: 3px; padding: 1px 8px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-tertiary); color: var(--text-secondary); font: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ac-db-chip:hover { border-color: #38bdf8; }
-.ac-db-chip--active { border-color: #38bdf8; color: #e0f2fe; background: rgba(56, 189, 248, 0.16); box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25); animation: ac-db-pulse 1.2s ease-in-out infinite; }
-.ac-db-sql { font-family: var(--font-mono, ui-monospace, monospace); overflow: hidden; text-overflow: ellipsis; }
-@keyframes ac-db-pulse { 50% { box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.1); } }
-@media (prefers-reduced-motion: reduce) { .ac-db-chip--active { animation: none; } }
+.ac-skill-row { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 100%; box-sizing: border-box; padding: 5px 12px; border: none; border-bottom: 1px solid var(--ac-edge); background: rgba(56, 189, 248, 0.05); color: var(--text-secondary); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.ac-skill-row:hover { background: rgba(56, 189, 248, 0.1); }
+.ac-skill-row-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ac-skill-row-mode { flex: none; padding: 0 6px; border-radius: 8px; background: rgba(56, 189, 248, 0.18); color: #7dd3fc; font-size: 11px; line-height: 16px; }
+.ac-skill-row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-skill-row--active { color: #e0f2fe; background: rgba(56, 189, 248, 0.16); box-shadow: inset 3px 0 0 #38bdf8; animation: ac-db-pulse 1.2s ease-in-out infinite; }
+.ac-db-sql { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: #7dd3fc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes ac-db-pulse { 50% { background: rgba(56, 189, 248, 0.24); } }
+@media (prefers-reduced-motion: reduce) { .ac-skill-row--active { animation: none; } }
 .ac-db-dialog { width: min(520px, 92vw); }
 .ac-db-section { margin: 12px 0 4px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 .ac-db-conns { max-height: min(240px, 34vh); overflow-y: auto; scrollbar-gutter: stable; border: 1px solid var(--border-color); border-radius: 8px; padding: 2px 8px; }

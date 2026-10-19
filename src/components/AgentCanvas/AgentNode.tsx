@@ -89,7 +89,7 @@ export function AgentNode({
   /** 這個 Agent 用的 AI 工具沒裝（顯示名稱，例如「Claude Code」）；有裝或還不知道是 null。 */
   missingTool?: string | null;
   /** 資料庫技能：標籤文字，與正在跑的 SQL 開頭（沒有在查就是 null）。沒裝是 null。 */
-  dbSkill?: { label: string; active: string | null } | null;
+  dbSkill?: { mode: string; label: string; active: string | null } | null;
   onDbSkill?: () => void;
   status: AgentStatus;
   nowSecs: number;
@@ -360,19 +360,6 @@ export function AgentNode({
               agent.model && <span className="ac-model">{agent.model}</span>
             )}
           </span>
-          {dbSkill && (
-            <button
-              type="button"
-              className={`ac-db-chip${dbSkill.active ? " ac-db-chip--active" : ""}`}
-              data-testid="agent-db-skill"
-              title={t.ac_db_chip_tip}
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={onDbSkill}
-            >
-              <span aria-hidden>🗄</span> {dbSkill.label}
-              {dbSkill.active && <span className="ac-db-sql"> · {dbSkill.active}</span>}
-            </button>
-          )}
           {missingTool && (
             <span className="ac-tool-missing" data-testid="agent-tool-missing">
               {t.ac_tool_missing_badge(missingTool)}
@@ -390,6 +377,25 @@ export function AgentNode({
           ×
         </button>
       </div>
+      {/* 技能列：自己一整列（標題那欄太窄，連線名稱會被截掉）。查詢中整列亮起來，第二行顯示 SQL 開頭。 */}
+      {dbSkill && (
+        <button
+          type="button"
+          className={`ac-skill-row${dbSkill.active ? " ac-skill-row--active" : ""}`}
+          data-testid="agent-db-skill"
+          title={`${t.ac_db_chip_tip}\n${dbSkill.label}（${dbSkill.mode}）`}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={onDbSkill}
+        >
+          <span className="ac-skill-row-line">
+            <span aria-hidden>🗄</span>
+            {/* 權限放前面：連線多時被截掉的是名稱，不是權限。 */}
+            <span className="ac-skill-row-mode">{dbSkill.mode}</span>
+            <span className="ac-skill-row-label">{dbSkill.label}</span>
+          </span>
+          {dbSkill.active && <span className="ac-db-sql">{dbSkill.active}</span>}
+        </button>
+      )}
       <div className="ac-agent-body">
         {failed ? (
           <div className="ac-attention" role="alert">

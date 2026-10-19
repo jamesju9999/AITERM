@@ -196,7 +196,7 @@ describe("AgentCanvasView", () => {
     ]);
     view();
     const chip = await within(await screen.findByTestId("agent-a1")).findByTestId("agent-db-skill");
-    await waitFor(() => expect(chip.className).toContain("ac-db-chip--active"));
+    await waitFor(() => expect(chip.className).toContain("ac-skill-row--active"));
     expect(chip.textContent).toContain("HTBKTW-DEV");
     expect(chip.textContent).toContain("唯讀");
     expect(chip.textContent).toContain(`${sql.slice(0, 40)}…`);

@@ -1185,7 +1185,7 @@ export function AgentCanvasView({
                         if (!skill) return null;
                         const names = skill.connections.map((id) => connNames[id] ?? id).join("、");
                         const running = activeQuery(dbQueries, a.id);
-                        return { label: `${names}（${t.ac_db_mode_short(skill.mode)}）`, active: running ? sqlPreview(running.sql) : null };
+                        return { mode: t.ac_db_mode_short(skill.mode), label: names, active: running ? sqlPreview(running.sql) : null };
                       })()}
                       onDbSkill={() => setDbSkillFor(a)}
                       missingTool={
