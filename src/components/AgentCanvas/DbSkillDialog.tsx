@@ -61,18 +61,23 @@ export function DbSkillDialog({
         <div className="ac-db-section">{t.ac_db_connections}</div>
         {conns === null && !error && <p className="task-field-hint">{t.ac_db_loading}</p>}
         {conns?.length === 0 && <p className="task-field-hint ac-bad-text">{t.ac_db_no_connections}</p>}
-        {conns?.map((c) => (
-          <label key={c.id} className="ac-db-option">
-            <input
-              type="checkbox"
-              checked={picked.includes(c.id)}
-              onChange={(e) => setPicked((p) => (e.target.checked ? [...p, c.id] : p.filter((x) => x !== c.id)))}
-            />
-            <span>
-              {c.name} <span className="ac-db-meta">· {c.db_type} · {c.database}</span>
-            </span>
-          </label>
-        ))}
+        {/* 連線多時只捲這一區，權限與按鈕永遠看得到。 */}
+        {!!conns?.length && (
+          <div className="ac-db-conns" data-testid="db-skill-conns">
+            {conns.map((c) => (
+              <label key={c.id} className="ac-db-option">
+                <input
+                  type="checkbox"
+                  checked={picked.includes(c.id)}
+                  onChange={(e) => setPicked((p) => (e.target.checked ? [...p, c.id] : p.filter((x) => x !== c.id)))}
+                />
+                <span>
+                  {c.name} <span className="ac-db-meta">{[c.db_type, c.database].filter(Boolean).map((s) => `· ${s}`).join(" ")}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
 
         <div className="ac-db-section">{t.ac_db_permission}</div>
         {modes.map((m) => (

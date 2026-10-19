@@ -682,6 +682,7 @@ button.ac-log-title:hover { color: var(--text-primary); }
 @media (prefers-reduced-motion: reduce) { .ac-db-chip--active { animation: none; } }
 .ac-db-dialog { width: min(520px, 92vw); }
 .ac-db-section { margin: 12px 0 4px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.ac-db-conns { max-height: min(240px, 34vh); overflow-y: auto; scrollbar-gutter: stable; border: 1px solid var(--border-color); border-radius: 8px; padding: 2px 8px; }
 .ac-db-option { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; font-size: 13px; cursor: pointer; }
 .ac-db-option input { margin-top: 3px; }
 .ac-db-meta { color: var(--text-muted); font-size: 12px; }
