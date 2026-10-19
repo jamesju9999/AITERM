@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -344,6 +344,14 @@ describe("AgentCanvasView", () => {
     fireEvent.click(within(dlg).getByRole("button", { name: /從資料夾加入|Add from folder/ }));
     expect(await within(dlg).findByLabelText(/htbtw-db/)).toBeTruthy();
     expect(within(dlg).getByText(/已加入並勾選：htbtw-db、htbtw-report/)).toBeTruthy();
+    // 協作頁之後重新整理（看板更新事件），從資料夾加入的技能也不能被洗掉（技能清單只載入一次）。
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    await act(async () => {
+      tasksUpdated?.();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(within(dlg).getByLabelText(/htbtw-report/)).toBeTruthy();
+    expect(listSkills).toHaveBeenCalledTimes(1);
     fireEvent.click(within(dlg).getByRole("button", { name: /^儲存$|^Save$/ }));
     await waitFor(() =>
       expect(setCustomSkills).toHaveBeenCalledWith("p1", "a1", [

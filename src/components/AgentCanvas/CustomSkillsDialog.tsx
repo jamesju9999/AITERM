@@ -28,20 +28,26 @@ export function CustomSkillsDialog({
   /** 從資料夾加入後的回饋：加了幾個、或都已經在清單裡。 */
   const [notice, setNotice] = useState<string | null>(null);
 
+  // 依內容而不是陣列本身決定要不要重新載入：呼叫端每次畫面更新都會傳一個新陣列，
+  // 拿陣列當相依會在協作頁每次重新整理時重跑，把剛從資料夾加入的技能洗掉（實機踩到：存成空的）。
+  const currentKey = current.join("\n");
   useEffect(() => {
     let alive = true;
+    const installed = currentKey ? currentKey.split("\n") : [];
     (async () => {
       const found = await listSkills(repoDir).catch(() => [] as SkillInfo[]);
       // 已裝但不在兩個預設位置的（從資料夾加入的），也要列出來。
       const extra = await Promise.all(
-        current.filter((p) => !found.some((s) => s.path === p)).map((p) => readSkill(p).catch(() => [] as SkillInfo[])),
+        installed.filter((p) => !found.some((s) => s.path === p)).map((p) => readSkill(p).catch(() => [] as SkillInfo[])),
       );
-      if (alive) setSkills([...found, ...extra.flat().filter((s) => current.includes(s.path))]);
+      const loaded = [...found, ...extra.flat().filter((s) => installed.includes(s.path))];
+      // 合併、不覆蓋：載入完成前使用者可能已經從資料夾加了技能。
+      if (alive) setSkills((prev) => [...loaded, ...(prev ?? []).filter((p) => !loaded.some((l) => l.path === p.path))]);
     })();
     return () => {
       alive = false;
     };
-  }, [repoDir, current]);
+  }, [repoDir, currentKey]);
 
   const addFolder = async () => {
     try {
