@@ -41,3 +41,14 @@ export function skillActivity(rows: DbQueryRow[], agentId: string, nowSecs: numb
   const recent = mine.find((r) => r.decision !== "denied" && r.finished_at !== null && nowSecs - r.finished_at <= SKILL_LINGER_SECS);
   return recent ? { kind: "recent", sql: recent.sql } : null;
 }
+
+/** `agents.custom_skills`：技能資料夾路徑的 JSON 陣列。沒有或壞掉都是空的。 */
+export function parseSkillPaths(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}

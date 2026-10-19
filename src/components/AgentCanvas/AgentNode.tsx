@@ -52,6 +52,8 @@ export function AgentNode({
   missingTool = null,
   dbSkill = null,
   onDbSkill,
+  customSkills = null,
+  onCustomSkills,
   status,
   nowSecs,
   dropState,
@@ -91,6 +93,9 @@ export function AgentNode({
   /** 資料庫技能：標籤文字，與正在跑的 SQL 開頭（沒有在查就是 null）。沒裝是 null。 */
   dbSkill?: { mode: string; label: string; activity: { kind: "pending" | "running" | "recent"; sql: string } | null } | null;
   onDbSkill?: () => void;
+  /** 自訂技能：名稱，與剛讀過的那個技能（亮起來用）。沒有是 null。 */
+  customSkills?: { names: string[]; active: string | null } | null;
+  onCustomSkills?: () => void;
   status: AgentStatus;
   nowSecs: number;
   dropState: "ok" | "bad" | null;
@@ -399,6 +404,22 @@ export function AgentNode({
               {dbSkill.activity.sql}
             </span>
           )}
+        </button>
+      )}
+      {customSkills && (
+        <button
+          type="button"
+          className={`ac-skill-row ac-skill-row--custom${customSkills.active ? " ac-skill-row--active" : ""}`}
+          data-testid="agent-custom-skills"
+          title={`${t.ac_cs_chip_tip}\n${customSkills.names.join("\n")}`}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={onCustomSkills}
+        >
+          <span className="ac-skill-row-line">
+            <RoleIcon name="doc" size={13} />
+            <span className="ac-skill-row-label">{customSkills.names.join("、")}</span>
+          </span>
+          {customSkills.active && <span className="ac-db-sql">{t.ac_cs_in_use(customSkills.active)}</span>}
         </button>
       )}
       <div className="ac-agent-body">

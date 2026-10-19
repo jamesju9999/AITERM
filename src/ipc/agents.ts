@@ -32,6 +32,8 @@ export interface AgentRow {
   cli?: AgentCli;
   /** 資料庫技能（JSON 字串，見 DbSkill）。null／沒有 = 沒裝。 */
   db_skill?: string | null;
+  /** 自訂技能：技能資料夾路徑的 JSON 陣列。null／沒有 = 沒有。 */
+  custom_skills?: string | null;
 }
 
 export type AgentCli = "claude" | "codex";
@@ -206,3 +208,29 @@ export const getReferences = (projectId: string): Promise<Reference[]> => invoke
 /** 整份取代；回傳整理後的清單（去重複、去空白）。資料夾不存在會回錯誤。 */
 export const setReferences = (projectId: string, references: Reference[]): Promise<Reference[]> =>
   invoke("agents_set_references", { projectId, references });
+
+// ── 自訂技能（見 tasks/custom_skills.rs）──
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  /** 技能資料夾（含 SKILL.md）的絕對路徑。 */
+  path: string;
+  source: "repo" | "user" | "folder" | "agent";
+}
+
+export interface SkillUseRow {
+  id: number;
+  task_id: string;
+  agent_id: string | null;
+  skill: string;
+  at: number;
+}
+
+/** 程式庫的 .claude/skills 與使用者的 ~/.claude/skills。 */
+export const listSkills = (repoDir: string): Promise<SkillInfo[]> => invoke("agents_list_skills", { repoDir });
+/** 使用者自己選的資料夾（要有 SKILL.md）。 */
+export const readSkill = (path: string): Promise<SkillInfo> => invoke("agents_read_skill", { path });
+export const setCustomSkills = (projectId: string, agentId: string, paths: string[]): Promise<void> =>
+  invoke("agents_set_custom_skills", { projectId, agentId, paths });
+export const listSkillUses = (projectId: string): Promise<SkillUseRow[]> => invoke("agents_skill_uses", { projectId });

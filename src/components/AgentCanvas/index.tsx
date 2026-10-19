@@ -22,6 +22,9 @@ import {
   setDbSkill,
   getReferences,
   setReferences,
+  listSkillUses,
+  setCustomSkills,
+  type SkillUseRow,
   type AgentKind,
   type AgentRow,
   type DbQueryRow,
@@ -33,8 +36,9 @@ import { DbSkillDialog } from "./DbSkillDialog";
 import { ResourceLayer } from "./ResourceLayer";
 import { accessLinks, folderResources, resourcesOf } from "./resources";
 import { ReferencesDialog } from "./ReferencesDialog";
+import { CustomSkillsDialog } from "./CustomSkillsDialog";
 import { RoleIcon } from "./RoleIcon";
-import { parseDbSkill, skillActivity, SKILL_LINGER_SECS, sqlPreview } from "./dbSkill";
+import { parseDbSkill, parseSkillPaths, skillActivity, SKILL_LINGER_SECS, sqlPreview } from "./dbSkill";
 import { ToolsBanner } from "./ToolsBanner";
 import { missingTools } from "./toolsCheck";
 import { listProjects, type ProjectInfo } from "../../ipc/projects";
@@ -202,6 +206,10 @@ export function AgentCanvasView({
   /** 專案的參考資料夾；記著是哪個專案的。 */
   const [refsOf, setRefsOf] = useState<{ projectId: string; list: Reference[] } | null>(null);
   const [refsOpen, setRefsOpen] = useState(false);
+  /** 自訂技能的使用記錄；記著是哪個專案的。 */
+  const [skillUsesOf, setSkillUsesOf] = useState<{ projectId: string; rows: SkillUseRow[] } | null>(null);
+  /** 正在設定自訂技能的 Agent。 */
+  const [customSkillsFor, setCustomSkillsFor] = useState<AgentRow | null>(null);
   /** 正在設定資料庫技能的 Agent。 */
   const [dbSkillFor, setDbSkillFor] = useState<AgentRow | null>(null);
   const [toolsBusy, setToolsBusy] = useState(false);
@@ -314,6 +322,9 @@ export function AgentCanvasView({
       getReferences(projectId)
         .then((list) => alive && setRefsOf({ projectId, list }))
         .catch(() => {});
+      listSkillUses(projectId)
+        .then((rows) => alive && setSkillUsesOf({ projectId, rows }))
+        .catch(() => {});
       Promise.all([listAgents(projectId), listTasks(projectId)])
         .then(([a, ts]) => {
           if (!alive) return;
@@ -373,7 +384,9 @@ export function AgentCanvasView({
   };
 
   // 查詢剛結束的那幾秒技能列還亮著，時鐘也要繼續走才會熄掉。
-  const dbRecent = (dbQueriesOf?.rows ?? []).some((q) => q.finished_at === null || nowSecs - q.finished_at <= SKILL_LINGER_SECS);
+  const dbRecent =
+    (dbQueriesOf?.rows ?? []).some((q) => q.finished_at === null || nowSecs - q.finished_at <= SKILL_LINGER_SECS) ||
+    (skillUsesOf?.rows ?? []).some((u) => nowSecs - u.at <= SKILL_LINGER_SECS);
   const anyRunning = tasks.some((x) => x.status === "running" && x.agent_id) || dbRecent;
   // 經過時間每秒更新——只在看得到、而且真的有東西在跑的時候。
   useEffect(() => {
@@ -532,6 +545,11 @@ export function AgentCanvasView({
         );
       for (let i = first; i < ev.length; i++) ev[i].role = role;
     }
+    // 自訂技能：讀了哪個技能。
+    for (const u of skillUsesOf?.projectId === projectId ? skillUsesOf.rows : []) {
+      const role = agents.find((a) => a.id === u.agent_id)?.kind;
+      ev.push({ at: u.at, text: t.ac_log_skill_used(agentName(u.agent_id), u.skill), kind: "dispatch", role });
+    }
     // 資料庫技能的查詢：活動記錄顯示完整 SQL。
     for (const q of dbQueries) {
       const who = agentName(q.agent_id);
@@ -551,7 +569,7 @@ export function AgentCanvasView({
       }
     }
     return ev.sort((a, b) => b.at - a.at).slice(0, 40);
-  }, [tasks, agents, agentName, dbQueries, t]);
+  }, [tasks, agents, agentName, dbQueries, skillUsesOf, projectId, t]);
 
   // ── 拖曳 ───────────────────────────────────────────────────────────────
 
@@ -618,7 +636,8 @@ export function AgentCanvasView({
       const target = hitTest(e.clientX, e.clientY);
       if (d.kind === "skill") {
         const a = target?.kind === "agent" ? agents.find((x) => x.id === target.agentId) : undefined;
-        if (a) setDbSkillFor(a);
+        if (a && d.id === "custom") setCustomSkillsFor(a);
+        else if (a) setDbSkillFor(a);
         else setToast(t.ac_skill_only_agent);
         return;
       }
@@ -1122,6 +1141,17 @@ export function AgentCanvasView({
           </span>
           <span className="ac-pool-name">{t.ac_skill_db}</span>
         </div>
+        <div
+          className="ac-pool-item ac-pool-item--skill"
+          data-testid="skill-custom"
+          title={t.ac_skill_hint}
+          onMouseDown={(e) => beginDrag(e, "skill", "custom")}
+        >
+          <span className="ac-agent-ico" aria-hidden>
+            <RoleIcon name="doc" />
+          </span>
+          <span className="ac-pool-name">{t.ac_skill_custom}</span>
+        </div>
       </div>
 
       <div className={`ac-main${layout.libCollapsed ? " ac-main--lib-collapsed" : ""}`}>
@@ -1240,6 +1270,16 @@ export function AgentCanvasView({
                         return { mode: t.ac_db_mode_short(skill.mode), label: names, activity: act && { kind: act.kind, sql: sqlPreview(act.sql) } };
                       })()}
                       onDbSkill={() => setDbSkillFor(a)}
+                      customSkills={(() => {
+                        const paths = parseSkillPaths(a.custom_skills);
+                        if (paths.length === 0) return null;
+                        const names = paths.map((p) => p.split(/[\\/]/).filter(Boolean).pop() ?? p);
+                        const used = (skillUsesOf?.projectId === projectId ? skillUsesOf.rows : [])
+                          .filter((u) => u.agent_id === a.id && nowSecs - u.at <= SKILL_LINGER_SECS)
+                          .sort((x, y) => y.at - x.at)[0];
+                        return { names, active: used?.skill ?? null };
+                      })()}
+                      onCustomSkills={() => setCustomSkillsFor(a)}
                       missingTool={
                         (a.cli ?? "claude") === "codex"
                           ? missing.includes("codex") ? "Codex" : null
@@ -1355,7 +1395,7 @@ export function AgentCanvasView({
         !guide.hintsOff &&
         !hintDismissed &&
         // 有對話框開著時不冒提示，免得浮在對話框上面。
-        !(config || newModule || templatesOpen || briefOpen || refsOpen || verifyFor || transcriptCard || helpOpen || inbox.open) && (
+        !(config || newModule || templatesOpen || briefOpen || refsOpen || customSkillsFor || verifyFor || transcriptCard || helpOpen || inbox.open) && (
           <GuideHint
             hint={hint}
             onDismiss={() =>
@@ -1409,11 +1449,26 @@ export function AgentCanvasView({
             {ghost.kind === "pool"
               ? poolLabel((ghost.id ?? "coder") as AgentKind)
               : ghost.kind === "skill"
-                ? t.ac_skill_db
+                ? ghost.id === "custom"
+                  ? t.ac_skill_custom
+                  : t.ac_skill_db
                 : (ghostCard?.title ?? "")}
           </div>,
           document.body,
         )}
+
+      {customSkillsFor && projectId && (
+        <CustomSkillsDialog
+          agentName={customSkillsFor.name}
+          repoDir={customSkillsFor.project_dir}
+          current={parseSkillPaths(customSkillsFor.custom_skills)}
+          onClose={() => setCustomSkillsFor(null)}
+          onSave={async (paths) => {
+            await setCustomSkills(projectId, customSkillsFor.id, paths);
+            await refresh();
+          }}
+        />
+      )}
 
       {refsOpen && projectId && (
         <ReferencesDialog

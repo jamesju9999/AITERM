@@ -48,6 +48,10 @@ vi.mock("../../ipc/agents", () => ({
   listDbQueries: vi.fn(),
   getReferences: vi.fn(),
   setReferences: vi.fn(),
+  listSkills: vi.fn(),
+  readSkill: vi.fn(),
+  setCustomSkills: vi.fn().mockResolvedValue(undefined),
+  listSkillUses: vi.fn(),
 }));
 vi.mock("../../ipc/db", async () => ({
   ...(await vi.importActual<typeof import("../../ipc/db")>("../../ipc/db")),
@@ -98,6 +102,10 @@ import {
   setDbSkill,
   getReferences,
   setReferences,
+  listSkills,
+  readSkill,
+  setCustomSkills,
+  listSkillUses,
   initRepo,
   listAgents,
   mergeAgent,
@@ -163,6 +171,11 @@ beforeEach(() => {
   vi.mocked(checkTools).mockResolvedValue(allTools);
   vi.mocked(listDbQueries).mockResolvedValue([]);
   vi.mocked(getReferences).mockResolvedValue([]);
+  vi.mocked(listSkills).mockResolvedValue([
+    { name: "htbtw-egl", description: "讀寫 MS950 檔案", path: "/repo/htbtw/.claude/skills/htbtw-egl", source: "repo" },
+    { name: "karpathy-guidelines", description: "寫程式的紀律", path: "/Users/me/.claude/skills/karpathy-guidelines", source: "user" },
+  ]);
+  vi.mocked(listSkillUses).mockResolvedValue([]);
   vi.mocked(setReferences).mockImplementation(async (_p, refs) => refs);
   tasksUpdated = null;
   try {
@@ -309,6 +322,42 @@ describe("AgentCanvasView", () => {
     expect(pill.textContent).toContain("HTBTW_Source");
     expect(pill.textContent).toContain("全員 · 唯讀");
     expect(screen.getByTestId("ac-references").textContent).toMatch(/1/);
+  });
+
+  it("自訂技能：拖到工程師上，勾選程式庫與自己的技能，也能從資料夾加入，存檔", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValueOnce("/Users/me/Downloads/htbtw-db");
+    vi.mocked(readSkill).mockResolvedValueOnce({ name: "htbtw-db", description: "查資料庫", path: "/Users/me/Downloads/htbtw-db", source: "folder" });
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const node = await screen.findByTestId("agent-a1");
+    drag(screen.getByTestId("skill-custom"), node);
+    const dlg = await screen.findByTestId("custom-skills-dialog");
+    fireEvent.click(await within(dlg).findByLabelText(/htbtw-egl/));
+    expect(listSkills).toHaveBeenCalledWith("/repo/htbktw");
+    expect(within(dlg).getByText("寫程式的紀律")).toBeTruthy();
+    fireEvent.click(within(dlg).getByRole("button", { name: /從資料夾加入|Add from folder/ }));
+    expect(await within(dlg).findByLabelText(/htbtw-db/)).toBeTruthy();
+    fireEvent.click(within(dlg).getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() =>
+      expect(setCustomSkills).toHaveBeenCalledWith("p1", "a1", ["/repo/htbtw/.claude/skills/htbtw-egl", "/Users/me/Downloads/htbtw-db"]),
+    );
+  });
+
+  it("自訂技能列：顯示技能名稱；剛讀過技能時亮起來並寫使用中，活動記錄記一行", async () => {
+    vi.mocked(listAgents).mockResolvedValue([
+      agent({ custom_skills: '["/repo/htbtw/.claude/skills/htbtw-egl","/Users/me/.claude/skills/karpathy-guidelines"]' }),
+    ]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listSkillUses).mockResolvedValue([{ id: 1, task_id: "t", agent_id: "a1", skill: "htbtw-egl", at: Math.floor(Date.now() / 1000) }]);
+    view();
+    const row = await within(await screen.findByTestId("agent-a1")).findByTestId("agent-custom-skills");
+    expect(row.textContent).toContain("htbtw-egl");
+    expect(row.textContent).toContain("karpathy-guidelines");
+    await waitFor(() => expect(row.className).toContain("ac-skill-row--active"));
+    expect(row.textContent).toMatch(/使用中/);
+    expect(screen.getByText(/使用技能 htbtw-egl/)).toBeTruthy();
   });
 
   it("點技能標籤可以移除技能", async () => {
