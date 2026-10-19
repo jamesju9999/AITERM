@@ -23,6 +23,7 @@ pub mod verify_ports;
 pub mod budget;
 pub mod codex;
 pub mod context;
+pub mod tools_check;
 
 use std::path::{Path, PathBuf};
 

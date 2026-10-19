@@ -395,6 +395,15 @@ pub async fn agents_check_repo(path: String) -> Result<crate::tasks::repo_check:
     Ok(crate::tasks::repo_check::check_repo(&path).await)
 }
 
+/// 協作頁檢查 Claude Code／Codex／git 有沒有裝（用派工分頁同一個 shell 環境找）。
+#[tauri::command]
+pub async fn agents_check_tools(
+    config: State<'_, std::sync::Arc<crate::config::ConfigStore>>,
+) -> Result<crate::tasks::tools_check::ToolsCheck, String> {
+    let command = config.get().task_board.claude_command;
+    crate::tasks::tools_check::check(&command).await
+}
+
 /// 一鍵把資料夾變成可用的 git repo（git init＋第一個 commit）。
 #[tauri::command]
 pub async fn agents_init_repo(

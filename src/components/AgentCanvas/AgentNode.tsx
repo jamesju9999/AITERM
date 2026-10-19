@@ -49,6 +49,7 @@ export function AgentNode({
   hasReviewer,
   hasOrchestrator,
   hasVerifier = false,
+  missingTool = null,
   status,
   nowSecs,
   dropState,
@@ -83,6 +84,8 @@ export function AgentNode({
   hasOrchestrator: boolean;
   /** 有驗收者時，合併結果要驗收通過才更新程式庫，協調者卡上不放「合併分支」。 */
   hasVerifier?: boolean;
+  /** 這個 Agent 用的 AI 工具沒裝（顯示名稱，例如「Claude Code」）；有裝或還不知道是 null。 */
+  missingTool?: string | null;
   status: AgentStatus;
   nowSecs: number;
   dropState: "ok" | "bad" | null;
@@ -352,6 +355,11 @@ export function AgentNode({
               agent.model && <span className="ac-model">{agent.model}</span>
             )}
           </span>
+          {missingTool && (
+            <span className="ac-tool-missing" data-testid="agent-tool-missing">
+              {t.ac_tool_missing_badge(missingTool)}
+            </span>
+          )}
         </div>
         <span className="ac-badge">
           {status === "done" ? "✓ " : ""}

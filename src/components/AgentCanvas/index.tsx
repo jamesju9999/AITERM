@@ -17,9 +17,13 @@ import {
   resolveAgent,
   acceptVerification,
   updateAgent,
+  checkTools,
   type AgentKind,
   type AgentRow,
+  type ToolsCheck,
 } from "../../ipc/agents";
+import { ToolsBanner } from "./ToolsBanner";
+import { missingTools } from "./toolsCheck";
 import { listProjects, type ProjectInfo } from "../../ipc/projects";
 import {
   getTaskBoardConfig,
@@ -174,6 +178,9 @@ export function AgentCanvasView({
     onProjectChangeRef.current = onProjectChange;
   });
   const [agents, setAgents] = useState<AgentRow[]>([]);
+  /** Claude Code／Codex／git 有沒有裝。null = 還沒查到或查不出來（不顯示提示）。 */
+  const [tools, setTools] = useState<ToolsCheck | null>(null);
+  const [toolsBusy, setToolsBusy] = useState(false);
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
   /** 每張卡的 token 用量；記著是哪個專案的，切專案時舊的不會被拿來用。 */
   const [usageOf, setUsageOf] = useState<{ projectId: string; map: Record<string, TokenUsage> } | null>(null);
@@ -352,6 +359,29 @@ export function AgentCanvasView({
     }, 15_000);
     return () => window.clearInterval(h);
   }, [isActive, anyRunning, projectId]);
+
+  // 缺工具提示：切到協作頁時、視窗重新取得焦點時（使用者剛去終端機裝好回來）各查一次。
+  // 查不出來（shell 逾時等）就不顯示，不拿猜的結果嚇人。
+  const recheckTools = useCallback(async () => {
+    setToolsBusy(true);
+    try {
+      setTools(await checkTools());
+    } catch {
+      setTools(null);
+    } finally {
+      setToolsBusy(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (!isActive) return;
+    // 自動檢查不轉「檢查中」：只有使用者按按鈕才需要那個回饋（也不在 effect 裡同步 setState）。
+    const quiet = () => checkTools().then(setTools, () => setTools(null));
+    void quiet();
+    const onFocus = () => void quiet();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [isActive]);
+  const missing = tools ? missingTools(tools, agents) : [];
   const usage = useMemo(() => (usageOf && usageOf.projectId === projectId ? usageOf.map : {}), [usageOf, projectId]);
   const projectUsage = useMemo(() => sumUsage(tasks, usage), [tasks, usage]);
 
@@ -844,7 +874,13 @@ export function AgentCanvasView({
 
   if (projects !== null && projects.length === 0) {
     return (
-      <div className="task-board agent-canvas">
+      <div className="task-board agent-canvas" style={{ gridTemplateRows: "auto minmax(0, 1fr)" }}>
+        {/* 新電腦第一次打開還沒有專案，缺工具的提示也要在這裡就看得到。 */}
+        {tools && missing.length > 0 ? (
+          <ToolsBanner check={tools} missing={missing} busy={toolsBusy} onRecheck={() => void recheckTools()} />
+        ) : (
+          <span />
+        )}
         <div className="ac-empty-state">{t.ac_no_projects}</div>
       </div>
     );
@@ -853,7 +889,9 @@ export function AgentCanvasView({
   return (
     <div
       className="task-board agent-canvas"
-      style={{ gridTemplateRows: `auto auto minmax(0, 1fr) ${layout.logCollapsed ? "auto" : `${layout.logHeight}px`}` }}
+      style={{
+        gridTemplateRows: `auto ${missing.length ? "auto " : ""}auto minmax(0, 1fr) ${layout.logCollapsed ? "auto" : `${layout.logHeight}px`}`,
+      }}
     >
       <div className="ac-top">
         <h1 className="ac-title">
@@ -943,6 +981,10 @@ export function AgentCanvasView({
           ?
         </button>
       </div>
+
+      {tools && missing.length > 0 && (
+        <ToolsBanner check={tools} missing={missing} busy={toolsBusy} onRecheck={() => void recheckTools()} />
+      )}
 
       <div className="ac-pool" data-guide="pool">
         <span className="ac-pool-label">{t.ac_pool}</span>
@@ -1076,6 +1118,11 @@ export function AgentCanvasView({
                       hasReviewer={hasReviewer}
                       hasOrchestrator={hasOrchestrator}
                       hasVerifier={hasVerifier}
+                      missingTool={
+                        (a.cli ?? "claude") === "codex"
+                          ? missing.includes("codex") ? "Codex" : null
+                          : missing.includes("claude") ? "Claude Code" : null
+                      }
                       onVerifyReport={setVerifyFor}
                       onAcceptVerify={(id) => projectId && void run(() => acceptVerification(projectId, id))}
                       status={deriveAgentStatus(

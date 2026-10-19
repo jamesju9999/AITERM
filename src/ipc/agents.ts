@@ -148,3 +148,14 @@ export const verifyReport = (projectId: string, taskId: string): Promise<VerifyR
 /** 放行沒通過的驗收：當成通過，程式庫更新到受驗版本。 */
 export const acceptVerification = (projectId: string, taskId: string): Promise<void> =>
   invoke("agents_accept_verification", { projectId, taskId });
+
+/** Claude Code／Codex／git 找到的路徑（null = 沒裝）。見 tasks/tools_check.rs。 */
+export interface ToolsCheck {
+  platform: "macos" | "windows" | "linux";
+  claude_command: string;
+  claude: string | null;
+  codex: string | null;
+  git: string | null;
+}
+
+export const checkTools = (): Promise<ToolsCheck> => invoke("agents_check_tools");

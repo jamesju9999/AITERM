@@ -43,6 +43,7 @@ vi.mock("../../ipc/agents", () => ({
   openRepo: vi.fn().mockResolvedValue(undefined),
   verifyReport: vi.fn().mockResolvedValue({ report: null, images: {} }),
   acceptVerification: vi.fn().mockResolvedValue(undefined),
+  checkTools: vi.fn(),
 }));
 vi.mock("../../ipc/projects", () => ({
   listProjects: vi.fn().mockResolvedValue([
@@ -80,6 +81,7 @@ import {
   acceptVerification,
   assignAgent,
   checkRepo,
+  checkTools,
   createAgent,
   initRepo,
   listAgents,
@@ -139,8 +141,11 @@ async function placeOnCanvas(dlg: HTMLElement) {
   fireEvent.click(within(dlg).getByText(/放上桌布|Place on canvas/));
 }
 
+const allTools = { platform: "macos" as const, claude_command: "claude", claude: "/c", codex: "/x", git: "/g" };
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(checkTools).mockResolvedValue(allTools);
   tasksUpdated = null;
   try {
     localStorage.clear();
@@ -155,6 +160,46 @@ beforeEach(() => {
 });
 
 describe("AgentCanvasView", () => {
+  it("缺 Claude Code 時顯示安裝指令；裝好後按重新檢查就消失", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(checkTools).mockResolvedValue({ ...allTools, claude: null });
+    view();
+    const banner = await screen.findByTestId("ac-tools");
+    expect(within(banner).getByText("curl -fsSL https://claude.ai/install.sh | bash")).toBeTruthy();
+    // 橫幅可能比 Agent 先出現（還沒有 Agent 時也預設要 Claude Code），卡片要用 find 等。
+    expect(within(await screen.findByTestId("agent-a1")).getByTestId("agent-tool-missing")).toBeTruthy();
+
+    vi.mocked(checkTools).mockResolvedValue(allTools);
+    fireEvent.click(within(banner).getByRole("button", { name: /重新檢查|Check again/ }));
+    await waitFor(() => expect(screen.queryByTestId("ac-tools")).toBeNull());
+    expect(screen.queryByTestId("agent-tool-missing")).toBeNull();
+  });
+
+  it("還沒有任何專案時也顯示缺工具提示", async () => {
+    vi.mocked(listProjects).mockResolvedValueOnce([]);
+    vi.mocked(checkTools).mockResolvedValue({ ...allTools, claude: null, git: null });
+    view();
+    const banner = await screen.findByTestId("ac-tools");
+    expect(within(banner).getByText("xcode-select --install")).toBeTruthy();
+    expect(screen.getByText(/還沒有看板專案/)).toBeTruthy();
+  });
+
+  it("只用 Codex 的團隊不會因為沒裝 Claude Code 跳提示；檢查失敗也不顯示", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent({ cli: "codex" })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(checkTools).mockResolvedValue({ ...allTools, claude: null });
+    view();
+    await screen.findByTestId("agent-a1");
+    await waitFor(() => expect(checkTools).toHaveBeenCalled());
+    expect(screen.queryByTestId("ac-tools")).toBeNull();
+
+    vi.mocked(checkTools).mockRejectedValue("zsh 在 10 秒內沒有回應");
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(checkTools).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId("ac-tools")).toBeNull();
+  });
+
   it("顯示 Agent、指派給它的卡片，與模組庫裡未指派的計畫中卡片", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([
