@@ -532,7 +532,8 @@
 .ac-lib-toggle { font-size: 14px; line-height: 1; }
 .ac-lib--rail {
   position: absolute;
-  left: 12px;
+  /* 14px：跟活動記錄面板、展開的模組庫左緣對齊（.ac-log／.ac-lib 的 margin）。 */
+  left: 14px;
   bottom: 12px;
   z-index: 6;
   flex-direction: row;
@@ -554,7 +555,7 @@
 .ac-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .ac-zoom {
   position: absolute;
-  right: 12px;
+  right: 14px; /* 跟活動記錄面板右緣對齊 */
   bottom: 12px;
   z-index: 5;
   display: flex;
