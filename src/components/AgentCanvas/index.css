@@ -298,9 +298,13 @@
 
 /* 活動記錄 */
 /* 活動記錄：浮在桌布下方的圓角面板，跟資源區、縮放工具列同一種外觀，不再是貼邊的一整條。 */
-.ac-log { margin: 0 14px 10px; border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden; background: var(--bg-secondary); display: flex; flex-direction: column; min-height: 0; }
+.ac-log { margin: 0 14px 10px; padding-bottom: 6px; border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden; background: var(--bg-secondary); display: flex; flex-direction: column; min-height: 0; }
 .ac-log-title { font-size: 11px; color: var(--text-muted); padding: 6px 14px 2px; letter-spacing: 0.06em; text-transform: uppercase; }
-.ac-log-lines { flex: 1; overflow: auto; padding: 0 14px 6px; font: 11.5px var(--mono); }
+/* 留白放在捲動區外（.ac-log 的 padding）：放在捲動內容裡的話，捲到一半最後一行會直接壓在圓角框上。
+   底部淡出提示下面還有。 */
+.ac-log-lines { flex: 1; overflow: auto; padding: 0 14px; font: 11.5px var(--mono);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 12px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 12px), transparent); }
 .ac-log-line { white-space: nowrap; color: var(--text-secondary); }
 .ac-log-line--start { color: #93c5fd; }
 .ac-log-line--ok { color: #86efac; }
@@ -583,6 +587,7 @@ button.ac-log-title {
   font-family: inherit;
 }
 button.ac-log-title:hover { color: var(--text-primary); }
+.ac-log--collapsed { padding-bottom: 0; }
 .ac-log--collapsed button.ac-log-title { padding-bottom: 6px; }
 .ac-log-latest {
   margin-left: 10px;
