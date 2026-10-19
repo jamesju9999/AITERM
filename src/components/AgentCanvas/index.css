@@ -98,6 +98,8 @@
   background: var(--bg-secondary);
   border-right: 1px solid var(--ac-edge);
 }
+/* 展開的模組庫：浮在左側的圓角面板，跟活動記錄、資源區同一種外觀（收合時是左下角的小按鈕，見 .ac-lib--rail）。 */
+.ac-lib:not(.ac-lib--rail) { margin: 10px 0 10px 14px; border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden; }
 .ac-lib--drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
 .ac-lib h2 { margin: 12px 12px 2px; font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; }
 .ac-lib-sub { margin: 0 12px 8px; font-size: 11px; color: var(--text-muted); }
