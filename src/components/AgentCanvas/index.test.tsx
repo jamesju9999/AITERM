@@ -44,6 +44,15 @@ vi.mock("../../ipc/agents", () => ({
   verifyReport: vi.fn().mockResolvedValue({ report: null, images: {} }),
   acceptVerification: vi.fn().mockResolvedValue(undefined),
   checkTools: vi.fn(),
+  setDbSkill: vi.fn().mockResolvedValue(undefined),
+  listDbQueries: vi.fn(),
+}));
+vi.mock("../../ipc/db", async () => ({
+  ...(await vi.importActual<typeof import("../../ipc/db")>("../../ipc/db")),
+  dbListConnections: vi.fn().mockResolvedValue([
+    { id: "dev", name: "HTBKTW-DEV", db_type: "sqlite", host: "", port: 0, database: "dev.db", username: "", is_connected: false },
+    { id: "prod", name: "HTBKTW-PROD", db_type: "postgresql", host: "h", port: 5432, database: "p", username: "u", is_connected: false },
+  ]),
 }));
 vi.mock("../../ipc/projects", () => ({
   listProjects: vi.fn().mockResolvedValue([
@@ -83,6 +92,8 @@ import {
   checkRepo,
   checkTools,
   createAgent,
+  listDbQueries,
+  setDbSkill,
   initRepo,
   listAgents,
   mergeAgent,
@@ -146,6 +157,7 @@ const allTools = { platform: "macos" as const, claude_command: "claude", claude:
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(checkTools).mockResolvedValue(allTools);
+  vi.mocked(listDbQueries).mockResolvedValue([]);
   tasksUpdated = null;
   try {
     localStorage.clear();
@@ -160,6 +172,52 @@ beforeEach(() => {
 });
 
 describe("AgentCanvasView", () => {
+  it("把資料庫技能拖到工程師上：選連線與權限後存檔", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const node = await screen.findByTestId("agent-a1");
+    drag(screen.getByTestId("skill-db"), node);
+    const dlg = await screen.findByTestId("db-skill-dialog");
+    fireEvent.click(await within(dlg).findByLabelText(/HTBKTW-DEV/));
+    fireEvent.click(within(dlg).getByLabelText(/每次核准|Approve each/));
+    fireEvent.click(within(dlg).getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() => expect(setDbSkill).toHaveBeenCalledWith("p1", "a1", { connections: ["dev"], mode: "approve" }));
+  });
+
+  it("裝了技能的工程師顯示連線與權限；查詢中顯示 SQL 開頭 40 字，活動記錄顯示完整 SQL", async () => {
+    const sql = "SELECT id, name, email, created_at FROM customers WHERE active = 1";
+    vi.mocked(listAgents).mockResolvedValue([agent({ db_skill: '{"connections":["dev"],"mode":"read"}' })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listDbQueries).mockResolvedValue([
+      { id: 2, task_id: "t", agent_id: "a1", connection_id: "dev", connection_name: "HTBKTW-DEV", sql, started_at: 200, finished_at: null, rows: null, ms: null, error: null, decision: "allowed" },
+      { id: 1, task_id: "t", agent_id: "a1", connection_id: "dev", connection_name: "HTBKTW-DEV", sql: "SELECT count(*) FROM orders", started_at: 100, finished_at: 101, rows: 12, ms: 300, error: null, decision: "allowed" },
+      { id: 0, task_id: "t", agent_id: "a1", connection_id: "dev", connection_name: "HTBKTW-DEV", sql: "DELETE FROM orders", started_at: 50, finished_at: 50, rows: null, ms: 0, error: "只開放唯讀", decision: "denied" },
+    ]);
+    view();
+    const chip = await within(await screen.findByTestId("agent-a1")).findByTestId("agent-db-skill");
+    await waitFor(() => expect(chip.className).toContain("ac-db-chip--active"));
+    expect(chip.textContent).toContain("HTBKTW-DEV");
+    expect(chip.textContent).toContain("唯讀");
+    expect(chip.textContent).toContain(`${sql.slice(0, 40)}…`);
+    expect(chip.textContent).not.toContain(sql);
+    const log = screen.getByText(/SELECT count\(\*\) FROM orders/);
+    expect(log.textContent).toMatch(/12 列/);
+    expect(log.textContent).toMatch(/0\.3 秒/);
+    expect(screen.getByText(/DELETE FROM orders/).textContent).toMatch(/擋下|拒絕/);
+  });
+
+  it("點技能標籤可以移除技能", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent({ db_skill: '{"connections":["dev"],"mode":"write"}' })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    fireEvent.click(await screen.findByTestId("agent-db-skill"));
+    const dlg = await screen.findByTestId("db-skill-dialog");
+    expect((within(dlg).getByLabelText(/直接放行|Allow writes/) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(dlg).getByRole("button", { name: /移除技能|Remove skill/ }));
+    await waitFor(() => expect(setDbSkill).toHaveBeenCalledWith("p1", "a1", null));
+  });
+
   it("缺 Claude Code 時顯示安裝指令；裝好後按重新檢查就消失", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);

@@ -50,6 +50,8 @@ export function AgentNode({
   hasOrchestrator,
   hasVerifier = false,
   missingTool = null,
+  dbSkill = null,
+  onDbSkill,
   status,
   nowSecs,
   dropState,
@@ -86,6 +88,9 @@ export function AgentNode({
   hasVerifier?: boolean;
   /** 這個 Agent 用的 AI 工具沒裝（顯示名稱，例如「Claude Code」）；有裝或還不知道是 null。 */
   missingTool?: string | null;
+  /** 資料庫技能：標籤文字，與正在跑的 SQL 開頭（沒有在查就是 null）。沒裝是 null。 */
+  dbSkill?: { label: string; active: string | null } | null;
+  onDbSkill?: () => void;
   status: AgentStatus;
   nowSecs: number;
   dropState: "ok" | "bad" | null;
@@ -355,6 +360,19 @@ export function AgentNode({
               agent.model && <span className="ac-model">{agent.model}</span>
             )}
           </span>
+          {dbSkill && (
+            <button
+              type="button"
+              className={`ac-db-chip${dbSkill.active ? " ac-db-chip--active" : ""}`}
+              data-testid="agent-db-skill"
+              title={t.ac_db_chip_tip}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={onDbSkill}
+            >
+              <span aria-hidden>🗄</span> {dbSkill.label}
+              {dbSkill.active && <span className="ac-db-sql"> · {dbSkill.active}</span>}
+            </button>
+          )}
           {missingTool && (
             <span className="ac-tool-missing" data-testid="agent-tool-missing">
               {t.ac_tool_missing_badge(missingTool)}

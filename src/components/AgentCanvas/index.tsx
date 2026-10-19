@@ -18,10 +18,16 @@ import {
   acceptVerification,
   updateAgent,
   checkTools,
+  listDbQueries,
+  setDbSkill,
   type AgentKind,
   type AgentRow,
+  type DbQueryRow,
   type ToolsCheck,
 } from "../../ipc/agents";
+import { dbListConnections } from "../../ipc/db";
+import { DbSkillDialog } from "./DbSkillDialog";
+import { activeQuery, parseDbSkill, sqlPreview } from "./dbSkill";
 import { ToolsBanner } from "./ToolsBanner";
 import { missingTools } from "./toolsCheck";
 import { listProjects, type ProjectInfo } from "../../ipc/projects";
@@ -105,11 +111,11 @@ function storeLayout(l: Layout) {
 
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
-type DragKind = "pool" | "module" | "agent";
+type DragKind = "pool" | "module" | "agent" | "skill";
 
 interface DragState {
   kind: DragKind;
-  /** module = 卡片 id；agent = agent id；pool = Agent 種類。 */
+  /** module = 卡片 id；agent = agent id；pool = Agent 種類；skill = 技能種類（目前只有 db）。 */
   id: string | null;
   startX: number;
   startY: number;
@@ -180,6 +186,12 @@ export function AgentCanvasView({
   const [agents, setAgents] = useState<AgentRow[]>([]);
   /** Claude Code／Codex／git 有沒有裝。null = 還沒查到或查不出來（不顯示提示）。 */
   const [tools, setTools] = useState<ToolsCheck | null>(null);
+  /** 資料庫技能的查詢記錄；記著是哪個專案的。 */
+  const [dbQueriesOf, setDbQueriesOf] = useState<{ projectId: string; rows: DbQueryRow[] } | null>(null);
+  /** 連線 id → 名稱（技能標籤顯示用）。 */
+  const [connNames, setConnNames] = useState<Record<string, string>>({});
+  /** 正在設定資料庫技能的 Agent。 */
+  const [dbSkillFor, setDbSkillFor] = useState<AgentRow | null>(null);
   const [toolsBusy, setToolsBusy] = useState(false);
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
   /** 每張卡的 token 用量；記著是哪個專案的，切專案時舊的不會被拿來用。 */
@@ -284,6 +296,9 @@ export function AgentCanvasView({
     let alive = true;
     prevTasks.current = null;
     const load = () => {
+      listDbQueries(projectId)
+        .then((rows) => alive && setDbQueriesOf({ projectId, rows }))
+        .catch(() => {});
       Promise.all([listAgents(projectId), listTasks(projectId)])
         .then(([a, ts]) => {
           if (!alive) return;
@@ -382,6 +397,19 @@ export function AgentCanvasView({
     return () => window.removeEventListener("focus", onFocus);
   }, [isActive]);
   const missing = tools ? missingTools(tools, agents) : [];
+
+  // 技能標籤要顯示連線名稱；設定框關掉後再讀一次（可能剛在資料庫頁改過名稱）。
+  useEffect(() => {
+    if (!isActive || dbSkillFor) return;
+    let alive = true;
+    dbListConnections()
+      .then((c) => alive && setConnNames(Object.fromEntries(c.map((x) => [x.id, x.name]))))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [isActive, dbSkillFor]);
+  const dbQueries = useMemo(() => (dbQueriesOf?.projectId === projectId ? dbQueriesOf.rows : []), [dbQueriesOf, projectId]);
   const usage = useMemo(() => (usageOf && usageOf.projectId === projectId ? usageOf.map : {}), [usageOf, projectId]);
   const projectUsage = useMemo(() => sumUsage(tasks, usage), [tasks, usage]);
 
@@ -475,8 +503,24 @@ export function AgentCanvasView({
         );
       for (let i = first; i < ev.length; i++) ev[i].role = role;
     }
+    // 資料庫技能的查詢：活動記錄顯示完整 SQL。
+    for (const q of dbQueries) {
+      const who = agentName(q.agent_id);
+      const role = agents.find((a) => a.id === q.agent_id)?.kind;
+      const sql = q.sql.replace(/\s+/g, " ").trim();
+      if (q.decision === "denied") {
+        ev.push({ at: q.started_at, text: t.ac_log_db_denied(who, q.connection_name, sql, q.error ?? ""), kind: "bad", role });
+      } else if (q.finished_at === null) {
+        ev.push({ at: q.started_at, text: t.ac_log_db_running(who, q.connection_name, sql), kind: "start", role });
+      } else if (q.error) {
+        ev.push({ at: q.finished_at, text: t.ac_log_db_failed(who, q.connection_name, sql, q.error), kind: "bad", role });
+      } else {
+        const secs = ((q.ms ?? 0) / 1000).toFixed(1);
+        ev.push({ at: q.finished_at, text: t.ac_log_db_query(who, q.connection_name, sql, q.rows, secs), kind: "ok", role });
+      }
+    }
     return ev.sort((a, b) => b.at - a.at).slice(0, 40);
-  }, [tasks, agents, agentName, t]);
+  }, [tasks, agents, agentName, dbQueries, t]);
 
   // ── 拖曳 ───────────────────────────────────────────────────────────────
 
@@ -541,6 +585,12 @@ export function AgentCanvasView({
         return;
       }
       const target = hitTest(e.clientX, e.clientY);
+      if (d.kind === "skill") {
+        const a = target?.kind === "agent" ? agents.find((x) => x.id === target.agentId) : undefined;
+        if (a) setDbSkillFor(a);
+        else setToast(t.ac_skill_only_agent);
+        return;
+      }
       if (d.kind === "pool") {
         if (target?.kind !== "canvas") return;
         const p = canvasPoint(e.clientX, e.clientY);
@@ -661,6 +711,7 @@ export function AgentCanvasView({
   };
 
   const dropStateFor = (a: AgentRow): "ok" | "bad" | null => {
+    if (ghost?.kind === "skill" && hover?.kind === "agent" && hover.agentId === a.id) return "ok";
     if (!ghost || ghost.kind !== "module" || hover?.kind !== "agent" || hover.agentId !== a.id) return null;
     return a.kind === "coder" ? "ok" : "bad";
   };
@@ -1017,6 +1068,17 @@ export function AgentCanvasView({
           );
         })}
         <span className="ac-pool-hint">{t.ac_pool_hint}</span>
+        <span className="ac-pool-sep" aria-hidden />
+        <span className="ac-pool-label">{t.ac_skills}</span>
+        <div
+          className="ac-pool-item ac-pool-item--skill"
+          data-testid="skill-db"
+          title={t.ac_skill_hint}
+          onMouseDown={(e) => beginDrag(e, "skill", "db")}
+        >
+          <span className="ac-skill-ico" aria-hidden>🗄</span>
+          <span className="ac-pool-name">{t.ac_skill_db}</span>
+        </div>
       </div>
 
       <div className={`ac-main${layout.libCollapsed ? " ac-main--lib-collapsed" : ""}`}>
@@ -1118,6 +1180,14 @@ export function AgentCanvasView({
                       hasReviewer={hasReviewer}
                       hasOrchestrator={hasOrchestrator}
                       hasVerifier={hasVerifier}
+                      dbSkill={(() => {
+                        const skill = parseDbSkill(a.db_skill);
+                        if (!skill) return null;
+                        const names = skill.connections.map((id) => connNames[id] ?? id).join("、");
+                        const running = activeQuery(dbQueries, a.id);
+                        return { label: `${names}（${t.ac_db_mode_short(skill.mode)}）`, active: running ? sqlPreview(running.sql) : null };
+                      })()}
+                      onDbSkill={() => setDbSkillFor(a)}
                       missingTool={
                         (a.cli ?? "claude") === "codex"
                           ? missing.includes("codex") ? "Codex" : null
@@ -1284,10 +1354,26 @@ export function AgentCanvasView({
       {ghost &&
         createPortal(
           <div className="task-card-ghost ac-ghost" style={{ transform: `translate(${ghost.x + 10}px, ${ghost.y + 10}px)` }}>
-            {ghost.kind === "pool" ? poolLabel((ghost.id ?? "coder") as AgentKind) : (ghostCard?.title ?? "")}
+            {ghost.kind === "pool"
+              ? poolLabel((ghost.id ?? "coder") as AgentKind)
+              : ghost.kind === "skill"
+                ? `🗄 ${t.ac_skill_db}`
+                : (ghostCard?.title ?? "")}
           </div>,
           document.body,
         )}
+
+      {dbSkillFor && projectId && (
+        <DbSkillDialog
+          agentName={dbSkillFor.name}
+          current={parseDbSkill(dbSkillFor.db_skill)}
+          onClose={() => setDbSkillFor(null)}
+          onSave={async (skill) => {
+            await setDbSkill(projectId, dbSkillFor.id, skill);
+            await refresh();
+          }}
+        />
+      )}
 
       {config && projectId && (
         <AgentConfigDialog

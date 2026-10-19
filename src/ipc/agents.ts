@@ -30,6 +30,8 @@ export interface AgentRow {
   model?: string | null;
   /** 用哪個 AI 工具做事；舊資料沒有 = claude。 */
   cli?: AgentCli;
+  /** 資料庫技能（JSON 字串，見 DbSkill）。null／沒有 = 沒裝。 */
+  db_skill?: string | null;
 }
 
 export type AgentCli = "claude" | "codex";
@@ -159,3 +161,34 @@ export interface ToolsCheck {
 }
 
 export const checkTools = (): Promise<ToolsCheck> => invoke("agents_check_tools");
+
+// ── 資料庫技能（見 docs/superpowers/specs/2026-10-19-agent-db-skill-design.md）──
+
+export type DbSkillMode = "read" | "approve" | "write";
+
+export interface DbSkill {
+  connections: string[];
+  mode: DbSkillMode;
+}
+
+/** 一筆 Agent 的資料庫查詢（tasks/db_skill.rs 的 DbQueryRow）。 */
+export interface DbQueryRow {
+  id: number;
+  task_id: string;
+  agent_id: string | null;
+  connection_id: string;
+  connection_name: string;
+  sql: string;
+  started_at: number;
+  finished_at: number | null;
+  rows: number | null;
+  ms: number | null;
+  error: string | null;
+  decision: "allowed" | "approved" | "denied";
+}
+
+/** 裝上、修改或移除（null）Agent 的資料庫技能。 */
+export const setDbSkill = (projectId: string, agentId: string, skill: DbSkill | null): Promise<void> =>
+  invoke("agents_set_db_skill", { projectId, agentId, skill });
+
+export const listDbQueries = (projectId: string): Promise<DbQueryRow[]> => invoke("agents_db_queries", { projectId });
