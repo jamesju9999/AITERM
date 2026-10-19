@@ -574,6 +574,15 @@ describe("AgentCanvasView", () => {
     expect(node.querySelector('[data-kind-icon="coder"]')).not.toBeNull();
   });
 
+  it("工程師套用內建角色時，標題圖示換成角色的 emoji", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent({ role: "架構師" })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const node = await screen.findByTestId("agent-a1");
+    expect(node.querySelector(".ac-agent-ico")?.textContent).toBe("🏛️");
+    expect(node.querySelector('[data-kind-icon="coder"]')).toBeNull();
+  });
+
   it("有分支且閒置時可以合併，衝突時顯示還原合併", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent({ branch: "aiterm-agent/a1" })]);
     vi.mocked(listTasks).mockResolvedValue([card({ id: "A", status: "done", outcome: "success", agent_id: "a1" })]);

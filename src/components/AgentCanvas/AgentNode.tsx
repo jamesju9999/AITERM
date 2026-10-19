@@ -1,5 +1,6 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { KindIcon } from "./KindIcon";
+import { roleEmoji } from "./roles";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import type { AgentRow } from "../../ipc/agents";
@@ -111,6 +112,7 @@ export function AgentNode({
   onAcceptVerify?: (taskId: string) => void;
 }) {
   const { t } = useLocale();
+  const emoji = roleEmoji(agent.kind, agent.role);
   const mine = tasks.filter((c) => c.agent_id === agent.id);
   const running = mine.find((c) => c.status === "running");
   const queued = mine.filter((c) => c.status === "queued");
@@ -330,7 +332,7 @@ export function AgentNode({
     >
       <div className="ac-agent-head" onMouseDown={onHeaderMouseDown}>
         <span className="ac-agent-ico" aria-hidden>
-          <KindIcon kind={agent.kind} />
+          {emoji ? <span className="ac-agent-emoji">{emoji}</span> : <KindIcon kind={agent.kind} />}
         </span>
         <div className="ac-agent-name">
           <b>

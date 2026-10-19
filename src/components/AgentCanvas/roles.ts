@@ -1,5 +1,5 @@
 import type { AgentKind } from "../../ipc/agents";
-import type { Translations } from "../../lib/i18n";
+import { translations, type Translations } from "../../lib/i18n";
 
 /** 角色預設：名稱寫進 Agent 的 role，prefix 是派工時加在每張卡片前面的提示詞。 */
 export interface RolePreset {
@@ -42,4 +42,20 @@ export function builtinRoles(kind: AgentKind, t: Translations): RolePreset[] {
     { name: t.ls_preset_researcher, emoji: "📊", prefix: t.ls_preset_researcher_desc },
     { name: t.ls_preset_architect, emoji: "🏛️", prefix: t.ls_preset_architect_desc },
   ];
+}
+
+/**
+ * 工程師卡片標題的圖示：角色名稱對得上內建角色就用它的 emoji，否則 null（沿用種類圖示）。
+ * role 存的是挑選當下語系的名稱，所以兩個語系都比對，切換語系後才不會掉回預設圖示。
+ * 只做工程師：其他種類的流程角色固定，用種類圖示辨識比較清楚。
+ */
+export function roleEmoji(kind: AgentKind, role: string): string | null {
+  if (kind !== "coder") return null;
+  const name = role.trim();
+  if (!name) return null;
+  for (const t of Object.values(translations) as Translations[]) {
+    const hit = builtinRoles(kind, t).find((r) => r.name === name);
+    if (hit) return hit.emoji;
+  }
+  return null;
 }
