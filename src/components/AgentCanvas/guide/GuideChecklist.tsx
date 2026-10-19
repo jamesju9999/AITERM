@@ -5,7 +5,16 @@ import { STEP_IDS, type StepId } from "./guideSteps";
 import "./guide.css";
 
 /** 上手清單：浮在桌布右上角，做完一步自己打勾、亮出下一步怎麼做。 */
-export function GuideChecklist({ done, onHide }: { done: readonly StepId[]; onHide: () => void }) {
+export function GuideChecklist({
+  done,
+  onHide,
+  onReset,
+}: {
+  done: readonly StepId[];
+  onHide: () => void;
+  /** 重新學習：清空進度。 */
+  onReset: () => void;
+}) {
   const { t } = useLocale();
   const [collapsed, setCollapsed] = useState(false);
   const label: Record<StepId, [string, string]> = {
@@ -43,6 +52,9 @@ export function GuideChecklist({ done, onHide }: { done: readonly StepId[]; onHi
         <b>{t.ac_check_title}</b>
         <span className="ac-steps-count">{t.ac_check_count(count, STEP_IDS.length)}</span>
         <span className="ac-spacer" />
+        <button className="ac-iconbtn" aria-label={t.ac_check_reset} title={t.ac_check_reset} onClick={onReset}>
+          ↺
+        </button>
         <button className="ac-iconbtn" aria-label={t.ac_check_collapse} title={t.ac_check_collapse} onClick={() => setCollapsed(true)}>
           –
         </button>

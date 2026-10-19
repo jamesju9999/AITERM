@@ -9,12 +9,15 @@ export function GuideHelp({
   onToggleHints,
   onReplayTour,
   onShowChecklist,
+  onResetProgress,
   onClose,
 }: {
   hintsOn: boolean;
   onToggleHints: (on: boolean) => void;
   onReplayTour: () => void;
   onShowChecklist: () => void;
+  /** 重新學習：清空上手清單的進度並打開它。 */
+  onResetProgress: () => void;
   onClose: () => void;
 }) {
   const { t } = useLocale();
@@ -45,6 +48,9 @@ export function GuideHelp({
           </button>
           <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={onShowChecklist}>
             {t.ac_help_checklist}
+          </button>
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={onResetProgress}>
+            {t.ac_check_reset}
           </button>
           <label className="ac-help-toggle">
             <input type="checkbox" checked={hintsOn} onChange={(e) => onToggleHints(e.target.checked)} />

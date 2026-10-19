@@ -1445,6 +1445,25 @@ describe("教學輔助", () => {
     expect(stored().done).toEqual(["module", "reviewer"]);
   });
 
+  it("上手清單可以重新開始：清空進度，空桌布回到 0/8；「?」裡也有重新開始", async () => {
+    setGuide({ checklistHidden: false, done: ["coder", "module", "assign", "reviewer", "orchestrator", "verifier", "merged", "verified"] });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const list = await screen.findByTestId("ac-checklist");
+    expect(within(list).getByText("8/8")).toBeTruthy();
+    fireEvent.click(within(list).getByRole("button", { name: "重新開始上手清單" }));
+    expect(within(screen.getByTestId("ac-checklist")).getByText("0/8")).toBeTruthy();
+    expect(stored().done).toEqual([]);
+
+    // 關掉之後，從「?」重新開始：清單會重新打開。
+    fireEvent.click(within(screen.getByTestId("ac-checklist")).getByRole("button", { name: "關閉上手清單" }));
+    fireEvent.click(screen.getByRole("button", { name: "說明" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "重新開始上手清單" }));
+    expect(await screen.findByTestId("ac-checklist")).toBeTruthy();
+    expect(stored().checklistHidden).toBe(false);
+  });
+
   it("情境提示指向下一步；關掉的那一項不再出現", async () => {
     setGuide({ hintsOff: false });
     // jsdom 沒有版面，給目標一個在畫面裡的位置。

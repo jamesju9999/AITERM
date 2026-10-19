@@ -89,6 +89,15 @@ export function observedSteps(agents: GuideAgent[], tasks: GuideCard[]): Set<Ste
   return out;
 }
 
+/**
+ * 重新學習：清掉完成的步驟與關掉的提示，重新打開清單與提示。導覽是否看過不動
+ * （要重看導覽從「?」按「重看導覽」）。桌布上已經有的東西（例如已放好的工程師）
+ * 下一次畫面更新就會再打勾——那些步驟確實是完成的。
+ */
+export function resetProgress(state: GuideState): GuideState {
+  return { ...state, checklistHidden: false, hintsOff: false, done: [], dismissedHints: [] };
+}
+
 /** 把這次看到的完成步驟併進進度。沒有新的就回傳同一個物件，呼叫端可以跳過寫入。 */
 export function withObserved(state: GuideState, observed: Set<StepId>): GuideState {
   const added = STEP_IDS.filter((s) => observed.has(s) && !state.done.includes(s));

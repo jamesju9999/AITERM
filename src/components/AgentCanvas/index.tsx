@@ -81,7 +81,7 @@ import { GuideChecklist } from "./guide/GuideChecklist";
 import { GuideHelp } from "./guide/GuideHelp";
 import { GuideHint } from "./guide/GuideHint";
 import { GuideTour } from "./guide/GuideTour";
-import { STUCK_HINTS, contextHint, loadGuide, observedSteps, saveGuide, withObserved, type GuideState } from "./guide/guideSteps";
+import { STUCK_HINTS, contextHint, loadGuide, observedSteps, resetProgress, saveGuide, withObserved, type GuideState } from "./guide/guideSteps";
 import "./index.css";
 
 /** 跟看板、TabBar 同一個門檻：小於這個位移是點擊，不是拖曳。 */
@@ -1209,7 +1209,11 @@ export function AgentCanvasView({
 
         <div className="ac-canvas-wrap" data-guide="canvas">
           {!guide.checklistHidden && (
-            <GuideChecklist done={guideDone.done} onHide={() => updateGuide((g) => ({ ...g, checklistHidden: true }))} />
+            <GuideChecklist
+              done={guideDone.done}
+              onHide={() => updateGuide((g) => ({ ...g, checklistHidden: true }))}
+              onReset={() => updateGuide(resetProgress)}
+            />
           )}
           <section className={`ac-canvas${hover?.kind === "canvas" && ghost?.kind === "pool" ? " ac-canvas--drop" : ""}`} data-drop="canvas" ref={canvasRef}>
             {agents.length === 0 && (
@@ -1423,6 +1427,10 @@ export function AgentCanvasView({
           onShowChecklist={() => {
             setHelpOpen(false);
             updateGuide((g) => ({ ...g, checklistHidden: false }));
+          }}
+          onResetProgress={() => {
+            setHelpOpen(false);
+            updateGuide(resetProgress);
           }}
           onClose={() => setHelpOpen(false)}
         />

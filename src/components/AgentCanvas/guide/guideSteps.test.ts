@@ -6,6 +6,7 @@ import {
   contextHint,
   loadGuide,
   observedSteps,
+  resetProgress,
   saveGuide,
   withObserved,
   type GuideAgent,
@@ -122,5 +123,12 @@ describe("contextHint", () => {
     expect(contextHint(running, tasks, { openQuestions: 0, attentionOwners: ["gone"] })?.id).toBe("add_orchestrator");
     // 暫停的不一定是工程師；也不需要有工程師。
     expect(contextHint([ag("r", "reviewer", "t1")], [])).toEqual({ id: "agent_paused", anchor: { agent: "r" }, occurrence: "r:t1" });
+  });
+});
+
+describe("resetProgress", () => {
+  it("清掉完成的步驟與關掉的提示，重新打開清單與提示；導覽看過與否不動", () => {
+    const g = { tourSeen: true, checklistHidden: true, hintsOff: true, done: [...STEP_IDS], dismissedHints: ["add_module" as const] };
+    expect(resetProgress(g)).toEqual({ tourSeen: true, checklistHidden: false, hintsOff: false, done: [], dismissedHints: [] });
   });
 });
