@@ -191,10 +191,19 @@ pub fn review_body(module: &TaskRow, reviewed: &TaskRow, json_path: &Path, previ
         req = module.body,
     );
     if let Some(prev) = previous {
-        s.push_str("\n這是修正後的再審查。上一輪的審查意見：\n");
+        // 再審查的 diff 只有修正那段；不加這些規則，審核者會在沒改到的地方挖出新的舊問題，
+        // 把有限的退回輪數耗掉。
+        s.push_str("\n這是修正後的再審查，上面的 diff 只有這次修正的部分。上一輪的審查意見：\n");
         for r in reasons_list(prev) {
             s.push_str(&format!("- {r}\n"));
         }
+        s.push_str(
+            "再審查規則：\n\
+             1. 逐條確認上一輪的 [必修] 是否已經解決；沒解決的再列為 important。\n\
+             2. 新的 important 只能來自這次修正的 diff。修正沒改到的地方發現的問題標 pre_existing，\
+             除非它讓模組需求完全無法達成。\n\
+             3. 上一輪已經提過的 [建議]、[既有] 不要再提。\n",
+        );
     }
     let rule = if module.is_spec {
         "檢核重點：\n\
@@ -202,17 +211,26 @@ pub fn review_body(module: &TaskRow, reviewed: &TaskRow, json_path: &Path, previ
          - 資料模型、API 與介面、畫面流程是否定義到可以直接實作\n\
          - 驗收條件是否具體、可以測試\n\
          - 有沒有前後矛盾，或模糊到會擋住實作的地方（待確認事項有列出就不算）\n\
-         判定規則：缺少關鍵內容、出現矛盾、或模糊到無法實作才判定 fail；用詞與排版建議寫進 reasons，但仍判定 pass。"
+         意見分級（severity）：\n\
+         - important：缺少關鍵內容、前後矛盾、或模糊到無法實作。location 寫章節。\n\
+         - nit：用詞與排版建議。\n\
+         - pre_existing：不是這次變更造成的問題。"
     } else {
-        "判定規則：只有正確性錯誤或與需求不符才判定 fail；風格建議寫進 reasons，但仍判定 pass。"
+        "意見分級（severity）：\n\
+         - important：正確性錯誤，或與需求不符。location 寫檔案:行號。\n\
+         - nit：風格、命名、可讀性建議。\n\
+         - pre_existing：不是這次變更造成的問題（原本就存在的程式碼）。"
     };
     s.push_str(&format!(
         "\n{rule}\n\
+         有任何 important 就是不通過，只有 nit／pre_existing 算通過——系統依 findings 自動判定。\
+         important 要寫清楚問題，並列出同一類問題還出現在哪些地方，讓工程師一次修完。沒有問題就給空陣列。\n\
          審查完成後，把結果寫成 JSON 檔到：{path}\n\
-         格式：{{\"verdict\": \"pass\" 或 \"fail\", \"reasons\": [\"…\"], \"provides\": \"…\"}}\n\
-         provides（判定 pass 時必填）：用一兩句、{limit} 字以內，寫這個{what}完成後對其他模組提供了什麼——\
+         格式：{{\"findings\": [{{\"severity\": \"important\" 或 \"nit\" 或 \"pre_existing\", \
+         \"location\": \"src/a.ts:42\", \"issue\": \"…\"}}], \"provides\": \"…\"}}\n\
+         provides（通過時必填）：用一兩句、{limit} 字以內，寫這個{what}完成後對其他模組提供了什麼——\
          可以直接使用的函式、元件、API、資料結構或檔案位置（例如「src/hooks/useTimer.ts 的 useTimer()，回傳剩餘秒數與 start／pause」）。\
-         這會給之後開工的工程師參考，只寫怎麼用，不要寫過程。判定 fail 時可以省略。\n",
+         這會給之後開工的工程師參考，只寫怎麼用，不要寫過程。不通過時可以省略。\n",
         path = json_path.display(),
         limit = PROVIDES_LIMIT / 2,
     ));
@@ -242,6 +260,10 @@ pub fn fix_body(module: &TaskRow, review: &TaskRow, round: usize) -> String {
     for r in reasons {
         s.push_str(&format!("- {r}\n"));
     }
+    s.push_str(
+        "\n標籤說明：[必修] 一定要修；[建議] 自行判斷要不要改；[既有] 不是這次造成的問題，不在這次的範圍，不用修。\n\
+         每條必修意見都要把同一類問題在整個模組裡找出來一併修掉，不要只改被點到的那一行。\n",
+    );
     s.push_str(&format!("\n原始需求：\n{}\n", module.body));
     s
 }
@@ -1398,12 +1420,61 @@ pub struct ReviewVerdict {
     pub provides: Option<String>,
 }
 
+/// review.json 的一條分級意見（見 `2026-10-19-agent-review-findings-design.md`）。
+#[derive(serde::Deserialize)]
+struct Finding {
+    severity: String,
+    #[serde(default)]
+    location: Option<String>,
+    issue: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RawReview {
+    #[serde(default)]
+    verdict: Option<String>,
+    #[serde(default)]
+    reasons: Vec<String>,
+    #[serde(default)]
+    findings: Option<Vec<Finding>>,
+    #[serde(default)]
+    provides: Option<String>,
+}
+
+/// 有 `findings` 時判定由它推導（有 important 就是 fail，不管 verdict 寫什麼），
+/// 並轉成帶標籤的 reasons；沒有就是舊格式，verdict 照寫。
 pub fn parse_review_json(text: &str) -> Result<ReviewVerdict, String> {
-    let v: ReviewVerdict = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
-    match v.verdict.as_str() {
-        "pass" | "fail" => Ok(v),
-        other => Err(format!("verdict 必須是 pass 或 fail，收到 {other}")),
+    let raw: RawReview = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+    let Some(findings) = raw.findings else {
+        let verdict = raw.verdict.ok_or("缺少 verdict（或 findings）")?;
+        return match verdict.as_str() {
+            "pass" | "fail" => Ok(ReviewVerdict { verdict, reasons: raw.reasons, provides: raw.provides }),
+            other => Err(format!("verdict 必須是 pass 或 fail，收到 {other}")),
+        };
+    };
+    let mut graded: Vec<(usize, String)> = Vec::new();
+    for f in findings {
+        let (rank, label) = match f.severity.as_str() {
+            "important" => (0, "必修"),
+            "nit" => (1, "建議"),
+            "pre_existing" => (2, "既有"),
+            other => return Err(format!("severity 必須是 important、nit 或 pre_existing，收到 {other}")),
+        };
+        let issue = f.issue.trim();
+        if issue.is_empty() {
+            return Err("findings 的 issue 不可空白".into());
+        }
+        let text = match f.location.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+            Some(loc) => format!("[{label}] {loc}：{issue}"),
+            None => format!("[{label}] {issue}"),
+        };
+        graded.push((rank, text));
     }
+    graded.sort_by_key(|(rank, _)| *rank);
+    let verdict = if graded.iter().any(|(rank, _)| *rank == 0) { "fail" } else { "pass" };
+    let mut reasons: Vec<String> = graded.into_iter().map(|(_, t)| t).collect();
+    reasons.extend(raw.reasons);
+    Ok(ReviewVerdict { verdict: verdict.into(), reasons, provides: raw.provides })
 }
 
 /// 交件摘要的上限（字元）：每張卡的團隊分工都會帶著它。
@@ -1691,7 +1762,7 @@ pub(crate) mod tests {
         assert_eq!(parse_review_json(r#"{"verdict":"fail","reasons":["x"]}"#).unwrap().provides, None);
         let body = review_body(&test_row("m"), &test_row("w"), Path::new("/p/review.json"), None);
         assert!(body.contains("\"provides\""), "{body}");
-        assert!(body.contains("判定 pass 時必填"), "{body}");
+        assert!(body.contains("通過時必填"), "{body}");
     }
 
     /// 通過時交件摘要記到模組卡；不通過、空白、驗收卡都不動；太長截斷；再通過一次以新的為準。
@@ -1726,6 +1797,58 @@ pub(crate) mod tests {
         assert_eq!(parse_review_json("\u{feff}{\"verdict\":\"fail\",\"reasons\":[\"x\"]}").unwrap().reasons, vec!["x"]);
         assert!(parse_review_json(r#"{"verdict":"maybe"}"#).is_err());
         assert!(parse_review_json("not json").is_err());
+    }
+
+    #[test]
+    fn findings_decide_the_verdict_and_become_labelled_reasons() {
+        // 只有建議與既有問題：寫了 fail 也算通過。
+        let nits = parse_review_json(
+            r#"{"verdict":"fail","findings":[{"severity":"pre_existing","location":"u.ts:8","issue":"除以零"},{"severity":"nit","issue":"命名"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(nits.verdict, "pass");
+        assert_eq!(nits.reasons, vec!["[建議] 命名", "[既有] u.ts:8：除以零"], "依必修→建議→既有排序");
+        // 有必修：寫了 pass 也算不通過；verdict 可省略。
+        let bad = parse_review_json(
+            r#"{"findings":[{"severity":"nit","issue":"命名"},{"severity":"important","location":"t.ts:42","issue":"暫停後重設"}],"provides":"x"}"#,
+        )
+        .unwrap();
+        assert_eq!(bad.verdict, "fail");
+        assert_eq!(bad.reasons, vec!["[必修] t.ts:42：暫停後重設", "[建議] 命名"]);
+        assert_eq!(bad.provides.as_deref(), Some("x"));
+        // findings 空陣列 = 通過；舊格式沒有 findings 時 verdict 照寫。
+        assert_eq!(parse_review_json(r#"{"findings":[]}"#).unwrap().verdict, "pass");
+        assert_eq!(parse_review_json(r#"{"verdict":"fail","reasons":["x"]}"#).unwrap().verdict, "fail");
+        assert!(parse_review_json(r#"{"reasons":["x"]}"#).is_err(), "沒有 findings 就要有 verdict");
+        assert!(parse_review_json(r#"{"findings":[{"severity":"major","issue":"x"}]}"#).is_err());
+        assert!(parse_review_json(r#"{"findings":[{"severity":"nit","issue":"   "}]}"#).is_err(), "issue 不可空白");
+    }
+
+    #[test]
+    fn the_review_prompt_asks_for_graded_findings() {
+        let reviewed = TaskRow { start_sha: Some("a".into()), end_sha: Some("b".into()), ..test_row("W") };
+        let body = review_body(&test_row("M"), &reviewed, Path::new("/p/review.json"), None);
+        for want in ["\"findings\"", "important", "nit", "pre_existing", "location", "同一類"] {
+            assert!(body.contains(want), "缺 {want}：{body}");
+        }
+        assert!(!body.contains("上一輪"), "初審不該有再審查規則：{body}");
+
+        let prev = TaskRow { review_reasons: Some(r#"["[必修] t.ts:42：暫停後重設"]"#.into()), ..test_row("R") };
+        let again = review_body(&test_row("M"), &reviewed, Path::new("/p/review.json"), Some(&prev));
+        assert!(again.contains("- [必修] t.ts:42：暫停後重設"), "{again}");
+        for want in ["逐條確認", "這次修正的 diff", "不要再提"] {
+            assert!(again.contains(want), "再審查缺「{want}」：{again}");
+        }
+    }
+
+    #[test]
+    fn the_fix_prompt_explains_labels_and_asks_to_fix_the_whole_class() {
+        let review = TaskRow { review_reasons: Some(r#"["[必修] t.ts:42：暫停後重設","[建議] 命名"]"#.into()), ..test_row("R") };
+        let body = fix_body(&test_row("M"), &review, 1);
+        assert!(body.contains("- [必修] t.ts:42：暫停後重設"), "{body}");
+        for want in ["[必修]", "[建議]", "[既有]", "同一類問題"] {
+            assert!(body.contains(want), "缺 {want}：{body}");
+        }
     }
 
     #[tokio::test]
