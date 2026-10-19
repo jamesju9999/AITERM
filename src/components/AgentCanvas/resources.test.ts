@@ -92,6 +92,13 @@ describe("linkPath", () => {
     // 最後從資源正上方垂直接到膠囊頂端
     expect(d).toMatch(new RegExp(`Q${pill.x + pill.w / 2},[\\d.]+ ${pill.x + pill.w / 2},[\\d.]+ V${pill.y}$`));
   });
+  it("繞行的橫線走在指定的高度（資源區上方的空白中間），不貼著資源區的框", () => {
+    const below = { x: 40, y: 230, w: 230, h: 150 };
+    const d = linkPath(a, pill, [below], 560);
+    expect(d).toContain("H");
+    expect(d).toMatch(/Q[\d.-]+,560 /);
+  });
+
   it("旁邊的卡片不算擋路", () => {
     expect(linkPath(a, pill, [{ x: 400, y: 230, w: 230, h: 150 }])).toMatch(/^M155,190 C/);
   });

@@ -118,14 +118,15 @@ export function ResourceLayer({
             const a = geo.agents[d.agentId];
             const p = geo.pills[d.resourceId];
             if (!a || !p) return null; // 收合中的閒置資源沒有線
+            const gapMid = geo.rail.y - RAIL_GAP / 2;
             const others = Object.entries(geo.agents).filter(([id]) => id !== d.agentId).map(([, r]) => r);
             const x2 = p.x + p.w / 2;
             return (
               <g key={`${d.agentId}-${d.resourceId}`} data-testid={`access-${d.agentId}-${d.resourceId}`} data-state={d.state}>
-                <path className={`ac-res-link ac-res-link--${d.state}`} d={linkPath(a, p, others)} />
+                <path className={`ac-res-link ac-res-link--${d.state}`} d={linkPath(a, p, others, gapMid)} />
                 {d.label && (
-                  // 標籤放在資源正上方，不管線是直接下來還是繞行都看得到、不會疊在卡片上。
-                  <text className="ac-res-tag" x={x2 + 6} y={p.y - 10 - (d.row ?? 0) * 15}>
+                  // 標籤放在資源區上方的空白裡（資源正上方），不壓到資源區的框，也不疊在卡片上。
+                  <text className="ac-res-tag" x={x2 + 8} y={gapMid - 8 - (d.row ?? 0) * 15}>
                     {d.label}
                   </text>
                 )}
@@ -150,7 +151,6 @@ export function ResourceLayer({
                 className={`ac-res${st === "query" ? " ac-res--hot" : st === "wait" ? " ac-res--wait" : ""}`}
                 data-resource-id={r.id}
                 data-testid={`resource-${r.id}`}
-                title={r.holders.map((h) => `${agentName(h.agentId)}（${modeLabel(h.mode)}）`).join("、")}
                 onMouseEnter={() => setHover(r.id)}
                 onMouseLeave={() => setHover((h) => (h === r.id ? null : h))}
               >

@@ -88,9 +88,9 @@ const CORNER = 10;
 /**
  * Agent 卡到資源膠囊的線。正下方沒有別的卡就從卡片底部一條曲線下去；
  * 有卡擋在中間（例如兩位工程師上下排）就從左側出來、沿著所有擋路卡片的左邊下去，
- * 再橫到資源上方——不然線會從別人的卡片後面穿過去。
+ * 再橫到資源上方——不然線會從別人的卡片後面穿過去。`turnAt`：橫線的高度。
  */
-export function linkPath(a: Rect, pill: Rect, others: Rect[]): string {
+export function linkPath(a: Rect, pill: Rect, others: Rect[], turnAt?: number): string {
   const x1 = a.x + a.w / 2;
   const y1 = a.y + a.h;
   const x2 = pill.x + pill.w / 2;
@@ -102,7 +102,8 @@ export function linkPath(a: Rect, pill: Rect, others: Rect[]): string {
   }
   const lane = Math.min(a.x, ...blockers.map((b) => b.x)) - LANE_GAP;
   const sy = a.y + a.h / 2;
-  const turnY = y2 - 2 * CORNER - 6;
+  // 橫線走在資源區上方的空白中間：貼著資源區的框走會跟框線、標題疊在一起。
+  const turnY = turnAt ?? y2 - 2 * CORNER - 6;
   const dir = x2 >= lane ? 1 : -1;
   return (
     `M${a.x},${sy} H${lane + CORNER} Q${lane},${sy} ${lane},${sy + CORNER} ` +
