@@ -19,6 +19,64 @@ pub enum Rpc {
     Respond(Value),
     /// 呼叫 `ask_human`：由接收器建立問題後用 `tool_result` 回覆。
     Ask { id: Value, question: NewQuestion },
+    /// 資料庫技能的工具（只有裝了技能的卡才會出現）：由接收器檢查權限、執行、記錄。
+    Db { id: Value, call: DbCall },
+}
+
+/// 資料庫技能的一次工具呼叫，見 docs/superpowers/specs/2026-10-19-agent-db-skill-design.md。
+#[derive(Debug, Clone, PartialEq)]
+pub enum DbCall {
+    ListConnections,
+    ListSchemas { connection_id: String },
+    ListTables { connection_id: String, schema: String },
+    TableSchema { connection_id: String, schema: String, table: String },
+    Query { connection_id: String, sql: String },
+}
+
+/// 派工時要放行的資料庫工具（`--allowedTools`）。
+pub const DB_ALLOWED_TOOLS: &str = "mcp__aiterm__db_list_connections mcp__aiterm__db_list_schemas \
+mcp__aiterm__db_list_tables mcp__aiterm__db_table_schema mcp__aiterm__db_query";
+
+fn db_tool(name: &str, description: &str, props: &[(&str, &str)]) -> Value {
+    let properties: serde_json::Map<String, Value> =
+        props.iter().map(|(k, d)| (k.to_string(), json!({ "type": "string", "description": d }))).collect();
+    let required: Vec<&str> = props.iter().map(|(k, _)| *k).collect();
+    json!({ "name": name, "description": description, "inputSchema": { "type": "object", "properties": properties, "required": required } })
+}
+
+pub fn db_tool_definitions() -> Vec<Value> {
+    let conn = ("connection_id", "連線 id（db_list_connections 列出的 id）");
+    vec![
+        db_tool("db_list_connections", "列出開放給你的資料庫連線（id、名稱、類型、資料庫、權限）。先呼叫這個。", &[]),
+        db_tool("db_list_schemas", "列出連線上的 schema。", &[conn]),
+        db_tool("db_list_tables", "列出 schema 裡的資料表與檢視。", &[conn, ("schema", "schema 名稱")]),
+        db_tool("db_table_schema", "列出資料表的欄位（名稱、型別、可否為空、預設值）。", &[conn, ("schema", "schema 名稱"), ("table", "資料表名稱")]),
+        db_tool(
+            "db_query",
+            "在連線上執行一句 SQL，回傳 JSON 結果。權限依連線設定：唯讀只能跑 SELECT／WITH／SHOW／DESCRIBE／EXPLAIN；\
+需核准的寫入會等使用者按核准；被拒絕時不要換個寫法硬做，改在待確認事項說明。一次只送一句。",
+            &[conn, ("sql", "一句 SQL")],
+        ),
+    ]
+}
+
+fn str_arg(args: &Value, key: &str) -> Option<String> {
+    args.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+fn parse_db_call(name: &str, args: &Value) -> Option<Result<DbCall, String>> {
+    let need = |key: &str| str_arg(args, key).ok_or_else(|| format!("{name} 需要 {key}"));
+    let call = match name {
+        "db_list_connections" => Ok(DbCall::ListConnections),
+        "db_list_schemas" => need("connection_id").map(|connection_id| DbCall::ListSchemas { connection_id }),
+        "db_list_tables" => (|| Ok(DbCall::ListTables { connection_id: need("connection_id")?, schema: need("schema")? }))(),
+        "db_table_schema" => (|| {
+            Ok(DbCall::TableSchema { connection_id: need("connection_id")?, schema: need("schema")?, table: need("table")? })
+        })(),
+        "db_query" => (|| Ok(DbCall::Query { connection_id: need("connection_id")?, sql: need("sql")? }))(),
+        _ => return None,
+    };
+    Some(call)
 }
 
 pub fn tool_definition() -> Value {
@@ -53,6 +111,11 @@ pub fn tool_result(id: &Value, text: &str, is_error: bool) -> Value {
 }
 
 pub fn classify(msg: &Value) -> Rpc {
+    classify_with(msg, false)
+}
+
+/// `db`：這張卡的 Agent 有沒有資料庫技能（有才列出、才接受 db 工具）。
+pub fn classify_with(msg: &Value, db: bool) -> Rpc {
     let Some(id) = msg.get("id").cloned() else { return Rpc::Notification };
     let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
@@ -70,9 +133,23 @@ pub fn classify(msg: &Value) -> Rpc {
         }
         // 新版協定的探測：回空結果，Claude Code 就改走 initialize（實測）。
         "server/discover" | "ping" => Rpc::Respond(ok(&id, json!({}))),
-        "tools/list" => Rpc::Respond(ok(&id, json!({ "tools": [tool_definition()] }))),
+        "tools/list" => {
+            let mut tools = vec![tool_definition()];
+            if db {
+                tools.extend(db_tool_definitions());
+            }
+            Rpc::Respond(ok(&id, json!({ "tools": tools })))
+        }
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+            if db {
+                if let Some(call) = parse_db_call(name, params.get("arguments").unwrap_or(&Value::Null)) {
+                    return match call {
+                        Ok(call) => Rpc::Db { id, call },
+                        Err(msg) => Rpc::Respond(tool_result(&id, &msg, true)),
+                    };
+                }
+            }
             if name != TOOL_NAME {
                 return Rpc::Respond(tool_result(&id, &format!("沒有這個工具：{name}"), true));
             }
@@ -176,6 +253,34 @@ pub fn allowed_tools(ask: bool, browser: bool) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn db_tools_are_listed_only_for_cards_with_the_skill() {
+        let list = |db: bool| {
+            let Rpc::Respond(v) = classify_with(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), db) else { panic!() };
+            v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(list(false), vec!["ask_human"]);
+        assert_eq!(list(true), vec!["ask_human", "db_list_connections", "db_list_schemas", "db_list_tables", "db_table_schema", "db_query"]);
+    }
+
+    #[test]
+    fn db_calls_are_parsed_and_refused_without_the_skill() {
+        let call = |name: &str, args: Value| json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":name,"arguments":args}});
+        assert_eq!(
+            classify_with(&call("db_query", json!({"connection_id":"dev","sql":"SELECT 1"})), true),
+            Rpc::Db { id: json!(7), call: DbCall::Query { connection_id: "dev".into(), sql: "SELECT 1".into() } }
+        );
+        assert_eq!(classify_with(&call("db_list_connections", json!({})), true), Rpc::Db { id: json!(7), call: DbCall::ListConnections });
+        assert_eq!(
+            classify_with(&call("db_table_schema", json!({"connection_id":"dev","schema":"main","table":"t"})), true),
+            Rpc::Db { id: json!(7), call: DbCall::TableSchema { connection_id: "dev".into(), schema: "main".into(), table: "t".into() } }
+        );
+        let Rpc::Respond(missing) = classify_with(&call("db_query", json!({"connection_id":"dev"})), true) else { panic!() };
+        assert_eq!(missing["result"]["isError"], true, "缺 sql");
+        let Rpc::Respond(off) = classify_with(&call("db_query", json!({"connection_id":"dev","sql":"SELECT 1"})), false) else { panic!() };
+        assert_eq!(off["result"]["isError"], true, "沒裝技能就沒有這個工具");
+    }
 
     #[test]
     fn the_verifier_gets_a_pinned_headless_isolated_browser() {

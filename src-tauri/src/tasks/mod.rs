@@ -24,6 +24,8 @@ pub mod budget;
 pub mod codex;
 pub mod context;
 pub mod tools_check;
+pub mod sql_guard;
+pub mod db_skill;
 
 use std::path::{Path, PathBuf};
 
@@ -257,6 +259,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let _ = sqlx::query("ALTER TABLE agents ADD COLUMN cli TEXT NOT NULL DEFAULT 'claude'").execute(pool).await;
     // Agent 找人決策的問題，見 docs/superpowers/specs/2026-10-16-agent-ask-human-design.md。
     questions::init_schema(pool).await?;
+    // Agent 的資料庫技能與查詢記錄，見 docs/superpowers/specs/2026-10-19-agent-db-skill-design.md。
+    db_skill::init_schema(pool).await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")
         .execute(pool)
         .await?;

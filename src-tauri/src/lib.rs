@@ -126,7 +126,7 @@ use commands::{
     task_board_config::{codex_env_set, codex_env_status, codex_info, task_board_get_config, task_board_set_config},
     agents::{
         agents_list, agents_create, agents_update, agents_delete, agents_resolve,
-        agents_merge, agents_abort_merge, agents_verify_report, agents_accept_verification, tasks_assign_agent, agents_override_module, agents_check_repo, agents_check_tools, agents_init_repo,
+        agents_merge, agents_abort_merge, agents_verify_report, agents_accept_verification, tasks_assign_agent, agents_override_module, agents_check_repo, agents_check_tools, agents_set_db_skill, agents_db_queries, agents_init_repo,
         agents_open_repo,
     },
     questions::{questions_answer, questions_list},
@@ -790,6 +790,8 @@ pub fn run() {
             agents_override_module,
             agents_check_repo,
             agents_check_tools,
+            agents_set_db_skill,
+            agents_db_queries,
             agents_init_repo,
             agents_open_repo,
             questions_list,

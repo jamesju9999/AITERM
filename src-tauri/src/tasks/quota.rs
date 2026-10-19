@@ -55,6 +55,16 @@ pub fn hook_settings_json_with(base: &str, plugins_off: &[String]) -> String {
     v.to_string()
 }
 
+/// 在派工 settings 的 `env` 加一個環境變數（例如等核准時把 MCP 工具逾時拉長）。
+pub fn settings_with_env(settings_json: &str, key: &str, value: &str) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(settings_json).unwrap_or_else(|_| serde_json::json!({}));
+    v["env"][key] = value.into();
+    v.to_string()
+}
+
+/// 寫入要核准時，db_query 會掛著等人按核准：Claude 的 MCP 工具逾時拉到 24 小時。
+pub const APPROVAL_TOOL_TIMEOUT_MS: &str = "86400000";
+
 /// 精簡啟動加在指令後面的旗標：只用 `--mcp-config` 給的 MCP 伺服器、不載入技能。
 /// 實測（claude 2.1.300，`-p` 模式第一次呼叫）：預設約 25K token，加上這兩個再關掉
 /// 外掛約 11.7K。`--bare` 不能用：它連 `--settings` 裡的 hook 都略過、也不讀 OAuth。
@@ -153,6 +163,35 @@ struct Entry {
     blocking_ask: bool,
     /// 問題 id → 等答案的提問請求。解除登記時一起丟掉，等待端就會收到「已取消」。
     waiters: HashMap<i64, tokio::sync::oneshot::Sender<String>>,
+    /// 這張卡的 Agent 的資料庫技能（`None`＝沒裝，db 工具不出現）。
+    db: Option<crate::tasks::db_skill::DbSkill>,
+    /// 寫入核准的問題 id → 等原始答案的 db_query 呼叫。
+    approvals: HashMap<i64, tokio::sync::oneshot::Sender<String>>,
+}
+
+/// 寫入核准問題的兩個選項。
+pub const APPROVE: &str = "核准執行";
+pub const REJECT: &str = "拒絕";
+
+/// AITerm 已設定的資料庫連線（不含帳密）。
+#[derive(Debug, Clone)]
+pub struct DbConnInfo {
+    pub id: String,
+    pub name: String,
+    pub db_type: String,
+    pub database: String,
+}
+
+/// db 工具的執行結果；`rows` 是 db_query 的列數。
+pub struct DbOutput {
+    pub text: String,
+    pub rows: Option<i64>,
+}
+
+/// 實際查資料庫的地方（正式環境接 `mcp_server::db_ops`；測試換成假的）。
+pub struct DbBackend {
+    pub connections: Box<dyn Fn() -> Vec<DbConnInfo> + Send + Sync>,
+    pub run: Box<dyn Fn(crate::tasks::ask::DbCall) -> futures_util::future::BoxFuture<'static, Result<DbOutput, String>> + Send + Sync>,
 }
 
 /// 執行中、由 AITerm 派出去的 claude 卡片，以及其中正在等額度或等人回覆的那些。
@@ -162,6 +201,7 @@ pub struct QuotaState {
     on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
     on_reply_wait: OnceLock<Box<dyn Fn(&ReplyLabel) + Send + Sync>>,
     on_question: OnceLock<Box<dyn Fn(&ReplyLabel, &crate::tasks::questions::QuestionRow) + Send + Sync>>,
+    db_backend: OnceLock<DbBackend>,
     reply_grace: Duration,
 }
 
@@ -177,6 +217,7 @@ impl QuotaState {
             on_change: OnceLock::new(),
             on_reply_wait: OnceLock::new(),
             on_question: OnceLock::new(),
+            db_backend: OnceLock::new(),
             reply_grace,
         })
     }
@@ -224,9 +265,10 @@ impl QuotaState {
         let Some((pool, label)) = self.entries.lock().get(task_id).map(|e| (e.pool.clone(), e.label.clone())) else {
             return ("這張卡已經結束，不能再提問。".into(), true);
         };
+        // 先進入等決策：問題一建好就可能被看見，那時已經不能判卡住。
+        self.set_asking(task_id, true);
         match crate::tasks::questions::create(&pool, task_id, label.agent_id.as_deref(), q).await {
             Ok(row) => {
-                self.set_asking(task_id, true);
                 // 先登記等待者再通知：通知之後馬上就可能有人回答。
                 let waiter = {
                     let mut entries = self.entries.lock();
@@ -247,7 +289,12 @@ impl QuotaState {
                     None => (crate::tasks::questions::ask_reply(&row), false),
                 }
             }
-            Err(e) => (format!("提問失敗：{e}"), true),
+            Err(e) => {
+                if !crate::tasks::questions::has_open(&pool, task_id).await.unwrap_or(false) {
+                    self.set_asking(task_id, false);
+                }
+                (format!("提問失敗：{e}"), true)
+            }
         }
     }
 
@@ -275,8 +322,176 @@ impl QuotaState {
                 asking: false,
                 blocking_ask: false,
                 waiters: HashMap::new(),
+                db: None,
+                approvals: HashMap::new(),
             },
         );
+    }
+
+    /// 資料庫實際執行的地方。
+    pub fn set_db_backend(&self, backend: DbBackend) {
+        let _ = self.db_backend.set(backend);
+    }
+
+    /// 這張卡的 Agent 的資料庫技能。在 `register` 之後呼叫。
+    pub fn set_db_skill(&self, task_id: &str, skill: Option<crate::tasks::db_skill::DbSkill>) {
+        if let Some(e) = self.entries.lock().get_mut(task_id) {
+            e.db = skill;
+        }
+    }
+
+    fn has_db(&self, task_id: &str) -> bool {
+        self.entries.lock().get(task_id).is_some_and(|e| e.db.is_some())
+    }
+
+    /// 這個問題是不是有 db_query 在等核准。
+    pub fn has_approval(&self, task_id: &str, question_id: i64) -> bool {
+        self.entries.lock().get(task_id).is_some_and(|e| e.approvals.contains_key(&question_id))
+    }
+
+    /// 把使用者的原始答案交給等核准的 db_query。
+    pub fn give_approval(&self, task_id: &str, question_id: i64, answer: &str) -> bool {
+        let tx = self.entries.lock().get_mut(task_id).and_then(|e| e.approvals.remove(&question_id));
+        tx.is_some_and(|tx| tx.send(answer.to_string()).is_ok())
+    }
+
+    fn changed(&self) {
+        if let Some(f) = self.on_change.get() {
+            f();
+        }
+    }
+
+    /// 資料庫技能的工具呼叫：檢查權限（需要時等使用者核准）、執行、記進 `db_queries`。
+    /// 回傳要給 Agent 的文字與是否是錯誤。
+    pub(crate) async fn db(&self, task_id: &str, call: crate::tasks::ask::DbCall) -> (String, bool) {
+        use crate::tasks::ask::DbCall;
+        use crate::tasks::db_skill::{self as skill, Decision, NewQuery};
+        let Some((pool, label, Some(db))) = self.entries.lock().get(task_id).map(|e| (e.pool.clone(), e.label.clone(), e.db.clone())) else {
+            return ("這張卡沒有資料庫技能。".into(), true);
+        };
+        let Some(backend) = self.db_backend.get() else {
+            return ("AITerm 的資料庫功能還沒準備好。".into(), true);
+        };
+        let conns = (backend.connections)();
+        let mode_label = match db.mode {
+            skill::DbMode::Read => "唯讀",
+            skill::DbMode::Approve => "寫入需核准",
+            skill::DbMode::Write => "可寫入",
+        };
+        let (connection_id, sql) = match &call {
+            DbCall::ListConnections => {
+                let list: Vec<serde_json::Value> = conns
+                    .iter()
+                    .filter(|c| db.connections.contains(&c.id))
+                    .map(|c| serde_json::json!({ "id": c.id, "name": c.name, "db_type": c.db_type, "database": c.database, "permission": mode_label }))
+                    .collect();
+                return (serde_json::to_string_pretty(&list).unwrap_or_default(), false);
+            }
+            DbCall::ListSchemas { connection_id } | DbCall::ListTables { connection_id, .. } | DbCall::TableSchema { connection_id, .. } => {
+                (connection_id.clone(), None)
+            }
+            DbCall::Query { connection_id, sql } => (connection_id.clone(), Some(sql.clone())),
+        };
+        let name = conns.iter().find(|c| c.id == connection_id).map(|c| c.name.clone()).unwrap_or_else(|| connection_id.clone());
+        let Some(sql) = sql else {
+            // 結構查詢不改資料，只檢查連線有沒有開放。
+            if !db.connections.contains(&connection_id) {
+                return ("這個連線沒有開放給你，先用 db_list_connections 看可以用哪些。".into(), true);
+            }
+            return match (backend.run)(call).await {
+                Ok(out) => (out.text, false),
+                Err(e) => (e, true),
+            };
+        };
+        let q = NewQuery {
+            task_id,
+            agent_id: label.agent_id.as_deref(),
+            connection_id: &connection_id,
+            connection_name: &name,
+            sql: &sql,
+            decision: "allowed",
+        };
+        let decision = match skill::authorize(&db, &connection_id, &sql) {
+            Decision::Allow => "allowed",
+            Decision::Deny(reason) => {
+                let _ = skill::record_denied(&pool, &q, &reason).await;
+                self.changed();
+                return (reason, true);
+            }
+            Decision::NeedApproval => match self.wait_for_approval(task_id, &pool, &label, &name, &sql).await {
+                Ok(()) => "approved",
+                Err(reason) => {
+                    let _ = skill::record_denied(&pool, &q, &reason).await;
+                    self.changed();
+                    return (reason, true);
+                }
+            },
+        };
+        let id = skill::start_query(&pool, &NewQuery { decision, ..q }).await.ok();
+        self.changed();
+        let started = Instant::now();
+        let result = (backend.run)(call).await;
+        let ms = started.elapsed().as_millis() as i64;
+        if let Some(id) = id {
+            let (rows, err) = match &result {
+                Ok(out) => (out.rows, None),
+                Err(e) => (None, Some(e.as_str())),
+            };
+            let _ = skill::finish_query(&pool, id, rows, ms, err).await;
+        }
+        self.changed();
+        match result {
+            Ok(out) => (out.text, false),
+            Err(e) => (e, true),
+        }
+    }
+
+    /// 建一個核准問題（收件匣＋Telegram）並等答案。核准回 Ok，其他回拒絕原因。
+    async fn wait_for_approval(
+        &self,
+        task_id: &str,
+        pool: &SqlitePool,
+        label: &ReplyLabel,
+        conn_name: &str,
+        sql: &str,
+    ) -> Result<(), String> {
+        let q = crate::tasks::questions::NewQuestion {
+            question: format!("要允許在資料庫「{conn_name}」執行這句寫入嗎？"),
+            options: vec![APPROVE.into(), REJECT.into()],
+            recommended: None,
+            context: Some(sql.to_string()),
+        };
+        // 先進入等決策：問題一建好就可能被看見，那時已經不能判卡住。
+        self.set_asking(task_id, true);
+        let row = match crate::tasks::questions::create(pool, task_id, label.agent_id.as_deref(), &q).await {
+            Ok(row) => row,
+            Err(e) => {
+                if !crate::tasks::questions::has_open(pool, task_id).await.unwrap_or(false) {
+                    self.set_asking(task_id, false);
+                }
+                return Err(format!("建立核准問題失敗：{e}"));
+            }
+        };
+        // 先登記等待者再通知：通知之後馬上就可能有人回答。
+        let rx = {
+            let mut entries = self.entries.lock();
+            let e = entries.get_mut(task_id).ok_or("這張卡已經結束。")?;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            e.approvals.insert(row.id, tx);
+            rx
+        };
+        if let Some(f) = self.on_question.get() {
+            f(label, &row);
+        }
+        let answer = rx.await;
+        if !crate::tasks::questions::has_open(pool, task_id).await.unwrap_or(false) {
+            self.set_asking(task_id, false);
+        }
+        match answer {
+            Ok(a) if a.trim() == APPROVE => Ok(()),
+            Ok(a) => Err(format!("使用者拒絕了這句寫入（回答：{}）。不要換個寫法硬做，改在待確認事項說明。", a.trim())),
+            Err(_) => Err("核准已取消（卡片已結束）。".into()),
+        }
     }
 
     /// 這張卡的 ask_human 要掛著等答案（Codex 卡片）。在 `register` 之後呼叫。
@@ -475,11 +690,15 @@ async fn start_server(state: Arc<QuotaState>) -> Result<(u16, String), String> {
         let Ok(msg) = serde_json::from_slice::<serde_json::Value>(&body) else {
             return axum::http::StatusCode::BAD_REQUEST.into_response();
         };
-        match crate::tasks::ask::classify(&msg) {
+        match crate::tasks::ask::classify_with(&msg, state.has_db(&task_id)) {
             crate::tasks::ask::Rpc::Notification => axum::http::StatusCode::ACCEPTED.into_response(),
             crate::tasks::ask::Rpc::Respond(v) => axum::Json(v).into_response(),
             crate::tasks::ask::Rpc::Ask { id, question } => {
                 let (text, is_error) = state.ask(&task_id, &question).await;
+                axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
+            }
+            crate::tasks::ask::Rpc::Db { id, call } => {
+                let (text, is_error) = state.db(&task_id, call).await;
                 axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
             }
         }
@@ -550,6 +769,14 @@ mod tests {
         let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
         crate::tasks::init_schema(&pool).await.unwrap();
         pool
+    }
+
+    #[test]
+    fn settings_env_is_added_without_losing_hooks() {
+        let s = settings_with_env(&hook_settings_json("http://x/quota/s/t"), "MCP_TOOL_TIMEOUT", APPROVAL_TOOL_TIMEOUT_MS);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["env"]["MCP_TOOL_TIMEOUT"], "86400000");
+        assert!(v["hooks"]["Stop"].is_array());
     }
 
     #[test]
@@ -767,6 +994,128 @@ mod tests {
         assert_eq!(crate::tasks::questions::list_open(&pool).await.unwrap().len(), 1);
     }
 
+    /// 假的資料庫後端：記下執行過的 SQL，結果固定兩列。
+    fn fake_db(ran: Arc<parking_lot::Mutex<Vec<String>>>) -> crate::tasks::quota::DbBackend {
+        DbBackend {
+            connections: Box::new(|| {
+                vec![
+                    DbConnInfo { id: "dev".into(), name: "Dev".into(), db_type: "sqlite".into(), database: "dev.db".into() },
+                    DbConnInfo { id: "prod".into(), name: "Prod".into(), db_type: "postgres".into(), database: "p".into() },
+                ]
+            }),
+            run: Box::new(move |call| {
+                let ran = ran.clone();
+                Box::pin(async move {
+                    if let crate::tasks::ask::DbCall::Query { sql, .. } = &call {
+                        ran.lock().push(sql.clone());
+                    }
+                    Ok(DbOutput { text: "[1,2]".into(), rows: Some(2) })
+                })
+            }),
+        }
+    }
+
+    async fn db_card(mode: crate::tasks::db_skill::DbMode) -> (SqlitePool, String, Arc<QuotaState>, Arc<parking_lot::Mutex<Vec<String>>>) {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        store::move_task(&pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        store::dispatch_for_test(&pool, &id, "tab").await;
+        let state = QuotaState::new();
+        let ran = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        state.set_db_backend(fake_db(ran.clone()));
+        state.register(&id, "tab", pool.clone(), ReplyLabel { agent_id: Some("a1".into()), ..label() });
+        state.set_db_skill(&id, Some(crate::tasks::db_skill::DbSkill { connections: vec!["dev".into()], mode }));
+        (pool, id, state, ran)
+    }
+
+    fn query(conn: &str, sql: &str) -> crate::tasks::ask::DbCall {
+        crate::tasks::ask::DbCall::Query { connection_id: conn.into(), sql: sql.into() }
+    }
+
+    #[tokio::test]
+    async fn db_calls_respect_the_skill_and_are_logged() {
+        use crate::tasks::db_skill::{recent_queries, DbMode};
+        let (pool, id, state, ran) = db_card(DbMode::Read).await;
+
+        let (text, err) = state.db(&id, crate::tasks::ask::DbCall::ListConnections).await;
+        assert!(!err && text.contains("Dev") && !text.contains("Prod"), "只列開放的連線：{text}");
+        assert!(text.contains("唯讀"), "{text}");
+
+        let (text, err) = state.db(&id, query("dev", "SELECT * FROM t")).await;
+        assert!(!err && text.contains("[1,2]"), "{text}");
+        let (text, err) = state.db(&id, query("dev", "DELETE FROM t")).await;
+        assert!(err && text.contains("唯讀"), "{text}");
+        let (_, err) = state.db(&id, query("prod", "SELECT 1")).await;
+        assert!(err, "沒開放的連線");
+        assert_eq!(*ran.lock(), vec!["SELECT * FROM t"], "被擋下的不能執行");
+
+        let rows = recent_queries(&pool, 10).await.unwrap();
+        assert_eq!(rows.len(), 3, "放行與擋下的都要記：{rows:?}");
+        let ok = rows.iter().find(|r| r.sql == "SELECT * FROM t").unwrap();
+        assert_eq!((ok.decision.as_str(), ok.rows, ok.connection_name.as_str(), ok.agent_id.as_deref()), ("allowed", Some(2), "Dev", Some("a1")));
+        assert!(ok.finished_at.is_some());
+        assert_eq!(rows.iter().filter(|r| r.decision == "denied").count(), 2);
+
+        // 沒裝技能的卡：一律拒絕。
+        state.set_db_skill(&id, None);
+        assert!(state.db(&id, query("dev", "SELECT 1")).await.1);
+    }
+
+    #[tokio::test]
+    async fn a_write_waits_for_approval_and_runs_only_if_approved() {
+        use crate::tasks::db_skill::{recent_queries, DbMode};
+        let (pool, id, state, ran) = db_card(DbMode::Approve).await;
+        let next_question = |pool: SqlitePool| async move {
+            loop {
+                if let Some(q) = crate::tasks::questions::list_open(&pool).await.unwrap().pop() {
+                    break q;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+
+        let s = state.clone();
+        let i = id.clone();
+        let pending = tokio::spawn(async move { s.db(&i, query("dev", "UPDATE t SET a = 1")).await });
+        let q = next_question(pool.clone()).await;
+        assert!(q.context.as_deref().unwrap_or("").contains("UPDATE t SET a = 1"), "核准要看得到完整 SQL");
+        assert_eq!(serde_json::from_str::<Vec<String>>(&q.options).unwrap(), vec![APPROVE.to_string(), REJECT.to_string()]);
+        assert!(state.is_waiting(&id), "等核准時不判卡住");
+        while !state.has_approval(&id, q.id) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(ran.lock().is_empty(), "還沒核准不能執行");
+        // 正式流程：指令先把答案存進資料庫，再交給等待者。
+        crate::tasks::questions::answer(&pool, q.id, APPROVE, "app").await.unwrap();
+        assert!(state.give_approval(&id, q.id, APPROVE));
+        let (text, err) = pending.await.unwrap();
+        assert!(!err, "{text}");
+        assert_eq!(*ran.lock(), vec!["UPDATE t SET a = 1"]);
+        assert!(!state.is_waiting(&id));
+
+        let s = state.clone();
+        let i = id.clone();
+        let pending = tokio::spawn(async move { s.db(&i, query("dev", "DELETE FROM t")).await });
+        let q = loop {
+            let q = next_question(pool.clone()).await;
+            if q.context.as_deref().unwrap_or("").contains("DELETE") {
+                break q;
+            }
+        };
+        while !state.has_approval(&id, q.id) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        crate::tasks::questions::answer(&pool, q.id, REJECT, "app").await.unwrap();
+        assert!(state.give_approval(&id, q.id, REJECT));
+        let (text, err) = pending.await.unwrap();
+        assert!(err && text.contains("拒絕"), "{text}");
+        assert_eq!(ran.lock().len(), 1, "拒絕的不執行");
+
+        let rows = recent_queries(&pool, 10).await.unwrap();
+        assert_eq!(rows.iter().find(|r| r.sql.starts_with("UPDATE")).unwrap().decision, "approved");
+        assert_eq!(rows.iter().find(|r| r.sql.starts_with("DELETE")).unwrap().decision, "denied");
+    }
+
     /// Codex 卡片的 ask_human 掛著等答案，答案直接當工具結果回去（不打字進 TUI：小模型會先自己猜答案）。
     #[tokio::test]
     async fn a_codex_card_waits_on_ask_human_until_the_answer_arrives() {
@@ -793,7 +1142,11 @@ mod tests {
         };
         assert!(state.is_waiting(&id), "等答案時不判卡住");
         assert!(!pending.is_finished(), "還沒回答就不能回傳");
-        assert!(state.is_blocking_ask(&id) && state.has_waiter(&id, q.id));
+        // 等待者在問題寫進資料庫之後才登記，輪詢看到問題時可能還差一點。
+        while !state.has_waiter(&id, q.id) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(state.is_blocking_ask(&id));
         assert!(!state.has_waiter(&id, q.id + 99));
         assert!(!state.give_answer(&id, q.id + 99, "x"), "別的問題沒人在等");
         assert!(state.give_answer(&id, q.id, "Q1 的回答：藍色"));

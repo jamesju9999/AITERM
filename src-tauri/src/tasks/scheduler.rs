@@ -852,6 +852,11 @@ impl Dispatcher for RealDispatcher {
         } else {
             None
         };
+        // 資料庫技能：工具掛在這張卡的 ask_human 端點上，所以要有那個端點才給。
+        let db_skill = ask_url
+            .as_ref()
+            .and(agent.as_ref())
+            .and_then(|a| crate::tasks::db_skill::parse(a.db_skill.as_deref()));
         let evidence = (managed && is_verify).then(|| crate::tasks::workflow::evidence_dir(&project.path, &task.id));
         let browser = if evidence.is_some() { crate::tasks::ask::detect_browser() } else { crate::tasks::ask::Browser::SystemChrome };
         if let Some(dir) = evidence.as_ref().filter(|_| codex) {
@@ -871,6 +876,7 @@ impl Dispatcher for RealDispatcher {
                 match written {
                     Ok(()) => crate::tasks::quota::path_flag("--mcp-config", &path).and_then(|f| {
                         crate::tasks::ask::allowed_tools(ask_url.is_some(), evidence.is_some())
+                            .map(|t| if db_skill.is_some() { format!("{t} {}", crate::tasks::ask::DB_ALLOWED_TOOLS) } else { t })
                             .map(|t| format!("{f} --allowedTools {t}"))
                     }),
                     Err(e) => {
@@ -942,6 +948,11 @@ impl Dispatcher for RealDispatcher {
             );
             prepare_worktree(&project.path, &task.id, &task.project_dir, isolate).await
         };
+        if let Some(skill) = db_skill.as_ref().filter(|_| !resume) {
+            let names: Vec<(String, String)> =
+                self.config.get().db_connections.iter().map(|c| (c.id.clone(), c.name.clone())).collect();
+            prompt.push_str(&crate::tasks::db_skill::prompt_note(skill, &names));
+        }
         // 非互動的 claude 卡片掛上額度 hook：撞到用量上限時卡片改成「等待額度」，
         // 換帳號或過一段時間自動續跑。做不到（接收器起不來、路徑有特殊字元）就照舊派工。
         // 精簡啟動（非互動的 Agent 卡）：關掉使用者的外掛、只用我們給的 MCP、不載入技能。
@@ -959,8 +970,15 @@ impl Dispatcher for RealDispatcher {
                 Some(base) => {
                     let dir = crate::tasks::task_dir(&project.path, &task.id);
                     let path = dir.join("claude-settings.json");
-                    match std::fs::create_dir_all(&dir)
-                        .and_then(|_| std::fs::write(&path, crate::tasks::quota::hook_settings_json_with(&base, &plugins_off)))
+                    let mut settings = crate::tasks::quota::hook_settings_json_with(&base, &plugins_off);
+                    if db_skill.as_ref().is_some_and(|s| s.mode == crate::tasks::db_skill::DbMode::Approve) {
+                        settings = crate::tasks::quota::settings_with_env(
+                            &settings,
+                            "MCP_TOOL_TIMEOUT",
+                            crate::tasks::quota::APPROVAL_TOOL_TIMEOUT_MS,
+                        );
+                    }
+                    match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, &settings))
                     {
                         Ok(()) => crate::tasks::quota::settings_flag(&path),
                         Err(e) => {
@@ -1018,11 +1036,13 @@ impl Dispatcher for RealDispatcher {
                 project_id: project.id.clone(),
                 agent_id: task.agent_id.clone(),
             };
+            let db = db_skill.clone();
             move |tab_id: &str| {
                 quota.register(&task_id, tab_id, pool, label);
                 if codex {
                     quota.set_blocking_ask(&task_id);
                 }
+                quota.set_db_skill(&task_id, db);
             }
         });
         drop(git_prep);
@@ -1690,6 +1710,10 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
             let root = crate::tasks::session_log::claude_projects_root();
             let mut any = false;
             for project in reg.all() {
+                // 重啟前還沒結束的資料庫查詢不會再結束了，畫面不能一直顯示「使用中」。
+                if let Err(e) = crate::tasks::db_skill::close_dangling(&project.pool).await {
+                    eprintln!("close dangling db queries ({}): {e}", project.name);
+                }
                 match recover_after_restart(&project.pool, root.as_deref()).await {
                     Ok(s) if s != RecoverSummary::default() => {
                         any = true;
@@ -1751,6 +1775,8 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
                 });
             });
         }
+        // Agent 的資料庫技能：在 AITerm 已設定的連線上執行（帳密不經過 Agent）。
+        quota.set_db_backend(real_db_backend(app.clone()));
         // 答案要能從收件匣與 Telegram 送回來：讓指令拿得到這份狀態（解除等決策）。
         app.manage(quota.clone());
         spawn_question_reminders(app.clone());
@@ -1780,6 +1806,57 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
     });
 
     handle
+}
+
+/// 資料庫技能的正式後端：`mcp_server::db_ops`，用 App 管理的連線、密鑰與 DB2 sidecar。
+fn real_db_backend(app: AppHandle) -> crate::tasks::quota::DbBackend {
+    use crate::tasks::ask::DbCall;
+    use crate::tasks::quota::{DbBackend, DbConnInfo, DbOutput};
+    let list_app = app.clone();
+    DbBackend {
+        connections: Box::new(move || {
+            list_app
+                .state::<Arc<crate::config::ConfigStore>>()
+                .get()
+                .db_connections
+                .iter()
+                .map(|c| DbConnInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    db_type: serde_json::to_value(&c.db_type).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
+                    database: c.database.clone(),
+                })
+                .collect()
+        }),
+        run: Box::new(move |call| {
+            let app = app.clone();
+            Box::pin(async move {
+                use crate::mcp_server::db_ops;
+                let config = app.state::<Arc<crate::config::ConfigStore>>();
+                let secrets = app.state::<Arc<crate::secret::SecretStore>>();
+                let manager = app.state::<crate::db::manager::DbManager>();
+                let sidecar = app.state::<crate::db::Db2SidecarState>();
+                let text = |r: Result<String, String>| r.map(|text| DbOutput { text, rows: None });
+                match call {
+                    DbCall::ListConnections => Ok(DbOutput { text: String::new(), rows: None }),
+                    DbCall::ListSchemas { connection_id } => {
+                        text(db_ops::list_schemas(&connection_id, &config, &secrets, &manager, &sidecar).await)
+                    }
+                    DbCall::ListTables { connection_id, schema } => {
+                        text(db_ops::list_tables(&connection_id, &schema, &config, &secrets, &manager, &sidecar).await)
+                    }
+                    DbCall::TableSchema { connection_id, schema, table } => text(
+                        db_ops::get_table_schema(&connection_id, &schema, &table, &config, &secrets, &manager, &sidecar).await,
+                    ),
+                    DbCall::Query { connection_id, sql } => {
+                        db_ops::execute_query_counted(&connection_id, &sql, &config, &secrets, &manager, &sidecar)
+                            .await
+                            .map(|(text, rows)| DbOutput { text, rows: Some(rows as i64) })
+                    }
+                }
+            })
+        }),
+    }
 }
 
 #[cfg(test)]

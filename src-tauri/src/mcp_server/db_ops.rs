@@ -78,21 +78,38 @@ pub(crate) async fn execute_query(
     manager: &DbManager,
     sidecar: &Db2SidecarState,
 ) -> Result<String, String> {
+    execute_query_counted(connection_id, sql, config, secrets, manager, sidecar).await.map(|(text, _)| text)
+}
+
+/// 同 `execute_query`，另外回傳列數（Agent 資料庫技能的活動記錄要用）。
+pub(crate) async fn execute_query_counted(
+    connection_id: &str,
+    sql: &str,
+    config: &ConfigStore,
+    secrets: &SecretStore,
+    manager: &DbManager,
+    sidecar: &Db2SidecarState,
+) -> Result<(String, usize), String> {
     ensure_connected(connection_id, config, secrets, manager, sidecar).await?;
     let result = manager.execute(connection_id, sql).await.map_err(|e| e.to_string())?;
     if let Some(db_err) = &result.error {
         return Err(db_err.clone());
     }
     let full = serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?;
+    // 寫入沒有回傳列，改用受影響的列數。
+    let rows = if result.rows.is_empty() { result.affected_rows.map_or(0, |n| n as usize) } else { result.rows.len() };
     if full.len() > MAX_QUERY_RESULT_BYTES {
-        Ok(format!(
-            "{}\n\n[TRUNCATED: result exceeds {} bytes; {} rows total]",
-            safe_truncate(&full, MAX_QUERY_RESULT_BYTES),
-            MAX_QUERY_RESULT_BYTES,
-            result.rows.len(),
+        Ok((
+            format!(
+                "{}\n\n[TRUNCATED: result exceeds {} bytes; {} rows total]",
+                safe_truncate(&full, MAX_QUERY_RESULT_BYTES),
+                MAX_QUERY_RESULT_BYTES,
+                result.rows.len(),
+            ),
+            rows,
         ))
     } else {
-        Ok(full)
+        Ok((full, rows))
     }
 }
 

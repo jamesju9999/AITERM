@@ -171,7 +171,7 @@ mod tests {
             id: id.into(), kind: kind.into(), name: name.into(), role: String::new(), prompt_prefix: String::new(),
             project_dir: "/r".into(), canvas_x: 0.0, canvas_y: 0.0, worktree_path: None, branch: None,
             paused_task_id: None, created_at: String::new(), last_merge_signature: None, produces_spec: false,
-            model: None, cli: "claude".into(),
+            model: None, cli: "claude".into(), db_skill: None,
         }
     }
 

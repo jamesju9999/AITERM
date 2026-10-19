@@ -64,7 +64,9 @@ pub async fn deliver_answer(app: &AppHandle, project_id: &str, id: i64, answer: 
     // Codex 卡片：答案交給掛著等的 ask_human 請求（不打字進 TUI）。
     // 沒人在等（例如 App 重開過）就不能往 shell 打字，回錯誤。
     let quota = app.try_state::<Arc<crate::tasks::quota::QuotaState>>();
-    let blocking = quota.as_ref().is_some_and(|qs| qs.is_blocking_ask(&q.task_id));
+    // 資料庫寫入的核准：答案交給掛著等的 db_query（Claude、Codex 卡片都一樣）。
+    let approval = quota.as_ref().is_some_and(|qs| qs.has_approval(&q.task_id, id));
+    let blocking = !approval && quota.as_ref().is_some_and(|qs| qs.is_blocking_ask(&q.task_id));
     if blocking && !quota.as_ref().is_some_and(|qs| qs.has_waiter(&q.task_id, id)) {
         return Err("Agent 目前沒有在等這個答案".into());
     }
@@ -73,7 +75,12 @@ pub async fn deliver_answer(app: &AppHandle, project_id: &str, id: i64, answer: 
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("{} 已經回答過或已取消", q.label()))?;
 
-    if blocking {
+    if approval {
+        let given = quota.as_ref().is_some_and(|qs| qs.give_approval(&q.task_id, id, row.answer.as_deref().unwrap_or("")));
+        if !given {
+            return Err("Agent 目前沒有在等這個核准".into());
+        }
+    } else if blocking {
         let given = quota.as_ref().is_some_and(|qs| qs.give_answer(&q.task_id, id, &questions::answer_text(&row)));
         if !given {
             return Err("Agent 目前沒有在等這個答案".into());

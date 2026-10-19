@@ -395,6 +395,31 @@ pub async fn agents_check_repo(path: String) -> Result<crate::tasks::repo_check:
     Ok(crate::tasks::repo_check::check_repo(&path).await)
 }
 
+/// 裝上、修改或移除（`None`）Agent 的資料庫技能。下一張派出去的卡才生效。
+#[tauri::command]
+pub async fn agents_set_db_skill(
+    project_id: String,
+    agent_id: String,
+    skill: Option<crate::tasks::db_skill::DbSkill>,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::db_skill::set_agent_skill(&p.pool, &agent_id, skill.as_ref()).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(())
+}
+
+/// 專案最近的資料庫查詢（活動記錄與「使用中」用）。
+#[tauri::command]
+pub async fn agents_db_queries(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<Vec<crate::tasks::db_skill::DbQueryRow>, String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::db_skill::recent_queries(&p.pool, 100).await.map_err(|e| e.to_string())
+}
+
 /// 協作頁檢查 Claude Code／Codex／git 有沒有裝（用派工分頁同一個 shell 環境找）。
 #[tauri::command]
 pub async fn agents_check_tools(

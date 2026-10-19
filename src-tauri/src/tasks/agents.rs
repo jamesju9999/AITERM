@@ -38,6 +38,9 @@ pub struct AgentRow {
     pub model: Option<String>,
     /// 用哪個 AI 工具做事：`claude`（預設）｜`codex`。見 docs/superpowers/specs/2026-10-17-agent-codex-design.md。
     pub cli: String,
+    /// 資料庫技能（JSON，見 `tasks::db_skill::DbSkill`）。NULL＝沒裝。
+    #[sqlx(default)]
+    pub db_skill: Option<String>,
 }
 
 pub struct NewAgent<'a> {
