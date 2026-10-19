@@ -82,8 +82,10 @@
 .ac-pool-item:hover { border-color: var(--accent); }
 .ac-pool-item small { color: var(--text-muted); font-size: 11px; }
 .ac-pool-item .ac-agent-ico { width: 22px; height: 22px; border-radius: 6px; }
-/* 工程師套用內建角色時，標題圖示換成角色的 emoji（底色仍是種類色）。 */
-.ac-agent-emoji { font-size: 15px; line-height: 1; }
+/* 角色線條圖示（RoleIcon）放在文字旁邊時的對齊。 */
+.ac-inline-icon { display: inline-flex; align-items: center; gap: 6px; }
+.ac-spec-mark svg, .ac-role-save svg { vertical-align: -2px; }
+.ac-role-menu-item svg { flex: none; color: var(--text-muted); }
 .ac-pool-name { white-space: nowrap; }
 .ac-pool-hint { margin-left: 6px; color: var(--text-muted); font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

@@ -1,10 +1,12 @@
 import type { AgentKind } from "../../ipc/agents";
 import { translations, type Translations } from "../../lib/i18n";
+import type { RoleIconName } from "./RoleIcon";
 
 /** 角色預設：名稱寫進 Agent 的 role，prefix 是派工時加在每張卡片前面的提示詞。 */
 export interface RolePreset {
   name: string;
-  emoji: string;
+  /** 線條圖示（RoleIcon），跟種類圖示同一套風格。 */
+  icon: RoleIconName | AgentKind;
   prefix: string;
 }
 
@@ -17,45 +19,45 @@ export interface RolePreset {
 export function builtinRoles(kind: AgentKind, t: Translations): RolePreset[] {
   if (kind === "reviewer") {
     return [
-      { name: t.ac_role_general_reviewer, emoji: "✅", prefix: t.ac_role_general_reviewer_desc },
-      { name: t.ac_role_combined_reviewer, emoji: "🧩", prefix: t.ac_role_combined_reviewer_desc },
-      { name: t.ls_preset_reviewer, emoji: "🔍", prefix: t.ac_role_code_reviewer_desc },
-      { name: t.ls_preset_security, emoji: "🛡️", prefix: t.ac_role_security_reviewer_desc },
+      { name: t.ac_role_general_reviewer, icon: "check", prefix: t.ac_role_general_reviewer_desc },
+      { name: t.ac_role_combined_reviewer, icon: "layers", prefix: t.ac_role_combined_reviewer_desc },
+      { name: t.ls_preset_reviewer, icon: "reviewer", prefix: t.ac_role_code_reviewer_desc },
+      { name: t.ls_preset_security, icon: "shield", prefix: t.ac_role_security_reviewer_desc },
     ];
   }
   if (kind === "verifier") {
-    return [{ name: t.ac_role_verifier, emoji: "☑", prefix: t.ac_role_verifier_desc }];
+    return [{ name: t.ac_role_verifier, icon: "verifier", prefix: t.ac_role_verifier_desc }];
   }
   if (kind === "orchestrator") {
-    return [{ name: t.ac_role_integrator, emoji: "⑂", prefix: t.ac_role_integrator_desc }];
+    return [{ name: t.ac_role_integrator, icon: "orchestrator", prefix: t.ac_role_integrator_desc }];
   }
   return [
-    { name: t.ls_preset_coder, emoji: "💻", prefix: t.ls_preset_coder_desc },
-    { name: t.ac_role_spec, emoji: "📐", prefix: t.ac_role_spec_desc },
-    { name: t.ac_role_migration, emoji: "🔁", prefix: t.ac_role_migration_desc },
-    { name: t.ls_preset_tester, emoji: "🧪", prefix: t.ls_preset_tester_desc },
-    { name: t.ac_role_bugfix, emoji: "🐞", prefix: t.ac_role_bugfix_desc },
-    { name: t.ac_role_frontend, emoji: "🎨", prefix: t.ac_role_frontend_desc },
-    { name: t.ls_preset_refactorer, emoji: "🔧", prefix: t.ls_preset_refactorer_desc },
-    { name: t.ls_preset_devops, emoji: "⚙️", prefix: t.ls_preset_devops_desc },
-    { name: t.ls_preset_docs, emoji: "📝", prefix: t.ls_preset_docs_desc },
-    { name: t.ls_preset_researcher, emoji: "📊", prefix: t.ls_preset_researcher_desc },
-    { name: t.ls_preset_architect, emoji: "🏛️", prefix: t.ls_preset_architect_desc },
+    { name: t.ls_preset_coder, icon: "coder", prefix: t.ls_preset_coder_desc },
+    { name: t.ac_role_spec, icon: "spec", prefix: t.ac_role_spec_desc },
+    { name: t.ac_role_migration, icon: "migrate", prefix: t.ac_role_migration_desc },
+    { name: t.ls_preset_tester, icon: "test", prefix: t.ls_preset_tester_desc },
+    { name: t.ac_role_bugfix, icon: "bug", prefix: t.ac_role_bugfix_desc },
+    { name: t.ac_role_frontend, icon: "palette", prefix: t.ac_role_frontend_desc },
+    { name: t.ls_preset_refactorer, icon: "wrench", prefix: t.ls_preset_refactorer_desc },
+    { name: t.ls_preset_devops, icon: "gear", prefix: t.ls_preset_devops_desc },
+    { name: t.ls_preset_docs, icon: "doc", prefix: t.ls_preset_docs_desc },
+    { name: t.ls_preset_researcher, icon: "chart", prefix: t.ls_preset_researcher_desc },
+    { name: t.ls_preset_architect, icon: "landmark", prefix: t.ls_preset_architect_desc },
   ];
 }
 
 /**
- * 工程師卡片標題的圖示：角色名稱對得上內建角色就用它的 emoji，否則 null（沿用種類圖示）。
+ * 工程師卡片標題的圖示：角色名稱對得上內建角色就用它的圖示，否則 null（沿用種類圖示）。
  * role 存的是挑選當下語系的名稱，所以兩個語系都比對，切換語系後才不會掉回預設圖示。
  * 只做工程師：其他種類的流程角色固定，用種類圖示辨識比較清楚。
  */
-export function roleEmoji(kind: AgentKind, role: string): string | null {
+export function roleIcon(kind: AgentKind, role: string): RoleIconName | AgentKind | null {
   if (kind !== "coder") return null;
   const name = role.trim();
   if (!name) return null;
   for (const t of Object.values(translations) as Translations[]) {
     const hit = builtinRoles(kind, t).find((r) => r.name === name);
-    if (hit) return hit.emoji;
+    if (hit) return hit.icon;
   }
   return null;
 }

@@ -8,6 +8,7 @@ import { usedDirs } from "../../ipc/projects";
 import { deleteCustomRole, loadCustomRoles, saveCustomRole, type CustomRole } from "./customRoles";
 import { RepoStatus } from "./RepoStatus";
 import { confirmInitRepo } from "./repoInit";
+import { RoleIcon } from "./RoleIcon";
 import { builtinRoles, type RolePreset } from "./roles";
 
 export interface AgentConfigValues {
@@ -223,14 +224,14 @@ export function AgentConfigDialog({
                   <div className="ac-role-menu-label">{t.ac_role_builtin}</div>
                   {roles.map((r) => (
                     <button key={r.name} type="button" role="menuitem" className="ac-role-menu-item" onClick={() => pickRole(r)}>
-                      <span aria-hidden>{r.emoji}</span> {r.name}
+                      <RoleIcon name={r.icon} size={14} /> {r.name}
                     </button>
                   ))}
                   {mine.length > 0 && <div className="ac-role-menu-label">{t.ac_role_mine}</div>}
                   {mine.map((r) => (
                     <div key={r.id} className="ac-role-menu-row">
                       <button type="button" role="menuitem" className="ac-role-menu-item" onClick={() => pickRole(r)}>
-                        <span aria-hidden>⭐</span> {r.name}
+                        <RoleIcon name="star" size={14} /> {r.name}
                       </button>
                       <button
                         type="button"
@@ -281,7 +282,9 @@ export function AgentConfigDialog({
         {kind === "coder" && (
           <label className="ac-produces-spec">
             <input type="checkbox" checked={producesSpec} onChange={(e) => setProducesSpec(e.target.checked)} />
-            <span>📐 {t.ac_produces_spec}</span>
+            <span className="ac-inline-icon">
+              <RoleIcon name="spec" size={14} /> {t.ac_produces_spec}
+            </span>
           </label>
         )}
         <div className="task-field">
@@ -341,7 +344,7 @@ export function AgentConfigDialog({
             disabled={!role.trim() || !prefix.trim()}
             onClick={saveMine}
           >
-            ⭐ {t.ac_role_save}
+            <RoleIcon name="star" size={14} /> {t.ac_role_save}
           </button>
           {notice && <span className="ac-role-notice">{notice}</span>}
         </div>
