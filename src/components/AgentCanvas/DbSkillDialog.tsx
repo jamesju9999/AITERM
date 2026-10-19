@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { DbSkill, DbSkillMode } from "../../ipc/agents";
 import { dbListConnections, type DbConnectionInfo } from "../../ipc/db";
+import { RoleIcon } from "./RoleIcon";
 
 /** 資料庫技能的設定：開放哪些連線、權限三選一。`current` 為 null 是新裝。 */
 export function DbSkillDialog({
@@ -55,7 +56,12 @@ export function DbSkillDialog({
   return (
     <div className="task-dialog-backdrop">
       <div className="task-dialog ac-db-dialog" role="dialog" aria-label={t.ac_db_title(agentName)} data-testid="db-skill-dialog">
-        <h3 className="task-dialog-title">🗄 {t.ac_db_title(agentName)}</h3>
+        <h3 className="task-dialog-title ac-inline-icon">
+          <span className="ac-agent-ico ac-skill-ico-db" aria-hidden>
+            <RoleIcon name="database" />
+          </span>
+          {t.ac_db_title(agentName)}
+        </h3>
         <p className="ac-dialog-desc">{t.ac_db_desc}</p>
 
         <div className="ac-db-section">{t.ac_db_connections}</div>

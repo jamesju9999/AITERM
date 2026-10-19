@@ -18,9 +18,35 @@ export type RoleIconName =
   | "check"
   | "layers"
   | "shield"
-  | "star";
+  | "star"
+  // 技能與資源（資料庫、API、瀏覽器）
+  | "database"
+  | "plug"
+  | "globe";
 
 const PATHS: Record<RoleIconName, ReactNode> = {
+  database: (
+    <>
+      <ellipse cx="12" cy="5" rx="8" ry="3" />
+      <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
+      <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+    </>
+  ),
+  plug: (
+    <>
+      <path d="M12 22v-5" />
+      <path d="M9 8V2" />
+      <path d="M15 8V2" />
+      <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+    </>
+  ),
+  globe: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M2 12h20" />
+      <path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10Z" />
+    </>
+  ),
   spec: (
     <>
       <path d="M4 20V4l16 16Z" />

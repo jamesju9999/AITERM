@@ -672,8 +672,10 @@ button.ac-log-title:hover { color: var(--text-primary); }
 
 /* 技能：Agent 池後面的可拖曳技能，與 Agent 卡上的技能標籤（查詢中會亮起來並顯示 SQL 開頭） */
 .ac-pool-sep { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--ac-edge); }
-.ac-pool-item--skill { padding-left: 10px; border-style: dashed; }
-.ac-skill-ico { font-size: 14px; line-height: 1; }
+/* 技能（資源）：天藍色，跟四種角色的顏色分開；虛線框表示它不是角色。 */
+.ac-pool-item--skill { border-style: dashed; }
+.ac-pool-item--skill .ac-agent-ico, .ac-skill-ico-db { background: rgba(56, 189, 248, 0.15); color: #7dd3fc; }
+.ac-skill-row svg { flex: none; color: #7dd3fc; }
 .ac-skill-row { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 100%; box-sizing: border-box; padding: 5px 12px; border: none; border-bottom: 1px solid var(--ac-edge); background: rgba(56, 189, 248, 0.05); color: var(--text-secondary); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .ac-skill-row:hover { background: rgba(56, 189, 248, 0.1); }
 .ac-skill-row-line { display: flex; align-items: center; gap: 6px; min-width: 0; }

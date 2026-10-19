@@ -27,6 +27,7 @@ import {
 } from "../../ipc/agents";
 import { dbListConnections } from "../../ipc/db";
 import { DbSkillDialog } from "./DbSkillDialog";
+import { RoleIcon } from "./RoleIcon";
 import { parseDbSkill, skillActivity, SKILL_LINGER_SECS, sqlPreview } from "./dbSkill";
 import { ToolsBanner } from "./ToolsBanner";
 import { missingTools } from "./toolsCheck";
@@ -1080,7 +1081,9 @@ export function AgentCanvasView({
           title={t.ac_skill_hint}
           onMouseDown={(e) => beginDrag(e, "skill", "db")}
         >
-          <span className="ac-skill-ico" aria-hidden>🗄</span>
+          <span className="ac-agent-ico" aria-hidden>
+            <RoleIcon name="database" />
+          </span>
           <span className="ac-pool-name">{t.ac_skill_db}</span>
         </div>
       </div>
@@ -1361,7 +1364,7 @@ export function AgentCanvasView({
             {ghost.kind === "pool"
               ? poolLabel((ghost.id ?? "coder") as AgentKind)
               : ghost.kind === "skill"
-                ? `🗄 ${t.ac_skill_db}`
+                ? t.ac_skill_db
                 : (ghostCard?.title ?? "")}
           </div>,
           document.body,

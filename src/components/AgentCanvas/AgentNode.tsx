@@ -388,7 +388,7 @@ export function AgentNode({
           onClick={onDbSkill}
         >
           <span className="ac-skill-row-line">
-            <span aria-hidden>🗄</span>
+            <RoleIcon name="database" size={13} />
             {/* 權限放前面：連線多時被截掉的是名稱，不是權限。 */}
             <span className="ac-skill-row-mode">{dbSkill.mode}</span>
             <span className="ac-skill-row-label">{dbSkill.label}</span>
