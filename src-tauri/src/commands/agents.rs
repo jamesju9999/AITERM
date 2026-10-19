@@ -445,6 +445,59 @@ pub async fn agents_set_references(
     Ok(refs)
 }
 
+/// 可以給 Agent 的技能：它的程式庫 `.claude/skills` 與使用者的 `~/.claude/skills`。
+#[tauri::command]
+pub async fn agents_list_skills(repo_dir: String) -> Vec<crate::tasks::custom_skills::SkillInfo> {
+    let home = dirs::home_dir();
+    crate::tasks::custom_skills::discover(Some(std::path::Path::new(&repo_dir)), home.as_deref())
+}
+
+/// 使用者自己選的資料夾：裡面要有 SKILL.md。
+#[tauri::command]
+pub fn agents_read_skill(path: String) -> Result<crate::tasks::custom_skills::SkillInfo, String> {
+    crate::tasks::custom_skills::read_skill(std::path::Path::new(&path), "folder")
+        .ok_or_else(|| format!("這個資料夾裡沒有 SKILL.md：{path}"))
+}
+
+/// 設定 Agent 的自訂技能（技能資料夾路徑，整份取代）。下一張派出去的卡才生效。
+#[tauri::command]
+pub async fn agents_set_custom_skills(
+    project_id: String,
+    agent_id: String,
+    paths: Vec<String>,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let mut clean: Vec<String> = Vec::new();
+    for p in paths {
+        let p = p.trim().to_string();
+        if p.is_empty() || clean.contains(&p) {
+            continue;
+        }
+        if !std::path::Path::new(&p).join(crate::tasks::custom_skills::SKILL_FILE).is_file() {
+            return Err(format!("這個資料夾裡沒有 SKILL.md：{p}"));
+        }
+        clean.push(p);
+    }
+    if clean.len() > crate::tasks::custom_skills::MAX_SKILLS {
+        return Err(format!("一位 Agent 最多 {} 個自訂技能", crate::tasks::custom_skills::MAX_SKILLS));
+    }
+    let p = project(&reg, &project_id)?;
+    crate::tasks::custom_skills::set_agent_skills(&p.pool, &agent_id, &clean).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(())
+}
+
+/// 專案最近的技能使用（技能列亮起來、活動記錄用）。
+#[tauri::command]
+pub async fn agents_skill_uses(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<Vec<crate::tasks::custom_skills::SkillUseRow>, String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::custom_skills::recent_uses(&p.pool, 100).await.map_err(|e| e.to_string())
+}
+
 /// 協作頁檢查 Claude Code／Codex／git 有沒有裝（用派工分頁同一個 shell 環境找）。
 #[tauri::command]
 pub async fn agents_check_tools(

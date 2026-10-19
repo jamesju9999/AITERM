@@ -41,6 +41,9 @@ pub struct AgentRow {
     /// 資料庫技能（JSON，見 `tasks::db_skill::DbSkill`）。NULL＝沒裝。
     #[sqlx(default)]
     pub db_skill: Option<String>,
+    /// 自訂技能（技能資料夾路徑的 JSON 陣列，見 `tasks::custom_skills`）。NULL＝沒有。
+    #[sqlx(default)]
+    pub custom_skills: Option<String>,
 }
 
 pub struct NewAgent<'a> {

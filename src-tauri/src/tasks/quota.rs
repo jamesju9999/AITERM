@@ -167,6 +167,8 @@ struct Entry {
     db: Option<crate::tasks::db_skill::DbSkill>,
     /// 寫入核准的問題 id → 等原始答案的 db_query 呼叫。
     approvals: HashMap<i64, tokio::sync::oneshot::Sender<String>>,
+    /// 這張卡的自訂技能（名稱、資料夾）：讀到它的 SKILL.md 就記一筆使用。
+    skills: Vec<(String, std::path::PathBuf)>,
 }
 
 /// 寫入核准問題的兩個選項。
@@ -324,6 +326,7 @@ impl QuotaState {
                 waiters: HashMap::new(),
                 db: None,
                 approvals: HashMap::new(),
+                skills: Vec::new(),
             },
         );
     }
@@ -337,6 +340,30 @@ impl QuotaState {
     pub fn set_db_skill(&self, task_id: &str, skill: Option<crate::tasks::db_skill::DbSkill>) {
         if let Some(e) = self.entries.lock().get_mut(task_id) {
             e.db = skill;
+        }
+    }
+
+    /// 這張卡的自訂技能。在 `register` 之後呼叫。
+    pub fn set_custom_skills(&self, task_id: &str, skills: Vec<(String, std::path::PathBuf)>) {
+        if let Some(e) = self.entries.lock().get_mut(task_id) {
+            e.skills = skills;
+        }
+    }
+
+    /// PostToolUse：Read 了某個技能的 SKILL.md → 記一筆技能使用（畫面上技能列會亮）。
+    async fn tool_used(&self, task_id: &str, json: &serde_json::Value) {
+        if json.get("tool_name").and_then(|v| v.as_str()) != Some("Read") {
+            return;
+        }
+        let Some(file) = json.pointer("/tool_input/file_path").and_then(|v| v.as_str()) else { return };
+        let hit = self.entries.lock().get(task_id).and_then(|e| {
+            crate::tasks::custom_skills::skill_of_read(&e.skills, file).map(|skill| (e.pool.clone(), e.label.agent_id.clone(), skill))
+        });
+        if let Some((pool, agent_id, skill)) = hit {
+            if let Err(e) = crate::tasks::custom_skills::record_use(&pool, task_id, agent_id.as_deref(), &skill).await {
+                eprintln!("record skill use {task_id}: {e}");
+            }
+            self.changed();
         }
     }
 
@@ -681,7 +708,10 @@ async fn start_server(state: Arc<QuotaState>) -> Result<(u16, String), String> {
         match kind.as_str() {
             "stop-failure" if is_quota_failure(&json) => state.set_waiting(&task_id, true).await,
             "turn-end" => state.turn_ended(&task_id),
-            "working" => state.working(&task_id).await,
+            "working" => {
+                state.tool_used(&task_id, &json).await;
+                state.working(&task_id).await
+            }
             "codex-session" => state.record_session(&task_id, &json).await,
             _ => {}
         }
@@ -848,6 +878,28 @@ mod tests {
         // 讀不到帳號：不能當成「換帳號」，只靠重試。
         assert_eq!(due(t0, None, soon, Some("b"), RETRY_AFTER), None);
         assert_eq!(due(t0, Some("a"), soon, None, RETRY_AFTER), None);
+    }
+
+    /// PostToolUse 送來的是 Read 某個技能的 SKILL.md → 記一筆技能使用；讀別的檔不算。
+    #[tokio::test]
+    async fn reading_a_skill_file_is_recorded_as_a_skill_use() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        let state = QuotaState::new();
+        state.register(&id, "tab", pool.clone(), ReplyLabel { agent_id: Some("a1".into()), ..label() });
+        state.set_custom_skills(&id, vec![("htbtw-egl".into(), std::path::PathBuf::from("/s/htbtw-egl"))]);
+        let base = state.hook_base(&id).await.unwrap();
+        let client = reqwest::Client::new();
+        let post = |body: serde_json::Value| client.post(format!("{base}/working")).json(&body).send();
+
+        post(serde_json::json!({"tool_name":"Read","tool_input":{"file_path":"/s/other.md"}})).await.unwrap();
+        post(serde_json::json!({"tool_name":"Bash","tool_input":{"command":"cat /s/htbtw-egl/SKILL.md"}})).await.unwrap();
+        assert!(crate::tasks::custom_skills::recent_uses(&pool, 10).await.unwrap().is_empty());
+
+        post(serde_json::json!({"tool_name":"Read","tool_input":{"file_path":"/s/htbtw-egl/SKILL.md"}})).await.unwrap();
+        let uses = crate::tasks::custom_skills::recent_uses(&pool, 10).await.unwrap();
+        assert_eq!(uses.len(), 1);
+        assert_eq!((uses[0].skill.as_str(), uses[0].agent_id.as_deref(), uses[0].task_id.as_str()), ("htbtw-egl", Some("a1"), id.as_str()));
     }
 
     #[tokio::test]
