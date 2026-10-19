@@ -138,9 +138,12 @@ export function ResourceLayer({
         className="ac-res-rail"
         data-resource-rail
         data-testid="ac-resource-rail"
-        style={geo ? { left: geo.rail.x, top: geo.rail.y, width: geo.rail.w } : { visibility: "hidden" }}
+        // 寬度跟著內容（膠囊少時不拉成一整條空框），最寬到團隊的寬度。
+        style={geo ? { left: geo.rail.x, top: geo.rail.y, maxWidth: geo.rail.w } : { visibility: "hidden" }}
       >
-        <span className="ac-res-rail-label">{t.ac_res_rail}</span>
+        <span className="ac-res-rail-label" title={t.ac_res_rail_tip}>
+          {t.ac_res_rail}
+        </span>
         {items.map((it) => {
           if (it.kind === "one") {
             const r = it.resource;
@@ -162,7 +165,13 @@ export function ResourceLayer({
                   {r.sub && <span className="ac-res-sub">{r.sub}</span>}
                 </span>
                 <span className={st ? "ac-res-state" : "ac-res-count"}>
-                  {st === "query" ? `● ${t.ac_res_querying}` : st === "wait" ? `⏳ ${t.ac_res_waiting}` : t.ac_res_holders(r.holders.length)}
+                  {st === "query"
+                    ? `● ${t.ac_res_querying}`
+                    : st === "wait"
+                      ? `⏳ ${t.ac_res_waiting}`
+                      : r.holders.length === 1
+                        ? `${agentName(r.holders[0].agentId)} · ${modeLabel(r.holders[0].mode)}`
+                        : t.ac_res_holders(r.holders.length)}
                 </span>
               </div>
             );

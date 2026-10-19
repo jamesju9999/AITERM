@@ -241,6 +241,8 @@ describe("AgentCanvasView", () => {
     expect(pill.textContent).toContain("HTBKTW-DEV");
     expect(screen.getByTestId("access-a1-dev").getAttribute("data-state")).toBe("query");
     expect(screen.queryByTestId("access-a2-dev"), "閒置的不畫線").toBeNull();
+    // 只有一位能用的資源直接寫是誰；兩位以上寫人數
+    expect(pill.textContent).toContain("查詢中");
 
     // 滑鼠停在資料庫上：顯示誰有權限
     fireEvent.mouseEnter(pill);
@@ -249,6 +251,20 @@ describe("AgentCanvasView", () => {
     expect(within(screen.getByTestId("access-a1-dev")).getByText(/唯讀$/)).toBeTruthy();
     fireEvent.mouseLeave(pill);
     expect(screen.queryByTestId("access-a2-dev")).toBeNull();
+  });
+
+  it("閒置的資源：一位可用時寫是誰與權限，多位時寫人數；標題只寫「資源」", async () => {
+    vi.mocked(listAgents).mockResolvedValue([
+      agent({ db_skill: '{"connections":["dev","prod"],"mode":"read"}' }),
+      agent({ id: "a2", name: "工程師2", canvas_y: 240, db_skill: '{"connections":["dev"],"mode":"approve"}' }),
+    ]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const prod = await screen.findByTestId("resource-prod");
+    await waitFor(() => expect(prod.textContent).toContain("Coder Agent1 · 唯讀"));
+    expect(screen.getByTestId("resource-dev").textContent).toContain("2 位可用");
+    const rail = screen.getByTestId("ac-resource-rail");
+    expect(within(rail).getByText("資源").getAttribute("title")).toMatch(/多位 Agent 共用/);
   });
 
   it("資源多於 4 個：閒置的收合成一顆，使用中的單獨顯示；點開看清單", async () => {

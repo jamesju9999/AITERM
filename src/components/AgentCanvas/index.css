@@ -705,13 +705,17 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-res-tag { font-size: 11px; fill: #c9d1d9; paint-order: stroke; stroke: var(--bg-primary, #0d1117); stroke-width: 4px; }
 @keyframes ac-res-flow { to { stroke-dashoffset: -28; } }
 @keyframes ac-res-fade { 50% { opacity: 0.35; } }
-.ac-res-rail { position: absolute; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; box-sizing: border-box; min-height: 72px; padding: 14px 16px; border: 1px dashed #3b4b5c; border-radius: 14px; background: rgba(22, 27, 34, 0.7); }
+.ac-res-rail { position: absolute; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; box-sizing: border-box; padding: 12px 14px; border: 1px dashed #2f3a46; border-radius: 12px; background: rgba(22, 27, 34, 0.45); }
 /* 標題放在下緣：上緣是存取線進來的地方，放上面會被線穿過。 */
-.ac-res-rail-label { position: absolute; bottom: -9px; left: 14px; padding: 0 8px; background: var(--bg-primary, #0d1117); color: var(--text-muted); font-size: 11.5px; }
-.ac-res { position: relative; display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 14px 0 6px; border: 1px solid #3b4b5c; border-radius: 21px; background: #17202b; transition: border-color 0.2s, box-shadow 0.2s; }
-.ac-res-ico { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 15px; background: rgba(56, 189, 248, 0.15); color: #7dd3fc; }
+.ac-res-rail-label { position: absolute; bottom: -9px; left: 12px; padding: 0 6px; background: var(--bg-primary, #0d1117); color: var(--text-muted); font-size: 11px; cursor: help; }
+/* 閒置時小一點、淡一點，不跟交件流程搶焦點；查詢中、等核准才放大變亮（高度不做動畫：線要對準量到的位置）。 */
+.ac-res { position: relative; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px 0 4px; border: 1px solid #2f3a46; border-radius: 17px; background: rgba(23, 32, 43, 0.7); opacity: 0.8; transition: border-color 0.2s, box-shadow 0.2s, opacity 0.2s; }
+.ac-res:hover { opacity: 1; }
+.ac-res-ico { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 13px; background: rgba(56, 189, 248, 0.12); color: #7dd3fc; }
+.ac-res--hot, .ac-res--wait { height: 42px; border-radius: 21px; padding: 0 14px 0 6px; opacity: 1; background: #17202b; }
+.ac-res--hot .ac-res-ico, .ac-res--wait .ac-res-ico { width: 30px; height: 30px; border-radius: 15px; }
 .ac-res-text { display: flex; flex-direction: column; min-width: 0; }
-.ac-res-name { font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+.ac-res-name { font-weight: 600; font-size: 12px; white-space: nowrap; }
 .ac-res-sub { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
 .ac-res-count { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
 .ac-res-state { font-size: 11px; white-space: nowrap; }
