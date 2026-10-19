@@ -297,7 +297,8 @@
 .ac-merge-msg--bad { color: #fca5a5; }
 
 /* 活動記錄 */
-.ac-log { border-top: 1px solid var(--ac-edge); background: var(--bg-secondary); display: flex; flex-direction: column; min-height: 0; }
+/* 活動記錄：浮在桌布下方的圓角面板，跟資源區、縮放工具列同一種外觀，不再是貼邊的一整條。 */
+.ac-log { margin: 0 14px 10px; border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden; background: var(--bg-secondary); display: flex; flex-direction: column; min-height: 0; }
 .ac-log-title { font-size: 11px; color: var(--text-muted); padding: 6px 14px 2px; letter-spacing: 0.06em; text-transform: uppercase; }
 .ac-log-lines { flex: 1; overflow: auto; padding: 0 14px 6px; font: 11.5px var(--mono); }
 .ac-log-line { white-space: nowrap; color: var(--text-secondary); }
@@ -567,7 +568,8 @@
 .ac-summary--bad { color: #fca5a5; }
 
 .ac-log { position: relative; }
-.ac-log-resize { position: absolute; left: 0; right: 0; top: -3px; height: 6px; cursor: row-resize; z-index: 2; }
+/* 面板有圓角且裁切內容，拖曳把手放在面板內的上緣。 */
+.ac-log-resize { position: absolute; left: 0; right: 0; top: 0; height: 6px; cursor: row-resize; z-index: 2; }
 .ac-log-resize:hover { background: color-mix(in srgb, var(--accent) 35%, transparent); }
 button.ac-log-title {
   display: flex;
