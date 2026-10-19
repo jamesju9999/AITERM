@@ -757,3 +757,4 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-cs-text { display: flex; flex-direction: column; min-width: 0; }
 .ac-cs-name { font-weight: 600; }
 .ac-cs-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; }
+.ac-good-text { color: #86efac; font-size: 12.5px; }

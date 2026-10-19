@@ -25,6 +25,8 @@ export function CustomSkillsDialog({
   const [picked, setPicked] = useState<string[]>(current);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 從資料夾加入後的回饋：加了幾個、或都已經在清單裡。 */
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -46,10 +48,15 @@ export function CustomSkillsDialog({
       const dir = await open({ directory: true });
       if (typeof dir !== "string" || !dir) return;
       // 可能一次找到好幾個（選了程式庫根目錄或 skills 資料夾）：全部列出並勾選。
-      const found = await readSkill(dir);
-      setSkills((s) => [...(s ?? []), ...found.filter((f) => !(s ?? []).some((x) => x.path === f.path)).map((f) => ({ ...f, source: "folder" as const }))]);
+      // 舊版後端回傳單一物件：也接受，免得 App 還沒重啟時整個功能壞掉。
+      const raw: SkillInfo[] | SkillInfo = await readSkill(dir);
+      const found = Array.isArray(raw) ? raw : [raw];
+      const known = skills ?? [];
+      const fresh = found.filter((f) => !known.some((x) => x.path === f.path));
+      setSkills([...known, ...fresh.map((f) => ({ ...f, source: "folder" as const }))]);
       setPicked((p) => [...p, ...found.map((f) => f.path).filter((x) => !p.includes(x))]);
       setError(null);
+      setNotice(fresh.length > 0 ? t.ac_cs_added(fresh.map((f) => f.name)) : t.ac_cs_already_listed(found.map((f) => f.name)));
     } catch (e) {
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
     }
@@ -120,6 +127,7 @@ export function CustomSkillsDialog({
           ＋ {t.ac_cs_add_folder}
         </button>
         <p className="task-field-hint">{t.ac_cs_folder_hint}</p>
+        {notice && !error && <p className="ac-good-text">{notice}</p>}
         {error && <p className="ac-bad-text">{error}</p>}
         <div className="task-dialog-actions">
           <button className="aiterm-btn aiterm-btn--secondary" onClick={onClose}>

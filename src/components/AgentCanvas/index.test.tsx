@@ -343,6 +343,7 @@ describe("AgentCanvasView", () => {
     expect(within(dlg).getByText("寫程式的紀律")).toBeTruthy();
     fireEvent.click(within(dlg).getByRole("button", { name: /從資料夾加入|Add from folder/ }));
     expect(await within(dlg).findByLabelText(/htbtw-db/)).toBeTruthy();
+    expect(within(dlg).getByText(/已加入並勾選：htbtw-db、htbtw-report/)).toBeTruthy();
     fireEvent.click(within(dlg).getByRole("button", { name: /^儲存$|^Save$/ }));
     await waitFor(() =>
       expect(setCustomSkills).toHaveBeenCalledWith("p1", "a1", [
@@ -351,6 +352,24 @@ describe("AgentCanvasView", () => {
         "/Users/me/Downloads/htbtw-report",
       ]),
     );
+  });
+
+  it("自訂技能：從資料夾加入的技能已經在清單裡時，告訴使用者已勾選，不是沒反應", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValueOnce("/Users/me/.claude/skills/karpathy-guidelines");
+    vi.mocked(readSkill).mockResolvedValueOnce([
+      { name: "karpathy-guidelines", description: "寫程式的紀律", path: "/Users/me/.claude/skills/karpathy-guidelines", source: "folder" },
+    ]);
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    drag(screen.getByTestId("skill-custom"), await screen.findByTestId("agent-a1"));
+    const dlg = await screen.findByTestId("custom-skills-dialog");
+    await within(dlg).findByLabelText(/karpathy-guidelines/);
+    fireEvent.click(within(dlg).getByRole("button", { name: /從資料夾加入|Add from folder/ }));
+    expect(await within(dlg).findByText(/已經在清單中，已幫你勾選/)).toBeTruthy();
+    expect((within(dlg).getByLabelText(/karpathy-guidelines/) as HTMLInputElement).checked).toBe(true);
+    expect(within(dlg).getAllByLabelText(/karpathy-guidelines/)).toHaveLength(1);
   });
 
   it("自訂技能列：顯示技能名稱；剛讀過技能時亮起來並寫使用中，活動記錄記一行", async () => {
