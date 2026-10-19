@@ -225,6 +225,25 @@ struct TabSpawnedEvent {
 /// plain quiet is not.
 const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 
+/// OSC 133 C：shell 整合在指令開始執行時送出（zsh/bash 的 preexec、PowerShell 的 Enter）。
+const COMMAND_START: &[u8] = b"\x1b]133;C";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Settle {
+    /// 可以打提示詞了。
+    Ready,
+    /// 啟動指令已經結束（帶離開碼）——claude 沒裝、啟動就出錯、或自己退出了。
+    LaunchExited(i32),
+}
+
+/// 分頁是新開的，第一個 C 就是我們打的啟動指令；它之後的 D 代表那個指令已經結束。
+/// C 之前的 D 不算（PowerShell 啟動時的第一個提示字元也會送 D，可能是非 0）。
+/// 沒有 shell 整合（cmd.exe）就沒有 C，回 None——無從判斷，照舊等。
+fn launch_exit_code(raw: &[u8]) -> Option<i32> {
+    let start = raw.windows(COMMAND_START.len()).position(|w| w == COMMAND_START)?;
+    crate::pty::cd_parser::find_exit_codes(&raw[start..]).first().copied()
+}
+
 /// Wait until `claude` has actually started and then gone quiet, so the
 /// prompt is typed into a live REPL rather than into a process that hasn't
 /// taken over the terminal yet.
@@ -246,21 +265,25 @@ const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 /// 停在「Quick safety check」畫面上，而那時替代畫面序列早就送過、畫面也
 /// 安靜了——兩個條件都成立，所以不特別處理的話提示詞會被打進對話框裡，
 /// 卡片看起來在執行、實際上什麼都沒發生。見 `trust_prompt_keys`。
-async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
+///
+/// 啟動指令已經結束（`launch_exit_code`）就回 `LaunchExited`：這時候 shell 又回到
+/// 提示字元，照打的話多行提示詞會被一行一行當成 shell 指令執行。新電腦沒裝 claude
+/// 就是這樣——實測提示詞裡的 `預期 > 實際` 在工作目錄建出了一個檔案。
+async fn wait_until_settled(pty: &PtyManager, tab_id: &str) -> Settle {
     let mut deadline = tokio::time::Instant::now() + Duration::from_millis(SETTLE_TIMEOUT_MS);
     let mut tui_started = false;
     // 只送一次。信任畫面的位元組會留在輸出環裡，接受之後再比對還是會命中，
     // 不 latch 就會一直重送按鍵。
     let mut trust_handled = false;
     loop {
+        let raw = pty.get_recent_raw(tab_id, 256 * 1024).unwrap_or_default();
+        if let Some(code) = launch_exit_code(&raw) {
+            return Settle::LaunchExited(code);
+        }
         // Latch it: the raw ring is bounded, and a chatty TUI can push the
         // sequence out of the window it was found in.
         if !tui_started {
-            tui_started = pty
-                .get_recent_raw(tab_id, 256 * 1024)
-                .is_some_and(|b| {
-                    b.windows(ALT_SCREEN_ENTER.len()).any(|w| w == ALT_SCREEN_ENTER)
-                });
+            tui_started = raw.windows(ALT_SCREEN_ENTER.len()).any(|w| w == ALT_SCREEN_ENTER);
         }
 
         // 信任提示的檢查一定要排在 settled 判斷之前：那個畫面出現時 TUI
@@ -292,7 +315,7 @@ async fn wait_until_settled(pty: &PtyManager, tab_id: &str) {
         let quiet = pty.ms_since_output(tab_id).unwrap_or(u64::MAX);
         let settled = if tui_started { quiet >= SETTLE_QUIET_MS } else { quiet >= NO_TUI_QUIET_MS };
         if settled || tokio::time::Instant::now() >= deadline {
-            return;
+            return Settle::Ready;
         }
         tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
     }
@@ -549,9 +572,21 @@ pub async fn spawn_and_run(
         eprintln!("emit mcp-coordination-tab-spawned failed: {e}");
     }
 
-    wait_until_settled(pty, &tab_id).await;
+    if let Settle::LaunchExited(code) = wait_until_settled(pty, &tab_id).await {
+        // 分頁留著不關：使用者要看裡面的錯誤訊息（command not found 之類）。
+        return Err(launch_failed_message(claude_command, code));
+    }
     let result = run_on_session(pty, &tab_id, prompt, request_done_marker).await?;
     Ok((tab_id, result))
+}
+
+/// 啟動指令還沒就緒就結束時，卡片上的錯誤訊息。
+fn launch_failed_message(claude_command: &str, code: i32) -> String {
+    format!(
+        "Claude Code 沒有啟動（`{claude_command}` 結束了，離開碼 {code}），沒有送出提示詞。\
+         請在終端機確認 `{claude_command}` 可以執行——新電腦要先安裝 Claude Code 並登入，\
+         或到設定修改派工指令。錯誤訊息在派工開的那個分頁裡。"
+    )
 }
 
 #[cfg(test)]
@@ -923,19 +958,48 @@ Enter to confirm · Esc to cancel
     /// The other half: once the TUI has actually entered the alternate
     /// screen and gone quiet, we must proceed promptly — waiting the full
     /// SETTLE_TIMEOUT_MS would add 30s to every dispatch.
+    ///
+    /// `; cat` 讓「TUI」一直活著：指令結束（shell 送出 D）代表 claude 已經不在了，
+    /// 那是 `LaunchExited`，不是 settled。
     #[tokio::test]
     #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
     async fn settles_once_the_tui_is_up_and_quiet() {
         let pty = PtyManager::new();
         let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
-        pty.write(&tab, b"printf '\\033[?1049h'\n").unwrap();
+        pty.write(&tab, b"printf '\\033[?1049h'; cat\n").unwrap();
 
         let settled = tokio::time::timeout(
             Duration::from_millis(NO_TUI_QUIET_MS),
             wait_until_settled(&pty, &tab),
         )
         .await;
-        assert!(settled.is_ok(), "did not settle even though the TUI was up and quiet");
+        assert_eq!(settled.ok(), Some(Settle::Ready), "did not settle even though the TUI was up and quiet");
+    }
+
+    /// 新電腦沒裝 claude：shell 回 command not found 就結束了。這時候絕對不能把
+    /// 提示詞打進 shell——多行提示詞會被一行一行當成指令執行（實測 `預期 > 實際`
+    /// 在工作目錄建出了檔案）。要馬上回報，不是等 5 秒安靜後照打。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn a_launch_command_that_is_not_installed_is_reported_instead_of_settling() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(settle_size(), |_| {}).unwrap();
+        pty.write(&tab, b"aiterm-no-such-cli-7f3e --session-id x\n").unwrap();
+
+        let settled = tokio::time::timeout(Duration::from_millis(NO_TUI_QUIET_MS - 1_000), wait_until_settled(&pty, &tab))
+            .await
+            .expect("要在安靜判定之前就回報，不是等到逾時");
+        assert_eq!(settled, Settle::LaunchExited(127));
+    }
+
+    #[test]
+    fn launch_exit_code_only_counts_a_d_marker_after_the_launch_started() {
+        // PowerShell 每次提示字元都送 D（含啟動時那次，可能是非 0）——在 C 之前的不算。
+        assert_eq!(launch_exit_code(b"\x1b]133;D;1\x07\x1b]133;A\x07PS> "), None);
+        assert_eq!(launch_exit_code(b"\x1b]133;D;1\x07PS> claude\x1b]133;C\x07"), None, "還在跑");
+        assert_eq!(launch_exit_code(b"\x1b]133;D;1\x07\x1b]133;C\x07not found\x1b]133;D;127\x07"), Some(127));
+        assert_eq!(launch_exit_code(b"\x1b]133;C\x07bye\x1b]133;D;0\x07"), Some(0), "結束碼 0 也是已經不在了");
+        assert_eq!(launch_exit_code(b"no markers at all"), None, "沒有 shell 整合（cmd.exe 等）就無從判斷");
     }
 
     /// A configured `claude_command` that is not a full-screen TUI never
