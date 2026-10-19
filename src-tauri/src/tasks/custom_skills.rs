@@ -25,21 +25,36 @@ pub struct SkillInfo {
 }
 
 /// 讀 SKILL.md 開頭的 frontmatter（`---` 之間）裡的 name 與 description。沒有就用資料夾名稱與空說明。
+/// description 支援 YAML 的多行寫法（`>`、`>-`、`|`、`|-` 後面接縮排的行，接成一行）。
 pub fn parse_frontmatter(text: &str, fallback_name: &str) -> (String, String) {
     let mut name = None;
-    let mut description = None;
-    let mut lines = text.trim_start_matches('\u{feff}').lines();
+    let mut description: Option<String> = None;
+    let mut lines = text.trim_start_matches('\u{feff}').lines().peekable();
     if lines.next().map(str::trim) == Some("---") {
-        for line in lines {
-            let line = line.trim();
+        let unquote = |v: &str| v.trim().trim_matches('"').trim_matches('\'').to_string();
+        while let Some(raw) = lines.next() {
+            let line = raw.trim();
             if line == "---" {
                 break;
             }
-            let unquote = |v: &str| v.trim().trim_matches('"').trim_matches('\'').to_string();
             if let Some(v) = line.strip_prefix("name:") {
                 name = Some(unquote(v));
             } else if let Some(v) = line.strip_prefix("description:") {
-                description = Some(unquote(v));
+                let v = v.trim();
+                if matches!(v, ">" | ">-" | ">+" | "|" | "|-" | "|+") {
+                    let mut parts = Vec::new();
+                    while let Some(next) = lines.peek() {
+                        if next.starts_with(' ') || next.starts_with('\t') || next.trim().is_empty() && !next.is_empty() {
+                            parts.push(next.trim().to_string());
+                            lines.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    description = Some(parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" "));
+                } else {
+                    description = Some(unquote(v));
+                }
             }
         }
     }
@@ -60,6 +75,19 @@ fn scan(root: &Path, source: &str) -> Vec<SkillInfo> {
     let mut out: Vec<SkillInfo> = entries.flatten().filter(|e| e.path().is_dir()).filter_map(|e| read_skill(&e.path(), source)).collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// 使用者選的資料夾裡的技能：它本身是技能、它底下的技能，或它的 `.claude/skills` 裡的技能。
+/// macOS 的資料夾選擇器預設看不到 `.claude` 這種隱藏資料夾，所以選上層資料夾也要找得到。
+pub fn find_in(dir: &Path) -> Vec<SkillInfo> {
+    if let Some(one) = read_skill(dir, "folder") {
+        return vec![one];
+    }
+    let below = scan(dir, "folder");
+    if !below.is_empty() {
+        return below;
+    }
+    scan(&dir.join(".claude").join("skills"), "folder")
 }
 
 /// 可以選的技能：程式庫的 `.claude/skills`、使用者的 `~/.claude/skills`。
@@ -172,6 +200,29 @@ mod tests {
         assert_eq!(parse_frontmatter(text, "x"), ("htbtw-egl".into(), "讀寫 MS950 檔案".into()));
         assert_eq!(parse_frontmatter("# 沒有 frontmatter", "folder"), ("folder".into(), String::new()));
         assert_eq!(parse_frontmatter("\u{feff}---\ndescription: 'd'\n---", "f"), ("f".into(), "d".into()));
+    }
+
+    #[test]
+    fn folded_and_literal_yaml_descriptions_are_joined() {
+        let folded = "---\nname: use-spark\ndescription: >-\n  Use the Spark MCP\n  extension.\nother: x\n---";
+        assert_eq!(parse_frontmatter(folded, "f").1, "Use the Spark MCP extension.");
+        let literal = "---\ndescription: |\n  第一行\n  第二行\n---";
+        assert_eq!(parse_frontmatter(literal, "f").1, "第一行 第二行");
+    }
+
+    /// macOS 的資料夾選擇器看不到 `.claude`：選上層資料夾也要找得到裡面的技能。
+    #[test]
+    fn finding_skills_under_any_chosen_folder() {
+        let repo = tempfile::tempdir().unwrap();
+        make_skill(&repo.path().join(".claude/skills"), "egl", "---\nname: egl\n---");
+        make_skill(&repo.path().join(".claude/skills"), "db", "---\nname: db\n---");
+        let names = |v: Vec<SkillInfo>| v.into_iter().map(|s| s.name).collect::<Vec<_>>();
+        assert_eq!(names(find_in(repo.path())), vec!["db", "egl"], "選程式庫根目錄 → .claude/skills 裡的");
+        assert_eq!(names(find_in(&repo.path().join(".claude/skills"))), vec!["db", "egl"], "選 skills 資料夾 → 底下全部");
+        assert_eq!(names(find_in(&repo.path().join(".claude/skills/egl"))), vec!["egl"], "選技能資料夾本身");
+        let other = tempfile::tempdir().unwrap();
+        assert!(find_in(other.path()).is_empty());
+        assert!(find_in(&other.path().join("nope")).is_empty());
     }
 
     #[test]

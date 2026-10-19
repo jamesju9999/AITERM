@@ -32,9 +32,9 @@ export function CustomSkillsDialog({
       const found = await listSkills(repoDir).catch(() => [] as SkillInfo[]);
       // 已裝但不在兩個預設位置的（從資料夾加入的），也要列出來。
       const extra = await Promise.all(
-        current.filter((p) => !found.some((s) => s.path === p)).map((p) => readSkill(p).catch(() => null)),
+        current.filter((p) => !found.some((s) => s.path === p)).map((p) => readSkill(p).catch(() => [] as SkillInfo[])),
       );
-      if (alive) setSkills([...found, ...extra.filter((s): s is SkillInfo => !!s)]);
+      if (alive) setSkills([...found, ...extra.flat().filter((s) => current.includes(s.path))]);
     })();
     return () => {
       alive = false;
@@ -45,9 +45,10 @@ export function CustomSkillsDialog({
     try {
       const dir = await open({ directory: true });
       if (typeof dir !== "string" || !dir) return;
-      const info = await readSkill(dir);
-      setSkills((s) => (s && !s.some((x) => x.path === info.path) ? [...s, { ...info, source: "folder" }] : s));
-      setPicked((p) => (p.includes(info.path) ? p : [...p, info.path]));
+      // 可能一次找到好幾個（選了程式庫根目錄或 skills 資料夾）：全部列出並勾選。
+      const found = await readSkill(dir);
+      setSkills((s) => [...(s ?? []), ...found.filter((f) => !(s ?? []).some((x) => x.path === f.path)).map((f) => ({ ...f, source: "folder" as const }))]);
+      setPicked((p) => [...p, ...found.map((f) => f.path).filter((x) => !p.includes(x))]);
       setError(null);
     } catch (e) {
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
@@ -101,8 +102,13 @@ export function CustomSkillsDialog({
                       onChange={(e) => setPicked((p) => (e.target.checked ? [...p, s.path] : p.filter((x) => x !== s.path)))}
                       aria-label={s.name}
                     />
-                    <span>
-                      {s.name} {s.description && <span className="ac-db-meta">{s.description}</span>}
+                    <span className="ac-cs-text">
+                      <span className="ac-cs-name">{s.name}</span>
+                      {s.description && (
+                        <span className="ac-db-meta ac-cs-desc" title={s.description}>
+                          {s.description}
+                        </span>
+                      )}
                     </span>
                   </label>
                 ))}
@@ -113,6 +119,7 @@ export function CustomSkillsDialog({
         <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm ac-refs-add" onClick={() => void addFolder()}>
           ＋ {t.ac_cs_add_folder}
         </button>
+        <p className="task-field-hint">{t.ac_cs_folder_hint}</p>
         {error && <p className="ac-bad-text">{error}</p>}
         <div className="task-dialog-actions">
           <button className="aiterm-btn aiterm-btn--secondary" onClick={onClose}>

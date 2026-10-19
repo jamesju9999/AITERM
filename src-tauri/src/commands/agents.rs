@@ -452,11 +452,14 @@ pub async fn agents_list_skills(repo_dir: String) -> Vec<crate::tasks::custom_sk
     crate::tasks::custom_skills::discover(Some(std::path::Path::new(&repo_dir)), home.as_deref())
 }
 
-/// 使用者自己選的資料夾：裡面要有 SKILL.md。
+/// 使用者自己選的資料夾裡的技能（它本身、它底下、或它的 `.claude/skills`）。
 #[tauri::command]
-pub fn agents_read_skill(path: String) -> Result<crate::tasks::custom_skills::SkillInfo, String> {
-    crate::tasks::custom_skills::read_skill(std::path::Path::new(&path), "folder")
-        .ok_or_else(|| format!("這個資料夾裡沒有 SKILL.md：{path}"))
+pub fn agents_read_skill(path: String) -> Result<Vec<crate::tasks::custom_skills::SkillInfo>, String> {
+    let found = crate::tasks::custom_skills::find_in(std::path::Path::new(&path));
+    if found.is_empty() {
+        return Err(format!("這個資料夾裡找不到技能（SKILL.md），也沒有 .claude/skills：{path}"));
+    }
+    Ok(found)
 }
 
 /// 設定 Agent 的自訂技能（技能資料夾路徑，整份取代）。下一張派出去的卡才生效。

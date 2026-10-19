@@ -327,7 +327,11 @@ describe("AgentCanvasView", () => {
   it("自訂技能：拖到工程師上，勾選程式庫與自己的技能，也能從資料夾加入，存檔", async () => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     vi.mocked(open).mockResolvedValueOnce("/Users/me/Downloads/htbtw-db");
-    vi.mocked(readSkill).mockResolvedValueOnce({ name: "htbtw-db", description: "查資料庫", path: "/Users/me/Downloads/htbtw-db", source: "folder" });
+    // 選的是程式庫根目錄：找到它 .claude/skills 裡的兩個技能，都要加入並勾選。
+    vi.mocked(readSkill).mockResolvedValueOnce([
+      { name: "htbtw-db", description: "查資料庫", path: "/Users/me/Downloads/htbtw-db", source: "folder" },
+      { name: "htbtw-report", description: "報表", path: "/Users/me/Downloads/htbtw-report", source: "folder" },
+    ]);
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);
     view();
@@ -341,7 +345,11 @@ describe("AgentCanvasView", () => {
     expect(await within(dlg).findByLabelText(/htbtw-db/)).toBeTruthy();
     fireEvent.click(within(dlg).getByRole("button", { name: /^儲存$|^Save$/ }));
     await waitFor(() =>
-      expect(setCustomSkills).toHaveBeenCalledWith("p1", "a1", ["/repo/htbtw/.claude/skills/htbtw-egl", "/Users/me/Downloads/htbtw-db"]),
+      expect(setCustomSkills).toHaveBeenCalledWith("p1", "a1", [
+        "/repo/htbtw/.claude/skills/htbtw-egl",
+        "/Users/me/Downloads/htbtw-db",
+        "/Users/me/Downloads/htbtw-report",
+      ]),
     );
   });
 

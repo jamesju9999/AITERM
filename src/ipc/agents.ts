@@ -229,8 +229,8 @@ export interface SkillUseRow {
 
 /** 程式庫的 .claude/skills 與使用者的 ~/.claude/skills。 */
 export const listSkills = (repoDir: string): Promise<SkillInfo[]> => invoke("agents_list_skills", { repoDir });
-/** 使用者自己選的資料夾（要有 SKILL.md）。 */
-export const readSkill = (path: string): Promise<SkillInfo> => invoke("agents_read_skill", { path });
+/** 使用者選的資料夾裡的技能：它本身、它底下，或它的 .claude/skills（macOS 選不到隱藏的 .claude）。 */
+export const readSkill = (path: string): Promise<SkillInfo[]> => invoke("agents_read_skill", { path });
 export const setCustomSkills = (projectId: string, agentId: string, paths: string[]): Promise<void> =>
   invoke("agents_set_custom_skills", { projectId, agentId, paths });
 export const listSkillUses = (projectId: string): Promise<SkillUseRow[]> => invoke("agents_skill_uses", { projectId });

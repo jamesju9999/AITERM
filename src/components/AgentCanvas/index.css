@@ -752,3 +752,8 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-refs-name { font-weight: 600; white-space: nowrap; }
 .ac-refs-path { flex: 1; min-width: 0; color: var(--text-muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ac-refs-add { align-self: flex-start; }
+
+/* 自訂技能清單：說明最多兩行，完整內容在滑鼠提示 */
+.ac-cs-text { display: flex; flex-direction: column; min-width: 0; }
+.ac-cs-name { font-weight: 600; }
+.ac-cs-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; }
