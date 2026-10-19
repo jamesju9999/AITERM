@@ -420,6 +420,31 @@ pub async fn agents_db_queries(
     crate::tasks::db_skill::recent_queries(&p.pool, 100).await.map_err(|e| e.to_string())
 }
 
+/// 專案的參考資料夾（整個團隊都能讀、不能寫）。
+#[tauri::command]
+pub async fn agents_get_references(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<Vec<crate::tasks::references::Reference>, String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::references::get(&p.pool).await.map_err(|e| e.to_string())
+}
+
+/// 存參考資料夾清單（整份取代）。資料夾必須存在；下一張派出去的卡才生效。
+#[tauri::command]
+pub async fn agents_set_references(
+    project_id: String,
+    references: Vec<crate::tasks::references::Reference>,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<Vec<crate::tasks::references::Reference>, String> {
+    let p = project(&reg, &project_id)?;
+    let refs = crate::tasks::references::normalize(references)?;
+    crate::tasks::references::set(&p.pool, &refs).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(refs)
+}
+
 /// 協作頁檢查 Claude Code／Codex／git 有沒有裝（用派工分頁同一個 shell 環境找）。
 #[tauri::command]
 pub async fn agents_check_tools(

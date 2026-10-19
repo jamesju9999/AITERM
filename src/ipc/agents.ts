@@ -192,3 +192,17 @@ export const setDbSkill = (projectId: string, agentId: string, skill: DbSkill | 
   invoke("agents_set_db_skill", { projectId, agentId, skill });
 
 export const listDbQueries = (projectId: string): Promise<DbQueryRow[]> => invoke("agents_db_queries", { projectId });
+
+// ── 參考資料夾（整個團隊都能讀、不能寫，見 tasks/references.rs）──
+
+export interface Reference {
+  path: string;
+  /** 一句說明，會寫進派工提示。 */
+  note: string;
+}
+
+export const getReferences = (projectId: string): Promise<Reference[]> => invoke("agents_get_references", { projectId });
+
+/** 整份取代；回傳整理後的清單（去重複、去空白）。資料夾不存在會回錯誤。 */
+export const setReferences = (projectId: string, references: Reference[]): Promise<Reference[]> =>
+  invoke("agents_set_references", { projectId, references });

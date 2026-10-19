@@ -22,7 +22,8 @@ export type RoleIconName =
   // 技能與資源（資料庫、API、瀏覽器）
   | "database"
   | "plug"
-  | "globe";
+  | "globe"
+  | "folder";
 
 const PATHS: Record<RoleIconName, ReactNode> = {
   database: (
@@ -40,6 +41,7 @@ const PATHS: Record<RoleIconName, ReactNode> = {
       <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
     </>
   ),
+  folder: <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2.3h8.8A1.5 1.5 0 0 1 21 8.8v9.7a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5Z" />,
   globe: (
     <>
       <circle cx="12" cy="12" r="10" />

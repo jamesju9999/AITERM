@@ -742,3 +742,13 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-res-pop-item svg { flex: none; color: #7dd3fc; }
 .ac-res-pop-who { margin-left: auto; color: var(--text-muted); font-size: 11px; }
 @media (prefers-reduced-motion: reduce) { .ac-res-link, .ac-res { animation: none !important; } }
+
+/* 參考資料夾設定框 */
+.ac-refs-dialog { width: min(600px, 92vw); }
+.ac-refs-list { display: flex; flex-direction: column; gap: 10px; max-height: min(320px, 45vh); overflow-y: auto; margin: 8px 0; }
+.ac-refs-item { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 8px; }
+.ac-refs-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ac-refs-head svg { flex: none; color: #7dd3fc; }
+.ac-refs-name { font-weight: 600; white-space: nowrap; }
+.ac-refs-path { flex: 1; min-width: 0; color: var(--text-muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-refs-add { align-self: flex-start; }

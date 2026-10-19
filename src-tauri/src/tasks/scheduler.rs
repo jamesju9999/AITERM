@@ -775,9 +775,17 @@ impl RealDispatcher {
             Vec::new()
         };
         let program = crate::tasks::codex::program();
+        // 參考資料夾：Codex 的 --add-dir 在 workspace-write 下也可寫入，只能靠提示要它別寫（Claude 卡另有禁止編輯的規則）。
+        let refs: Vec<std::path::PathBuf> = if task.agent_id.is_some() {
+            crate::tasks::references::get(&project.pool).await.unwrap_or_default().into_iter().map(|r| r.path.into()).collect()
+        } else {
+            Vec::new()
+        };
+        let mut add_dirs: Vec<&std::path::Path> = vec![dir.as_path()];
+        add_dirs.extend(refs.iter().map(|p| p.as_path()));
         crate::tasks::codex::launch_command(&crate::tasks::codex::CodexLaunch {
             program: &program,
-            add_dirs: &[dir.as_path()],
+            add_dirs: &add_dirs,
             model: codex_model(task, agent),
             prompt_file: &file,
             resume_session: resume,
@@ -948,6 +956,15 @@ impl Dispatcher for RealDispatcher {
             );
             prepare_worktree(&project.path, &task.id, &task.project_dir, isolate).await
         };
+        // 參考資料夾（專案層級，整個團隊都能讀、不能寫）。只給 Agent 卡。
+        let references = if task.agent_id.is_some() {
+            crate::tasks::references::get(&project.pool).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        if !resume {
+            prompt.push_str(&crate::tasks::references::prompt_note(&references));
+        }
         if let Some(skill) = db_skill.as_ref().filter(|_| !resume) {
             let names: Vec<(String, String)> =
                 self.config.get().db_connections.iter().map(|c| (c.id.clone(), c.name.clone())).collect();
@@ -971,6 +988,10 @@ impl Dispatcher for RealDispatcher {
                     let dir = crate::tasks::task_dir(&project.path, &task.id);
                     let path = dir.join("claude-settings.json");
                     let mut settings = crate::tasks::quota::hook_settings_json_with(&base, &plugins_off);
+                    settings = crate::tasks::references::settings_with_deny(
+                        &settings,
+                        &crate::tasks::references::deny_edit_rules(&references),
+                    );
                     if db_skill.as_ref().is_some_and(|s| s.mode == crate::tasks::db_skill::DbMode::Approve) {
                         settings = crate::tasks::quota::settings_with_env(
                             &settings,
@@ -995,7 +1016,9 @@ impl Dispatcher for RealDispatcher {
         // 依角色指定的模型（只對 claude 指令加，看不出是 claude 就不動）。
         let model_args = if session_id.is_some() { model_flag(agent.as_ref().and_then(|a| a.model.as_deref())) } else { None };
         let lean_args = lean.then(|| crate::tasks::quota::LEAN_FLAGS.to_string());
-        let extra_args = join_args([model_args, quota_args.clone(), ask_args, lean_args]);
+        // Claude 讀參考資料夾不會停下來等權限；只對 claude 指令加（看得出是 claude 才有 session id）。
+        let ref_args = if session_id.is_some() { crate::tasks::references::add_dir_args(&references) } else { None };
+        let extra_args = join_args([model_args, quota_args.clone(), ask_args, lean_args, ref_args]);
         if resume {
             // 卡片內容已經在對話裡了，只要叫它接著做。驗收卡的埠剛重新挑過，要再告訴它一次。
             let ports_note = prompt.rfind("\n\n可用的埠：").map(|i| prompt[i..].to_string()).unwrap_or_default();

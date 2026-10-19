@@ -1,8 +1,8 @@
-import type { AgentRow, DbQueryRow, DbSkillMode } from "../../ipc/agents";
+import type { AgentRow, DbQueryRow, DbSkillMode, Reference } from "../../ipc/agents";
 import { parseDbSkill, SKILL_LINGER_SECS } from "./dbSkill";
 
-/** 資源區：多位 Agent 共用的外部資源（目前只有資料庫）。原型見 .superpowers/brainstorm/agent-db-resource。 */
-export type ResourceType = "db";
+/** 資源區：多位 Agent 共用的外部資源（資料庫、參考資料夾）。原型見 .superpowers/brainstorm/agent-db-resource。 */
+export type ResourceType = "db" | "folder";
 
 export interface Resource {
   id: string;
@@ -12,6 +12,20 @@ export interface Resource {
   type: ResourceType;
   /** 誰可以用、什麼權限。 */
   holders: { agentId: string; mode: DbSkillMode }[];
+  /** 整個團隊都能用（參考資料夾）；holders 是空的。 */
+  everyone?: boolean;
+}
+
+/** 參考資料夾：整個團隊唯讀。id 加 `ref:` 前綴，不會跟資料庫連線 id 撞在一起。 */
+export function folderResources(refs: Reference[]): Resource[] {
+  return refs.map((r) => ({
+    id: `ref:${r.path}`,
+    name: r.path.split(/[\\/]/).filter(Boolean).pop() ?? r.path,
+    sub: r.note,
+    type: "folder" as const,
+    holders: [],
+    everyone: true,
+  }));
 }
 
 /** 有 Agent 用到的連線（依第一次出現的順序）。`conns`：連線 id → 名稱與說明。 */

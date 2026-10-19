@@ -20,15 +20,19 @@ import {
   checkTools,
   listDbQueries,
   setDbSkill,
+  getReferences,
+  setReferences,
   type AgentKind,
   type AgentRow,
   type DbQueryRow,
+  type Reference,
   type ToolsCheck,
 } from "../../ipc/agents";
 import { dbListConnections } from "../../ipc/db";
 import { DbSkillDialog } from "./DbSkillDialog";
 import { ResourceLayer } from "./ResourceLayer";
-import { accessLinks, resourcesOf } from "./resources";
+import { accessLinks, folderResources, resourcesOf } from "./resources";
+import { ReferencesDialog } from "./ReferencesDialog";
 import { RoleIcon } from "./RoleIcon";
 import { parseDbSkill, skillActivity, SKILL_LINGER_SECS, sqlPreview } from "./dbSkill";
 import { ToolsBanner } from "./ToolsBanner";
@@ -195,6 +199,9 @@ export function AgentCanvasView({
   const [connNames, setConnNames] = useState<Record<string, { name: string; sub: string }>>({});
   /** 資源區的底端（桌布座標）；桌布高度要把它算進去。 */
   const [railBottom, setRailBottom] = useState(0);
+  /** 專案的參考資料夾；記著是哪個專案的。 */
+  const [refsOf, setRefsOf] = useState<{ projectId: string; list: Reference[] } | null>(null);
+  const [refsOpen, setRefsOpen] = useState(false);
   /** 正在設定資料庫技能的 Agent。 */
   const [dbSkillFor, setDbSkillFor] = useState<AgentRow | null>(null);
   const [toolsBusy, setToolsBusy] = useState(false);
@@ -303,6 +310,9 @@ export function AgentCanvasView({
     const load = () => {
       listDbQueries(projectId)
         .then((rows) => alive && setDbQueriesOf({ projectId, rows }))
+        .catch(() => {});
+      getReferences(projectId)
+        .then((list) => alive && setRefsOf({ projectId, list }))
         .catch(() => {});
       Promise.all([listAgents(projectId), listTasks(projectId)])
         .then(([a, ts]) => {
@@ -423,7 +433,11 @@ export function AgentCanvasView({
     };
   }, [isActive, dbSkillFor]);
   const dbQueries = useMemo(() => (dbQueriesOf?.projectId === projectId ? dbQueriesOf.rows : []), [dbQueriesOf, projectId]);
-  const resources = useMemo(() => resourcesOf(agents, connNames), [agents, connNames]);
+  const references = useMemo(() => (refsOf?.projectId === projectId ? refsOf.list : []), [refsOf, projectId]);
+  const resources = useMemo(
+    () => [...resourcesOf(agents, connNames), ...folderResources(references)],
+    [agents, connNames, references],
+  );
   const links = useMemo(() => accessLinks(dbQueries, nowSecs), [dbQueries, nowSecs]);
   const usage = useMemo(() => (usageOf && usageOf.projectId === projectId ? usageOf.map : {}), [usageOf, projectId]);
   const projectUsage = useMemo(() => sumUsage(tasks, usage), [tasks, usage]);
@@ -1030,6 +1044,16 @@ export function AgentCanvasView({
             {briefOf?.projectId === projectId && briefOf.set && <span className="ac-brief-mark"> ✓</span>}
           </button>
         )}
+        {projectId && (
+          <button
+            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+            data-testid="ac-references"
+            title={t.ac_refs_desc}
+            onClick={() => setRefsOpen(true)}
+          >
+            {t.ac_refs_button(references.length)}
+          </button>
+        )}
         <button
           className={`aiterm-btn aiterm-btn--sm ${questions.length ? "aiterm-btn--primary" : "aiterm-btn--ghost"}`}
           data-testid="ac-inbox-button"
@@ -1331,7 +1355,7 @@ export function AgentCanvasView({
         !guide.hintsOff &&
         !hintDismissed &&
         // 有對話框開著時不冒提示，免得浮在對話框上面。
-        !(config || newModule || templatesOpen || briefOpen || verifyFor || transcriptCard || helpOpen || inbox.open) && (
+        !(config || newModule || templatesOpen || briefOpen || refsOpen || verifyFor || transcriptCard || helpOpen || inbox.open) && (
           <GuideHint
             hint={hint}
             onDismiss={() =>
@@ -1390,6 +1414,17 @@ export function AgentCanvasView({
           </div>,
           document.body,
         )}
+
+      {refsOpen && projectId && (
+        <ReferencesDialog
+          initial={references}
+          onClose={() => setRefsOpen(false)}
+          onSave={async (list) => {
+            const saved = await setReferences(projectId, list);
+            setRefsOf({ projectId, list: saved });
+          }}
+        />
+      )}
 
       {dbSkillFor && projectId && (
         <DbSkillDialog

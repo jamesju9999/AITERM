@@ -26,6 +26,7 @@ pub mod context;
 pub mod tools_check;
 pub mod sql_guard;
 pub mod db_skill;
+pub mod references;
 
 use std::path::{Path, PathBuf};
 

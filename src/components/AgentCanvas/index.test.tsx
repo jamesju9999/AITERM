@@ -46,6 +46,8 @@ vi.mock("../../ipc/agents", () => ({
   checkTools: vi.fn(),
   setDbSkill: vi.fn().mockResolvedValue(undefined),
   listDbQueries: vi.fn(),
+  getReferences: vi.fn(),
+  setReferences: vi.fn(),
 }));
 vi.mock("../../ipc/db", async () => ({
   ...(await vi.importActual<typeof import("../../ipc/db")>("../../ipc/db")),
@@ -94,6 +96,8 @@ import {
   createAgent,
   listDbQueries,
   setDbSkill,
+  getReferences,
+  setReferences,
   initRepo,
   listAgents,
   mergeAgent,
@@ -158,6 +162,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(checkTools).mockResolvedValue(allTools);
   vi.mocked(listDbQueries).mockResolvedValue([]);
+  vi.mocked(getReferences).mockResolvedValue([]);
+  vi.mocked(setReferences).mockImplementation(async (_p, refs) => refs);
   tasksUpdated = null;
   try {
     localStorage.clear();
@@ -280,6 +286,29 @@ describe("AgentCanvasView", () => {
     expect(group.textContent).toMatch(/×\s*5/);
     fireEvent.click(within(group).getByRole("button"));
     expect(await within(group).findByText("HTBKTW-PROD")).toBeTruthy();
+  });
+
+  it("參考資料夾：頂列設定，存檔後資源區出現資料夾（全員唯讀）", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValueOnce("/Users/me/HTBTW_Source");
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    await screen.findByTestId("agent-a1");
+    fireEvent.click(screen.getByTestId("ac-references"));
+    const dlg = await screen.findByTestId("references-dialog");
+    fireEvent.click(within(dlg).getByRole("button", { name: /加入資料夾|Add folder/ }));
+    const note = await within(dlg).findByLabelText(/HTBTW_Source/);
+    fireEvent.change(note, { target: { value: "舊系統原始碼與 ArcDocs" } });
+    vi.mocked(getReferences).mockResolvedValue([{ path: "/Users/me/HTBTW_Source", note: "舊系統原始碼與 ArcDocs" }]);
+    fireEvent.click(within(dlg).getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() =>
+      expect(setReferences).toHaveBeenCalledWith("p1", [{ path: "/Users/me/HTBTW_Source", note: "舊系統原始碼與 ArcDocs" }]),
+    );
+    const pill = await screen.findByTestId("resource-ref:/Users/me/HTBTW_Source");
+    expect(pill.textContent).toContain("HTBTW_Source");
+    expect(pill.textContent).toContain("全員 · 唯讀");
+    expect(screen.getByTestId("ac-references").textContent).toMatch(/1/);
   });
 
   it("點技能標籤可以移除技能", async () => {

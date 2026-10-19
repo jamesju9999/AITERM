@@ -158,7 +158,7 @@ export function ResourceLayer({
                 onMouseLeave={() => setHover((h) => (h === r.id ? null : h))}
               >
                 <span className="ac-res-ico" aria-hidden>
-                  <RoleIcon name="database" size={16} />
+                  <RoleIcon name={r.type === "folder" ? "folder" : "database"} size={16} />
                 </span>
                 <span className="ac-res-text">
                   <span className="ac-res-name">{r.name}</span>
@@ -169,7 +169,9 @@ export function ResourceLayer({
                     ? `● ${t.ac_res_querying}`
                     : st === "wait"
                       ? `⏳ ${t.ac_res_waiting}`
-                      : r.holders.length === 1
+                      : r.everyone
+                        ? t.ac_res_everyone
+                        : r.holders.length === 1
                         ? `${agentName(r.holders[0].agentId)} · ${modeLabel(r.holders[0].mode)}`
                         : t.ac_res_holders(r.holders.length)}
                 </span>
@@ -180,11 +182,11 @@ export function ResourceLayer({
             <div key={`g-${it.type}`} className="ac-res ac-res--group" data-resource-group data-testid={`resource-group-${it.type}`}>
               <button type="button" className="ac-res-group-btn" onClick={() => setOpen((o) => (o === it.type ? null : it.type))}>
                 <span className="ac-res-ico" aria-hidden>
-                  <RoleIcon name="database" size={16} />
+                  <RoleIcon name={it.type === "folder" ? "folder" : "database"} size={16} />
                 </span>
                 <span className="ac-res-text">
                   <span className="ac-res-name">
-                    {t.ac_skill_db} ×{it.resources.length}
+                    {it.type === "folder" ? t.ac_res_folders : t.ac_skill_db} ×{it.resources.length}
                   </span>
                   <span className="ac-res-sub">{t.ac_res_idle_hint}</span>
                 </span>
@@ -193,10 +195,10 @@ export function ResourceLayer({
                 <div className="ac-res-pop" data-resource-pop role="list">
                   {it.resources.map((r) => (
                     <div key={r.id} className="ac-res-pop-item" role="listitem">
-                      <RoleIcon name="database" size={13} />
+                      <RoleIcon name={r.type === "folder" ? "folder" : "database"} size={13} />
                       <span>{r.name}</span>
                       <span className="ac-res-pop-who">
-                        {r.holders.map((h) => `${agentName(h.agentId)}（${modeLabel(h.mode)}）`).join("、")}
+                        {r.everyone ? t.ac_res_everyone : r.holders.map((h) => `${agentName(h.agentId)}（${modeLabel(h.mode)}）`).join("、")}
                       </span>
                     </div>
                   ))}
