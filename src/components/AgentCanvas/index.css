@@ -694,3 +694,36 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-db-option input { margin-top: 3px; }
 .ac-db-meta { color: var(--text-muted); font-size: 12px; }
 .ac-db-remove { color: var(--ac-fail, #ef4444); }
+
+/* 資源區（桌布底部）與存取線：原型見 .superpowers/brainstorm/agent-db-resource */
+.ac-res-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.ac-res-link { fill: none; stroke-width: 2; }
+.ac-res-link--query { stroke: #38bdf8; stroke-dasharray: 7 7; animation: ac-res-flow 0.6s linear infinite; }
+.ac-res-link--wait { stroke: #f59e0b; stroke-dasharray: 4 6; animation: ac-res-flow 1.2s linear infinite, ac-res-fade 1s ease-in-out infinite; }
+.ac-res-link--denied { stroke: #ef4444; stroke-dasharray: 3 5; }
+.ac-res-link--hover { stroke: #6e7681; stroke-dasharray: 2 5; opacity: 0.9; }
+.ac-res-tag { font-size: 11px; fill: #c9d1d9; paint-order: stroke; stroke: var(--bg-primary, #0d1117); stroke-width: 4px; }
+@keyframes ac-res-flow { to { stroke-dashoffset: -28; } }
+@keyframes ac-res-fade { 50% { opacity: 0.35; } }
+.ac-res-rail { position: absolute; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; box-sizing: border-box; min-height: 72px; padding: 14px 16px; border: 1px dashed #3b4b5c; border-radius: 14px; background: rgba(22, 27, 34, 0.7); }
+.ac-res-rail-label { position: absolute; top: -9px; left: 14px; padding: 0 8px; background: var(--bg-primary, #0d1117); color: var(--text-muted); font-size: 11.5px; }
+.ac-res { position: relative; display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 14px 0 6px; border: 1px solid #3b4b5c; border-radius: 21px; background: #17202b; transition: border-color 0.2s, box-shadow 0.2s; }
+.ac-res-ico { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 15px; background: rgba(56, 189, 248, 0.15); color: #7dd3fc; }
+.ac-res-text { display: flex; flex-direction: column; min-width: 0; }
+.ac-res-name { font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+.ac-res-sub { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.ac-res-count { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.ac-res-state { font-size: 11px; white-space: nowrap; }
+.ac-res--hot { border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18), 0 0 18px rgba(56, 189, 248, 0.25); }
+.ac-res--hot .ac-res-state { color: #7dd3fc; }
+.ac-res--wait { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2); animation: ac-res-blink 1s ease-in-out infinite; }
+.ac-res--wait .ac-res-state { color: #fcd34d; }
+@keyframes ac-res-blink { 50% { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.08); } }
+.ac-res--group { border-style: dashed; padding: 0; }
+.ac-res-group-btn { display: flex; align-items: center; gap: 10px; height: 100%; padding: 0 14px 0 6px; border: none; border-radius: 21px; background: none; color: inherit; font: inherit; cursor: pointer; }
+.ac-res--group:hover { border-color: #6e7681; }
+.ac-res-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; min-width: 280px; padding: 6px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); }
+.ac-res-pop-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 12.5px; white-space: nowrap; }
+.ac-res-pop-item svg { flex: none; color: #7dd3fc; }
+.ac-res-pop-who { margin-left: auto; color: var(--text-muted); font-size: 11px; }
+@media (prefers-reduced-motion: reduce) { .ac-res-link, .ac-res { animation: none !important; } }

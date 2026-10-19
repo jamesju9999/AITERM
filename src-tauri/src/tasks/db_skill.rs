@@ -197,7 +197,12 @@ pub async fn recent_queries(pool: &SqlitePool, limit: i64) -> Result<Vec<DbQuery
 
 /// App 重啟時還沒結束的查詢已經不會結束了：標成中斷，畫面才不會一直顯示「使用中」。
 pub async fn close_dangling(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE db_queries SET finished_at = started_at, error = 'AITerm 重新啟動，查詢中斷' WHERE finished_at IS NULL")
+    // 等核准的那句沒有執行過：記成被拒絕，不是「查詢失敗」。
+    sqlx::query(
+        "UPDATE db_queries SET finished_at = started_at, error = 'AITerm 重新啟動，查詢中斷',
+             decision = CASE WHEN decision = 'pending' THEN 'denied' ELSE decision END
+         WHERE finished_at IS NULL",
+    )
         .execute(pool)
         .await?;
     Ok(())
@@ -258,8 +263,12 @@ mod tests {
         let denied = rows.iter().find(|r| r.sql == "DROP TABLE t").unwrap();
         assert_eq!((denied.decision.as_str(), denied.error.as_deref()), ("denied", Some("唯讀")));
 
+        let waiting = start_query(&pool, &NewQuery { sql: "UPDATE t", decision: "pending", ..q }).await.unwrap();
         close_dangling(&pool).await.unwrap();
-        assert!(recent_queries(&pool, 10).await.unwrap().iter().all(|r| r.finished_at.is_some()));
+        let rows = recent_queries(&pool, 10).await.unwrap();
+        assert!(rows.iter().all(|r| r.finished_at.is_some()));
+        assert_eq!(rows.iter().find(|r| r.id == waiting).unwrap().decision, "denied", "沒執行過的等核准記成被拒絕");
+        assert_eq!(rows.iter().find(|r| r.id == running).unwrap().decision, "allowed");
 
         set_agent_skill(&pool, "nobody", Some(&skill(DbMode::Read))).await.unwrap();
     }

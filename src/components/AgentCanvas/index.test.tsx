@@ -220,6 +220,52 @@ describe("AgentCanvasView", () => {
     expect(screen.getByText(/等你核准 HTBKTW-DEV 的寫入/)).toBeTruthy();
   });
 
+  it("資源區：有人用資料庫技能才出現；查詢中的資料庫發亮並拉一條流動的線", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    const { unmount } = view();
+    await screen.findByTestId("agent-a1");
+    expect(screen.queryByTestId("ac-resource-rail")).toBeNull();
+    unmount();
+
+    vi.mocked(listAgents).mockResolvedValue([
+      agent({ db_skill: '{"connections":["dev"],"mode":"read"}' }),
+      agent({ id: "a2", name: "工程師2", canvas_y: 240, db_skill: '{"connections":["dev"],"mode":"approve"}' }),
+    ]);
+    vi.mocked(listDbQueries).mockResolvedValue([
+      { id: 1, task_id: "t", agent_id: "a1", connection_id: "dev", connection_name: "HTBKTW-DEV", sql: "SELECT 1", started_at: Math.floor(Date.now() / 1000), finished_at: null, rows: null, ms: null, error: null, decision: "allowed" },
+    ]);
+    view();
+    const pill = await screen.findByTestId("resource-dev");
+    await waitFor(() => expect(pill.className).toContain("ac-res--hot"));
+    expect(pill.textContent).toContain("HTBKTW-DEV");
+    expect(screen.getByTestId("access-a1-dev").getAttribute("data-state")).toBe("query");
+    expect(screen.queryByTestId("access-a2-dev"), "閒置的不畫線").toBeNull();
+
+    // 滑鼠停在資料庫上：顯示誰有權限
+    fireEvent.mouseEnter(pill);
+    expect(screen.getByTestId("access-a2-dev").getAttribute("data-state")).toBe("hover");
+    expect(within(screen.getByTestId("access-a2-dev")).getByText("工程師2 需核准")).toBeTruthy();
+    expect(within(screen.getByTestId("access-a1-dev")).getByText(/唯讀$/)).toBeTruthy();
+    fireEvent.mouseLeave(pill);
+    expect(screen.queryByTestId("access-a2-dev")).toBeNull();
+  });
+
+  it("資源多於 4 個：閒置的收合成一顆，使用中的單獨顯示；點開看清單", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent({ db_skill: '{"connections":["dev","prod","c3","c4","c5","c6"],"mode":"read"}' })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listDbQueries).mockResolvedValue([
+      { id: 1, task_id: "t", agent_id: "a1", connection_id: "c3", connection_name: "c3", sql: "SELECT 1", started_at: Math.floor(Date.now() / 1000), finished_at: null, rows: null, ms: null, error: null, decision: "allowed" },
+    ]);
+    view();
+    expect(await screen.findByTestId("resource-c3")).toBeTruthy();
+    expect(screen.queryByTestId("resource-dev")).toBeNull();
+    const group = screen.getByTestId("resource-group-db");
+    expect(group.textContent).toMatch(/×\s*5/);
+    fireEvent.click(within(group).getByRole("button"));
+    expect(await within(group).findByText("HTBKTW-PROD")).toBeTruthy();
+  });
+
   it("點技能標籤可以移除技能", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent({ db_skill: '{"connections":["dev"],"mode":"write"}' })]);
     vi.mocked(listTasks).mockResolvedValue([]);

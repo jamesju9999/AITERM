@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>資料庫資源區原型</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --card: #1c2128; --border: #30363d; --edge: #3d444d;
+    --text: #e6edf3; --muted: #8b949e; --blue: #38bdf8; --amber: #f59e0b; --green: #22c55e; --red: #ef4444; --violet: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; }
+  .top { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .top h1 { font-size: 14px; margin: 0 8px 0 0; }
+  .sep { width: 1px; height: 22px; background: var(--border); }
+  .btn { background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  .btn.on { border-color: var(--blue); background: rgba(56,189,248,.15); }
+  .note { color: var(--muted); font-size: 12px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  .wrap { overflow-x: auto; }
+  .canvas { position: relative; width: 1240px; height: 600px; margin: 0 auto;
+    background-image: radial-gradient(#22272e 1px, transparent 1px); background-size: 18px 18px; }
+  svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+
+  .agent { position: absolute; width: 230px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+  .agent .head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  .agent .ico { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; flex: none; }
+  .k-coder { background: rgba(59,130,246,.18); color: #93c5fd; }
+  .k-reviewer { background: rgba(234,179,8,.15); color: #fde68a; }
+  .k-orchestrator { background: rgba(34,197,94,.15); color: #86efac; }
+  .k-verifier { background: rgba(20,184,166,.15); color: #5eead4; }
+  .skill .line svg { flex: none; color: #7dd3fc; }
+  .skill.browser .line svg { color: #c4b5fd; }
+  .pop .it svg { color: #7dd3fc; }
+  .agent .name { font-weight: 600; }
+  .agent .role { color: var(--muted); font-size: 11px; }
+  .agent .badge { margin-left: auto; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: rgba(34,197,94,.15); color: #86efac; }
+  .agent .badge.run { background: rgba(56,189,248,.15); color: #7dd3fc; }
+  .skill { display: flex; flex-direction: column; gap: 2px; padding: 5px 10px; font-size: 12px; color: #c9d1d9; background: rgba(56,189,248,.05); border-bottom: 1px solid var(--border); }
+  .skill .line { display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; }
+  .mode { padding: 0 6px; border-radius: 8px; background: rgba(56,189,248,.18); color: #7dd3fc; font-size: 11px; flex: none; }
+  .sql { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #7dd3fc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .skill.active { background: rgba(56,189,248,.16); box-shadow: inset 3px 0 0 var(--blue); }
+  .skill.pending { background: rgba(245,158,11,.16); box-shadow: inset 3px 0 0 var(--amber); }
+  .skill.pending .sql { color: #fcd34d; }
+  /* 瀏覽器：每位 Agent 自己的工具，只在卡片上顯示，不進資源區 */
+  .skill.browser { background: rgba(167,139,250,.06); }
+  .skill.browser .mode { background: rgba(167,139,250,.2); color: #c4b5fd; }
+  .skill.browser.active { background: rgba(167,139,250,.16); box-shadow: inset 3px 0 0 var(--violet); }
+  .skill.browser .sql { color: #c4b5fd; }
+  .agent .body { padding: 8px 10px; color: var(--muted); font-size: 12px; }
+
+  /* 資源區：底部一條，外觀跟 Agent 卡明顯不同；只放多位 Agent 共用的外部資源 */
+  .rail { position: absolute; left: 20px; right: 20px; bottom: 18px; height: 86px; border: 1px dashed #3b4b5c; border-radius: 14px; background: rgba(22,27,34,.7);
+    display: flex; align-items: center; gap: 14px; padding: 0 18px; }
+  .rail .label { position: absolute; top: -10px; left: 16px; padding: 0 8px; background: var(--bg); color: var(--muted); font-size: 12px; }
+  .res { position: relative; height: 42px; padding: 0 14px 0 12px; display: flex; align-items: center; gap: 10px; flex: none;
+    border: 1px solid #3b4b5c; border-radius: 21px; background: #17202b; transition: border-color .2s, box-shadow .2s; }
+  .res .cyl { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: rgba(56,189,248,.15); color: #7dd3fc; flex: none; }
+  .res .dn { font-weight: 600; white-space: nowrap; }
+  .res .dt { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .res .count { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .res .state { font-size: 11px; white-space: nowrap; }
+  .res.hot { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(56,189,248,.18), 0 0 18px rgba(56,189,248,.25); }
+  .res.hot .state { color: #7dd3fc; }
+  .res.wait { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(245,158,11,.2); animation: blink 1s ease-in-out infinite; }
+  .res.wait .state { color: #fcd34d; }
+  .res.group { cursor: pointer; border-style: dashed; }
+  .res.group:hover { border-color: #6e7681; }
+  .res.more { cursor: pointer; padding: 0 14px; color: var(--muted); }
+  @keyframes blink { 50% { box-shadow: 0 0 0 6px rgba(245,158,11,.08); } }
+  .pop { position: absolute; bottom: 52px; left: 0; min-width: 260px; background: #1c2128; border: 1px solid var(--border); border-radius: 10px; padding: 6px; box-shadow: 0 10px 30px rgba(0,0,0,.5); z-index: 5; }
+  .pop .it { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; white-space: nowrap; }
+  .pop .it:hover { background: #262c36; }
+  .pop .it .m { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .pop .h { color: var(--muted); font-size: 11px; padding: 4px 8px; }
+
+  .flow { fill: none; stroke: var(--edge); stroke-width: 1.6; }
+  .access { fill: none; stroke-width: 2; }
+  .access.query { stroke: var(--blue); stroke-dasharray: 7 7; animation: flow .6s linear infinite; }
+  .access.wait { stroke: var(--amber); stroke-dasharray: 4 6; animation: flow 1.2s linear infinite, fade 1s ease-in-out infinite; }
+  .access.denied { stroke: var(--red); stroke-dasharray: 3 5; }
+  .access.hover { opacity: .9; stroke: #6e7681; stroke-dasharray: 2 5; }
+  @keyframes flow { to { stroke-dashoffset: -28; } }
+  @keyframes fade { 50% { opacity: .35; } }
+  .tag { font-size: 11px; fill: #c9d1d9; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
+
+  .log { width: 1240px; margin: 0 auto 24px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; min-height: 92px; }
+  .log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log .ok::before { content: "● "; color: var(--green); }
+  .log .run::before { content: "● "; color: var(--blue); }
+  .log .wait::before { content: "● "; color: var(--amber); }
+  .log .bad::before { content: "● "; color: var(--red); }
+  .log .web::before { content: "● "; color: var(--violet); }
+  @media (prefers-reduced-motion: reduce) { .access, .res { animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Agent 協作 · 資源區（原型 v2）</h1>
+  <button class="btn" data-s="idle">閒置</button>
+  <button class="btn" data-s="q1">工程師1 查詢中</button>
+  <button class="btn" data-s="both">兩人同時查同一個庫</button>
+  <button class="btn" data-s="wait">工程師2 寫入等核准</button>
+  <button class="btn" data-s="denied">唯讀擋下寫入</button>
+  <button class="btn" data-s="browser">驗收者用瀏覽器</button>
+  <span class="sep"></span>
+  <button class="btn" data-s="many">資料庫很多（收合）</button>
+  <button class="btn" data-s="manyBusy">很多＋其中兩個使用中</button>
+  <span class="sep"></span>
+  <button class="btn" data-s="auto">自動輪播</button>
+</div>
+<div class="note" id="note"></div>
+<div class="wrap"><div class="canvas" id="canvas">
+  <svg class="edges" id="edges"></svg>
+
+  <div class="agent" id="c1" style="left:40px; top:40px">
+    <div class="head"><span class="ico k-coder"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a10 10 0 1 1 10-10c0 2.2-1.8 3-3.5 3H16a2 2 0 0 0-1.5 3.3A2 2 0 0 1 12 22Z"/><circle cx="7.5" cy="11" r="1" fill="currentColor"/><circle cx="10" cy="7" r="1" fill="currentColor"/><circle cx="15" cy="7" r="1" fill="currentColor"/></svg></span><div><div class="name">工程師1</div><div class="role">前端工程師</div></div><span class="badge run">執行中</span></div>
+    <div class="skill" id="c1s"></div>
+    <div class="body">記帳畫面：index.html</div>
+  </div>
+  <div class="agent" id="c2" style="left:40px; top:230px">
+    <div class="head"><span class="ico k-coder"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span><div><div class="name">工程師2</div><div class="role">程式碼工程師</div></div><span class="badge run">執行中</span></div>
+    <div class="skill" id="c2s"></div>
+    <div class="body">資料層：js/store.js</div>
+  </div>
+  <div class="agent" id="rv" style="left:360px; top:135px">
+    <div class="head"><span class="ico k-reviewer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16" y2="16"/><polyline points="8 11 10.5 13.5 14 9"/></svg></span><div><div class="name">審核者</div><div class="role">sonnet</div></div><span class="badge">待命</span></div>
+    <div class="body">等交件</div>
+  </div>
+  <div class="agent" id="or" style="left:680px; top:135px">
+    <div class="head"><span class="ico k-orchestrator"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.5"/><circle cx="18" cy="12" r="2.5"/><circle cx="6" cy="19" r="2.5"/><path d="M6 7.5v9"/><path d="M6 7.5c0 3 3 4.5 9.5 4.5"/></svg></span><div><div class="name">協調者</div><div class="role">整合者</div></div><span class="badge">待命</span></div>
+    <div class="body">等審查通過</div>
+  </div>
+  <div class="agent" id="vf" style="left:990px; top:135px">
+    <div class="head"><span class="ico k-verifier"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><polyline points="9 13 11 15 15 11"/></svg></span><div><div class="name">驗收者</div><div class="role">sonnet</div></div><span class="badge" id="vfb">待命</span></div>
+    <div class="skill" id="vfs"></div>
+    <div class="skill browser" id="vfw"></div>
+    <div class="body">等合併結果</div>
+  </div>
+
+  <div class="rail" id="rail"><span class="label">資源 · 多位 Agent 共用的外部資源，依技能自動出現</span></div>
+</div></div>
+<div class="log" id="log"></div>
+
+<script>
+// ── 資料 ─────────────────────────────────────────────
+const FEW = [
+  { id: "dev", type: "db", name: "HTBKTW-DEV", sub: "mssql · HTBTWDB" },
+  { id: "chinook", type: "db", name: "SQL-Lite-Chinook", sub: "sqlite" },
+];
+const MANY = [
+  ...FEW,
+  { id: "lbot", type: "db", name: "總行LBOTHODB", sub: "db2 · LBOTHODB" },
+  { id: "kr", type: "db", name: "企金KR_NUNTIO", sub: "mssql · KR_NUNTIO" },
+  { id: "la", type: "db", name: "洛杉磯LBOTLADB", sub: "db2 · LBOTLADB" },
+  { id: "ares", type: "db", name: "ARESPP45", sub: "mssql · ARESPPDB_Dev2019" },
+  { id: "cathay", type: "db", name: "華泰銀行資料庫", sub: "mssql · HTBTWDB" },
+  { id: "task", type: "db", name: "TaskDB", sub: "sqlite" },
+  { id: "pay", type: "api", name: "付款 API", sub: "https://pay.dev/api" },
+  { id: "fx", type: "api", name: "匯率 API", sub: "https://fx.dev/v2" },
+];
+const SVG = {"database": "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><ellipse cx=\"12\" cy=\"5\" rx=\"8\" ry=\"3\"/><path d=\"M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5\"/><path d=\"M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3\"/></svg>", "plug": "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 22v-5\"/><path d=\"M9 8V2\"/><path d=\"M15 8V2\"/><path d=\"M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z\"/></svg>", "globe": "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M2 12h20\"/><path d=\"M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10Z\"/></svg>"};
+const SMALL = {"database": "<svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><ellipse cx=\"12\" cy=\"5\" rx=\"8\" ry=\"3\"/><path d=\"M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5\"/><path d=\"M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3\"/></svg>", "plug": "<svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 22v-5\"/><path d=\"M9 8V2\"/><path d=\"M15 8V2\"/><path d=\"M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z\"/></svg>", "globe": "<svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M2 12h20\"/><path d=\"M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10Z\"/></svg>"};
+const TYPE = { db: { icon: SVG.database, small: SMALL.database, label: "資料庫" }, api: { icon: SVG.plug, small: SMALL.plug, label: "API" } };
+const PERM = { 唯讀: "唯讀", 需核准: "需核准" };
+// [agent, 資源 id, 權限]
+const ACCESS_FEW = [["c1", "dev", "唯讀"], ["c1", "chinook", "唯讀"], ["c2", "dev", "需核准"], ["vf", "dev", "唯讀"]];
+const ACCESS_MANY = [...ACCESS_FEW, ["c1", "lbot", "唯讀"], ["c2", "kr", "需核准"], ["c2", "la", "唯讀"], ["c1", "ares", "唯讀"],
+  ["c2", "cathay", "需核准"], ["vf", "task", "唯讀"], ["c2", "pay", "唯讀"], ["c1", "fx", "唯讀"]];
+const MAX_SHOWN = 4; // 超過就依類型收合
+
+const flows = [["c1", "rv"], ["c2", "rv"], ["rv", "or"], ["or", "vf"]];
+const canvas = document.getElementById("canvas");
+const svg = document.getElementById("edges");
+const rail = document.getElementById("rail");
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+const box = (node) => { const c = canvas.getBoundingClientRect(), r = node.getBoundingClientRect(); return { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height }; };
+
+// ── 狀態 ─────────────────────────────────────────────
+let S; // 目前情境
+function blank(resources, access) {
+  return { resources, access, use: {}, // `${agent}-${res}` → "query" | "wait" | "denied"
+    skills: {}, browser: null, log: [], openGroup: null, hoverRes: null, note: "" };
+}
+
+// ── 畫面 ─────────────────────────────────────────────
+function skillRow(agent) {
+  const s = document.getElementById(`${agent}s`);
+  const mine = S.access.filter(([a]) => a === agent);
+  if (!mine.length) { s.style.display = "none"; return; }
+  s.style.display = "";
+  const names = mine.map(([, r]) => S.resources.find((x) => x.id === r).name);
+  const perm = [...new Set(mine.map(([, , p]) => p))].join("／");
+  const st = S.skills[agent];
+  s.className = `skill ${st ? st.cls : ""}`;
+  s.innerHTML = `<div class="line">${SMALL.database} <span class="mode">${perm}</span> <span style="overflow:hidden;text-overflow:ellipsis">${names.join("、")}</span></div>` +
+    (st ? `<div class="sql">${st.text}</div>` : "");
+}
+
+function browserRow() {
+  const w = document.getElementById("vfw");
+  w.className = `skill browser${S.browser ? " active" : ""}`;
+  w.innerHTML = `<div class="line">${SMALL.globe} <span class="mode">瀏覽器</span> 自己的無頭瀏覽器</div>` + (S.browser ? `<div class="sql">${S.browser}</div>` : "");
+  document.getElementById("vfb").textContent = S.browser ? "驗收中" : "待命";
+  document.getElementById("vfb").className = `badge${S.browser ? " run" : ""}`;
+}
+
+function resState(id) {
+  const states = S.access.filter(([, r]) => r === id).map(([a]) => S.use[`${a}-${id}`]).filter(Boolean);
+  if (states.includes("wait")) return "wait";
+  if (states.includes("query")) return "query";
+  return null;
+}
+
+function drawRail() {
+  rail.querySelectorAll(".res").forEach((e) => e.remove());
+  const all = S.resources;
+  const collapse = all.length > MAX_SHOWN;
+  // 使用中、等核准的一律單獨拉出來；其餘依類型收合
+  const solo = collapse ? all.filter((r) => resState(r.id)) : all;
+  const rest = collapse ? all.filter((r) => !resState(r.id)) : [];
+  for (const r of solo) rail.append(resPill(r));
+  const groups = {};
+  for (const r of rest) (groups[r.type] ??= []).push(r);
+  for (const [type, list] of Object.entries(groups)) rail.append(groupPill(type, list));
+}
+
+function resPill(r) {
+  const n = S.access.filter(([, x]) => x === r.id).length;
+  const st = resState(r.id);
+  const d = document.createElement("div");
+  d.className = `res${st === "query" ? " hot" : st === "wait" ? " wait" : ""}`;
+  d.id = `r-${r.id}`;
+  d.innerHTML = `<span class="cyl">${TYPE[r.type].icon}</span><div><div class="dn">${r.name}</div><div class="dt">${r.sub}</div></div>` +
+    `<span class="${st ? "state" : "count"}">${st === "query" ? "● 查詢中" : st === "wait" ? "⏳ 等核准" : `${n} 位可用`}</span>`;
+  d.addEventListener("mouseenter", () => { S.hoverRes = r.id; drawEdges(); });
+  d.addEventListener("mouseleave", () => { S.hoverRes = null; drawEdges(); });
+  return d;
+}
+
+function groupPill(type, list) {
+  const d = document.createElement("div");
+  d.className = "res group";
+  d.id = `g-${type}`;
+  d.innerHTML = `<span class="cyl">${TYPE[type].icon}</span><div><div class="dn">${TYPE[type].label} ×${list.length}</div><div class="dt">閒置中 · 點開看清單</div></div>`;
+  d.addEventListener("click", (e) => { e.stopPropagation(); S.openGroup = S.openGroup === type ? null : type; render(); });
+  if (S.openGroup === type) {
+    const pop = document.createElement("div");
+    pop.className = "pop";
+    pop.innerHTML = `<div class="h">${TYPE[type].label}（閒置）· 誰有權限</div>` + list.map((r) => {
+      const who = S.access.filter(([, x]) => x === r.id).map(([a, , p]) => `${{ c1: "工程師1", c2: "工程師2", vf: "驗收者" }[a]}（${p}）`).join("、");
+      return `<div class="it">${TYPE[type].small} ${r.name}<span class="m">${who}</span></div>`;
+    }).join("");
+    d.append(pop);
+  }
+  return d;
+}
+
+function drawEdges() {
+  svg.innerHTML = "";
+  for (const [a, b] of flows) {
+    const A = box(document.getElementById(a)), B = box(document.getElementById(b));
+    const x1 = A.x + A.w, y1 = A.y + 40, x2 = B.x, y2 = B.y + 40, mx = (x1 + x2) / 2;
+    svg.append(el("path", { class: "flow", d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` }));
+    svg.append(el("path", { d: `M${x2 - 7},${y2 - 5} L${x2},${y2} L${x2 - 7},${y2 + 5}`, fill: "none", stroke: "#3d444d", "stroke-width": 1.6 }));
+  }
+  for (const [a, r, perm] of S.access) {
+    const st = S.use[`${a}-${r}`];
+    const hover = S.hoverRes === r;
+    if (!st && !hover) continue; // 平常不畫
+    const target = document.getElementById(`r-${r}`);
+    if (!target) continue; // 收合中的閒置資源沒有線
+    const A = box(document.getElementById(a)), D = box(target);
+    const x1 = A.x + A.w / 2, y1 = A.y + A.h, x2 = D.x + D.w / 2, y2 = D.y, my = (y1 + y2) / 2;
+    svg.append(el("path", { class: `access ${st || "hover"}`, d: `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}` }));
+    if (hover) { const t = el("text", { class: "tag", x: (x1 + x2) / 2 + 6, y: my + 4 }); t.textContent = perm; svg.append(t); }
+  }
+}
+
+function render() {
+  ["c1", "c2", "vf"].forEach(skillRow);
+  browserRow();
+  drawRail();
+  drawEdges();
+  document.getElementById("log").innerHTML = S.log.map(([c, t]) => `<div class="${c}">${t}</div>`).join("");
+  document.getElementById("note").textContent = S.note;
+}
+document.addEventListener("click", () => { if (S.openGroup) { S.openGroup = null; render(); } });
+
+// ── 情境 ─────────────────────────────────────────────
+const NOTE_FEW = "資源少（≤4）時每個一顆。滑鼠停在資源上看誰有權限；閒置時桌布上不會多出任何線。";
+const NOTE_MANY = "資源超過 4 個：閒置的依類型收合成一顆（點開看清單與誰有權限）；使用中、等核准的一律單獨拉出來，線接在具體那一個上。";
+const scenes = {
+  idle() { S = blank(FEW, ACCESS_FEW); S.note = NOTE_FEW;
+    S.log = [["ok", "上午10:02:11 工程師1 查詢 HTBKTW-DEV：SELECT COUNT(*) FROM orders（1 列，0.0 秒）"]]; },
+  q1() { S = blank(FEW, ACCESS_FEW); S.note = NOTE_FEW;
+    S.use["c1-dev"] = "query"; S.skills.c1 = { cls: "active", text: "SELECT id, item, qty, created_at FROM ord…" };
+    S.log = [["run", "上午10:03:40 工程師1 正在查詢 HTBKTW-DEV：SELECT id, item, qty, created_at FROM orders WHERE created_at >= '2026-10-01'"]]; },
+  both() { S = blank(FEW, ACCESS_FEW); S.note = NOTE_FEW;
+    S.use["c1-dev"] = "query"; S.use["c2-dev"] = "query";
+    S.skills.c1 = { cls: "active", text: "SELECT * FROM customers WHERE active = 1" };
+    S.skills.c2 = { cls: "active", text: "SELECT SUM(amount) FROM payments GROUP BY…" };
+    S.log = [["run", "上午10:05:02 工程師2 正在查詢 HTBKTW-DEV：SELECT SUM(amount) FROM payments GROUP BY month"],
+             ["run", "上午10:05:01 工程師1 正在查詢 HTBKTW-DEV：SELECT * FROM customers WHERE active = 1"]]; },
+  wait() { S = blank(FEW, ACCESS_FEW); S.note = NOTE_FEW;
+    S.use["c2-dev"] = "wait"; S.skills.c2 = { cls: "pending", text: "⏳ 等你核准：UPDATE orders SET status = 'paid' WH…" };
+    S.log = [["wait", "上午10:06:15 工程師2 等你核准 HTBKTW-DEV 的寫入：UPDATE orders SET status = 'paid' WHERE id = 42"]]; },
+  denied() { S = blank(FEW, ACCESS_FEW); S.note = NOTE_FEW;
+    S.use["c1-dev"] = "denied";
+    S.log = [["bad", "上午10:07:30 工程師1 對 HTBKTW-DEV 的這句被擋下或拒絕：DELETE FROM orders WHERE id = 42（這個連線只開放唯讀查詢）"]];
+    setTimeout(() => { if (S.use["c1-dev"] === "denied") { delete S.use["c1-dev"]; render(); } }, 1600); },
+  browser() { S = blank(FEW, ACCESS_FEW);
+    S.note = "瀏覽器是每位 Agent 自己開的，不跟別人共用：只在卡片上的技能列顯示正在做什麼，不放進資源區、也不拉線。";
+    S.browser = "開啟 http://localhost:5173/orders · 點擊「新增訂單」";
+    S.log = [["web", "上午10:08:02 驗收者 瀏覽器：點擊「新增訂單」"], ["web", "上午10:08:00 驗收者 瀏覽器：開啟 http://localhost:5173/orders"]]; },
+  many() { S = blank(MANY, ACCESS_MANY); S.note = NOTE_MANY;
+    S.log = [["ok", "上午10:09:44 工程師2 查詢 企金KR_NUNTIO：SELECT TOP 10 * FROM loans（10 列，0.2 秒）"]]; },
+  manyBusy() { S = blank(MANY, ACCESS_MANY); S.note = NOTE_MANY;
+    S.use["c1-dev"] = "query"; S.use["c2-kr"] = "wait";
+    S.skills.c1 = { cls: "active", text: "SELECT * FROM orders WHERE id = 42" };
+    S.skills.c2 = { cls: "pending", text: "⏳ 等你核准：UPDATE loans SET rate = 1.85 WHE…" };
+    S.log = [["wait", "上午10:10:20 工程師2 等你核准 企金KR_NUNTIO 的寫入：UPDATE loans SET rate = 1.85 WHERE id = 7"],
+             ["run", "上午10:10:18 工程師1 正在查詢 HTBKTW-DEV：SELECT * FROM orders WHERE id = 42"]]; },
+};
+
+let timer = null;
+function play(name) {
+  document.querySelectorAll(".btn").forEach((b) => b.classList.toggle("on", b.dataset.s === name));
+  clearInterval(timer);
+  if (name === "auto") {
+    const order = ["idle", "q1", "both", "wait", "denied", "browser", "many", "manyBusy"]; let i = 0;
+    const step = () => { scenes[order[i++ % order.length]](); render(); };
+    step(); timer = setInterval(step, 3000);
+    return;
+  }
+  scenes[name](); render();
+}
+document.querySelectorAll(".btn").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); play(b.dataset.s); }));
+window.addEventListener("resize", () => render());
+play(scenes[location.hash.slice(1)] ? location.hash.slice(1) : "auto");
+</script>
+</body>
+</html>

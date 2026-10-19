@@ -27,6 +27,8 @@ import {
 } from "../../ipc/agents";
 import { dbListConnections } from "../../ipc/db";
 import { DbSkillDialog } from "./DbSkillDialog";
+import { ResourceLayer } from "./ResourceLayer";
+import { accessLinks, resourcesOf } from "./resources";
 import { RoleIcon } from "./RoleIcon";
 import { parseDbSkill, skillActivity, SKILL_LINGER_SECS, sqlPreview } from "./dbSkill";
 import { ToolsBanner } from "./ToolsBanner";
@@ -190,7 +192,9 @@ export function AgentCanvasView({
   /** 資料庫技能的查詢記錄；記著是哪個專案的。 */
   const [dbQueriesOf, setDbQueriesOf] = useState<{ projectId: string; rows: DbQueryRow[] } | null>(null);
   /** 連線 id → 名稱（技能標籤顯示用）。 */
-  const [connNames, setConnNames] = useState<Record<string, string>>({});
+  const [connNames, setConnNames] = useState<Record<string, { name: string; sub: string }>>({});
+  /** 資源區的底端（桌布座標）；桌布高度要把它算進去。 */
+  const [railBottom, setRailBottom] = useState(0);
   /** 正在設定資料庫技能的 Agent。 */
   const [dbSkillFor, setDbSkillFor] = useState<AgentRow | null>(null);
   const [toolsBusy, setToolsBusy] = useState(false);
@@ -406,13 +410,21 @@ export function AgentCanvasView({
     if (!isActive || dbSkillFor) return;
     let alive = true;
     dbListConnections()
-      .then((c) => alive && setConnNames(Object.fromEntries(c.map((x) => [x.id, x.name]))))
+      .then(
+        (c) =>
+          alive &&
+          setConnNames(
+            Object.fromEntries(c.map((x) => [x.id, { name: x.name, sub: [x.db_type, x.database].filter(Boolean).join(" · ") }])),
+          ),
+      )
       .catch(() => {});
     return () => {
       alive = false;
     };
   }, [isActive, dbSkillFor]);
   const dbQueries = useMemo(() => (dbQueriesOf?.projectId === projectId ? dbQueriesOf.rows : []), [dbQueriesOf, projectId]);
+  const resources = useMemo(() => resourcesOf(agents, connNames), [agents, connNames]);
+  const links = useMemo(() => accessLinks(dbQueries, nowSecs), [dbQueries, nowSecs]);
   const usage = useMemo(() => (usageOf && usageOf.projectId === projectId ? usageOf.map : {}), [usageOf, projectId]);
   const projectUsage = useMemo(() => sumUsage(tasks, usage), [tasks, usage]);
 
@@ -858,8 +870,8 @@ export function AgentCanvasView({
       w = Math.max(w, a.canvas_x + NODE_W);
       h = Math.max(h, a.canvas_y + NODE_H);
     }
-    return { w: w + WORLD_MARGIN, h: h + WORLD_MARGIN };
-  }, [shownAgents]);
+    return { w: w + WORLD_MARGIN, h: Math.max(h, railBottom) + WORLD_MARGIN };
+  }, [shownAgents, railBottom]);
 
   const summary = useMemo(() => projectSummary(agents, tasks), [agents, tasks]);
   const hasOrchestrator = agents.some((a) => a.kind === "orchestrator");
@@ -1175,6 +1187,15 @@ export function AgentCanvasView({
                   revision={tasks}
                   dispatchHint={t.ac_dispatch_edge_hint}
                 />
+                <ResourceLayer
+                  containerRef={canvasRef}
+                  agents={shownAgents}
+                  resources={resources}
+                  links={links}
+                  agentName={agentName}
+                  revision={tasks}
+                  onBottom={setRailBottom}
+                />
                 {shownAgents.map((shown) => {
                   const a = agents.find((x) => x.id === shown.id) as AgentRow;
                   return (
@@ -1190,7 +1211,7 @@ export function AgentCanvasView({
                       dbSkill={(() => {
                         const skill = parseDbSkill(a.db_skill);
                         if (!skill) return null;
-                        const names = skill.connections.map((id) => connNames[id] ?? id).join("、");
+                        const names = skill.connections.map((id) => connNames[id]?.name ?? id).join("、");
                         const act = skillActivity(dbQueries, a.id, nowSecs);
                         return { mode: t.ac_db_mode_short(skill.mode), label: names, activity: act && { kind: act.kind, sql: sqlPreview(act.sql) } };
                       })()}
