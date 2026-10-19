@@ -22,7 +22,22 @@ export function sqlPreview(sql: string): string {
   return one.length > SQL_PREVIEW_CHARS ? `${one.slice(0, SQL_PREVIEW_CHARS)}…` : one;
 }
 
-/** 這位 Agent 最新一筆還沒結束的查詢（標籤亮起來用）。 */
-export function activeQuery(rows: DbQueryRow[], agentId: string): DbQueryRow | null {
-  return rows.filter((r) => r.agent_id === agentId && r.finished_at === null).sort((a, b) => b.started_at - a.started_at || b.id - a.id)[0] ?? null;
+/** 查詢結束後技能列再亮幾秒：快的查詢只跑幾十毫秒，畫面抓到資料時早就結束了。 */
+export const SKILL_LINGER_SECS = 5;
+
+export interface SkillActivity {
+  /** pending = 寫入等你核准；running = 查詢中；recent = 剛結束（SKILL_LINGER_SECS 內）。 */
+  kind: "pending" | "running" | "recent";
+  sql: string;
+}
+
+/** 這位 Agent 的技能列現在要怎麼亮。等核准最優先，其次是查詢中，再來是剛結束的最新一筆。 */
+export function skillActivity(rows: DbQueryRow[], agentId: string, nowSecs: number): SkillActivity | null {
+  const mine = rows.filter((r) => r.agent_id === agentId).sort((a, b) => b.started_at - a.started_at || b.id - a.id);
+  const pending = mine.find((r) => r.decision === "pending" && r.finished_at === null);
+  if (pending) return { kind: "pending", sql: pending.sql };
+  const running = mine.find((r) => r.finished_at === null);
+  if (running) return { kind: "running", sql: running.sql };
+  const recent = mine.find((r) => r.decision !== "denied" && r.finished_at !== null && nowSecs - r.finished_at <= SKILL_LINGER_SECS);
+  return recent ? { kind: "recent", sql: recent.sql } : null;
 }

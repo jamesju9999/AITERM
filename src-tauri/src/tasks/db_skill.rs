@@ -120,7 +120,7 @@ pub struct DbQueryRow {
     pub rows: Option<i64>,
     pub ms: Option<i64>,
     pub error: Option<String>,
-    /// `allowed`／`approved`／`denied`。
+    /// `allowed`／`pending`（等核准）／`approved`／`denied`。
     pub decision: String,
 }
 
@@ -172,6 +172,12 @@ pub async fn finish_query(
         .bind(id)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// 等核准的查詢有了結果（`approved`／`denied`）。
+pub async fn set_decision(pool: &SqlitePool, id: i64, decision: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE db_queries SET decision = ? WHERE id = ?").bind(decision).bind(id).execute(pool).await?;
     Ok(())
 }
 

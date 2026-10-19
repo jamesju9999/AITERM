@@ -207,6 +207,19 @@ describe("AgentCanvasView", () => {
     expect(screen.getByText(/DELETE FROM orders/).textContent).toMatch(/擋下|拒絕/);
   });
 
+  it("寫入等核准時技能列變琥珀色並寫「等你核准」，活動記錄也有一行", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent({ db_skill: '{"connections":["dev"],"mode":"approve"}' })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listDbQueries).mockResolvedValue([
+      { id: 5, task_id: "t", agent_id: "a1", connection_id: "dev", connection_name: "HTBKTW-DEV", sql: "UPDATE orders SET qty = 9", started_at: 100, finished_at: null, rows: null, ms: null, error: null, decision: "pending" },
+    ]);
+    view();
+    const row = await within(await screen.findByTestId("agent-a1")).findByTestId("agent-db-skill");
+    await waitFor(() => expect(row.className).toContain("ac-skill-row--pending"));
+    expect(row.textContent).toContain("等你核准");
+    expect(screen.getByText(/等你核准 HTBKTW-DEV 的寫入/)).toBeTruthy();
+  });
+
   it("點技能標籤可以移除技能", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent({ db_skill: '{"connections":["dev"],"mode":"write"}' })]);
     vi.mocked(listTasks).mockResolvedValue([]);

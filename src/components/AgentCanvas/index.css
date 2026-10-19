@@ -681,6 +681,8 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-skill-row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ac-skill-row--active { color: #e0f2fe; background: rgba(56, 189, 248, 0.16); box-shadow: inset 3px 0 0 #38bdf8; animation: ac-db-pulse 1.2s ease-in-out infinite; }
 .ac-db-sql { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: #7dd3fc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-skill-row--pending { color: #fef3c7; background: rgba(245, 158, 11, 0.16); box-shadow: inset 3px 0 0 #f59e0b; }
+.ac-skill-row--pending .ac-db-sql { color: #fcd34d; }
 @keyframes ac-db-pulse { 50% { background: rgba(56, 189, 248, 0.24); } }
 @media (prefers-reduced-motion: reduce) { .ac-skill-row--active { animation: none; } }
 .ac-db-dialog { width: min(520px, 92vw); }

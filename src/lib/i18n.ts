@@ -540,6 +540,8 @@ const zhTW = {
     ac_log_db_query: (agent: string, conn: string, sql: string, rows: number | null, secs: string) =>
       `${agent} 查詢 ${conn}：${sql}（${rows ?? 0} 列，${secs} 秒）`,
     ac_log_db_running: (agent: string, conn: string, sql: string) => `${agent} 正在查詢 ${conn}：${sql}`,
+    ac_log_db_pending: (agent: string, conn: string, sql: string) => `${agent} 等你核准 ${conn} 的寫入：${sql}`,
+    ac_db_waiting_approval: "等你核准：",
     ac_log_db_failed: (agent: string, conn: string, sql: string, error: string) => `${agent} 查詢 ${conn} 失敗：${sql}（${error}）`,
     ac_log_db_denied: (agent: string, conn: string, sql: string, reason: string) => `${agent} 對 ${conn} 的這句被擋下或拒絕：${sql}（${reason}）`,
     ac_log_dispatched: (title: string, agent: string) => `派工：${title} → ${agent}`,
@@ -2771,6 +2773,8 @@ const enRaw = {
     ac_log_db_query: (agent: string, conn: string, sql: string, rows: number | null, secs: string) =>
       `${agent} queried ${conn}: ${sql} (${rows ?? 0} rows, ${secs} s)`,
     ac_log_db_running: (agent: string, conn: string, sql: string) => `${agent} is querying ${conn}: ${sql}`,
+    ac_log_db_pending: (agent: string, conn: string, sql: string) => `${agent} is waiting for your approval to write to ${conn}: ${sql}`,
+    ac_db_waiting_approval: "Awaiting your approval: ",
     ac_log_db_failed: (agent: string, conn: string, sql: string, error: string) => `${agent}'s query on ${conn} failed: ${sql} (${error})`,
     ac_log_db_denied: (agent: string, conn: string, sql: string, reason: string) => `${agent}'s statement on ${conn} was blocked or rejected: ${sql} (${reason})`,
     ac_log_dispatched: (title: string, agent: string) => `Dispatched: ${title} → ${agent}`,

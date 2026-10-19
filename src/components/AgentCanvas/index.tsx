@@ -27,7 +27,7 @@ import {
 } from "../../ipc/agents";
 import { dbListConnections } from "../../ipc/db";
 import { DbSkillDialog } from "./DbSkillDialog";
-import { activeQuery, parseDbSkill, sqlPreview } from "./dbSkill";
+import { parseDbSkill, skillActivity, SKILL_LINGER_SECS, sqlPreview } from "./dbSkill";
 import { ToolsBanner } from "./ToolsBanner";
 import { missingTools } from "./toolsCheck";
 import { listProjects, type ProjectInfo } from "../../ipc/projects";
@@ -357,7 +357,9 @@ export function AgentCanvasView({
     }
   };
 
-  const anyRunning = tasks.some((x) => x.status === "running" && x.agent_id);
+  // 查詢剛結束的那幾秒技能列還亮著，時鐘也要繼續走才會熄掉。
+  const dbRecent = (dbQueriesOf?.rows ?? []).some((q) => q.finished_at === null || nowSecs - q.finished_at <= SKILL_LINGER_SECS);
+  const anyRunning = tasks.some((x) => x.status === "running" && x.agent_id) || dbRecent;
   // 經過時間每秒更新——只在看得到、而且真的有東西在跑的時候。
   useEffect(() => {
     if (!isActive || !anyRunning) return;
@@ -508,7 +510,9 @@ export function AgentCanvasView({
       const who = agentName(q.agent_id);
       const role = agents.find((a) => a.id === q.agent_id)?.kind;
       const sql = q.sql.replace(/\s+/g, " ").trim();
-      if (q.decision === "denied") {
+      if (q.decision === "pending" && q.finished_at === null) {
+        ev.push({ at: q.started_at, text: t.ac_log_db_pending(who, q.connection_name, sql), kind: "dispatch", role });
+      } else if (q.decision === "denied") {
         ev.push({ at: q.started_at, text: t.ac_log_db_denied(who, q.connection_name, sql, q.error ?? ""), kind: "bad", role });
       } else if (q.finished_at === null) {
         ev.push({ at: q.started_at, text: t.ac_log_db_running(who, q.connection_name, sql), kind: "start", role });
@@ -1184,8 +1188,8 @@ export function AgentCanvasView({
                         const skill = parseDbSkill(a.db_skill);
                         if (!skill) return null;
                         const names = skill.connections.map((id) => connNames[id] ?? id).join("、");
-                        const running = activeQuery(dbQueries, a.id);
-                        return { mode: t.ac_db_mode_short(skill.mode), label: names, active: running ? sqlPreview(running.sql) : null };
+                        const act = skillActivity(dbQueries, a.id, nowSecs);
+                        return { mode: t.ac_db_mode_short(skill.mode), label: names, activity: act && { kind: act.kind, sql: sqlPreview(act.sql) } };
                       })()}
                       onDbSkill={() => setDbSkillFor(a)}
                       missingTool={

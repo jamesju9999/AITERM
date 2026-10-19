@@ -411,23 +411,35 @@ impl QuotaState {
             sql: &sql,
             decision: "allowed",
         };
-        let decision = match skill::authorize(&db, &connection_id, &sql) {
-            Decision::Allow => "allowed",
+        let id = match skill::authorize(&db, &connection_id, &sql) {
+            Decision::Allow => skill::start_query(&pool, &q).await.ok(),
             Decision::Deny(reason) => {
                 let _ = skill::record_denied(&pool, &q, &reason).await;
                 self.changed();
                 return (reason, true);
             }
-            Decision::NeedApproval => match self.wait_for_approval(task_id, &pool, &label, &name, &sql).await {
-                Ok(()) => "approved",
-                Err(reason) => {
-                    let _ = skill::record_denied(&pool, &q, &reason).await;
-                    self.changed();
-                    return (reason, true);
+            Decision::NeedApproval => {
+                // 等核准的這段也記下來（pending），畫面才看得出 Agent 卡在等你。核准後同一筆接著執行。
+                let id = skill::start_query(&pool, &NewQuery { decision: "pending", ..q }).await.ok();
+                self.changed();
+                match self.wait_for_approval(task_id, &pool, &label, &name, &sql).await {
+                    Ok(()) => {
+                        if let Some(id) = id {
+                            let _ = skill::set_decision(&pool, id, "approved").await;
+                        }
+                        id
+                    }
+                    Err(reason) => {
+                        if let Some(id) = id {
+                            let _ = skill::set_decision(&pool, id, "denied").await;
+                            let _ = skill::finish_query(&pool, id, None, 0, Some(&reason)).await;
+                        }
+                        self.changed();
+                        return (reason, true);
+                    }
                 }
-            },
+            }
         };
-        let id = skill::start_query(&pool, &NewQuery { decision, ..q }).await.ok();
         self.changed();
         let started = Instant::now();
         let result = (backend.run)(call).await;
@@ -1085,6 +1097,9 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(ran.lock().is_empty(), "還沒核准不能執行");
+        let waiting = recent_queries(&pool, 10).await.unwrap();
+        assert_eq!(waiting.len(), 1, "等核准時就要有一筆，畫面才顯示得出「等你核准」");
+        assert_eq!((waiting[0].decision.as_str(), waiting[0].finished_at), ("pending", None));
         // 正式流程：指令先把答案存進資料庫，再交給等待者。
         crate::tasks::questions::answer(&pool, q.id, APPROVE, "app").await.unwrap();
         assert!(state.give_approval(&id, q.id, APPROVE));
@@ -1112,7 +1127,9 @@ mod tests {
         assert_eq!(ran.lock().len(), 1, "拒絕的不執行");
 
         let rows = recent_queries(&pool, 10).await.unwrap();
+        assert_eq!(rows.len(), 2, "等待那筆就是後來執行的那筆，不另外多記：{rows:?}");
         assert_eq!(rows.iter().find(|r| r.sql.starts_with("UPDATE")).unwrap().decision, "approved");
+        assert!(rows.iter().all(|r| r.finished_at.is_some()));
         assert_eq!(rows.iter().find(|r| r.sql.starts_with("DELETE")).unwrap().decision, "denied");
     }
 

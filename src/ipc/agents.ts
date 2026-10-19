@@ -184,7 +184,7 @@ export interface DbQueryRow {
   rows: number | null;
   ms: number | null;
   error: string | null;
-  decision: "allowed" | "approved" | "denied";
+  decision: "allowed" | "pending" | "approved" | "denied";
 }
 
 /** 裝上、修改或移除（null）Agent 的資料庫技能。 */

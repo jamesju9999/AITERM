@@ -89,7 +89,7 @@ export function AgentNode({
   /** 這個 Agent 用的 AI 工具沒裝（顯示名稱，例如「Claude Code」）；有裝或還不知道是 null。 */
   missingTool?: string | null;
   /** 資料庫技能：標籤文字，與正在跑的 SQL 開頭（沒有在查就是 null）。沒裝是 null。 */
-  dbSkill?: { mode: string; label: string; active: string | null } | null;
+  dbSkill?: { mode: string; label: string; activity: { kind: "pending" | "running" | "recent"; sql: string } | null } | null;
   onDbSkill?: () => void;
   status: AgentStatus;
   nowSecs: number;
@@ -381,7 +381,7 @@ export function AgentNode({
       {dbSkill && (
         <button
           type="button"
-          className={`ac-skill-row${dbSkill.active ? " ac-skill-row--active" : ""}`}
+          className={`ac-skill-row${dbSkill.activity ? ` ac-skill-row--${dbSkill.activity.kind === "pending" ? "pending" : "active"}` : ""}`}
           data-testid="agent-db-skill"
           title={`${t.ac_db_chip_tip}\n${dbSkill.label}（${dbSkill.mode}）`}
           onMouseDown={(e) => e.stopPropagation()}
@@ -393,7 +393,12 @@ export function AgentNode({
             <span className="ac-skill-row-mode">{dbSkill.mode}</span>
             <span className="ac-skill-row-label">{dbSkill.label}</span>
           </span>
-          {dbSkill.active && <span className="ac-db-sql">{dbSkill.active}</span>}
+          {dbSkill.activity && (
+            <span className="ac-db-sql">
+              {dbSkill.activity.kind === "pending" ? `⏳ ${t.ac_db_waiting_approval}` : ""}
+              {dbSkill.activity.sql}
+            </span>
+          )}
         </button>
       )}
       <div className="ac-agent-body">
