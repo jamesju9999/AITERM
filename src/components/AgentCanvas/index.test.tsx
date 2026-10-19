@@ -26,6 +26,7 @@ vi.mock("../../ipc/tasks", () => ({
   }),
   readTranscript: vi.fn().mockResolvedValue(""),
   markTaskDone: vi.fn().mockResolvedValue(undefined),
+  deleteTask: vi.fn().mockResolvedValue(undefined),
   codexInfo: vi.fn().mockResolvedValue({ models: [], login: null, error: null }),
 }));
 vi.mock("../../ipc/agents", () => ({
@@ -116,7 +117,7 @@ import {
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
-import { codexInfo, getProjectBrief, listTasks, listTokenUsage, markTaskDone, setProjectBrief, type TaskWithAttachments } from "../../ipc/tasks";
+import { codexInfo, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, setProjectBrief, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { listProjects } from "../../ipc/projects";
@@ -582,6 +583,22 @@ describe("AgentCanvasView", () => {
       await waitFor(() => expect(within(node).getByText(/驗收通過/)).toBeTruthy());
       expect(screen.getByTestId("ac-summary").textContent).toMatch(/已合回程式庫/);
     });
+  });
+
+  it("模組庫的模組可以直接刪除：先在原地確認，取消就不刪", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([card({ id: "C", title: "C 訂單", status: "planning" })]);
+    view();
+    const mod = await screen.findByTestId("module-C");
+    fireEvent.click(within(mod).getByRole("button", { name: /刪除模組|Delete module/ }));
+    expect(within(mod).getByText(/刪除這個模組？|Delete this module\?/)).toBeTruthy();
+    fireEvent.click(within(mod).getByRole("button", { name: /^取消$|^Cancel$/ }));
+    expect(deleteTask).not.toHaveBeenCalled();
+    expect(within(mod).queryByText(/刪除這個模組？/)).toBeNull();
+
+    fireEvent.click(within(mod).getByRole("button", { name: /刪除模組|Delete module/ }));
+    fireEvent.click(within(mod).getByRole("button", { name: /^刪除$|^Delete$/ }));
+    await waitFor(() => expect(deleteTask).toHaveBeenCalledWith("p1", "C", false));
   });
 
   it("把模組拖到 Agent 上會指派給它", async () => {

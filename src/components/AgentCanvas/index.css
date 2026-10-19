@@ -114,7 +114,15 @@
   font-size: 12.5px;
 }
 .ac-module:hover { border-color: var(--accent); }
-.ac-module-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-module-title { display: block; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 刪除鈕平常隱藏，滑鼠移到模組上（或鍵盤聚焦）才出現。 */
+.ac-module { display: flex; align-items: center; gap: 6px; }
+.ac-module-del { flex: none; opacity: 0; padding: 0 4px; line-height: 1; color: var(--text-muted); }
+.ac-module:hover .ac-module-del, .ac-module-del:focus-visible { opacity: 1; }
+.ac-module-del:hover { color: var(--ac-fail, #ef4444); }
+.ac-module--confirm { border-color: color-mix(in srgb, var(--ac-fail, #ef4444) 55%, transparent); cursor: default; }
+.ac-module-confirm { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.ac-module-del-yes { background: color-mix(in srgb, var(--ac-fail, #ef4444) 20%, transparent); color: #fca5a5; border: 1px solid color-mix(in srgb, var(--ac-fail, #ef4444) 50%, transparent); }
 .ac-lib-foot { display: flex; align-items: stretch; gap: 6px; padding: 0 12px 12px; }
 .ac-lib-foot .ac-add { flex: 1; margin: 0; }
 .ac-lib-foot .ac-lib-toggle { border: 1px solid var(--ac-edge); border-radius: 8px; padding: 0 9px; }

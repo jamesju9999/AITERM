@@ -44,6 +44,7 @@ import { missingTools } from "./toolsCheck";
 import { listProjects, type ProjectInfo } from "../../ipc/projects";
 import {
   getTaskBoardConfig,
+  deleteTask,
   listTasks,
   listTokenUsage,
   getTokenBudget,
@@ -206,6 +207,8 @@ export function AgentCanvasView({
   /** 專案的參考資料夾；記著是哪個專案的。 */
   const [refsOf, setRefsOf] = useState<{ projectId: string; list: Reference[] } | null>(null);
   const [refsOpen, setRefsOpen] = useState(false);
+  /** 模組庫裡正在確認要不要刪除的模組。 */
+  const [deletingModule, setDeletingModule] = useState<string | null>(null);
   /** 自訂技能的使用記錄；記著是哪個專案的。 */
   const [skillUsesOf, setSkillUsesOf] = useState<{ projectId: string; rows: SkillUseRow[] } | null>(null);
   /** 正在設定自訂技能的 Agent。 */
@@ -1181,12 +1184,44 @@ export function AgentCanvasView({
               {library.map((c) => (
                 <div
                   key={c.id}
-                  className="ac-module"
+                  className={`ac-module${deletingModule === c.id ? " ac-module--confirm" : ""}`}
                   data-testid={`module-${c.id}`}
-                  onMouseDown={(e) => beginDrag(e, "module", c.id)}
+                  onMouseDown={(e) => deletingModule !== c.id && beginDrag(e, "module", c.id)}
                   title={c.body}
                 >
-                  <span className="ac-module-title">{c.title}</span>
+                  {deletingModule === c.id ? (
+                    // 原地確認，不跳系統對話框；模組庫裡都是還沒指派的計畫中卡片，刪了不影響任何工作。
+                    <span className="ac-module-confirm" onMouseDown={(e) => e.stopPropagation()}>
+                      <span>{t.ac_module_delete_q}</span>
+                      <button
+                        type="button"
+                        className="aiterm-btn aiterm-btn--sm ac-module-del-yes"
+                        onClick={() => {
+                          setDeletingModule(null);
+                          if (projectId) void run(() => deleteTask(projectId, c.id, false));
+                        }}
+                      >
+                        {t.ac_module_delete_yes}
+                      </button>
+                      <button type="button" className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setDeletingModule(null)}>
+                        {t.cancel}
+                      </button>
+                    </span>
+                  ) : (
+                    <>
+                      <span className="ac-module-title">{c.title}</span>
+                      <button
+                        type="button"
+                        className="ac-iconbtn ac-module-del"
+                        aria-label={t.ac_module_delete}
+                        title={t.ac_module_delete}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={() => setDeletingModule(c.id)}
+                      >
+                        ×
+                      </button>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
