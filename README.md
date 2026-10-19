@@ -13,7 +13,7 @@
 <a id="english"></a>
 # AITerm (English)
 
-A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 19**, and **Rust**. AITerm seamlessly integrates the traditional command-line experience with advanced AI capabilities, autonomous agents, a task board that dispatches work to Claude Code on your behalf, and project requirement management.
+A powerful, cross-platform AI-enhanced terminal built with **Tauri 2**, **React 19**, and **Rust**. AITerm seamlessly integrates the traditional command-line experience with advanced AI capabilities, autonomous agents, a task board that dispatches work to Claude Code on your behalf, **Agent Collaboration** that organizes several AI engineers into a team that builds, reviews, merges and verifies a project, and project requirement management.
 
 Beyond cloud providers, AITerm connects to **local models** (Ollama, LM Studio, oMLX, and other OpenAI-compatible endpoints) so inference runs on your own machine — **no API cost and nothing sent off-box** — which pays off for high-volume automation. It can also **bridge the Claude Code CLI to any provider** you have configured, so you run Claude Code on your OpenAI, Gemini, or local models.
 
@@ -25,10 +25,11 @@ Beyond cloud providers, AITerm connects to **local models** (Ollama, LM Studio, 
 - **Structured Command Blocks**: Every command and its output render as a distinct card instead of raw scrollback. The live terminal pane auto-expands only while a command is running and shrinks back down when idle, keeping the screen uncluttered.
 - **Autonomous Agent Loop (`/agent`)**: Multi-step, goal-driven agentic execution for complex tasks, with built-in guardrails and fallback to manual confirmation for dangerous operations.
 - **LoopStudio (Loop Engineering)**: A visual multi-agent orchestration workbench — an orchestrator breaks a goal down and dispatches sub-agents to work in parallel, with safety gates and a live execution trace, running autonomously until the goal is verified done instead of requiring back-and-forth confirmation.
-- **Task Board**: A kanban board that hands work to Claude Code for you. Write what you want done as cards — title, which folder to work in, detailed instructions, attachments if needed — and drag one to Queued: AITerm opens a tab, launches Claude Code, delivers your instructions, and moves the card to Done with a success or failure outcome when it finishes. Queue up an evening's work instead of driving each task by hand. Cards live in projects (self-contained folders you can copy to move or share), several projects open as tabs at once, and a global concurrency cap keeps the machine sane. Interactive mode marks work you intend to discuss with Claude Code yourself, exempt from the cap and from stall detection. Finished work keeps a clean transcript you can reread, and "Requeue" clones a card to run the same thing again. Search filters all four columns by title, body or folder.
+- **Task Board**: A kanban board that hands work to Claude Code for you. Write what you want done as cards — title, which folder to work in, detailed instructions, attachments if needed — and drag one to Queued: AITerm opens a tab, launches Claude Code, delivers your instructions, and moves the card to Done with a success or failure outcome when it finishes. Queue up an evening's work instead of driving each task by hand. Cards live in projects (self-contained folders you can copy to move or share), several projects open as tabs at once, and a global concurrency cap keeps the machine sane. Interactive mode marks work you intend to discuss with Claude Code yourself, exempt from the cap and from stall detection. Finished work keeps a clean transcript you can reread, and "Requeue" clones a card to run the same thing again. Search filters all four columns by title, body or folder. Each card can run on Claude Code or OpenAI's Codex CLI.
 - **AI Work Report**: Turn a project's board into a formatted document. Pick a style, choose a model, and AITerm reads every card — including the full transcripts of finished work — and writes an HTML report that is saved into the project folder and kept as history. A finished card's summary is written once and cached, so a second report only processes what is new.
 - **Archive**: Finished cards would otherwise pile up forever. Archive them one at a time or a whole column at once and the board keeps only what is in flight. Nothing is deleted — cards, transcripts and attachments stay put, the archive view searches and pages through them, and any card can be restored to the board.
 - **AI Refine**: Jot a rough note into a task's body, press Refine, and the AI rewrites it into a brief Claude Code can execute — goal, scope, constraints, acceptance criteria — without inventing work you did not ask for. One click restores your original.
+- **Agent Collaboration**: Turn several Claude Code / Codex agents into a team on a canvas. **Engineers** (as many as you like) each work on their own git worktree and branch, so they truly run in parallel — drag a module onto an engineer and it starts. A **reviewer** reads every finished module's diff and passes it or sends it back with reasons (up to 2 rounds, then you decide); on a pass it writes a hand-off note on what the module provides. An **integrator** merges every branch once all modules pass, and an optional **verifier** builds, runs and actually uses the merged result — clicking through a browser for web apps — checking each acceptance criterion with screenshot evidence before your repository is fast-forwarded. Every agent starts with a shared big picture: a project brief you write once (with AI refine), plus an auto-generated team map of who owns what, progress, dependencies and hand-off notes. Agents ask for decisions in a Decisions inbox (with desktop and Telegram notifications), wait out usage limits and resume, and pick up the same conversation after an app restart. Also: spec-first planning, task dependencies, per-role models, per-project token caps, team templates, and a guided tour. Requires the Claude Code CLI (Codex optional).
 - **Code Assistant**: A dedicated tab where the AI answers questions about any project directory — it scans the file tree, searches and reads source files on its own, can render Mermaid diagrams, and lets you export the conversation to Markdown.
 - **Multi-turn Chat Sidebar**: Persistent, context-aware AI chat directly beside your terminal for troubleshooting, code generation, and brainstorming.
 - **AI Document & Chart Panel**: Reports, comparison tables, and charts the AI produces open in a formatted panel beside the conversation instead of raw markup — bar/line/pie charts render directly, switch to a table view for exact numbers, and export to an HTML file in one click. Available across the terminal and remote AI panels, Code Assistant, Knowledge Base, and database / cross-database Q&A.
@@ -42,6 +43,11 @@ Beyond cloud providers, AITerm connects to **local models** (Ollama, LM Studio, 
 - **Requirement Management System**: AI-assisted discussion for feature planning, automatically generating and saving specifications (SDD) into structured, project-managed directories.
 - **MCP Tools**: Connect any MCP (Model Context Protocol) server and the AI can read and write files, query data, and call external services directly — no terminal command in between. Every tool call and its result stays visible and expandable.
 - **Claude Code Bridge**: Point the Claude Code CLI at any provider you have configured in AITerm — run Claude Code on your OpenAI, Gemini, or local models, and switch between them at any time.
+- **Next-Step Suggestions**: While Claude Code, Codex, Gemini CLI or a similar AI CLI runs in the terminal, a side panel reads the screen and suggests 3–5 prompts to send next — click to fill, double-click (or ➤) to send. Set a big goal per tab and let the AI break it into milestones; suggestions steer toward the next unfinished one. A prompt helper rewrites rough requests, and likely API keys, tokens and passwords are masked before the screen is sent.
+- **Computer-Use Hub**: A global hotkey (default ``Ctrl+` ``) summons or hides AITerm from anywhere, a tray icon keeps it running in the background, and it can start at login. With Computer Use enabled, the AI (in Ask AI or any external MCP client) can list apps, read UI elements, take screenshots, click, type and scroll in other applications — asking before it touches each app for the first time, re-confirming destructive clicks, and logging every action.
+- **OpenAI-Compatible API Server**: Let Cursor, Cline, Open WebUI or your own scripts talk to AITerm and use any provider you have configured in it — subscription sign-ins, API keys or local models. Requests are routed through a model alias table, need an API key, support streaming and tool calling, and accept LAN connections only if you opt in.
+- **System Integration**: Use AITerm as the system terminal on macOS and Linux; right-click a folder → "Open in AITerm" in macOS Finder and Windows Explorer; on Windows, run commands that need administrator rights elevated in the same tab. AITerm remembers window size and position and warns before closing while work is running.
+- **Command History Hints**: As you type, a grey hint suggests a command you have typed before; press Tab (configurable) to accept it.
 - **Robust Terminal Engine**: Powered by `xterm.js` and `portable-pty` for a fast, native-feeling shell experience across Windows, macOS, and Linux.
 
 ## 🏗️ Architecture
@@ -142,9 +148,10 @@ connection keeps working. Across networks, use an address the viewer can reach
 src-tauri/       # Rust backend (Tauri + PTY + AI Router + DB)
   src/pty/       # PTY lifecycle and streaming
   src/ai/        # Multi-provider AI router
+  src/tasks/     # Task board, dispatch, Agent Collaboration workflow
   tests/         # Rust integration tests
 src/             # React 19 frontend
-  components/    # TerminalView, ChatSidebar, etc.
+  components/    # TerminalView, ChatSidebar, TaskBoard, AgentCanvas, etc.
   ipc/           # Typed Tauri invoke + event wrappers
 docs/            # Specs and implementation plans
 ```
@@ -156,7 +163,7 @@ docs/            # Specs and implementation plans
 
 # AITerm (繁體中文)
 
-一個強大且跨平台的 AI 智慧終端機，基於 **Tauri 2**、**React 19** 和 **Rust** 打造。AITerm 將傳統的命令列體驗與先進的 AI 能力、自主代理（Agent）、可自動把工作派給 Claude Code 執行的工作看板，以及專案需求管理完美結合。
+一個強大且跨平台的 AI 智慧終端機，基於 **Tauri 2**、**React 19** 和 **Rust** 打造。AITerm 將傳統的命令列體驗與先進的 AI 能力、自主代理（Agent）、可自動把工作派給 Claude Code 執行的工作看板、讓好幾個 AI 工程師分工開發、互相審查、合併並實際驗收的 **Agent 協作**，以及專案需求管理完美結合。
 
 除了雲端供應商，AITerm 也能串接**本地端模型**（Ollama、LM Studio、oMLX 及其他 OpenAI 相容端點），推論在自己機器上跑——**不花 API 費用、資料不外送**——量大的自動化任務尤其划算。也可以用 **Claude Code 橋接**，讓 Claude Code CLI 跑在你已設定的任何供應商上（OpenAI、Gemini 或本地模型皆可）。
 
@@ -168,10 +175,11 @@ docs/            # Specs and implementation plans
 - **結構化指令區塊**：每個指令與其輸出都會渲染成獨立卡片，而非傳統終端機的原始捲動畫面；即時終端機視窗只在指令執行中才自動展開，閒置時自動收合，畫面保持乾淨。
 - **自主代理循環 (`/agent`)**：針對複雜任務提供多步驟、目標導向的代理執行能力，內建安全防護機制，並在遇到危險操作時自動退回手動確認模式。
 - **LoopStudio（循環工程）**：可視化的多代理協同工作台——主控代理拆解任務並分派子代理平行執行，搭配安全閘門與即時執行追蹤，自主循環直到目標驗證完成，不需要一問一答反覆確認。
-- **工作看板**：把工作排進去，AITerm 自動派給 Claude Code 執行。把想做的事寫成卡片（標題、要在哪個資料夾做、詳細指示，需要的話還能附上檔案），拖到「待執行」，AITerm 就會開一個分頁、啟動 Claude Code、把指示送過去，做完自動搬到「已完成」並標上成功或失敗——一次排好幾件晚上再看結果，不必守在電腦前一件一件下指令。卡片歸屬於專案（自成一體的磁碟資料夾，複製即可搬移或分享），可同時開多個專案分頁，並行上限為全域設定。「互動模式」用於你打算自己跟 Claude Code 討論的工作，不佔並行額度也不會被判定卡住。完成的工作留有乾淨的對話記錄可回顧，「重新派工」會複製一張新卡片重跑同一件事。搜尋可依標題、內容或工作目錄即時過濾四個欄位。
+- **工作看板**：把工作排進去，AITerm 自動派給 Claude Code 執行。把想做的事寫成卡片（標題、要在哪個資料夾做、詳細指示，需要的話還能附上檔案），拖到「待執行」，AITerm 就會開一個分頁、啟動 Claude Code、把指示送過去，做完自動搬到「已完成」並標上成功或失敗——一次排好幾件晚上再看結果，不必守在電腦前一件一件下指令。卡片歸屬於專案（自成一體的磁碟資料夾，複製即可搬移或分享），可同時開多個專案分頁，並行上限為全域設定。「互動模式」用於你打算自己跟 Claude Code 討論的工作，不佔並行額度也不會被判定卡住。完成的工作留有乾淨的對話記錄可回顧，「重新派工」會複製一張新卡片重跑同一件事。搜尋可依標題、內容或工作目錄即時過濾四個欄位。每張卡片可以選擇用 Claude Code 或 OpenAI 的 Codex CLI 執行。
 - **AI 工作報告**：把一個專案的看板整理成一份文件。選風格、選模型，AITerm 會讀過每一張卡片（含已完成工作的完整對話記錄），產出排版好的 HTML 報告，存進專案資料夾累積成歷史。已完成的工作摘要只整理一次就快取起來，第二次產報告只需處理新完成的部分。
 - **封存**：完成的卡片不會無止境堆積。可單張封存或整欄一次收起，看板只留下正在進行的事。封存不是刪除——卡片、對話記錄、附件全部留著，封存清單可搜尋、分頁翻閱，任何一張都能放回看板。
 - **AI 潤飾**：工作內容隨手打幾句，按下「AI 潤飾」，AI 會改寫成一份 Claude Code 能執行的完整指示（目標、範圍、限制、驗收標準），且不會自己加上你沒要求的工作。不滿意按「還原」即換回原文。
+- **Agent 協作**：在桌布上把好幾個 Claude Code／Codex 編成一個團隊。**工程師**（可放好幾位）各自在自己的 git worktree 與分支上工作，真正平行——把模組拖到工程師身上就開工。**審核者**讀每個完成模組的 diff，判定通過或附理由退回（最多 2 輪，之後由你決定）；通過時寫下這個模組「提供了什麼」的交件摘要。所有模組通過後，**協調者**合併各分支；選用的**驗收者**會在合併版上實際建置、執行、操作（網頁就開瀏覽器點擊），照驗收條件逐條確認並留下截圖，通過才把你的程式庫快轉到整合版。每位 Agent 開工前都有共同的全貌：你寫一次的專案簡介（可 AI 潤飾），加上自動產生的團隊分工——誰負責什麼、進度、相依與交件摘要。需要你決定時會送到「待決策」（並發桌面通知與 Telegram）；額度用完會等待後續跑；App 重開後接回原本的對話。另有規格先行、相依關係、依角色指定模型、專案 token 上限、團隊範本與新手導覽。需要先安裝 Claude Code CLI（Codex 選用）。
 - **程式庫協助**：獨立分頁，讓 AI 針對任意專案目錄回答問題——自動掃描檔案樹、搜尋並讀取原始碼，可繪製 Mermaid 圖表，對話還能匯出成 Markdown。
 - **多輪對話側邊欄**：終端機旁內建具備上下文記憶的 AI 對話視窗，方便進行問題排解、程式碼生成與靈感發想。
 - **AI 文件與圖表面板**：AI 產生的報告、比較表格與圖表會在對話右側開一個排版好的面板，而不是塞成原始碼——長條圖、折線圖、圓餅圖直接畫出來，可切換成表格檢視看確切數字，也能一鍵存成 HTML 檔；終端機與遠端 AI 面板、程式庫協助、知識庫、資料庫與跨資料庫問答皆適用。
@@ -185,6 +193,11 @@ docs/            # Specs and implementation plans
 - **需求管理系統**：提供 AI 輔助的系統功能討論，可自動生成規格文件 (SDD) 並將其儲存到專案管理的結構化目錄中。
 - **MCP 工具**：接上任何 MCP（Model Context Protocol）伺服器，AI 就能直接讀寫檔案、查詢資料、呼叫外部服務，不必經過終端機指令；工具的每一次呼叫與回傳都看得到、展得開。
 - **Claude Code 橋接**：把 Claude Code CLI 接到 AITerm 已設定的任何供應商——用你手邊的 OpenAI、Gemini 或本地模型跑 Claude Code，模型可隨時切換。
+- **下一步建議側欄**：在終端機跑 Claude Code、Codex、Gemini CLI 這類 AI 命令列工具時，側欄會看目前畫面，提出 3 到 5 個下一步可以送出的提示詞——單擊填入、雙擊（或按 ➤）直接送出。可以替每個分頁設定大目標，讓 AI 拆成里程碑，建議會朝第一個未完成的里程碑推進；提示詞助手能把粗略的需求改寫清楚；送出畫面前會先遮罩疑似的 API 金鑰、token 與密碼。
+- **電腦操作入口**：全域快捷鍵（預設 ``Ctrl+` ``）在任何地方叫出或隱藏 AITerm，托盤圖示讓它常駐背景，也可以開機自動啟動。開啟「電腦操作」後，AI（Ask AI 或任何外部 MCP 用戶端）能列出應用程式、讀取畫面元件、截圖、點擊、打字、捲動其他應用程式——每個應用程式第一次操作都會先問你，刪除／送出類的按鈕每次都再確認，所有操作都有紀錄。
+- **OpenAI 相容 API 伺服器**：讓 Cursor、Cline、Open WebUI 或你自己的腳本直接連到 AITerm，使用你在 AITerm 設定好的任何供應商（訂閱登入、API 金鑰、本機模型皆可）。模型名稱依別名表轉送，請求要帶 API key，支援串流與工具呼叫，要自己勾選才開放區網連線。
+- **系統整合**：macOS 與 Linux 可把 AITerm 當成系統的終端機；在 macOS Finder 與 Windows 檔案總管對資料夾按右鍵「在 AITerm 開啟」；Windows 需要系統管理員權限的指令可以直接在同一個分頁提權執行。AITerm 會記住視窗大小與位置，有工作在進行時關閉會先提醒。
+- **指令歷史提示**：輸入時用灰字提示你之前打過的指令，按 Tab（可改）補上。
 - **強大的終端機引擎**：基於 `xterm.js` 與 `portable-pty`，在 Windows、macOS 與 Linux 上提供快速、原生的 Shell 體驗。
 
 ## 🏗️ 系統架構
@@ -280,9 +293,10 @@ aiterm-host --bind 0.0.0.0 --port 8022
 src-tauri/       # Rust 後端 (Tauri + PTY + AI Router + DB)
   src/pty/       # PTY 生命週期與資料流處理
   src/ai/        # 多重 AI 供應商路由
+  src/tasks/     # 工作看板、派工與 Agent 協作流程
   tests/         # Rust 整合測試
 src/             # React 19 前端
-  components/    # TerminalView、對話側邊欄等元件
+  components/    # TerminalView、對話側邊欄、工作看板、Agent 協作等元件
   ipc/           # 型別安全的 Tauri IPC 封裝
 docs/            # 規格文件與實作計畫
 ```
