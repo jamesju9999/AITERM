@@ -5,7 +5,9 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { DetailPane } from "./DetailPane";
 import { foldFinished } from "./fold";
 import { GraphCanvas } from "./GraphCanvas";
-import { layoutGraph } from "./graphLayout";
+import { layoutGraph, ROOT_ID } from "./graphLayout";
+import { formatTokens } from "./format";
+import { tokenStats } from "./tokens";
 import { TimelineView } from "./TimelineView";
 import "./ClaudeActivityPanel.css";
 
@@ -70,6 +72,8 @@ export function ClaudeActivityPanel({ snapshot, fill }: Props) {
   const visible = showDone ? turnNodes : folded.nodes;
   const graph = useMemo(() => layoutGraph(visible), [visible]);
   // 時間軸不折疊，所以選中的節點要在整輪裡找；圖則在折疊後看得到的節點裡找。
+  const stats = useMemo(() => tokenStats(turnNodes), [turnNodes]);
+  const rootSelected = mode === "graph" && selectedId === ROOT_ID;
   const selected = (mode === "timeline" ? turnNodes : visible).find((n) => n.id === selectedId) ?? null;
 
   useEffect(() => {
@@ -97,6 +101,7 @@ export function ClaudeActivityPanel({ snapshot, fill }: Props) {
       <span className="aiterm-cact__title">{t.claude_activity_title}</span>
       <span className="aiterm-cact__count">{t.claude_activity_running(running)}</span>
       <span className="aiterm-cact__count">{t.claude_activity_total(turnNodes.length)}</span>
+      {stats.total > 0 && <span className="aiterm-cact__count">{t.claude_activity_tokens_total(formatTokens(stats.total))}</span>}
       {closeButton ? (
         <button type="button" className="aiterm-cact__btn aiterm-cact__btn--first" onClick={() => setEnlarged(false)}>
           {t.claude_activity_close}
@@ -151,12 +156,19 @@ export function ClaudeActivityPanel({ snapshot, fill }: Props) {
           onSelect={setSelectedId}
           runningCount={running}
           mainTool={snapshot.main_tool}
+          mainToolCount={snapshot.main_tool_count}
+          heaviestId={stats.heaviestId}
           onExpandDone={() => setShowDone(true)}
         />
       ) : (
         <TimelineView nodes={turnNodes} now={now} selectedId={selectedId} onSelect={setSelectedId} />
       )}
-      <DetailPane node={selected} now={now} />
+      <DetailPane
+        node={selected}
+        now={now}
+        share={selected ? stats.share(selected) : null}
+        main={rootSelected ? { count: snapshot.main_tool_count, recent: snapshot.main_recent } : null}
+      />
     </>
   );
 

@@ -47,7 +47,6 @@ export function useClaudeActivityAlerts(snapshot: ActivitySnapshot, isActive: bo
           : tRef.current.claude_activity_alert_all_done(a.count, a.failed),
       );
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- notify 只讀 ref，不需要列入
   }, [snapshot]);
 
   const anyRunning = snapshot.nodes.some((n) => n.status === "running");
@@ -65,6 +64,5 @@ export function useClaudeActivityAlerts(snapshot: ActivitySnapshot, isActive: bo
       }
     }, STUCK_CHECK_MS);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- notify 只讀 ref，不需要列入
   }, [anyRunning]);
 }

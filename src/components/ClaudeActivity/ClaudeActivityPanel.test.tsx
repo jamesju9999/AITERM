@@ -234,4 +234,36 @@ describe("縮放與時間軸", () => {
     fireEvent.click(screen.getByRole("button", { name: "流程圖" }));
     expect(screen.getByTestId("graph")).toBeInTheDocument();
   });
+
+  it("標頭顯示本輪 token 合計；沒有任何 token 資料時不顯示", () => {
+    const { unmount } = renderPanel([done("a", { tokens: 1_000 }), done("b", { tokens: 3_000 })]);
+    expect(screen.getByText("共 4.0k tokens")).toBeInTheDocument();
+    unmount();
+    renderPanel([done("a")]);
+    expect(screen.queryByText(/共 .* tokens/)).toBeNull();
+  });
+
+  it("token 最多的節點標「最耗」，詳情顯示佔本輪百分比", () => {
+    renderPanel([done("a", { tokens: 1_000 }), done("b", { tokens: 3_000 })]);
+    expect(card("b").textContent).toContain("最耗");
+    expect(card("a").textContent).not.toContain("最耗");
+    fireEvent.click(card("b"));
+    expect(screen.getByText("佔本輪 75%")).toBeInTheDocument();
+  });
+
+  it("只有一個節點有 token 時不標最耗", () => {
+    renderPanel([done("a", { tokens: 1_000 }), done("b")]);
+    expect(card("a").textContent).not.toContain("最耗");
+  });
+
+  it("根卡片顯示主 Claude 的工具次數；點它看最近的工具清單", () => {
+    renderPanel([done("a")], { main_tool_count: 12, main_recent: ["Read: /a.rs", "Bash: ls"] });
+    expect(card("__root__").textContent).toContain("12 次工具呼叫");
+    fireEvent.click(card("__root__"));
+    expect(screen.getByText("主 Claude 本輪 12 次工具呼叫")).toBeInTheDocument();
+    expect(screen.getByText("Read: /a.rs")).toBeInTheDocument();
+    expect(screen.getByText("Bash: ls")).toBeInTheDocument();
+    // 選根不該把其他卡片全部淡掉
+    expect(card("a").className).not.toContain("is-dim");
+  });
 });

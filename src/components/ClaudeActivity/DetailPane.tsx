@@ -2,9 +2,29 @@ import type { ActivityNode, ActivityStatus } from "../../ipc/claudeActivity";
 import { useLocale } from "../../contexts/LocaleContext";
 import { formatDuration, formatTokens } from "./format";
 
-/** 選中節點的詳情；沒選時顯示提示。圖與時間軸共用。 */
-export function DetailPane({ node, now }: { node: ActivityNode | null; now: number }) {
+export interface MainActivity {
+  count: number;
+  recent: string[];
+}
+
+/** 選中節點的詳情；沒選時顯示提示。選到根時顯示主 Claude 的活動。圖與時間軸共用。 */
+export function DetailPane({ node, now, share = null, main = null }: { node: ActivityNode | null; now: number; share?: number | null; main?: MainActivity | null }) {
   const { t } = useLocale();
+  if (main) {
+    return (
+      <div className="aiterm-cact__detail">
+        <div className="aiterm-cact__detail-title">{t.claude_activity_main_tools(main.count)}</div>
+        {main.recent.length > 0 && (
+          <>
+            <div className="aiterm-cact__hint">{t.claude_activity_main_recent}</div>
+            <ul className="aiterm-cact__recent">
+              {main.recent.map((r, i) => <li key={i}>{r}</li>)}
+            </ul>
+          </>
+        )}
+      </div>
+    );
+  }
   if (!node) {
     return (
       <div className="aiterm-cact__detail">
@@ -26,6 +46,7 @@ export function DetailPane({ node, now }: { node: ActivityNode | null; now: numb
         <span>{statusLabel[node.status]}</span>
         <span>{formatDuration((node.ended_ms ?? now) - node.started_ms)}</span>
         {node.tokens != null && <span>{t.claude_activity_tokens(formatTokens(node.tokens))}</span>}
+        {share != null && <span>{t.claude_activity_share(share)}</span>}
         {node.tool_count != null && <span>{t.claude_activity_tools(node.tool_count)}</span>}
       </div>
       {node.status === "running" && node.current_tool && <div className="aiterm-cact__tool">{node.current_tool}</div>}

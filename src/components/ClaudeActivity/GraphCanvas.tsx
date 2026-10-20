@@ -18,6 +18,9 @@ interface Props {
   onSelect: (id: string | null) => void;
   runningCount: number;
   mainTool: string | null;
+  mainToolCount: number;
+  /** token 最多的節點（有 ≥2 個節點有 token 時才有）；卡片上標「最耗」。 */
+  heaviestId: string | null;
   /** 點群組卡（已完成 N 個）：展開被折起來的節點。 */
   onExpandDone: () => void;
 }
@@ -35,7 +38,7 @@ function pathTo(id: string | null, graph: Graph): Set<string> {
   return path;
 }
 
-export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCount, mainTool, onExpandDone }: Props) {
+export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCount, mainTool, mainToolCount, heaviestId, onExpandDone }: Props) {
   const { t } = useLocale();
   const uid = useId().replace(/:/g, "");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -43,7 +46,8 @@ export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCo
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
   const cols = useMemo(() => new Map(Array.from({ length: 12 }, (_, d) => [colX(d), d] as const)), []);
   const path = useMemo(() => pathTo(selectedId, graph), [selectedId, graph]);
-  const dimming = selectedId != null && path.size > 0;
+  // 選根只是要看主 Claude 的詳情，不需要把所有 subagent 都淡掉。
+  const dimming = selectedId != null && selectedId !== ROOT_ID && path.size > 0;
 
   const statusLabel: Record<ActivityStatus, string> = {
     running: t.claude_activity_status_running,
@@ -116,11 +120,21 @@ export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCo
               const dim = dimming && !path.has(id);
               if (id === ROOT_ID) {
                 return (
-                  <div key={id} className={`aiterm-cact__card aiterm-cact__card--root${dim ? " is-dim" : ""}`} style={style} data-node-id={id} data-col={col}>
+                  <button
+                    key={id}
+                    type="button"
+                    className={`aiterm-cact__card aiterm-cact__card--root${selectedId === id ? " is-selected" : ""}${dim ? " is-dim" : ""}`}
+                    style={style}
+                    data-node-id={id}
+                    data-col={col}
+                    aria-pressed={selectedId === id}
+                    onClick={() => onSelect(selectedId === id ? null : id)}
+                  >
                     <span className="aiterm-cact__card-title">{t.claude_activity_root}</span>
                     <span className="aiterm-cact__card-sub">{t.claude_activity_running(runningCount)}</span>
                     {mainTool && <span className="aiterm-cact__card-line aiterm-cact__card-line--main" title={mainTool}>{mainTool}</span>}
-                  </div>
+                    {mainToolCount > 0 && <span className="aiterm-cact__card-line">{t.claude_activity_tools(mainToolCount)}</span>}
+                  </button>
                 );
               }
               const n = byId.get(id);
@@ -160,6 +174,7 @@ export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCo
                   <span className="aiterm-cact__card-sub">
                     <span className="aiterm-cact__badge">{n.agent_type}</span>
                     <span>{statusLabel[n.status]}</span>
+                    {heaviestId === id && <span className="aiterm-cact__badge aiterm-cact__badge--hot">{t.claude_activity_heaviest}</span>}
                   </span>
                   <span className="aiterm-cact__card-line">
                     {n.status === "running" && n.current_tool
