@@ -110,6 +110,23 @@ pub fn settings_with_deny(settings_json: &str, rules: &[String]) -> String {
     v.to_string()
 }
 
+/// 派工時 Agent 可以讀、不能改的資料夾：參考資料夾、自訂技能的資料夾、這張卡附件所在的資料夾
+/// （附件存在看板專案資料夾，不在程式庫裡；不加的話 Claude 讀截圖會停下來等權限）。去掉重複。
+pub fn readable_dirs(refs: &[Reference], skill_dirs: &[String], attachment_files: &[String]) -> Vec<Reference> {
+    let mut out: Vec<Reference> = refs.to_vec();
+    let extra = skill_dirs.iter().cloned().chain(
+        attachment_files
+            .iter()
+            .filter_map(|f| Path::new(f).parent().map(|d| d.to_string_lossy().into_owned())),
+    );
+    for path in extra {
+        if !out.iter().any(|r| r.path == path) {
+            out.push(Reference { path, note: String::new() });
+        }
+    }
+    out
+}
+
 /// 讀了參考資料的記錄：每張卡、每個資料夾一筆，讀了幾次、第一次與最後一次的時間。
 /// 畫面用最後一次的時間決定要不要畫「讀取中」的線，活動記錄每張卡一行不洗版。
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
@@ -271,5 +288,18 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!((rows[0].task_id.as_str(), rows[0].reads, rows[0].first_at, rows[0].last_at), ("t1", 2, 100, 130));
         assert_eq!((rows[1].task_id.as_str(), rows[1].reads), ("t2", 1));
+    }
+
+    #[test]
+    fn readable_dirs_add_skill_and_attachment_folders_once() {
+        let refs = vec![Reference { path: "/old".into(), note: "舊系統".into() }];
+        let got = readable_dirs(
+            &refs,
+            &["/skills/db".into()],
+            &["/board/tasks/t1/attachments/a.png".into(), "/board/tasks/t1/attachments/b.png".into()],
+        );
+        let paths: Vec<&str> = got.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, vec!["/old", "/skills/db", "/board/tasks/t1/attachments"]);
+        assert_eq!(got[0].note, "舊系統");
     }
 }

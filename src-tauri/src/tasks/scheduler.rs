@@ -983,11 +983,8 @@ impl Dispatcher for RealDispatcher {
             prompt.push_str(&crate::tasks::references::prompt_note(&references));
             prompt.push_str(&crate::tasks::custom_skills::prompt_note(&skills));
         }
-        let readable: Vec<crate::tasks::references::Reference> = references
-            .iter()
-            .cloned()
-            .chain(skills.iter().map(|k| crate::tasks::references::Reference { path: k.path.clone(), note: String::new() }))
-            .collect();
+        let skill_dirs: Vec<String> = skills.iter().map(|k| k.path.clone()).collect();
+        let readable = crate::tasks::references::readable_dirs(&references, &skill_dirs, &attachments);
         if let Some(skill) = db_skill.as_ref().filter(|_| !resume) {
             let names: Vec<(String, String)> =
                 self.config.get().db_connections.iter().map(|c| (c.id.clone(), c.name.clone())).collect();
