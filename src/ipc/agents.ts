@@ -234,3 +234,15 @@ export const readSkill = (path: string): Promise<SkillInfo[]> => invoke("agents_
 export const setCustomSkills = (projectId: string, agentId: string, paths: string[]): Promise<void> =>
   invoke("agents_set_custom_skills", { projectId, agentId, paths });
 export const listSkillUses = (projectId: string): Promise<SkillUseRow[]> => invoke("agents_skill_uses", { projectId });
+
+/** 這個專案的程式庫與來源：桌布上 Agent 的 → 記住的 → 看板資料夾所在的 → 預設（看板資料夾裡的 workspace，套用時才建立）。 */
+export interface ProjectRepo {
+  path: string;
+  source: "agents" | "saved" | "enclosing" | "default";
+}
+export const projectRepo = (projectId: string): Promise<ProjectRepo> => invoke("agents_project_repo", { projectId });
+/** 建立預設的程式庫資料夾、初始化並記住。 */
+export const createProjectRepo = (projectId: string, path: string): Promise<void> =>
+  invoke("agents_create_project_repo", { projectId, path });
+/** 記住這個專案的程式庫（套用範本時選過一次就不再問）。 */
+export const setProjectRepo = (projectId: string, path: string): Promise<void> => invoke("agents_set_project_repo", { projectId, path });

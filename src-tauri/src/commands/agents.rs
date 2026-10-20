@@ -501,6 +501,32 @@ pub async fn agents_skill_uses(
     crate::tasks::custom_skills::recent_uses(&p.pool, 100).await.map_err(|e| e.to_string())
 }
 
+/// 這個專案的程式庫（套用團隊範本用，不必每次選）：桌布上 Agent 的 → 記住的 → 看板資料夾所在的。
+#[tauri::command]
+pub async fn agents_project_repo(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<crate::tasks::repo_check::ProjectRepo, String> {
+    let p = project(&reg, &project_id)?;
+    let dirs: Vec<String> = agents::list_agents(&p.pool).await.map_err(|e| e.to_string())?.into_iter().map(|a| a.project_dir).collect();
+    let saved = crate::tasks::repo_check::saved_project_repo(&p.pool).await.map_err(|e| e.to_string())?;
+    Ok(crate::tasks::repo_check::project_repo(&dirs, saved, &p.path).await)
+}
+
+/// 建立預設的程式庫（看板專案資料夾裡的 workspace）並初始化、記住。
+#[tauri::command]
+pub async fn agents_create_project_repo(project_id: String, path: String, reg: State<'_, ProjectRegistry>) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::repo_check::create_project_repo(&p.pool, path.trim(), &p.path).await
+}
+
+/// 記住這個專案的程式庫。
+#[tauri::command]
+pub async fn agents_set_project_repo(project_id: String, path: String, reg: State<'_, ProjectRegistry>) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::repo_check::save_project_repo(&p.pool, path.trim()).await.map_err(|e| e.to_string())
+}
+
 /// 協作頁檢查 Claude Code／Codex／git 有沒有裝（用派工分頁同一個 shell 環境找）。
 #[tauri::command]
 pub async fn agents_check_tools(

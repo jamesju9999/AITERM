@@ -98,6 +98,66 @@ pub fn exclude_inside(repo: &Path, inner: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+/// 專案記住的程式庫（套用團隊範本時選過一次就不再問），存在 `project_settings`。
+const PROJECT_REPO_KEY: &str = "repo_dir";
+
+pub async fn saved_project_repo(pool: &sqlx::SqlitePool) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT value FROM project_settings WHERE key = ?").bind(PROJECT_REPO_KEY).fetch_optional(pool).await
+}
+
+pub async fn save_project_repo(pool: &sqlx::SqlitePool, repo: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO project_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(PROJECT_REPO_KEY)
+        .bind(repo)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// 看板專案資料夾所在的 git 程式庫（資料夾本身在某個程式庫裡面時）。
+pub async fn enclosing_repo(dir: &Path) -> Option<String> {
+    let out = tokio::process::Command::new("git").arg("-C").arg(dir).args(["rev-parse", "--show-toplevel"]).output().await.ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!top.is_empty()).then_some(top)
+}
+
+/// 專案的程式庫，與它從哪裡來（`agents`／`saved`／`enclosing`／`default`）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ProjectRepo {
+    pub path: String,
+    pub source: &'static str,
+}
+
+/// 都找不到時的預設：看板專案資料夾裡的 `workspace`（套用範本時才建立並初始化）。
+/// 不能直接用看板專案資料夾本身：它放著 tasks.db 與派工紀錄，初始化會把它們收進版控。
+pub fn default_project_repo(board: &Path) -> std::path::PathBuf {
+    board.join("workspace")
+}
+
+/// 這個專案的程式庫：桌布上 Agent 的程式庫 → 記住的 → 看板專案資料夾所在的程式庫 → 預設的 workspace。
+pub async fn project_repo(agent_dirs: &[String], saved: Option<String>, board: &Path) -> ProjectRepo {
+    if let Some(d) = agent_dirs.iter().find(|d| !d.trim().is_empty()) {
+        return ProjectRepo { path: d.clone(), source: "agents" };
+    }
+    if let Some(s) = saved.filter(|s| !s.trim().is_empty()) {
+        return ProjectRepo { path: s, source: "saved" };
+    }
+    if let Some(top) = enclosing_repo(board).await {
+        return ProjectRepo { path: top, source: "enclosing" };
+    }
+    ProjectRepo { path: default_project_repo(board).to_string_lossy().into_owned(), source: "default" }
+}
+
+/// 建立預設的程式庫資料夾並初始化（第一個 commit 可以是空的），然後記在專案裡。
+pub async fn create_project_repo(pool: &sqlx::SqlitePool, path: &str, board: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(path).map_err(|e| format!("無法建立資料夾 {path}：{e}"))?;
+    init_repo(path, Some(board)).await?;
+    save_project_repo(pool, path).await.map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +281,50 @@ mod tests {
         assert!(!exclude_inside(dir.path(), dir.path()).unwrap(), "程式庫本身不排除");
         let text = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
         assert_eq!(text.matches("/Board/").count(), 1, "{text}");
+    }
+
+    #[tokio::test]
+    async fn project_repo_prefers_agents_then_saved_then_the_enclosing_repo() {
+        let repo = tempfile::tempdir().unwrap();
+        let ok = std::process::Command::new("git").arg("-C").arg(repo.path()).args(["init", "-q"]).status().unwrap().success();
+        assert!(ok);
+        let board = repo.path().join("boards/記帳本");
+        std::fs::create_dir_all(&board).unwrap();
+        let top = std::fs::canonicalize(repo.path()).unwrap().to_string_lossy().into_owned();
+
+        let r = project_repo(&["/a".into()], Some("/s".into()), &board).await;
+        assert_eq!((r.path.as_str(), r.source), ("/a", "agents"), "桌布上 Agent 的程式庫優先");
+        let r = project_repo(&[], Some("/s".into()), &board).await;
+        assert_eq!((r.path.as_str(), r.source), ("/s", "saved"), "其次是記住的");
+        let r = project_repo(&[], None, &board).await;
+        assert_eq!(std::fs::canonicalize(&r.path).unwrap().to_string_lossy(), top.as_str(), "再來是看板資料夾所在的程式庫");
+        assert_eq!(r.source, "enclosing");
+        let outside = tempfile::tempdir().unwrap();
+        let r = project_repo(&[], None, outside.path()).await;
+        assert_eq!((r.path, r.source), (outside.path().join("workspace").to_string_lossy().into_owned(), "default"), "都沒有：看板資料夾裡的 workspace");
+    }
+
+    #[tokio::test]
+    async fn the_project_repo_is_remembered() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        assert_eq!(saved_project_repo(&pool).await.unwrap(), None);
+        save_project_repo(&pool, "/r").await.unwrap();
+        save_project_repo(&pool, "/r2").await.unwrap();
+        assert_eq!(saved_project_repo(&pool).await.unwrap().as_deref(), Some("/r2"));
+    }
+
+    #[tokio::test]
+    async fn creating_the_default_repo_makes_an_initialised_repo_and_remembers_it() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        let board = tempfile::tempdir().unwrap();
+        std::fs::write(board.path().join(".aitprj"), "{}").unwrap();
+        let ws = default_project_repo(board.path());
+        let ws_s = ws.to_string_lossy().into_owned();
+        create_project_repo(&pool, &ws_s, board.path()).await.unwrap();
+        assert!(matches!(check_repo(&ws_s).await, RepoCheck::Ok { .. }), "建立後就是有 commit 的程式庫");
+        assert_eq!(saved_project_repo(&pool).await.unwrap().as_deref(), Some(ws_s.as_str()));
+        assert!(!board.path().join(".git").exists(), "看板資料夾本身不能變成程式庫");
     }
 }

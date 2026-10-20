@@ -1561,7 +1561,6 @@ export function AgentCanvasView({
         <TeamTemplateDialog
           projectId={projectId}
           agents={agents}
-          defaultRepo={agents[0]?.project_dir ?? ""}
           onApply={async (tpl, repoDir) => {
             // 新團隊擺在現有 Agent 下面，不疊在上面。
             const y = agents.length ? Math.max(...agents.map((a) => a.canvas_y)) + 260 : 40;
