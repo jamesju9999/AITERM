@@ -37,6 +37,8 @@ export function AgentConfigDialog({
   kind,
   agent,
   defaultName,
+  teamRepo = null,
+  defaultRepo = null,
   onCancel,
   onSubmit,
 }: {
@@ -45,6 +47,10 @@ export function AgentConfigDialog({
   /** `null` = 新建。 */
   agent: AgentRow | null;
   defaultName: string;
+  /** 桌布上已有團隊時它們的程式庫：新 Agent 一律用它（一個團隊只能用一個程式庫）。 */
+  teamRepo?: string | null;
+  /** 空桌布時的預設：這個專案記住的專案資料夾。 */
+  defaultRepo?: string | null;
   onCancel: () => void;
   onSubmit: (values: AgentConfigValues) => Promise<void>;
 }) {
@@ -58,7 +64,9 @@ export function AgentConfigDialog({
   const [name, setName] = useState(agent?.name ?? defaultName);
   const [role, setRole] = useState(agent?.role ?? roles[0].name);
   const [prefix, setPrefix] = useState(agent?.prompt_prefix ?? roles[0].prefix);
-  const [dir, setDir] = useState(agent?.project_dir ?? "");
+  const [dir, setDir] = useState(agent?.project_dir ?? teamRepo ?? defaultRepo ?? "");
+  // 新 Agent 但團隊已有程式庫：鎖定，跟編輯既有 Agent 一樣只顯示。
+  const lockedRepo = agent?.project_dir ?? (isNew ? teamRepo : null);
   const [producesSpec, setProducesSpec] = useState(agent?.produces_spec ?? false);
   // 新的審核者、驗收者預設用 Sonnet：判定與照條件驗收不需要最貴的模型，可以改。
   const [model, setModel] = useState(agent?.model ?? (isNew && (kind === "reviewer" || kind === "verifier") ? "sonnet" : ""));
@@ -350,7 +358,7 @@ export function AgentConfigDialog({
         </div>
         <div className="task-field">
           <span className="task-field-label">{t.ac_repo}</span>
-          {isNew ? (
+          {isNew && !lockedRepo ? (
             <>
               <div className="task-field-row">
                 <input
@@ -386,10 +394,13 @@ export function AgentConfigDialog({
               {dir.trim() && repo && <RepoStatus repo={repo} busy={repoBusy} onFix={() => void fixRepo()} />}
             </>
           ) : (
-            <div className="ac-readonly" title={t.ac_repo_locked}>
-              {agent.project_dir}
-              {agent.branch ? ` · ${agent.branch}` : ""}
-            </div>
+            <>
+              <div className="ac-readonly" title={agent ? t.ac_repo_locked : t.ac_tpl_repo_locked}>
+                {lockedRepo}
+                {agent?.branch ? ` · ${agent.branch}` : ""}
+              </div>
+              {!agent && <span className="task-field-hint">{t.ac_tpl_repo_locked}</span>}
+            </>
           )}
         </div>
         {error && (

@@ -17,10 +17,13 @@ export function TeamTemplateDialog({
   projectId,
   agents,
   onApply,
+  onRepoChange,
   onClose,
 }: {
   projectId: string;
   agents: AgentRow[];
+  /** 使用者換了專案資料夾（已記住）：讓協作頁的「新增模組」也跟著帶新的。 */
+  onRepoChange?: (path: string) => void;
   onApply: (tpl: TeamTemplate, repoDir: string) => Promise<void>;
   onClose: () => void;
 }) {
@@ -62,8 +65,11 @@ export function TeamTemplateDialog({
     };
   }, [repo, checkRev]);
   const repoOk = !!repo && check?.status === "ok";
-  // 沒有程式庫或使用者要換：顯示選擇；否則只顯示「套用到：<路徑>」。
-  const showPicker = resolved !== undefined && (!resolved || changing);
+  // 桌布上已有 Agent：鎖定為它們的程式庫。一個團隊只能用一個程式庫——協調者只能合併
+  // 同一個程式庫裡的分支（實機：換了資料夾再套用，AIMailer 的團隊就分到兩個程式庫）。
+  const locked = found?.source === "agents";
+  // 沒有程式庫或使用者要換：顯示選擇；否則只顯示路徑。
+  const showPicker = resolved !== undefined && !locked && (!resolved || changing);
 
   const fixRepo = async () => {
     setIniting(true);
@@ -79,6 +85,9 @@ export function TeamTemplateDialog({
       if (typeof p === "string") {
         setCheck(null);
         setPicked(p);
+        // 選了就記住，不必等套用：關掉對話框再打開、新增模組都會用新的。
+        await setProjectRepo(projectId, p);
+        onRepoChange?.(p);
       }
     } catch (e) {
       setError(String(e));
@@ -90,8 +99,11 @@ export function TeamTemplateDialog({
     setError(null);
     try {
       await onApply(tpl, repo);
-      // 自己選的程式庫記在專案裡，下次不用再選。
-      if (picked && picked.trim() !== resolved) await setProjectRepo(projectId, repo);
+      // 手動輸入的路徑在套用時記住（用「選擇…」挑的已經記住了）。
+      if (picked && picked.trim() !== resolved) {
+        await setProjectRepo(projectId, repo);
+        onRepoChange?.(repo);
+      }
       onClose();
     } catch (e) {
       setError(String(e));
@@ -135,13 +147,14 @@ export function TeamTemplateDialog({
           ) : (
             <div className="ac-tpl-row ac-tpl-target">
               <code className="ac-tpl-path">{repo}</code>
-              {resolved !== undefined && (
+              {resolved !== undefined && !locked && (
                 <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setChanging(true)}>
                   {t.ac_tpl_change_repo}
                 </button>
               )}
             </div>
           )}
+          {locked && <span className="task-field-hint">{t.ac_tpl_repo_locked}</span>}
           {repo && check && <RepoStatus repo={check} busy={initing} onFix={() => void fixRepo()} />}
         </div>
 

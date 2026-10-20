@@ -1548,6 +1548,8 @@ export function AgentCanvasView({
           kind={config.kind}
           agent={config.agent}
           defaultName={defaultName(config.kind)}
+          teamRepo={agents[0]?.project_dir ?? null}
+          defaultRepo={projRepoOf?.projectId === projectId ? projRepoOf.path : null}
           onCancel={() => setConfig(null)}
           onSubmit={submitConfig}
         />
@@ -1576,6 +1578,7 @@ export function AgentCanvasView({
             }
             void refresh();
           }}
+          onRepoChange={(path) => projectId && setProjRepoOf({ projectId, path })}
           onClose={() => setTemplatesOpen(false)}
         />
       )}

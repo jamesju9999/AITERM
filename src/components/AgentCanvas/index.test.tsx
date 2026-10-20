@@ -763,6 +763,53 @@ describe("AgentCanvasView", () => {
     expect(setProjectRepo).not.toHaveBeenCalled();
   });
 
+  it("團隊範本：桌布上已有 Agent 時專案資料夾鎖定為它們的程式庫，不能更換（避免一個團隊兩個程式庫）", async () => {
+    vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "agents" });
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    fireEvent.click(await screen.findByTestId("ac-templates"));
+    const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    expect(await within(dlg).findByText("/repo/htbktw")).toBeTruthy();
+    expect(within(dlg).queryByRole("button", { name: "更換" })).toBeNull();
+    expect(within(dlg).getByText(/團隊正在使用這個資料夾/)).toBeTruthy();
+  });
+
+  it("團隊範本：桌布是空的時更換專案資料夾會立刻記住，不必等套用", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValueOnce("/repo/new");
+    vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/old", source: "saved" });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    fireEvent.click(await screen.findByTestId("ac-templates-empty"));
+    const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    fireEvent.click(await within(dlg).findByRole("button", { name: "更換" }));
+    fireEvent.click(within(dlg).getByRole("button", { name: "選擇…" }));
+    await waitFor(() => expect(setProjectRepo).toHaveBeenCalledWith("p1", "/repo/new"));
+    expect(createAgent).not.toHaveBeenCalled();
+  });
+
+  it("放新 Agent：桌布上已有團隊時程式庫鎖定為團隊的；空桌布預設帶專案資料夾", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    const { unmount } = view();
+    await screen.findByTestId("agent-a1");
+    drag(screen.getByTestId("pool-reviewer"), document.querySelector('[data-drop="canvas"]') as Element);
+    let dlg = await screen.findByRole("dialog");
+    expect(within(dlg).queryByLabelText(/程式庫|Repository/)).toBeNull();
+    expect(within(dlg).getByText("/repo/htbktw")).toBeTruthy();
+    unmount();
+
+    vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/chosen", source: "saved" });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    view();
+    await waitFor(() => expect(projectRepo).toHaveBeenCalled());
+    drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
+    dlg = await screen.findByRole("dialog");
+    await waitFor(() => expect((within(dlg).getByLabelText(/程式庫|Repository/) as HTMLInputElement).value).toBe("/repo/chosen"));
+  });
+
   it("團隊範本：存下桌布上的團隊成為我的範本，可以刪除", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);
