@@ -18,6 +18,8 @@ export function FormationMenu({
   onRename,
   onDelete,
   onCancelPending,
+  onTemplates,
+  onClearTeam,
 }: {
   state: FormationsState;
   onSwitch: (id: string) => void;
@@ -26,6 +28,10 @@ export function FormationMenu({
   onRename: (id: string, name: string) => void;
   onDelete: (id: string, name: string) => void;
   onCancelPending: () => void;
+  /** 團隊範本：整個團隊的操作，跟編制放在同一個選單。 */
+  onTemplates: () => void;
+  /** 清空團隊（桌布上沒有 Agent 時不給）。 */
+  onClearTeam?: () => void;
 }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
@@ -67,6 +73,7 @@ export function FormationMenu({
         <button
           className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
           data-testid="ac-formation"
+          data-guide="templates"
           title={t.ac_form_tip}
           aria-haspopup="menu"
           aria-expanded={open}
@@ -140,6 +147,34 @@ export function FormationMenu({
                     onClick={() => setEditing({ kind: "rename", value: active.name })}
                   >
                     {t.ac_form_rename}
+                  </button>
+                )}
+                <div className="ac-role-menu-sep" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="ac-role-menu-item"
+                  data-testid="ac-templates"
+                  onClick={() => {
+                    close();
+                    onTemplates();
+                  }}
+                >
+                  {t.ac_form_templates}
+                </button>
+                {onClearTeam && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="ac-role-menu-item ac-form-danger"
+                    data-testid="ac-clear-team"
+                    title={t.ac_clear_team_tip}
+                    onClick={() => {
+                      close();
+                      onClearTeam();
+                    }}
+                  >
+                    {t.ac_form_clear}
                   </button>
                 )}
               </>

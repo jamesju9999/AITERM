@@ -51,6 +51,10 @@ import {
   type RetiredAgent,
 } from "../../ipc/formations";
 import { FormationMenu } from "./FormationMenu";
+import { TopMoreMenu } from "./TopMoreMenu";
+
+/** 編制還沒載入（或讀不到）時，選單照樣出現：團隊範本在裡面。 */
+const EMPTY_FORMATIONS: FormationsState = { formations: [], active: null, pending: null, busy: [], log: [] };
 import { BugReportDialog } from "./BugReportDialog";
 import { DbSkillDialog } from "./DbSkillDialog";
 import { ResourceLayer } from "./ResourceLayer";
@@ -1137,9 +1141,10 @@ export function AgentCanvasView({
           </button>
         )}
         <span className="ac-spacer" />
-        {projectId && forms && (
+        {/* 頂列依用途分組：團隊｜專案設定｜常用動作｜狀態與其他。 */}
+        {projectId && (
           <FormationMenu
-            state={forms}
+            state={forms ?? EMPTY_FORMATIONS}
             onSwitch={(id) => void run(() => doSwitchFormation(id))}
             onCreate={(name) => void run(async () => doSwitchFormation(await createFormation(projectId, name, [])))}
             onSaveAs={(name) => void run(() => saveFormationAs(projectId, name))}
@@ -1150,74 +1155,64 @@ export function AgentCanvasView({
               })
             }
             onCancelPending={() => void run(() => cancelFormationSwitch(projectId))}
+            onTemplates={() => setTemplatesOpen(true)}
+            onClearTeam={agents.length > 0 ? () => void clearTeam() : undefined}
           />
         )}
+        {projectId && (
+          <>
+            <span className="ac-top-sep" aria-hidden />
+            <button
+              className={`aiterm-btn aiterm-btn--ghost aiterm-btn--sm ac-top-btn${briefOf?.projectId === projectId && briefOf.set ? "" : " ac-brief-btn--empty"}`}
+              data-testid="ac-brief"
+              data-guide="brief"
+              title={briefOf?.projectId === projectId && briefOf.set ? t.ac_brief_set : t.ac_brief_unset}
+              onClick={() => setBriefOpen(true)}
+            >
+              <RoleIcon name="doc" size={14} />
+              <span className="ac-top-label">{t.ac_brief_button}</span>
+              {briefOf?.projectId === projectId && briefOf.set && <span className="ac-brief-mark">✓</span>}
+            </button>
+            <button
+              className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm ac-top-btn"
+              data-testid="ac-references"
+              title={t.ac_refs_desc}
+              onClick={() => setRefsOpen(true)}
+            >
+              <RoleIcon name="folder" size={14} />
+              <span className="ac-top-label">{t.ac_refs_button(0)}</span>
+              {references.length > 0 && <span className="ac-top-count">{references.length}</span>}
+            </button>
+          </>
+        )}
         {projectId && agents.some((a) => a.kind === "coder") && (
-          <button
-            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
-            data-testid="ac-bug"
-            title={t.ac_bug_button_tip}
-            onClick={() => setBugFor({ moduleId: null })}
-          >
-            {t.ac_bug_button}
-          </button>
+          <>
+            <span className="ac-top-sep" aria-hidden />
+            <button
+              className="aiterm-btn aiterm-btn--sm ac-top-btn ac-bug-btn"
+              data-testid="ac-bug"
+              title={t.ac_bug_button_tip}
+              onClick={() => setBugFor({ moduleId: null })}
+            >
+              <RoleIcon name="bug" size={14} />
+              <span className="ac-top-label">{t.ac_bug_button}</span>
+            </button>
+          </>
         )}
-        {/* 團隊範本是整個專案團隊的操作，放在頂列的專案動作這邊，不跟拖曳角色的 Agent 池混在一起。 */}
-        {projectId && (
-          <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" data-testid="ac-templates" data-guide="templates" onClick={() => setTemplatesOpen(true)}>
-            {t.ac_tpl_button}
-          </button>
-        )}
-        {projectId && agents.length > 0 && (
-          <button
-            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm ac-clear-team"
-            data-testid="ac-clear-team"
-            title={t.ac_clear_team_tip}
-            onClick={() => void clearTeam()}
-          >
-            {t.ac_clear_team}
-          </button>
-        )}
-        {projectId && (
-          <button
-            className={`aiterm-btn aiterm-btn--ghost aiterm-btn--sm${briefOf?.projectId === projectId && briefOf.set ? "" : " ac-brief-btn--empty"}`}
-            data-testid="ac-brief"
-            data-guide="brief"
-            title={briefOf?.projectId === projectId && briefOf.set ? t.ac_brief_set : t.ac_brief_unset}
-            onClick={() => setBriefOpen(true)}
-          >
-            {t.ac_brief_button}
-            {briefOf?.projectId === projectId && briefOf.set && <span className="ac-brief-mark"> ✓</span>}
-          </button>
-        )}
-        {projectId && (
-          <button
-            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
-            data-testid="ac-references"
-            title={t.ac_refs_desc}
-            onClick={() => setRefsOpen(true)}
-          >
-            {t.ac_refs_button(references.length)}
-          </button>
-        )}
-        <button
-          className={`aiterm-btn aiterm-btn--sm ${questions.length ? "aiterm-btn--primary" : "aiterm-btn--ghost"}`}
-          data-testid="ac-inbox-button"
-          data-guide="inbox"
-          onClick={() => setInbox({ open: !inbox.open, focus: null })}
-        >
-          {t.ac_inbox_button(questions.length)}
-        </button>
-        {cap !== null && <span className="ac-ctl">{t.ac_cap(cap)}</span>}
-        <button
-          className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm ac-help-btn"
-          data-guide="help"
-          aria-label={t.ac_help_button}
-          title={t.ac_help_button}
-          onClick={() => setHelpOpen(true)}
-        >
-          ?
-        </button>
+        <span className="ac-top-sep" aria-hidden />
+        {/* 待決策只在有問題時出現；導覽的「待決策」那一步圈這一整區。 */}
+        <span className="ac-top-status" data-guide="inbox">
+          {questions.length > 0 && (
+            <button
+              className="aiterm-btn aiterm-btn--sm aiterm-btn--primary"
+              data-testid="ac-inbox-button"
+              onClick={() => setInbox({ open: !inbox.open, focus: null })}
+            >
+              {t.ac_inbox_button(questions.length)}
+            </button>
+          )}
+          <TopMoreMenu cap={cap} onHelp={() => setHelpOpen(true)} />
+        </span>
       </div>
 
       {tools && missing.length > 0 && (

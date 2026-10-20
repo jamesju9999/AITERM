@@ -24,6 +24,8 @@ const view = (state: FormationsState = base) => {
     onRename: vi.fn(),
     onDelete: vi.fn(),
     onCancelPending: vi.fn(),
+    onTemplates: vi.fn(),
+    onClearTeam: vi.fn(),
   };
   render(
     <LocaleProvider>
@@ -96,6 +98,20 @@ describe("FormationMenu", () => {
     expect(screen.getByTestId("ac-formation-pending").textContent).toContain("等 工程師1、審核者 做完目前的工作後切換到「轉換」");
     fireEvent.click(screen.getByRole("button", { name: "取消切換" }));
     expect(h.onCancelPending).toHaveBeenCalled();
+  });
+
+  it("團隊範本與清空團隊在選單裡；清空用紅字放最後", () => {
+    const h = view();
+    fireEvent.click(screen.getByTestId("ac-formation"));
+    const items = screen.getAllByRole("menuitem");
+    expect(items[items.length - 1]).toBe(screen.getByTestId("ac-clear-team"));
+    expect(screen.getByTestId("ac-clear-team").className).toContain("ac-form-danger");
+    fireEvent.click(screen.getByTestId("ac-templates"));
+    expect(h.onTemplates).toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.click(screen.getByTestId("ac-formation"));
+    fireEvent.click(screen.getByTestId("ac-clear-team"));
+    expect(h.onClearTeam).toHaveBeenCalled();
   });
 
   it("沒有任何編制時顯示未命名", () => {

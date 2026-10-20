@@ -825,3 +825,19 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-bug-add { height: 64px; padding: 0 12px; border: 1px dashed var(--border-color); border-radius: 6px; background: none; color: var(--text-muted); font-size: 12px; cursor: pointer; }
 .ac-bug-add:hover { color: var(--text-primary); border-color: var(--text-muted); }
 .ac-bug-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* 頂列分組 */
+.ac-top-sep { width: 1px; height: 16px; background: var(--border-color); margin: 0 4px; flex: none; }
+.ac-top-btn { display: inline-flex; align-items: center; gap: 5px; }
+.ac-top-btn svg { flex: none; opacity: 0.8; }
+.ac-top-count { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.ac-top-status { display: inline-flex; align-items: center; gap: 6px; }
+.ac-bug-btn { --c: #fb923c; color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 45%, transparent); background: color-mix(in srgb, var(--c) 10%, transparent); }
+.ac-bug-btn:hover { background: color-mix(in srgb, var(--c) 20%, transparent); }
+.ac-more-btn { min-width: 28px; font-weight: 700; letter-spacing: 1px; }
+.ac-more-menu { min-width: 200px; }
+.ac-form-danger { color: #fca5a5; }
+/* 窄的視窗：專案設定與回報問題只留圖示（滑鼠停上去看文字）。 */
+@media (max-width: 1280px) {
+  .ac-top-label { display: none; }
+}

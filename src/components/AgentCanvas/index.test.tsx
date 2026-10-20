@@ -193,6 +193,18 @@ function drag(from: Element, dropOn: Element) {
   }
 }
 
+/** 團隊範本在「編制」選單裡。 */
+async function openTemplates() {
+  fireEvent.click(await screen.findByTestId("ac-formation"));
+  fireEvent.click(screen.getByTestId("ac-templates"));
+}
+
+/** 說明在頂列的「⋯」裡。 */
+function openHelp() {
+  fireEvent.click(screen.getByRole("button", { name: "更多" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "說明" }));
+}
+
 /** 團隊範本：選一張範本卡，回傳底部的「加到目前桌布」按鈕。 */
 function chooseTemplate(dlg: HTMLElement, testId: string) {
   fireEvent.click(within(within(dlg).getByTestId(testId)).getByRole("button", { pressed: false }));
@@ -819,7 +831,7 @@ describe("AgentCanvasView", () => {
     vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "審核者", canvas_x: 400 })]);
     vi.mocked(listTasks).mockResolvedValue([]);
     view();
-    fireEvent.click(await screen.findByTestId("ac-templates"));
+    await openTemplates();
     const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
     expect(await within(dlg).findByText("/repo/htbktw")).toBeTruthy();
     for (const name of ["快速修改", "修 Bug", "標準開發", "規格先行", "舊系統轉換", "舊系統盤點"]) expect(within(dlg).getByText(name)).toBeTruthy();
@@ -841,7 +853,7 @@ describe("AgentCanvasView", () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);
     const { unmount } = view();
-    fireEvent.click(await screen.findByTestId("ac-templates"));
+    await openTemplates();
     let dlg = await screen.findByRole("dialog", { name: "團隊範本" });
     let add = chooseTemplate(dlg, "tpl-builtin-migration");
     expect(within(dlg).getByRole("button", { name: "建立成新編制「舊系統轉換」" }).className).toContain("aiterm-btn--primary");
@@ -861,7 +873,7 @@ describe("AgentCanvasView", () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);
     view();
-    fireEvent.click(await screen.findByTestId("ac-templates"));
+    await openTemplates();
     const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
     expect(await within(dlg).findByText("/repo/htbktw")).toBeTruthy();
     expect(within(dlg).queryByRole("button", { name: "更換" })).toBeNull();
@@ -908,19 +920,23 @@ describe("AgentCanvasView", () => {
     vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "a2", name: "工程師2" })]);
     vi.mocked(listTasks).mockResolvedValue([]);
     const { unmount } = view();
-    const btn = await screen.findByTestId("ac-clear-team");
+    const clear = async () => {
+      fireEvent.click(await screen.findByTestId("ac-formation"));
+      fireEvent.click(screen.getByTestId("ac-clear-team"));
+    };
     vi.mocked(confirm).mockResolvedValueOnce(false);
-    fireEvent.click(btn);
+    await clear();
     await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/2 位/), expect.anything()));
     expect(deleteAllAgents).not.toHaveBeenCalled();
     vi.mocked(confirm).mockResolvedValueOnce(true);
-    fireEvent.click(btn);
+    await clear();
     await waitFor(() => expect(deleteAllAgents).toHaveBeenCalledWith("p1"));
     unmount();
 
     vi.mocked(listAgents).mockResolvedValue([]);
     view();
     await screen.findByTestId("ac-templates-empty");
+    fireEvent.click(await screen.findByTestId("ac-formation"));
     expect(screen.queryByTestId("ac-clear-team")).toBeNull();
   });
 
@@ -928,7 +944,7 @@ describe("AgentCanvasView", () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);
     view();
-    fireEvent.click(await screen.findByTestId("ac-templates"));
+    await openTemplates();
     const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
     fireEvent.change(within(dlg).getByLabelText("範本名稱"), { target: { value: "我的小隊" } });
     fireEvent.click(within(dlg).getByRole("button", { name: "存成範本" }));
@@ -1746,6 +1762,18 @@ describe("AgentCanvasView", () => {
       await waitFor(() => expect(screen.queryByTestId("question-5")).toBeNull());
     });
 
+    it("沒有待決策時頂列不顯示按鈕，但導覽的「待決策」那一步仍圈得到位置", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      vi.mocked(listQuestions).mockResolvedValue([]);
+      view();
+      await screen.findByTestId("agent-a1");
+      expect(screen.queryByTestId("ac-inbox-button")).toBeNull();
+      expect(document.querySelector('[data-guide="inbox"]')).not.toBeNull();
+      expect(document.querySelector('[data-guide="help"]')).not.toBeNull();
+      expect(document.querySelector('[data-guide="templates"]')).not.toBeNull();
+    });
+
     it("也可以自己打字回答", async () => {
       vi.mocked(listAgents).mockResolvedValue([agent()]);
       vi.mocked(listTasks).mockResolvedValue([]);
@@ -1780,7 +1808,7 @@ describe("教學輔助", () => {
     localStorage.setItem(GUIDE, JSON.stringify({ tourSeen: true, checklistHidden: true, hintsOff: true, done: [], dismissedHints: [], ...over }));
   const stored = () => JSON.parse(localStorage.getItem(GUIDE) ?? "{}") as Record<string, unknown>;
 
-  it("第一次打開自動跑導覽；略過後不再自動出現，可以從「?」重看", async () => {
+  it("第一次打開自動跑導覽；略過後不再自動出現，可以從「⋯ → 說明」重看", async () => {
     localStorage.removeItem(GUIDE);
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
@@ -1789,16 +1817,16 @@ describe("教學輔助", () => {
     expect(within(tour).getByText("加入角色")).toBeTruthy();
     expect(within(tour).getByText("1 / 8")).toBeTruthy();
     fireEvent.click(within(tour).getByRole("button", { name: "下一步" }));
-    expect(within(tour).getByText("團隊範本")).toBeTruthy();
+    expect(within(tour).getByText("團隊編制與範本")).toBeTruthy();
     fireEvent.click(within(tour).getByRole("button", { name: "略過" }));
     expect(screen.queryByTestId("ac-tour")).toBeNull();
     expect(stored().tourSeen).toBe(true);
     first.unmount();
 
     view();
-    await screen.findByTestId("ac-templates");
+    await screen.findByTestId("ac-formation");
     expect(screen.queryByTestId("ac-tour")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "說明" }));
+    openHelp();
     const help = await screen.findByRole("dialog", { name: "Agent 協作怎麼運作" });
     fireEvent.click(within(help).getByRole("button", { name: "重看導覽" }));
     tour = await screen.findByTestId("ac-tour");
@@ -1826,7 +1854,7 @@ describe("教學輔助", () => {
     fireEvent.click(within(list).getByRole("button", { name: "關閉上手清單" }));
     expect(screen.queryByTestId("ac-checklist")).toBeNull();
     expect(stored().checklistHidden).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "說明" }));
+    openHelp();
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "打開上手清單" }));
     expect(await screen.findByTestId("ac-checklist")).toBeTruthy();
   });
@@ -1860,7 +1888,7 @@ describe("教學輔助", () => {
 
     // 關掉之後，從「?」重新開始：清單會重新打開。
     fireEvent.click(within(screen.getByTestId("ac-checklist")).getByRole("button", { name: "關閉上手清單" }));
-    fireEvent.click(screen.getByRole("button", { name: "說明" }));
+    openHelp();
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "重新開始上手清單" }));
     expect(await screen.findByTestId("ac-checklist")).toBeTruthy();
     expect(stored().checklistHidden).toBe(false);
@@ -1920,7 +1948,7 @@ describe("教學輔助", () => {
       vi.mocked(listTasks).mockResolvedValue([]);
       view();
       await screen.findByTestId("ac-hint-add_module");
-      fireEvent.click(screen.getByRole("button", { name: "說明" }));
+      openHelp();
       const help = await screen.findByRole("dialog");
       fireEvent.click(within(help).getByLabelText("顯示情境提示"));
       fireEvent.click(within(help).getByRole("button", { name: "關閉" }));
