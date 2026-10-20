@@ -666,11 +666,6 @@ button.ac-log-title:hover { color: var(--text-primary); }
 /* 團隊範本 */
 .ac-tpl-row { display: flex; gap: 8px; align-items: center; }
 .ac-tpl-row .task-field-input { flex: 1; min-width: 0; }
-/* 不設自己的捲動：清單在對話框裡完整展開，整個對話框一起捲（.ac-tpl-dialog），避免兩層捲軸、最後一組被切掉。 */
-.ac-tpl-list { display: flex; flex-direction: column; gap: 6px; }
-.ac-tpl-item { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 10px; }
-.ac-tpl-item > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.ac-tpl-item small { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 專案簡介 */
 .ac-brief-btn--empty { opacity: 0.75; }
@@ -769,11 +764,37 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-good-text { color: #86efac; font-size: 12.5px; }
 
 /* 團隊範本：套用到哪個程式庫、內建／我的範本分區 */
-.ac-tpl-dialog { width: min(640px, 94vw); max-height: 90vh; overflow-y: auto; }
+/* 內容捲動、底部的套用按鈕固定（選了範本不必捲回下面找按鈕）。 */
+.ac-tpl-dialog { width: min(760px, 94vw); max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+.ac-tpl-body { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.ac-tpl-footer { flex: none; border-top: 1px solid var(--border-color); margin-top: 10px; padding-top: 10px; }
+.ac-tpl-footer .task-dialog-actions { margin-top: 0; align-items: center; }
+.ac-tpl-hint { margin-right: auto; }
+.ac-tpl-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 640px) { .ac-tpl-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.ac-tpl-card { position: relative; display: flex; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); transition: border-color 0.12s, background 0.12s; }
+.ac-tpl-card:hover { border-color: var(--text-muted); }
+.ac-tpl-card--on { border-color: var(--ac-coding); background: color-mix(in srgb, var(--ac-coding) 12%, var(--bg-secondary)); box-shadow: 0 0 0 1px var(--ac-coding); }
+.ac-tpl-card-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; text-align: left; background: none; border: none; color: var(--text-primary); padding: 9px 10px; cursor: pointer; border-radius: 8px; font: inherit; }
+.ac-tpl-card-main b { font-size: 13.5px; }
+.ac-tpl-card-main small { color: var(--text-muted); font-size: 11.5px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ac-tpl-card-del { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border: none; border-radius: 5px; background: none; color: var(--text-muted); cursor: pointer; }
+.ac-tpl-card-del:hover { background: var(--bg-hover); color: var(--text-primary); }
+.ac-tpl-save { margin-top: 8px; }
+.ac-tpl-detail { margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-tertiary); }
+.ac-tpl-detail p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); }
+.ac-tpl-detail .ac-tpl-section { margin-top: 10px; }
+.ac-tpl-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 0; }
+.ac-tpl-flow-step { display: inline-flex; align-items: center; }
+.ac-tpl-flow-arrow { color: var(--text-muted); margin: 0 6px; }
+.ac-tpl-chip { --c: #93c5fd; display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; font-size: 12px; color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 45%, transparent); background: color-mix(in srgb, var(--c) 10%, transparent); }
+.ac-tpl-chip em { font-style: normal; font-weight: 600; }
+.ac-tpl-chip--reviewer { --c: #fde68a; }
+.ac-tpl-chip--orchestrator { --c: #86efac; }
+.ac-tpl-chip--verifier { --c: #5eead4; }
 .ac-tpl-target { align-items: center; }
 .ac-tpl-path { flex: 1; min-width: 0; padding: 3px 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-tertiary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ac-tpl-section { margin: 14px 0 6px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
-.ac-tpl-item .ac-tpl-desc { display: block; color: var(--text-secondary); margin: 2px 0; white-space: normal; }
 
 /* 團隊編制選單 */
 .ac-form-menu { left: 0; right: auto; min-width: 260px; }
@@ -782,4 +803,3 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-form-del { flex: none; width: 28px; justify-content: center; }
 .ac-form-input { width: 100%; box-sizing: border-box; margin: 2px 0; }
 .ac-form-pending { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #fbbf24; }
-.ac-tpl-item > button { flex: none; white-space: nowrap; }

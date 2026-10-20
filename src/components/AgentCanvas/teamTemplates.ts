@@ -230,3 +230,28 @@ export function toFormationAgents(tpl: TeamTemplate, x: number, y: number): Form
     dy: y + a.dy,
   }));
 }
+
+/** 範本組成的一種角色：同一個角色的人合併成一筆（研究工程師 ×3）。 */
+export interface CompositionPart {
+  kind: AgentKind;
+  label: string;
+  count: number;
+  produces_spec: boolean;
+}
+
+/**
+ * 範本的組成，依工作流程排序：產出規格的工程師 → 其他工程師 → 審核者 → 協調者 → 驗收者
+ * （跟桌布的自動排列同一個順序）；同一個順序裡照範本出現的先後。
+ */
+export function composition(tpl: TeamTemplate): CompositionPart[] {
+  const rank = (a: { kind: AgentKind; produces_spec: boolean }) =>
+    a.kind === "coder" ? (a.produces_spec ? 0 : 1) : { reviewer: 2, orchestrator: 3, verifier: 4 }[a.kind];
+  const parts: CompositionPart[] = [];
+  for (const a of tpl.agents) {
+    const label = a.role || a.name;
+    const same = parts.find((p) => p.kind === a.kind && p.label === label && p.produces_spec === a.produces_spec);
+    if (same) same.count++;
+    else parts.push({ kind: a.kind, label, count: 1, produces_spec: a.produces_spec });
+  }
+  return parts.map((p, i) => ({ p, i })).sort((x, y) => rank(x.p) - rank(y.p) || x.i - y.i).map(({ p }) => p);
+}

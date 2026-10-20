@@ -189,6 +189,12 @@ function drag(from: Element, dropOn: Element) {
   }
 }
 
+/** 團隊範本：選一張範本卡，回傳底部的「加到目前桌布」按鈕。 */
+function chooseTemplate(dlg: HTMLElement, testId: string) {
+  fireEvent.click(within(within(dlg).getByTestId(testId)).getByRole("button", { pressed: false }));
+  return within(dlg).getByRole("button", { name: "加到目前桌布" });
+}
+
 /** 等程式庫檢查通過（按鈕才會啟用）再按「放上桌布」。 */
 async function placeOnCanvas(dlg: HTMLElement) {
   await within(dlg).findByText(/^✓/);
@@ -783,17 +789,19 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(onProjectChange).toHaveBeenCalledWith("p2", "Pomodoro"));
   });
 
-  it("團隊範本：內建五組，直接套用到這個專案的程式庫；已經有的審核者不重複，名稱不撞", async () => {
+  it("團隊範本：內建六組，選一組加到目前桌布（專案的程式庫）；已經有的審核者不重複，名稱不撞", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "審核者", canvas_x: 400 })]);
     vi.mocked(listTasks).mockResolvedValue([]);
     view();
     fireEvent.click(await screen.findByTestId("ac-templates"));
     const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
     expect(await within(dlg).findByText("/repo/htbktw")).toBeTruthy();
-    for (const name of ["快速修改", "修 Bug", "標準開發", "規格先行", "舊系統轉換"]) expect(within(dlg).getByText(name)).toBeTruthy();
-    const std = within(dlg).getByTestId("tpl-builtin-standard");
-    expect(std.textContent).toMatch(/前端與程式碼工程師分工/);
-    const apply = within(std).getByRole("button", { name: "套用" });
+    for (const name of ["快速修改", "修 Bug", "標準開發", "規格先行", "舊系統轉換", "舊系統盤點"]) expect(within(dlg).getByText(name)).toBeTruthy();
+    // 還沒選範本：套用按鈕不能按，說明出現在選了之後。
+    expect(within(dlg).getByRole("button", { name: "加到目前桌布" })).toBeDisabled();
+    expect(within(dlg).queryByTestId("tpl-detail")).toBeNull();
+    const apply = chooseTemplate(dlg, "tpl-builtin-standard");
+    expect(within(dlg).getByTestId("tpl-detail").textContent).toMatch(/前端與程式碼工程師分工/);
     await waitFor(() => expect(apply).not.toBeDisabled());
     fireEvent.click(apply);
     await waitFor(() => expect(createAgent).toHaveBeenCalledTimes(4));
@@ -801,6 +809,25 @@ describe("AgentCanvasView", () => {
     expect(made.map((m) => m.kind)).toEqual(["coder", "coder", "orchestrator", "verifier"]);
     expect(made.every((m) => m.project_dir === "/repo/htbktw")).toBe(true);
     expect(setProjectRepo).not.toHaveBeenCalled();
+  });
+
+  it("團隊範本：桌布上已有團隊時主要按鈕是建立成新編制；空桌布時是加到目前桌布", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    const { unmount } = view();
+    fireEvent.click(await screen.findByTestId("ac-templates"));
+    let dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    let add = chooseTemplate(dlg, "tpl-builtin-migration");
+    expect(within(dlg).getByRole("button", { name: "建立成新編制「舊系統轉換」" }).className).toContain("aiterm-btn--primary");
+    expect(add.className).not.toContain("aiterm-btn--primary");
+    unmount();
+
+    vi.mocked(listAgents).mockResolvedValue([]);
+    view();
+    fireEvent.click(await screen.findByTestId("ac-templates-empty"));
+    dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    add = chooseTemplate(dlg, "tpl-builtin-migration");
+    expect(add.className).toContain("aiterm-btn--primary");
   });
 
   it("團隊範本：桌布上已有 Agent 時專案資料夾鎖定為它們的程式庫，不能更換（避免一個團隊兩個程式庫）", async () => {
@@ -880,7 +907,8 @@ describe("AgentCanvasView", () => {
     fireEvent.change(within(dlg).getByLabelText("範本名稱"), { target: { value: "我的小隊" } });
     fireEvent.click(within(dlg).getByRole("button", { name: "存成範本" }));
     const item = await within(dlg).findByTestId("tpl-我的小隊");
-    expect(item.textContent).toMatch(/Coder Agent1/);
+    // 卡片寫的是組成（角色），跟內建範本一致。
+    expect(item.textContent).toMatch(/Senior Coder/);
     fireEvent.click(within(item).getByRole("button", { name: /刪除範本/ }));
     expect(within(dlg).queryByTestId("tpl-我的小隊")).toBeNull();
   });
@@ -900,7 +928,7 @@ describe("AgentCanvasView", () => {
     fireEvent.click(within(dlg).getByRole("button", { name: "選擇…" }));
     fireEvent.click(await within(dlg).findByRole("button", { name: "初始化為 git repo" }));
     await waitFor(() => expect(initRepo).toHaveBeenCalledWith("/repo", "p1"));
-    const apply = within(within(dlg).getByTestId("tpl-builtin-quick")).getByRole("button", { name: "套用" });
+    const apply = chooseTemplate(dlg, "tpl-builtin-quick");
     await waitFor(() => expect(apply).not.toBeDisabled());
     fireEvent.click(apply);
     await waitFor(() => expect(createAgent).toHaveBeenCalledWith("p1", expect.objectContaining({ kind: "coder", project_dir: "/repo" })));
@@ -918,7 +946,7 @@ describe("AgentCanvasView", () => {
     fireEvent.click(await within(dlg).findByRole("button", { name: "選擇…" }));
     expect((await within(dlg).findByTestId("repo-status")).textContent).toMatch(/看板專案資料夾，不是程式碼/);
     expect(within(dlg).queryByRole("button", { name: /初始化|第一個 commit/ })).toBeNull();
-    expect(within(within(dlg).getByTestId("tpl-builtin-quick")).getByRole("button", { name: "套用" })).toBeDisabled();
+    expect(chooseTemplate(dlg, "tpl-builtin-quick")).toBeDisabled();
   });
 
   it("可以自訂角色名稱與提示詞，存成我的角色後下次從選單帶入", async () => {
@@ -1019,8 +1047,8 @@ describe("AgentCanvasView", () => {
     view();
     fireEvent.click(await screen.findByTestId("ac-templates-empty"));
     const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
-    const item = within(dlg).getByTestId("tpl-builtin-inventory");
-    const btn = within(item).getByRole("button", { name: "套用成新編制" });
+    chooseTemplate(dlg, "tpl-builtin-inventory");
+    const btn = within(dlg).getByRole("button", { name: "建立成新編制「舊系統盤點」" });
     await waitFor(() => expect(btn).not.toBeDisabled());
     fireEvent.click(btn);
     await waitFor(() => expect(switchFormation).toHaveBeenCalledWith("p1", "f-new"));

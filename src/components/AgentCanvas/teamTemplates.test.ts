@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { AgentRow } from "../../ipc/agents";
 import { translations } from "../../lib/i18n";
-import { builtinTemplates, deleteTemplate, loadTemplates, saveTemplate, snapshot, toCreate } from "./teamTemplates";
+import { builtinTemplates, composition, deleteTemplate, loadTemplates, saveTemplate, snapshot, toCreate } from "./teamTemplates";
 
 const ag = (over: Partial<AgentRow>): AgentRow => ({
   id: "x", kind: "coder", name: "工程師1", role: "資深", prompt_prefix: "p", project_dir: "/old", canvas_x: 100, canvas_y: 50,
@@ -154,5 +154,21 @@ describe("範本的排列", () => {
   it("舊系統轉換的最前面也是需求分析（產出規格）", () => {
     const mig = builtinTemplates(translations["zh-TW"]).find((x) => x.id === "migration");
     expect(mig?.agents.filter((a) => a.produces_spec)).toHaveLength(1);
+  });
+});
+
+describe("composition", () => {
+  it("同一角色合併計數，依流程排序：產出規格 → 工程師 → 審核 → 協調 → 驗收", () => {
+    const zh = translations["zh-TW"];
+    const inv = builtinTemplates(zh).find((x) => x.id === "inventory")!;
+    // 故意把順序打亂：協調者放最前面，確認排序不是照範本原本的順序。
+    const shuffled = { ...inv, agents: [...inv.agents].reverse() };
+    expect(composition(shuffled).map((p) => [p.label, p.count])).toEqual([
+      [zh.ac_role_analyst, 1],
+      [zh.ls_preset_docs, 1],
+      [zh.ls_preset_researcher, 3],
+      [zh.ac_tpl_inventory_reviewer_role, 1],
+      [zh.ac_role_integrator, 1],
+    ]);
   });
 });
