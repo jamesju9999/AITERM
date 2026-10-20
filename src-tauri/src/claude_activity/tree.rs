@@ -12,6 +12,8 @@ pub const MAX_NODES: usize = 200;
 const SUMMARY_MAX_CHARS: usize = 400;
 const HINT_MAX_CHARS: usize = 80;
 pub const MAIN_RECENT_MAX: usize = 10;
+/// 一個 session 最多留幾筆工具呼叫；超過就丟最舊的已結束者。
+pub const MAX_TOOLS: usize = 300;
 
 static NULL: Value = Value::Null;
 /// 建立節點時還不知道型別的暫用名稱，之後 SubagentStart 帶著真型別來會被換掉。
@@ -45,6 +47,22 @@ pub struct Node {
     pub turn: u32,
 }
 
+/// 一次工具呼叫（檔案、shell、網路、資料庫、MCP…），圖上的葉節點。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ToolCall {
+    /// `tool_use_id`，Pre 與 Post 靠它配對。
+    pub id: String,
+    /// 呼叫者 agent_id；主 Claude 為 None。
+    pub parent: Option<String>,
+    pub tool: String,
+    pub hint: String,
+    pub category: &'static str,
+    pub status: Status,
+    pub started_ms: u64,
+    pub ended_ms: Option<u64>,
+    pub turn: u32,
+}
+
 /// 送給前端的完整狀態；事件與快照指令共用。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct Snapshot {
@@ -55,6 +73,7 @@ pub struct Snapshot {
     pub main_tool_count: u64,
     /// 本輪主 Claude 最近的工具提示，舊的在前，最多 `MAIN_RECENT_MAX` 筆。
     pub main_recent: Vec<String>,
+    pub tools: Vec<ToolCall>,
     /// 目前的提問輪次；0＝還沒有過提問。
     pub turn: u32,
 }
@@ -64,6 +83,8 @@ pub struct Snapshot {
 pub enum Kind {
     Pre,
     Post,
+    /// `PostToolUseFailure`：工具執行失敗。
+    PostFail,
     SubStart,
     SubStop,
     SessionEnd,
@@ -76,6 +97,7 @@ impl Kind {
         match s {
             "pre" => Some(Kind::Pre),
             "post" => Some(Kind::Post),
+            "post-fail" => Some(Kind::PostFail),
             "sub-start" => Some(Kind::SubStart),
             "sub-stop" => Some(Kind::SubStop),
             "session-end" => Some(Kind::SessionEnd),
@@ -100,6 +122,7 @@ pub struct Tree {
     main_tool: Option<String>,
     main_tool_count: u64,
     main_recent: VecDeque<String>,
+    tools: Vec<ToolCall>,
     turn: u32,
 }
 
@@ -125,8 +148,36 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+const DB_CLIENTS: [&str; 6] = ["psql", "mysql", "sqlite3", "mongosh", "redis-cli", "mariadb"];
+const DB_WORDS: [&str; 9] = ["sql", "postgres", "mysql", "sqlite", "mongo", "redis", "database", "supabase", "dynamodb"];
+
+/// 工具的類別，前端用來決定圖示與顏色。
+fn category(tool: &str, input: &Value) -> &'static str {
+    match tool {
+        "Read" | "Edit" | "Write" | "NotebookEdit" | "Glob" | "Grep" => "file",
+        "Bash" => {
+            let first = str_of(input, "command").unwrap_or_default();
+            let first = first.split_whitespace().next().unwrap_or("").to_owned();
+            if DB_CLIENTS.contains(&first.as_str()) { "database" } else { "shell" }
+        }
+        "WebFetch" | "WebSearch" => "web",
+        t if t.starts_with("mcp__") => {
+            let lower = t.to_lowercase();
+            if DB_WORDS.iter().any(|w| lower.contains(w)) { "database" } else { "mcp" }
+        }
+        _ => "other",
+    }
+}
+
 /// 「Bash: ls -la」這種一行提示；沒有可顯示的細節就只回工具名。
 fn tool_hint(tool: &str, input: &Value) -> String {
+    if let Some(rest) = tool.strip_prefix("mcp__") {
+        let mut it = rest.splitn(2, "__");
+        return match (it.next(), it.next()) {
+            (Some(server), Some(name)) => truncate(&format!("{server}: {name}"), HINT_MAX_CHARS),
+            _ => truncate(rest, HINT_MAX_CHARS),
+        };
+    }
     let detail = match tool {
         "Bash" => str_of(input, "command"),
         "Read" | "Edit" | "Write" | "NotebookEdit" => str_of(input, "file_path"),
@@ -146,12 +197,17 @@ impl Tree {
         &self.nodes
     }
 
+    pub fn snapshot_tools(&self) -> &[ToolCall] {
+        &self.tools
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             nodes: self.nodes.clone(),
             main_tool: self.main_tool.clone(),
             main_tool_count: self.main_tool_count,
             main_recent: self.main_recent.iter().cloned().collect(),
+            tools: self.tools.clone(),
             turn: self.turn,
         }
     }
@@ -181,7 +237,12 @@ impl Tree {
                 }
                 self.queue_spawn(body, caller)
             }
-            Kind::Pre => match (tool.as_deref(), caller.as_deref()) {
+            Kind::Pre => {
+                // 同一個 tool_use_id 的重複事件整個忽略，不重複計數。
+                if self.record_tool(tool.as_deref(), caller.as_deref(), body, now_ms) {
+                    return false;
+                }
+                match (tool.as_deref(), caller.as_deref()) {
                 (Some(tool), Some(agent)) => self.on_tool_pre(tool, agent, body, now_ms),
                 (Some(tool), None) => {
                     let hint = tool_hint(tool, field(body, "tool_input"));
@@ -189,14 +250,23 @@ impl Tree {
                     self.note_main_tool(hint);
                 }
                 _ => {}
-            },
+                }
+            }
             Kind::Post if is_agent_tool => {
                 if caller.is_none() {
                     self.main_tool = None;
                 }
                 self.on_agent_post(body, caller, now_ms)
             }
-            Kind::Post => match caller.as_deref() {
+            Kind::PostFail if is_agent_tool => {
+                if caller.is_none() {
+                    self.main_tool = None;
+                }
+            }
+            Kind::Post | Kind::PostFail => {
+                let status = if kind == Kind::PostFail { Status::Failed } else { Status::Done };
+                self.finish_tool(str_of(body, "tool_use_id").as_deref(), status, now_ms);
+                match caller.as_deref() {
                 Some(a) => {
                     if let Some(i) = self.index_of(a) {
                         self.nodes[i].current_tool = None;
@@ -204,7 +274,8 @@ impl Tree {
                     }
                 }
                 None => self.main_tool = None,
-            },
+                }
+            }
             Kind::SubStart => {
                 if let Some(id) = str_of(body, "agent_id") {
                     self.on_start(&id, agent_type_of(body), now_ms);
@@ -227,11 +298,17 @@ impl Tree {
             Kind::SessionEnd => {
                 self.nodes.clear();
                 self.pending.clear();
+                self.tools.clear();
                 self.main_tool = None;
                 self.reset_main_activity();
                 self.turn = 0;
             }
             Kind::Prompt => {
+                // 上一輪還沒有 Post 的工具（例如按 Esc 中斷）不會再有結束事件。
+                for c in self.tools.iter_mut().filter(|c| c.status == Status::Running) {
+                    c.status = Status::Interrupted;
+                    c.ended_ms = Some(now_ms);
+                }
                 self.turn += 1;
                 self.main_tool = None;
                 self.reset_main_activity();
@@ -250,6 +327,39 @@ impl Tree {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// 記下一次工具呼叫；回傳 true＝這是已經記過的重複事件。
+    fn record_tool(&mut self, tool: Option<&str>, caller: Option<&str>, body: &Value, now_ms: u64) -> bool {
+        let (Some(tool), Some(id)) = (tool, str_of(body, "tool_use_id")) else { return false };
+        if tool == "SubagentHandback" {
+            return false;
+        }
+        if self.tools.iter().any(|c| c.id == id) {
+            return true;
+        }
+        let input = field(body, "tool_input");
+        self.tools.push(ToolCall {
+            id,
+            parent: caller.map(str::to_owned),
+            tool: tool.to_owned(),
+            hint: tool_hint(tool, input),
+            category: category(tool, input),
+            status: Status::Running,
+            started_ms: now_ms,
+            ended_ms: None,
+            turn: self.turn,
+        });
+        false
+    }
+
+    fn finish_tool(&mut self, id: Option<&str>, status: Status, now_ms: u64) {
+        if let Some(c) = id.and_then(|id| self.tools.iter_mut().find(|c| c.id == id)) {
+            if c.status == Status::Running {
+                c.status = status;
+                c.ended_ms = Some(now_ms);
+            }
         }
     }
 
@@ -391,6 +501,14 @@ impl Tree {
     }
 
     fn trim(&mut self) {
+        while self.tools.len() > MAX_TOOLS {
+            match self.tools.iter().position(|c| c.status != Status::Running) {
+                Some(i) => {
+                    self.tools.remove(i);
+                }
+                None => break,
+            }
+        }
         while self.nodes.len() > MAX_NODES {
             match self.nodes.iter().position(|n| n.status != Status::Running) {
                 Some(i) => {
@@ -762,5 +880,108 @@ mod tests {
         t.apply(Kind::SessionEnd, &json!({}), 4);
         let s = t.snapshot();
         assert_eq!((s.main_tool_count, s.main_recent.len()), (0, 0));
+    }
+
+    fn tool_pre_id(agent: Option<&str>, id: &str, tool: &str, input: Value) -> Value {
+        let mut v = json!({ "hook_event_name": "PreToolUse", "tool_name": tool, "tool_use_id": id, "tool_input": input });
+        if let Some(a) = agent { v["agent_id"] = a.into(); v["agent_type"] = "general-purpose".into(); }
+        v
+    }
+    fn tool_post_id(agent: Option<&str>, id: &str, tool: &str) -> Value {
+        let mut v = json!({ "hook_event_name": "PostToolUse", "tool_name": tool, "tool_use_id": id });
+        if let Some(a) = agent { v["agent_id"] = a.into(); v["agent_type"] = "general-purpose".into(); }
+        v
+    }
+    fn tool<'a>(t: &'a Tree, id: &str) -> &'a ToolCall {
+        t.snapshot_tools().iter().find(|c| c.id == id).unwrap_or_else(|| panic!("no tool {id}"))
+    }
+
+    #[test]
+    fn categories() {
+        assert_eq!(category("Read", &json!({})), "file");
+        assert_eq!(category("Grep", &json!({})), "file");
+        assert_eq!(category("Bash", &json!({"command": "ls -la"})), "shell");
+        assert_eq!(category("Bash", &json!({"command": "psql -d app -c 'select 1'"})), "database");
+        assert_eq!(category("Bash", &json!({"command": "  sqlite3 a.db .tables"})), "database");
+        assert_eq!(category("WebFetch", &json!({})), "web");
+        assert_eq!(category("WebSearch", &json!({})), "web");
+        assert_eq!(category("mcp__postgres__query", &json!({})), "database");
+        assert_eq!(category("mcp__github__create_issue", &json!({})), "mcp");
+        assert_eq!(category("TodoWrite", &json!({})), "other");
+    }
+
+    #[test]
+    fn mcp_hint_drops_the_prefix() {
+        assert_eq!(tool_hint("mcp__github__create_issue", &json!({})), "github: create_issue");
+    }
+
+    #[test]
+    fn tool_lifecycle_pre_post_and_failure() {
+        let mut t = Tree::default();
+        assert!(t.apply(Kind::Pre, &tool_pre_id(None, "u1", "Bash", json!({"command": "ls"})), 10));
+        assert_eq!(tool(&t, "u1").status, Status::Running);
+        assert_eq!(tool(&t, "u1").parent, None);
+        assert_eq!(tool(&t, "u1").hint, "Bash: ls");
+        assert_eq!(tool(&t, "u1").category, "shell");
+        assert!(t.apply(Kind::Post, &tool_post_id(None, "u1", "Bash"), 25));
+        assert_eq!((tool(&t, "u1").status, tool(&t, "u1").ended_ms), (Status::Done, Some(25)));
+
+        t.apply(Kind::Pre, &tool_pre_id(None, "u2", "Read", json!({"file_path": "/x"})), 30);
+        assert!(t.apply(Kind::PostFail, &tool_post_id(None, "u2", "Read"), 40));
+        assert_eq!(tool(&t, "u2").status, Status::Failed);
+    }
+
+    #[test]
+    fn tools_called_by_a_subagent_are_parented_to_it() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &tool_pre_id(Some("a1"), "u1", "Grep", json!({"pattern": "x"})), 5);
+        assert_eq!(tool(&t, "u1").parent.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn agent_and_handback_calls_are_not_tool_nodes() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &pre_agent("tu1", None, "Run ls", "general-purpose"), 1);
+        t.apply(Kind::Pre, &tool_pre_id(Some("a1"), "u9", "SubagentHandback", json!({"message": "hi"})), 2);
+        assert!(t.snapshot_tools().is_empty());
+    }
+
+    #[test]
+    fn a_duplicate_pre_does_not_add_a_second_node_and_a_missing_id_is_skipped() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &tool_pre_id(None, "u1", "Bash", json!({"command": "ls"})), 1);
+        assert!(!t.apply(Kind::Pre, &tool_pre_id(None, "u1", "Bash", json!({"command": "ls"})), 2));
+        assert_eq!(t.snapshot_tools().len(), 1);
+        t.apply(Kind::Pre, &main_pre("Bash", json!({"command": "ls"})), 3); // 沒有 tool_use_id
+        assert_eq!(t.snapshot_tools().len(), 1);
+    }
+
+    #[test]
+    fn a_new_prompt_interrupts_tools_still_running_and_session_end_clears_all() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &tool_pre_id(None, "u1", "Bash", json!({"command": "sleep 9"})), 1);
+        t.apply(Kind::Pre, &tool_pre_id(None, "u2", "Read", json!({"file_path": "/x"})), 2);
+        t.apply(Kind::Post, &tool_post_id(None, "u2", "Read"), 3);
+        t.apply(Kind::Prompt, &json!({}), 4);
+        assert_eq!(tool(&t, "u1").status, Status::Interrupted);
+        assert_eq!(tool(&t, "u1").ended_ms, Some(4));
+        assert_eq!(tool(&t, "u2").status, Status::Done);
+        assert_eq!(tool(&t, "u2").turn, 0);
+        t.apply(Kind::Pre, &tool_pre_id(None, "u3", "Bash", json!({"command": "ls"})), 5);
+        assert_eq!(tool(&t, "u3").turn, 1);
+        t.apply(Kind::SessionEnd, &json!({}), 6);
+        assert!(t.snapshot_tools().is_empty());
+    }
+
+    #[test]
+    fn tool_history_is_capped_dropping_the_oldest_finished() {
+        let mut t = Tree::default();
+        for i in 0..(MAX_TOOLS + 5) {
+            let id = format!("u{i}");
+            t.apply(Kind::Pre, &tool_pre_id(None, &id, "Bash", json!({"command": "ls"})), i as u64);
+            t.apply(Kind::Post, &tool_post_id(None, &id, "Bash"), i as u64);
+        }
+        assert_eq!(t.snapshot_tools().len(), MAX_TOOLS);
+        assert_eq!(t.snapshot_tools()[0].id, "u5");
     }
 }

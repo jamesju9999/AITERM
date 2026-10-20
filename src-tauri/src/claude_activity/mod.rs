@@ -35,6 +35,7 @@ pub fn settings_json(base: &str) -> String {
         "hooks": {
             "PreToolUse": hook("pre"),
             "PostToolUse": hook("post"),
+            "PostToolUseFailure": hook("post-fail"),
             "SubagentStart": hook("sub-start"),
             "SubagentStop": hook("sub-stop"),
             "SessionEnd": hook("session-end"),
@@ -226,6 +227,7 @@ mod tests {
         for (event, path) in [
             ("PreToolUse", "pre"),
             ("PostToolUse", "post"),
+            ("PostToolUseFailure", "post-fail"),
             ("SubagentStart", "sub-start"),
             ("SubagentStop", "sub-stop"),
             ("SessionEnd", "session-end"),
@@ -355,7 +357,7 @@ mod tests {
         cmd.args(&spec.args).args([
             "-i",
             "-c",
-            "claude -p --model haiku 'Use the Agent tool to spawn two subagents in parallel; each runs `ls` with Bash and reports the first filename. Then say done.' </dev/null",
+            "claude -p --model haiku 'First use the Read tool on /nonexistent/zzz.txt (it will fail), then use Bash to run `echo hi`. Then use the Agent tool to spawn two subagents in parallel; each runs `ls` with Bash and reports the first filename. Then say done.' </dev/null",
         ]);
         for (k, v) in spec.envs.iter().chain(env.iter()) {
             cmd.env(k, v);
@@ -363,7 +365,14 @@ mod tests {
         let out = cmd.output().unwrap();
         println!("claude said: {}", String::from_utf8_lossy(&out.stdout));
         // claude 結束時會送 SessionEnd、圖被清空，所以看「清空前最後一份快照」。
-        let nodes = seen.lock().unwrap().iter().map(|(_, s)| s.nodes.clone()).filter(|n| !n.is_empty()).last().unwrap_or_default();
+        let last = seen.lock().unwrap().iter().map(|(_, s)| s.clone()).filter(|s| !s.nodes.is_empty()).last().unwrap_or_default();
+        let (nodes, tools) = (last.nodes, last.tools);
+        println!("{}", serde_json::to_string_pretty(&tools).unwrap());
+        use super::tree::Status;
+        assert!(tools.iter().any(|c| c.tool == "Read" && c.status == Status::Failed && c.parent.is_none()), "Read 失敗要變 failed：{tools:?}");
+        assert!(tools.iter().any(|c| c.category == "shell" && c.status == Status::Done && c.parent.is_none()), "主 Claude 的 Bash：{tools:?}");
+        assert!(tools.iter().any(|c| c.parent.is_some()), "subagent 的工具要掛在 subagent 底下：{tools:?}");
+        assert!(tools.iter().all(|c| c.status != Status::Running), "沒有卡在 running 的：{tools:?}");
         assert!(a.snapshot("real-session").nodes.is_empty(), "claude 結束後圖要清空");
         println!("{}", serde_json::to_string_pretty(&nodes).unwrap());
         assert!(nodes.len() >= 2, "應該看到兩個 subagent：{nodes:?}");
