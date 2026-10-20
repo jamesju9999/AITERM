@@ -2,7 +2,7 @@
 //!
 //! 事件形狀來自真 claude（2.1.300）的探勘，見計畫書開頭。
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -14,6 +14,8 @@ const HINT_MAX_CHARS: usize = 80;
 pub const MAIN_RECENT_MAX: usize = 10;
 /// 一個 session 最多留幾筆工具呼叫；超過就丟最舊的已結束者。
 pub const MAX_TOOLS: usize = 300;
+/// 工具明細（完整輸入、輸出）各留多少字元；明細不放進事件，點選時才取。
+pub const DETAIL_MAX_CHARS: usize = 4000;
 
 static NULL: Value = Value::Null;
 /// 建立節點時還不知道型別的暫用名稱，之後 SubagentStart 帶著真型別來會被換掉。
@@ -61,6 +63,15 @@ pub struct ToolCall {
     pub started_ms: u64,
     pub ended_ms: Option<u64>,
     pub turn: u32,
+}
+
+/// 點選工具節點時才取的明細。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ToolDetail {
+    /// 完整指令／路徑／搜尋字串等，不像提示只留第一行。
+    pub input: String,
+    /// 工具的輸出；失敗時是錯誤訊息；還沒結束時為 None。
+    pub output: Option<String>,
 }
 
 /// 送給前端的完整狀態；事件與快照指令共用。
@@ -123,6 +134,7 @@ pub struct Tree {
     main_tool_count: u64,
     main_recent: VecDeque<String>,
     tools: Vec<ToolCall>,
+    details: HashMap<String, ToolDetail>,
     turn: u32,
 }
 
@@ -169,6 +181,53 @@ fn category(tool: &str, input: &Value) -> &'static str {
     }
 }
 
+/// 工具輸入的完整文字（給明細用）。
+fn tool_input_text(tool: &str, input: &Value) -> String {
+    let text = match tool {
+        "Bash" => str_of(input, "command"),
+        "Read" | "Edit" | "Write" | "NotebookEdit" => str_of(input, "file_path"),
+        "Glob" => str_of(input, "pattern"),
+        "Grep" => str_of(input, "pattern").map(|p| match str_of(input, "path") {
+            Some(path) => format!("{p}\n{path}"),
+            None => p,
+        }),
+        "WebFetch" => str_of(input, "url"),
+        "WebSearch" => str_of(input, "query"),
+        _ => None,
+    };
+    truncate(&text.unwrap_or_else(|| serde_json::to_string_pretty(input).unwrap_or_default()), DETAIL_MAX_CHARS)
+}
+
+/// 從各種 `tool_response` 形狀取出人看得懂的輸出。
+fn response_text(resp: &Value) -> Option<String> {
+    let text = match resp {
+        Value::Null => return None,
+        Value::String(s) => s.clone(),
+        Value::Object(_) => {
+            let streams: Vec<String> = ["stdout", "stderr"]
+                .iter()
+                .filter_map(|k| str_of(resp, k))
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !streams.is_empty() {
+                streams.join("\n")
+            } else if let Some(c) = resp.pointer("/file/content").and_then(Value::as_str) {
+                c.to_owned()
+            } else if let Some(c) = resp.get("content").and_then(Value::as_str) {
+                c.to_owned()
+            } else if let Some(items) = resp.get("content").and_then(Value::as_array) {
+                items.iter().filter_map(|i| i.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
+            } else if let Some(o) = str_of(resp, "output") {
+                o
+            } else {
+                resp.to_string()
+            }
+        }
+        other => other.to_string(),
+    };
+    Some(truncate(&text, DETAIL_MAX_CHARS))
+}
+
 /// 「Bash: ls -la」這種一行提示；沒有可顯示的細節就只回工具名。
 fn tool_hint(tool: &str, input: &Value) -> String {
     if let Some(rest) = tool.strip_prefix("mcp__") {
@@ -199,6 +258,10 @@ impl Tree {
 
     pub fn snapshot_tools(&self) -> &[ToolCall] {
         &self.tools
+    }
+
+    pub fn tool_detail(&self, id: &str) -> Option<ToolDetail> {
+        self.details.get(id).cloned()
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -264,8 +327,15 @@ impl Tree {
                 }
             }
             Kind::Post | Kind::PostFail => {
-                let status = if kind == Kind::PostFail { Status::Failed } else { Status::Done };
-                self.finish_tool(str_of(body, "tool_use_id").as_deref(), status, now_ms);
+                let interrupted = body.get("is_interrupt").and_then(Value::as_bool) == Some(true);
+                let (status, output) = match kind {
+                    Kind::PostFail => (
+                        if interrupted { Status::Interrupted } else { Status::Failed },
+                        str_of(body, "error").map(|e| truncate(&e, DETAIL_MAX_CHARS)),
+                    ),
+                    _ => (Status::Done, response_text(field(body, "tool_response"))),
+                };
+                self.finish_tool(str_of(body, "tool_use_id").as_deref(), status, output, now_ms);
                 match caller.as_deref() {
                 Some(a) => {
                     if let Some(i) = self.index_of(a) {
@@ -299,6 +369,7 @@ impl Tree {
                 self.nodes.clear();
                 self.pending.clear();
                 self.tools.clear();
+                self.details.clear();
                 self.main_tool = None;
                 self.reset_main_activity();
                 self.turn = 0;
@@ -340,6 +411,7 @@ impl Tree {
             return true;
         }
         let input = field(body, "tool_input");
+        self.details.insert(id.clone(), ToolDetail { input: tool_input_text(tool, input), output: None });
         self.tools.push(ToolCall {
             id,
             parent: caller.map(str::to_owned),
@@ -354,11 +426,15 @@ impl Tree {
         false
     }
 
-    fn finish_tool(&mut self, id: Option<&str>, status: Status, now_ms: u64) {
-        if let Some(c) = id.and_then(|id| self.tools.iter_mut().find(|c| c.id == id)) {
+    fn finish_tool(&mut self, id: Option<&str>, status: Status, output: Option<String>, now_ms: u64) {
+        let Some(id) = id else { return };
+        if let Some(c) = self.tools.iter_mut().find(|c| c.id == id) {
             if c.status == Status::Running {
                 c.status = status;
                 c.ended_ms = Some(now_ms);
+                if let Some(d) = self.details.get_mut(id) {
+                    d.output = output;
+                }
             }
         }
     }
@@ -504,7 +580,8 @@ impl Tree {
         while self.tools.len() > MAX_TOOLS {
             match self.tools.iter().position(|c| c.status != Status::Running) {
                 Some(i) => {
-                    self.tools.remove(i);
+                    let gone = self.tools.remove(i);
+                    self.details.remove(&gone.id);
                 }
                 None => break,
             }
@@ -983,5 +1060,91 @@ mod tests {
         }
         assert_eq!(t.snapshot_tools().len(), MAX_TOOLS);
         assert_eq!(t.snapshot_tools()[0].id, "u5");
+    }
+
+    #[test]
+    fn an_interrupted_tool_is_marked_interrupted_not_failed() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &tool_pre_id(None, "u1", "Bash", json!({"command": "sleep 60"})), 1);
+        let mut v = tool_post_id(None, "u1", "Bash");
+        v["is_interrupt"] = true.into();
+        v["error"] = "interrupted".into();
+        t.apply(Kind::PostFail, &v, 9);
+        assert_eq!((tool(&t, "u1").status, tool(&t, "u1").ended_ms), (Status::Interrupted, Some(9)));
+    }
+
+    #[test]
+    fn tool_detail_keeps_full_input_and_the_output() {
+        let mut t = Tree::default();
+        let cmd = "echo hi\nls -la";
+        t.apply(Kind::Pre, &tool_pre_id(None, "u1", "Bash", json!({"command": cmd})), 1);
+        assert_eq!(t.tool_detail("u1").unwrap().input, cmd, "提示只留第一行，明細要留完整指令");
+        assert_eq!(t.tool_detail("u1").unwrap().output, None);
+        let mut post = tool_post_id(None, "u1", "Bash");
+        post["tool_response"] = json!({ "stdout": "hi\nfile", "stderr": "warn" });
+        t.apply(Kind::Post, &post, 2);
+        assert_eq!(t.tool_detail("u1").unwrap().output.as_deref(), Some("hi\nfile\nwarn"));
+        assert!(t.tool_detail("nope").is_none());
+    }
+
+    #[test]
+    fn tool_detail_input_for_each_kind_of_tool() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &tool_pre_id(None, "r", "Read", json!({"file_path": "/a/b.rs"})), 1);
+        t.apply(Kind::Pre, &tool_pre_id(None, "g", "Grep", json!({"pattern": "foo", "path": "src"})), 2);
+        t.apply(Kind::Pre, &tool_pre_id(None, "m", "mcp__db__query", json!({"sql": "select 1"})), 3);
+        assert_eq!(t.tool_detail("r").unwrap().input, "/a/b.rs");
+        assert_eq!(t.tool_detail("g").unwrap().input, "foo\nsrc");
+        assert!(t.tool_detail("m").unwrap().input.contains("select 1"));
+    }
+
+    #[test]
+    fn tool_detail_output_from_the_shapes_claude_sends() {
+        let mut t = Tree::default();
+        for (id, resp) in [
+            ("s", json!("plain text")),
+            ("f", json!({ "type": "text", "file": { "filePath": "/a", "content": "file body" } })),
+            ("c", json!({ "content": [{ "type": "text", "text": "mcp text" }] })),
+        ] {
+            t.apply(Kind::Pre, &tool_pre_id(None, id, "Read", json!({"file_path": "/a"})), 1);
+            let mut post = tool_post_id(None, id, "Read");
+            post["tool_response"] = resp;
+            t.apply(Kind::Post, &post, 2);
+        }
+        assert_eq!(t.tool_detail("s").unwrap().output.as_deref(), Some("plain text"));
+        assert_eq!(t.tool_detail("f").unwrap().output.as_deref(), Some("file body"));
+        assert_eq!(t.tool_detail("c").unwrap().output.as_deref(), Some("mcp text"));
+    }
+
+    #[test]
+    fn a_failed_tool_keeps_its_error_as_the_output() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &tool_pre_id(None, "u1", "Read", json!({"file_path": "/x"})), 1);
+        let mut v = tool_post_id(None, "u1", "Read");
+        v["error"] = "File does not exist".into();
+        t.apply(Kind::PostFail, &v, 2);
+        assert_eq!(t.tool_detail("u1").unwrap().output.as_deref(), Some("File does not exist"));
+    }
+
+    #[test]
+    fn tool_detail_is_truncated_and_dropped_with_the_tool() {
+        let mut t = Tree::default();
+        let long = "x".repeat(DETAIL_MAX_CHARS + 500);
+        t.apply(Kind::Pre, &tool_pre_id(None, "u1", "Bash", json!({"command": long})), 1);
+        assert!(t.tool_detail("u1").unwrap().input.chars().count() <= DETAIL_MAX_CHARS + 1);
+        t.apply(Kind::SessionEnd, &json!({}), 2);
+        assert!(t.tool_detail("u1").is_none());
+    }
+
+    #[test]
+    fn detail_of_a_trimmed_tool_is_dropped_too() {
+        let mut t = Tree::default();
+        for i in 0..(MAX_TOOLS + 2) {
+            let id = format!("u{i}");
+            t.apply(Kind::Pre, &tool_pre_id(None, &id, "Bash", json!({"command": "ls"})), i as u64);
+            t.apply(Kind::Post, &tool_post_id(None, &id, "Bash"), i as u64);
+        }
+        assert!(t.tool_detail("u0").is_none());
+        assert!(t.tool_detail(&format!("u{}", MAX_TOOLS + 1)).is_some());
     }
 }

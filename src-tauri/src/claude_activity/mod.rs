@@ -18,7 +18,7 @@ use axum::routing::post;
 use parking_lot::Mutex;
 use serde_json::Value;
 
-use tree::{Kind, Snapshot, Tree};
+use tree::{Kind, Snapshot, ToolDetail, Tree};
 
 /// 子行程環境變數：該 session 的 hooks 設定檔路徑。
 pub const SETTINGS_ENV: &str = "AITERM_CLAUDE_SETTINGS";
@@ -137,6 +137,10 @@ impl ClaudeActivity {
             tree.snapshot()
         };
         (self.emit)(session_id, &snapshot);
+    }
+
+    pub fn tool_detail(&self, session_id: &str, tool_id: &str) -> Option<ToolDetail> {
+        self.sessions.lock().get(session_id).and_then(|t| t.tool_detail(tool_id))
     }
 
     pub fn snapshot(&self, session_id: &str) -> Snapshot {
@@ -349,7 +353,23 @@ mod tests {
     #[ignore = "needs a logged-in claude CLI and spends a little quota"]
     #[tokio::test(flavor = "multi_thread")]
     async fn real_claude_pipeline() {
-        let (a, seen) = activity("real");
+        // 明細在 SessionEnd 時會跟著清空，所以每次事件都把當下看得到的明細抄一份下來。
+        let seen: Seen = Arc::default();
+        let details: Arc<StdMutex<HashMap<String, ToolDetail>>> = Arc::default();
+        let holder: Arc<OnceLock<Arc<ClaudeActivity>>> = Arc::default();
+        let (sink, det, h) = (seen.clone(), details.clone(), holder.clone());
+        let emit: Emitter = Arc::new(move |sid, snap| {
+            if let Some(a) = h.get() {
+                for c in &snap.tools {
+                    if let Some(d) = a.tool_detail(sid, &c.id) {
+                        det.lock().unwrap().insert(c.id.clone(), d);
+                    }
+                }
+            }
+            sink.lock().unwrap().push((sid.to_owned(), snap.clone()));
+        });
+        let a = ClaudeActivity::new(temp_dir("real"), emit);
+        let _ = holder.set(a.clone());
         let env = a.prepare("real-session");
         assert_eq!(env.len(), 1, "接收器沒起來");
         let spec = aiterm_core::pty::shell::default_shell().expect("a default shell");
@@ -373,6 +393,14 @@ mod tests {
         assert!(tools.iter().any(|c| c.category == "shell" && c.status == Status::Done && c.parent.is_none()), "主 Claude 的 Bash：{tools:?}");
         assert!(tools.iter().any(|c| c.parent.is_some()), "subagent 的工具要掛在 subagent 底下：{tools:?}");
         assert!(tools.iter().all(|c| c.status != Status::Running), "沒有卡在 running 的：{tools:?}");
+        let details = details.lock().unwrap();
+        let echo = tools.iter().find(|c| c.hint == "Bash: echo hi").expect("echo hi 節點");
+        assert_eq!(details[&echo.id].input, "echo hi");
+        assert!(details[&echo.id].output.as_deref().is_some_and(|o| o.contains("hi")), "Bash 輸出：{:?}", details[&echo.id]);
+        let read = tools.iter().find(|c| c.tool == "Read" && c.status == Status::Failed).unwrap();
+        assert!(details[&read.id].input.contains("/nonexistent/zzz.txt"), "{:?}", details[&read.id]);
+        assert!(details[&read.id].output.as_deref().is_some_and(|o| !o.is_empty()), "失敗要有錯誤訊息：{:?}", details[&read.id]);
+        println!("echo detail: {:?}\nread detail: {:?}", details[&echo.id], details[&read.id]);
         assert!(a.snapshot("real-session").nodes.is_empty(), "claude 結束後圖要清空");
         println!("{}", serde_json::to_string_pretty(&nodes).unwrap());
         assert!(nodes.len() >= 2, "應該看到兩個 subagent：{nodes:?}");

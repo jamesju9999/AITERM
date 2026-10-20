@@ -523,6 +523,7 @@ pub fn run() {
             pty_resize,
             pty_close,
             claude_activity::commands::claude_activity_snapshot,
+            claude_activity::commands::claude_activity_tool_detail,
             pty_get_cwd,
             pty_get_recent_output,
             pty_get_shell_type,
