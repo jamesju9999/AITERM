@@ -67,3 +67,14 @@ export function listenClaudeActivity(
 ): Promise<UnlistenFn> {
   return listen<ActivitySnapshot>(claudeActivityEvent(sessionId), (e) => onSnapshot(e.payload));
 }
+
+/** 對應 Rust `claude_activity::tree::ToolDetail`：點選工具節點時才取的完整輸入與輸出。 */
+export interface ToolDetail {
+  input: string;
+  /** 還沒結束時為 null；失敗時是錯誤訊息。 */
+  output: string | null;
+}
+
+export function getClaudeToolDetail(sessionId: string, toolId: string): Promise<ToolDetail | null> {
+  return invoke<ToolDetail | null>("claude_activity_tool_detail", { sessionId, toolId });
+}

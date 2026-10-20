@@ -1,10 +1,16 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ActivityNode, ActivitySnapshot, ToolCall } from "../../ipc/claudeActivity";
 
 vi.mock("../../contexts/LocaleContext", async () => {
   const { translations } = await vi.importActual<typeof import("../../lib/i18n")>("../../lib/i18n");
   return { useLocale: () => ({ locale: "zh-TW" as const, t: translations["zh-TW"], setLocale: () => {} }) };
+});
+
+const getToolDetail = vi.fn();
+vi.mock("../../ipc/claudeActivity", async () => {
+  const actual = await vi.importActual<typeof import("../../ipc/claudeActivity")>("../../ipc/claudeActivity");
+  return { ...actual, getClaudeToolDetail: (...a: unknown[]) => getToolDetail(...a) };
 });
 
 import { ClaudeActivityPanel } from "./ClaudeActivityPanel";
@@ -20,11 +26,13 @@ const snap = (nodes: ActivityNode[], over: Partial<ActivitySnapshot> = {}): Acti
   nodes, main_tool: null, main_tool_count: 0, main_recent: [], tools: [], turn: Math.max(0, ...nodes.map((n) => n.turn)), ...over,
 });
 const renderPanel = (nodes: ActivityNode[], over: Partial<ActivitySnapshot> = {}) =>
-  render(<ClaudeActivityPanel snapshot={snap(nodes, over)} fill />);
+  render(<ClaudeActivityPanel snapshot={snap(nodes, over)} fill sessionId="sess-1" />);
 const card = (id: string) => document.querySelector(`[data-node-id="${id}"]`) as HTMLElement;
 
 // 預設是收合；其餘測試要看圖，所以先記成「展開過」。
 beforeEach(() => {
+  getToolDetail.mockReset();
+  getToolDetail.mockResolvedValue(null);
   localStorage.clear();
   localStorage.setItem("aiterm-claude-activity-collapsed", "0");
 });
@@ -326,5 +334,47 @@ describe("縮放與時間軸", () => {
     renderPanel(agents, { tools: [tool("u1", { parent: "a" }), tool("u2")] });
     expect(card("tool:u1")).toBeNull();
     expect(card("tool:u2")).not.toBeNull();
+  });
+
+  it("點工具節點：向後端取完整輸入與輸出並顯示；結束後（狀態變了）會重取", async () => {
+    getToolDetail.mockResolvedValue({ input: "echo hi\nls", output: null });
+    const running = tool("u1", { status: "running", ended_ms: null });
+    const { rerender } = render(<ClaudeActivityPanel snapshot={snap([], { tools: [running] })} fill sessionId="sess-1" />);
+    fireEvent.click(card("tool:u1"));
+    expect(await screen.findByText(/echo hi/)).toBeInTheDocument();
+    expect(getToolDetail).toHaveBeenCalledWith("sess-1", "u1");
+    expect(screen.queryByText("輸出")).toBeNull();
+
+    getToolDetail.mockResolvedValue({ input: "echo hi\nls", output: "hi\nfile" });
+    rerender(<ClaudeActivityPanel snapshot={snap([], { tools: [tool("u1")] })} fill sessionId="sess-1" />);
+    await waitFor(() => {
+      const pres = [...document.querySelectorAll(".aiterm-cact__pre")].map((e) => e.textContent);
+      expect(pres).toEqual(["echo hi\nls", "hi\nfile"]);
+    });
+    expect(getToolDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("取不到明細（例如離開 claude 後）時不顯示輸入輸出區塊，也不報錯", async () => {
+    getToolDetail.mockResolvedValue(null);
+    renderPanel([], { tools: [tool("u1")] });
+    fireEvent.click(card("tool:u1"));
+    await Promise.resolve();
+    expect(screen.queryByText("輸入")).toBeNull();
+  });
+
+  it("中斷的工具用文字標示「中斷」", () => {
+    renderPanel([], { tools: [tool("u1", { status: "interrupted" })] });
+    expect(card("tool:u1").textContent).toContain("中斷");
+  });
+
+  it("最新一輪還沒有活動時提示，並停在最近有活動的那一輪", () => {
+    renderPanel([], { tools: [tool("u1", { turn: 2 })], turn: 3 });
+    expect(screen.getByText("最新一輪還沒有活動")).toBeInTheDocument();
+    expect(card("tool:u1")).not.toBeNull();
+  });
+
+  it("最新一輪就有活動時不顯示那則提示", () => {
+    renderPanel([], { tools: [tool("u1", { turn: 3 })], turn: 3 });
+    expect(screen.queryByText("最新一輪還沒有活動")).toBeNull();
   });
 });

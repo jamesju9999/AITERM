@@ -1,7 +1,8 @@
 import type { ActivityNode, ActivityStatus } from "../../ipc/claudeActivity";
 import { useLocale } from "../../contexts/LocaleContext";
 import { formatDuration, formatTokens } from "./format";
-import { isToolId } from "./toolNodes";
+import { TOOL_PREFIX, isToolId } from "./toolNodes";
+import { useToolDetail } from "./useToolDetail";
 
 export interface MainActivity {
   count: number;
@@ -9,8 +10,10 @@ export interface MainActivity {
 }
 
 /** 選中節點的詳情；沒選時顯示提示。選到根時顯示主 Claude 的活動。圖與時間軸共用。 */
-export function DetailPane({ node, now, share = null, main = null }: { node: ActivityNode | null; now: number; share?: number | null; main?: MainActivity | null }) {
+export function DetailPane({ node, now, share = null, main = null, sessionId }: { node: ActivityNode | null; now: number; share?: number | null; main?: MainActivity | null; sessionId?: string }) {
   const { t } = useLocale();
+  const toolId = node && isToolId(node.id) ? node.id.slice(TOOL_PREFIX.length) : null;
+  const toolDetail = useToolDetail(sessionId, toolId, node ? `${node.status}:${node.ended_ms ?? ""}` : "");
   if (main) {
     return (
       <div className="aiterm-cact__detail">
@@ -49,6 +52,18 @@ export function DetailPane({ node, now, share = null, main = null }: { node: Act
           <span>{statusLabel[node.status]}</span>
           <span>{formatDuration((node.ended_ms ?? now) - node.started_ms)}</span>
         </div>
+        {toolDetail && (
+          <>
+            <div className="aiterm-cact__hint">{t.claude_activity_input}</div>
+            <pre className="aiterm-cact__pre">{toolDetail.input}</pre>
+            {toolDetail.output != null && (
+              <>
+                <div className="aiterm-cact__hint">{t.claude_activity_output}</div>
+                <pre className="aiterm-cact__pre">{toolDetail.output}</pre>
+              </>
+            )}
+          </>
+        )}
       </div>
     );
   }

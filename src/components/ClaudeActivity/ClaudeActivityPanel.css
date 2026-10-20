@@ -126,3 +126,8 @@ button.aiterm-cact__card { cursor: pointer; }
 .aiterm-cact__card--cat-database { border-left-color: #fb923c; }
 .aiterm-cact__card--cat-mcp { border-left-color: #f472b6; }
 .aiterm-cact__card--tool.is-failed { outline: 1px solid #f87171; }
+.aiterm-cact__pre {
+  margin: 2px 0 6px; padding: 6px 8px; max-height: 140px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+  font-family: var(--font-mono, monospace); font-size: 11px; border-radius: 6px;
+  background: var(--bg-glass, rgba(255, 255, 255, 0.06)); color: var(--text-primary, #d4d4d4);
+}

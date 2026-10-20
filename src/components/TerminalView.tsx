@@ -2034,7 +2034,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     claudeActivityVisible || suggestionsShown ? (
       <>
         {claudeActivityVisible && (
-          <ClaudeActivityPanel snapshot={claudeActivity} fill={!suggestionsShown} />
+          <ClaudeActivityPanel snapshot={claudeActivity} fill={!suggestionsShown} sessionId={sessionId} />
         )}
         {suggestionsShown && (
           <div style={{ flex: "1 1 0%", minHeight: 0, display: "flex", flexDirection: "column" }}>

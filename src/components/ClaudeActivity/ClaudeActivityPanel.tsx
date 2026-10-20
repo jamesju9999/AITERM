@@ -56,9 +56,11 @@ interface Props {
   snapshot: ActivitySnapshot;
   /** true＝獨佔側欄整欄；false＝與建議側欄上下並排時只佔上半部（有上限）。 */
   fill: boolean;
+  /** 取工具明細要用；沒給就不顯示輸入輸出。 */
+  sessionId?: string;
 }
 
-export function ClaudeActivityPanel({ snapshot, fill }: Props) {
+export function ClaudeActivityPanel({ snapshot, fill, sessionId }: Props) {
   const { t } = useLocale();
   const [collapsed, setCollapsed] = useState(loadCollapsed);
   const [enlarged, setEnlarged] = useState(false);
@@ -147,6 +149,9 @@ export function ClaudeActivityPanel({ snapshot, fill }: Props) {
 
   const toolbar = (
     <div className="aiterm-cact__toolbar">
+      {snapshot.turn > (turns[turns.length - 1] ?? 0) && (
+        <span className="aiterm-cact__hint">{t.claude_activity_latest_turn_empty}</span>
+      )}
       {turns.length > 1 && (
         <span className="aiterm-cact__turns">
           <button type="button" className="aiterm-cact__btn" aria-label={t.claude_activity_prev_turn} disabled={turnIndex === 0} onClick={() => stepTurn(-1)}>‹</button>
@@ -198,6 +203,7 @@ export function ClaudeActivityPanel({ snapshot, fill }: Props) {
       <DetailPane
         node={selected}
         now={now}
+        sessionId={sessionId}
         share={selected ? stats.share(selected) : null}
         main={rootSelected ? { count: snapshot.main_tool_count, recent: snapshot.main_recent } : null}
       />
