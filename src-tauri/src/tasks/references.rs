@@ -110,6 +110,72 @@ pub fn settings_with_deny(settings_json: &str, rules: &[String]) -> String {
     v.to_string()
 }
 
+/// 讀了參考資料的記錄：每張卡、每個資料夾一筆，讀了幾次、第一次與最後一次的時間。
+/// 畫面用最後一次的時間決定要不要畫「讀取中」的線，活動記錄每張卡一行不洗版。
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+pub struct ReferenceReadRow {
+    pub task_id: String,
+    pub agent_id: Option<String>,
+    /// 參考資料夾（跟清單裡的 `Reference::path` 一字不差）。
+    pub ref_path: String,
+    /// 讀取次數（Read 一個檔、Grep／Glob 搜一次各算一次）。
+    pub reads: i64,
+    pub first_at: i64,
+    pub last_at: i64,
+}
+
+pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS reference_reads (
+            task_id  TEXT NOT NULL,
+            agent_id TEXT,
+            ref_path TEXT NOT NULL,
+            reads    INTEGER NOT NULL,
+            first_at INTEGER NOT NULL,
+            last_at  INTEGER NOT NULL,
+            PRIMARY KEY (task_id, ref_path)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// PostToolUse 的工具呼叫讀的是不是某個參考資料夾裡的東西；是的話回傳那個資料夾。
+/// 看得到路徑的只有 Read／Grep／Glob／LS／NotebookRead；Bash 指令裡的路徑不解析（猜錯比沒畫更糟）。
+pub fn reference_of_access<'a>(refs: &'a [String], tool: &str, input: &serde_json::Value) -> Option<&'a String> {
+    let key = match tool {
+        "Read" => "file_path",
+        "NotebookRead" => "notebook_path",
+        "Grep" | "Glob" | "LS" => "path",
+        _ => return None,
+    };
+    let target = Path::new(input.get(key)?.as_str()?);
+    if !target.is_absolute() {
+        return None;
+    }
+    refs.iter().find(|r| target.starts_with(Path::new(r.as_str())))
+}
+
+pub async fn record_read(pool: &SqlitePool, task_id: &str, agent_id: Option<&str>, ref_path: &str, now: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO reference_reads (task_id, agent_id, ref_path, reads, first_at, last_at) VALUES (?, ?, ?, 1, ?, ?)
+         ON CONFLICT(task_id, ref_path) DO UPDATE SET reads = reads + 1, last_at = excluded.last_at",
+    )
+    .bind(task_id)
+    .bind(agent_id)
+    .bind(ref_path)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn recent_reads(pool: &SqlitePool, limit: i64) -> Result<Vec<ReferenceReadRow>, sqlx::Error> {
+    sqlx::query_as::<_, ReferenceReadRow>("SELECT * FROM reference_reads ORDER BY last_at DESC LIMIT ?").bind(limit).fetch_all(pool).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +243,33 @@ mod tests {
         assert_eq!(get(&pool).await.unwrap(), vec![r("/a", "x")]);
         set(&pool, &[]).await.unwrap();
         assert!(get(&pool).await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn which_reference_a_tool_call_reads() {
+        let refs = vec!["/old/HTBTW_Source".to_string(), "/docs".to_string()];
+        let hit = |tool: &str, input: serde_json::Value| reference_of_access(&refs, tool, &input).cloned();
+        assert_eq!(hit("Read", serde_json::json!({"file_path": "/old/HTBTW_Source/FR/FR1000.egl"})).as_deref(), Some("/old/HTBTW_Source"));
+        assert_eq!(hit("Grep", serde_json::json!({"pattern": "x", "path": "/docs"})).as_deref(), Some("/docs"));
+        assert_eq!(hit("Glob", serde_json::json!({"pattern": "**/*.egl", "path": "/old/HTBTW_Source/AC"})).as_deref(), Some("/old/HTBTW_Source"));
+        // 路徑字首相同但是別的資料夾、相對路徑、沒有路徑的搜尋、Bash：都不算。
+        assert_eq!(hit("Read", serde_json::json!({"file_path": "/old/HTBTW_Source2/a.egl"})), None);
+        assert_eq!(hit("Read", serde_json::json!({"file_path": "FR/FR1000.egl"})), None);
+        assert_eq!(hit("Grep", serde_json::json!({"pattern": "x"})), None);
+        assert_eq!(hit("Bash", serde_json::json!({"command": "cat /docs/a.md"})), None);
+        assert_eq!(hit("Edit", serde_json::json!({"file_path": "/docs/a.md"})), None);
+    }
+
+    #[tokio::test]
+    async fn reads_aggregate_per_card_and_folder() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        record_read(&pool, "t1", Some("a1"), "/docs", 100).await.unwrap();
+        record_read(&pool, "t1", Some("a1"), "/docs", 130).await.unwrap();
+        record_read(&pool, "t2", Some("a2"), "/docs", 120).await.unwrap();
+        let rows = recent_reads(&pool, 10).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].task_id.as_str(), rows[0].reads, rows[0].first_at, rows[0].last_at), ("t1", 2, 100, 130));
+        assert_eq!((rows[1].task_id.as_str(), rows[1].reads), ("t2", 1));
     }
 }

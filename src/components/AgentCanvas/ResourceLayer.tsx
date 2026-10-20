@@ -48,6 +48,9 @@ export function ResourceLayer({
   const [geo, setGeo] = useState<{ rail: Pos; railW: number; agents: Record<string, Pos>; pills: Record<string, Pos> } | null>(null);
 
   const busy = new Set(links.filter((l) => l.state !== "denied").map((l) => l.resourceId));
+  /** 正在讀這個參考資料夾的人。 */
+  const readers = (id: string) =>
+    [...new Set(links.filter((l) => l.resourceId === id && l.state === "query").map((l) => agentName(l.agentId)))].join("、");
   const items = railItems(resources, busy);
   const stateOf = (id: string) =>
     links.some((l) => l.resourceId === id && l.state === "wait") ? "wait" : links.some((l) => l.resourceId === id && l.state === "query") ? "query" : null;
@@ -168,7 +171,9 @@ export function ResourceLayer({
                 </span>
                 <span className={st ? "ac-res-state" : "ac-res-count"}>
                   {st === "query"
-                    ? `● ${t.ac_res_querying}`
+                    ? r.type === "folder"
+                      ? `● ${t.ac_res_reading(readers(r.id))}`
+                      : `● ${t.ac_res_querying}`
                     : st === "wait"
                       ? `⏳ ${t.ac_res_waiting}`
                       : r.everyone

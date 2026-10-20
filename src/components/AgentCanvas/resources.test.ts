@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AgentRow, DbQueryRow } from "../../ipc/agents";
-import { accessLinks, linkPath, railItems, resourcesOf, type Resource } from "./resources";
+import { accessLinks, folderLinks, linkPath, railItems, resourcesOf, type Resource } from "./resources";
 
 const agent = (id: string, skill: string | null): AgentRow =>
   ({ id, kind: "coder", name: id, role: "", prompt_prefix: "", project_dir: "", canvas_x: 0, canvas_y: 0, worktree_path: null, branch: null,
@@ -101,5 +101,19 @@ describe("linkPath", () => {
 
   it("旁邊的卡片不算擋路", () => {
     expect(linkPath(a, pill, [{ x: 400, y: 230, w: 230, h: 150 }])).toMatch(/^M155,190 C/);
+  });
+});
+
+describe("folderLinks", () => {
+  const read = (agent_id: string | null, ref_path: string, last_at: number) => ({ task_id: "t", agent_id, ref_path, reads: 3, first_at: 1, last_at });
+  it("5 秒內讀過才畫線；同一人同一資料夾只畫一條；沒有 Agent 的不畫", () => {
+    const links = folderLinks(
+      [read("a1", "/old", 996), read("a1", "/old", 990), read("a2", "/old", 994), read("a3", "/docs", 1000), read(null, "/old", 1000)],
+      1000,
+    );
+    expect(links).toEqual([
+      { agentId: "a1", resourceId: "ref:/old", state: "query" },
+      { agentId: "a3", resourceId: "ref:/docs", state: "query" },
+    ]);
   });
 });

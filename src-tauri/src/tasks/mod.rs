@@ -268,6 +268,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     custom_skills::init_schema(pool).await?;
     // 團隊編制，見 docs/superpowers/specs/2026-10-20-agent-canvas-team-formations-design.md。
     formations::init_schema(pool).await?;
+    // 讀了參考資料的記錄（桌布上「讀取中」的線）。
+    references::init_schema(pool).await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")
         .execute(pool)
         .await?;

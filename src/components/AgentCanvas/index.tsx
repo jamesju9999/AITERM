@@ -25,9 +25,11 @@ import {
   projectRepo,
   deleteAllAgents,
   listSkillUses,
+  listReferenceReads,
   setCustomSkills,
   setProjectRepo,
   type SkillUseRow,
+  type ReferenceReadRow,
   type AgentKind,
   type AgentRow,
   type DbQueryRow,
@@ -51,7 +53,7 @@ import {
 import { FormationMenu } from "./FormationMenu";
 import { DbSkillDialog } from "./DbSkillDialog";
 import { ResourceLayer } from "./ResourceLayer";
-import { accessLinks, folderResources, resourcesOf } from "./resources";
+import { accessLinks, folderLinks, folderResources, resourcesOf } from "./resources";
 import { ReferencesDialog } from "./ReferencesDialog";
 import { CustomSkillsDialog } from "./CustomSkillsDialog";
 import { RoleIcon } from "./RoleIcon";
@@ -230,6 +232,9 @@ export function AgentCanvasView({
   const [deletingModule, setDeletingModule] = useState<string | null>(null);
   /** 自訂技能的使用記錄；記著是哪個專案的。 */
   const [skillUsesOf, setSkillUsesOf] = useState<{ projectId: string; rows: SkillUseRow[] } | null>(null);
+  /** 讀了參考資料的記錄（讀取中的線、活動記錄）。 */
+  const [refReadsOf, setRefReadsOf] = useState<{ projectId: string; rows: ReferenceReadRow[] } | null>(null);
+  const refReads = useMemo(() => (refReadsOf?.projectId === projectId ? refReadsOf.rows : []), [refReadsOf, projectId]);
   /** 團隊編制（見 FormationMenu）。 */
   const [formsOf, setFormsOf] = useState<{ projectId: string; state: FormationsState } | null>(null);
   const forms = formsOf?.projectId === projectId ? formsOf.state : null;
@@ -359,6 +364,9 @@ export function AgentCanvasView({
       listSkillUses(projectId)
         .then((rows) => alive && setSkillUsesOf({ projectId, rows }))
         .catch(() => {});
+      listReferenceReads(projectId)
+        .then((rows) => alive && setRefReadsOf({ projectId, rows }))
+        .catch(() => {});
       formationsState(projectId, formDefaultName.current)
         .then((state) => alive && setFormsOf({ projectId, state }))
         .catch(() => {});
@@ -426,7 +434,8 @@ export function AgentCanvasView({
   // 查詢剛結束的那幾秒技能列還亮著，時鐘也要繼續走才會熄掉。
   const dbRecent =
     (dbQueriesOf?.rows ?? []).some((q) => q.finished_at === null || nowSecs - q.finished_at <= SKILL_LINGER_SECS) ||
-    (skillUsesOf?.rows ?? []).some((u) => nowSecs - u.at <= SKILL_LINGER_SECS);
+    (skillUsesOf?.rows ?? []).some((u) => nowSecs - u.at <= SKILL_LINGER_SECS) ||
+    refReads.some((r) => nowSecs - r.last_at <= SKILL_LINGER_SECS);
   const anyRunning = tasks.some((x) => x.status === "running" && x.agent_id) || dbRecent;
   // 經過時間每秒更新——只在看得到、而且真的有東西在跑的時候。
   useEffect(() => {
@@ -491,7 +500,7 @@ export function AgentCanvasView({
     () => [...resourcesOf(agents, connNames), ...folderResources(references)],
     [agents, connNames, references],
   );
-  const links = useMemo(() => accessLinks(dbQueries, nowSecs), [dbQueries, nowSecs]);
+  const links = useMemo(() => [...accessLinks(dbQueries, nowSecs), ...folderLinks(refReads, nowSecs)], [dbQueries, refReads, nowSecs]);
   const usage = useMemo(() => (usageOf && usageOf.projectId === projectId ? usageOf.map : {}), [usageOf, projectId]);
   const projectUsage = useMemo(() => sumUsage(tasks, usage), [tasks, usage]);
 
@@ -599,6 +608,11 @@ export function AgentCanvasView({
       const role = agentKind(u.agent_id);
       ev.push({ at: u.at, text: t.ac_log_skill_used(agentName(u.agent_id), u.skill), kind: "dispatch", role });
     }
+    // 參考資料：每張卡每個資料夾一行（不逐檔記），時間是最後一次讀。
+    for (const r of refReads) {
+      const folder = r.ref_path.split(/[\\/]/).filter(Boolean).pop() ?? r.ref_path;
+      ev.push({ at: r.last_at, text: t.ac_log_ref_read(agentName(r.agent_id), folder, r.reads), kind: "dispatch", role: agentKind(r.agent_id) });
+    }
     // 資料庫技能的查詢：活動記錄顯示完整 SQL。
     for (const q of dbQueries) {
       const who = agentName(q.agent_id);
@@ -621,7 +635,7 @@ export function AgentCanvasView({
       ev.push({ at: l.at, text: t.ac_log_formation(l.from_name, l.to_name), kind: "dispatch" });
     }
     return ev.sort((a, b) => b.at - a.at).slice(0, 40);
-  }, [tasks, agentName, agentKind, dbQueries, skillUsesOf, projectId, forms, t]);
+  }, [tasks, agentName, agentKind, dbQueries, skillUsesOf, refReads, projectId, forms, t]);
 
   // ── 拖曳 ───────────────────────────────────────────────────────────────
 

@@ -53,6 +53,7 @@ vi.mock("../../ipc/agents", () => ({
   readSkill: vi.fn(),
   setCustomSkills: vi.fn().mockResolvedValue(undefined),
   listSkillUses: vi.fn(),
+  listReferenceReads: vi.fn(),
   projectRepo: vi.fn(),
   setProjectRepo: vi.fn().mockResolvedValue(undefined),
   deleteAllAgents: vi.fn().mockResolvedValue(2),
@@ -121,6 +122,7 @@ import {
   readSkill,
   setCustomSkills,
   listSkillUses,
+  listReferenceReads,
   projectRepo,
   setProjectRepo,
   deleteAllAgents,
@@ -213,6 +215,7 @@ beforeEach(() => {
     { name: "karpathy-guidelines", description: "寫程式的紀律", path: "/Users/me/.claude/skills/karpathy-guidelines", source: "user" },
   ]);
   vi.mocked(listSkillUses).mockResolvedValue([]);
+  vi.mocked(listReferenceReads).mockResolvedValue([]);
   vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "agents" });
   vi.mocked(formationsState).mockResolvedValue(formations());
   vi.mocked(listRetiredAgents).mockResolvedValue([]);
@@ -365,6 +368,27 @@ describe("AgentCanvasView", () => {
     expect(pill.textContent).toContain("HTBTW_Source");
     expect(pill.textContent).toContain("全員 · 唯讀");
     expect(screen.getByTestId("ac-references").textContent).toMatch(/1/);
+  });
+
+  it("參考資料夾：有人正在讀就發亮、寫誰在讀，並拉一條線；活動記錄每張卡一行；讀完一陣子就熄", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    vi.mocked(getReferences).mockResolvedValue([{ path: "/Users/me/HTBTW_Source", note: "舊系統原始碼" }]);
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "a2", name: "工程師2", canvas_y: 240 })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listReferenceReads).mockResolvedValue([
+      { task_id: "t1", agent_id: "a1", ref_path: "/Users/me/HTBTW_Source", reads: 12, first_at: now - 60, last_at: now },
+      { task_id: "t0", agent_id: "a2", ref_path: "/Users/me/HTBTW_Source", reads: 4, first_at: now - 900, last_at: now - 600 },
+    ]);
+    view();
+    const pill = await screen.findByTestId("resource-ref:/Users/me/HTBTW_Source");
+    await waitFor(() => expect(pill.className).toContain("ac-res--hot"));
+    expect(pill.textContent).toContain("讀取中：Coder Agent1");
+    expect(pill.textContent).not.toContain("工程師2");
+    expect(screen.getByTestId("access-a1-ref:/Users/me/HTBTW_Source").getAttribute("data-state")).toBe("query");
+    expect(screen.queryByTestId("access-a2-ref:/Users/me/HTBTW_Source"), "很久以前讀的不畫線").toBeNull();
+    const log = document.querySelector(".ac-log") as HTMLElement;
+    expect(log.textContent).toContain("Coder Agent1 讀取參考資料 HTBTW_Source（12 次）");
+    expect(log.textContent).toContain("工程師2 讀取參考資料 HTBTW_Source（4 次）");
   });
 
   it("自訂技能：拖到工程師上，勾選程式庫與自己的技能，也能從資料夾加入，存檔", async () => {

@@ -169,7 +169,14 @@ struct Entry {
     approvals: HashMap<i64, tokio::sync::oneshot::Sender<String>>,
     /// 這張卡的自訂技能（名稱、資料夾）：讀到它的 SKILL.md 就記一筆使用。
     skills: Vec<(String, std::path::PathBuf)>,
+    /// 專案的參考資料夾：讀到裡面的東西就記一筆（桌布上畫「讀取中」的線）。
+    refs: Vec<String>,
+    /// 上次因為讀參考資料通知畫面的時間。讀檔很頻繁，每次都通知畫面會一直重抓。
+    last_ref_notify: Option<Instant>,
 }
+
+/// 讀參考資料時最多多久通知畫面一次。要比畫面上線停留的時間（5 秒）短，連續讀的時候線才不會斷。
+const REF_NOTIFY_EVERY: Duration = Duration::from_secs(3);
 
 /// 寫入核准問題的兩個選項。
 pub const APPROVE: &str = "核准執行";
@@ -327,6 +334,8 @@ impl QuotaState {
                 db: None,
                 approvals: HashMap::new(),
                 skills: Vec::new(),
+                refs: Vec::new(),
+                last_ref_notify: None,
             },
         );
     }
@@ -350,12 +359,22 @@ impl QuotaState {
         }
     }
 
-    /// PostToolUse：Read 了某個技能的 SKILL.md → 記一筆技能使用（畫面上技能列會亮）。
+    /// 專案的參考資料夾。在 `register` 之後呼叫。
+    pub fn set_references(&self, task_id: &str, refs: Vec<String>) {
+        if let Some(e) = self.entries.lock().get_mut(task_id) {
+            e.refs = refs;
+        }
+    }
+
+    /// PostToolUse：讀了參考資料夾裡的東西 → 累計一筆；Read 了某個技能的 SKILL.md → 記一筆技能使用。
     async fn tool_used(&self, task_id: &str, json: &serde_json::Value) {
-        if json.get("tool_name").and_then(|v| v.as_str()) != Some("Read") {
+        let tool = json.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+        let input = json.get("tool_input").cloned().unwrap_or_default();
+        self.reference_read(task_id, tool, &input).await;
+        if tool != "Read" {
             return;
         }
-        let Some(file) = json.pointer("/tool_input/file_path").and_then(|v| v.as_str()) else { return };
+        let Some(file) = input.get("file_path").and_then(|v| v.as_str()) else { return };
         let hit = self.entries.lock().get(task_id).and_then(|e| {
             crate::tasks::custom_skills::skill_of_read(&e.skills, file).map(|skill| (e.pool.clone(), e.label.agent_id.clone(), skill))
         });
@@ -363,6 +382,28 @@ impl QuotaState {
             if let Err(e) = crate::tasks::custom_skills::record_use(&pool, task_id, agent_id.as_deref(), &skill).await {
                 eprintln!("record skill use {task_id}: {e}");
             }
+            self.changed();
+        }
+    }
+
+    async fn reference_read(&self, task_id: &str, tool: &str, input: &serde_json::Value) {
+        let hit = self.entries.lock().get(task_id).and_then(|e| {
+            crate::tasks::references::reference_of_access(&e.refs, tool, input).map(|r| (e.pool.clone(), e.label.agent_id.clone(), r.clone()))
+        });
+        let Some((pool, agent_id, ref_path)) = hit else { return };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        if let Err(e) = crate::tasks::references::record_read(&pool, task_id, agent_id.as_deref(), &ref_path, now).await {
+            eprintln!("record reference read {task_id}: {e}");
+            return;
+        }
+        let notify = self.entries.lock().get_mut(task_id).is_some_and(|e| {
+            let due = e.last_ref_notify.is_none_or(|at| at.elapsed() >= REF_NOTIFY_EVERY);
+            if due {
+                e.last_ref_notify = Some(Instant::now());
+            }
+            due
+        });
+        if notify {
             self.changed();
         }
     }
@@ -900,6 +941,38 @@ mod tests {
         let uses = crate::tasks::custom_skills::recent_uses(&pool, 10).await.unwrap();
         assert_eq!(uses.len(), 1);
         assert_eq!((uses[0].skill.as_str(), uses[0].agent_id.as_deref(), uses[0].task_id.as_str()), ("htbtw-egl", Some("a1"), id.as_str()));
+    }
+
+    /// PostToolUse 讀了參考資料夾裡的檔案 → 累計到那張卡那個資料夾；畫面的通知有節流。
+    #[tokio::test]
+    async fn reading_a_reference_folder_is_recorded_and_notifications_are_throttled() {
+        let pool = mem_pool().await;
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        let state = QuotaState::new();
+        let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        {
+            let changes = changes.clone();
+            state.set_on_change(move || {
+                changes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+        state.register(&id, "tab", pool.clone(), ReplyLabel { agent_id: Some("a1".into()), ..label() });
+        state.set_references(&id, vec!["/old/src".into()]);
+        let base = state.hook_base(&id).await.unwrap();
+        let client = reqwest::Client::new();
+        let post = |body: serde_json::Value| client.post(format!("{base}/working")).json(&body).send();
+
+        post(serde_json::json!({"tool_name":"Read","tool_input":{"file_path":"/repo/a.rs"}})).await.unwrap();
+        assert!(crate::tasks::references::recent_reads(&pool, 10).await.unwrap().is_empty());
+        let before = changes.load(std::sync::atomic::Ordering::SeqCst);
+
+        post(serde_json::json!({"tool_name":"Read","tool_input":{"file_path":"/old/src/FR/a.egl"}})).await.unwrap();
+        post(serde_json::json!({"tool_name":"Grep","tool_input":{"pattern":"x","path":"/old/src"}})).await.unwrap();
+        let rows = crate::tasks::references::recent_reads(&pool, 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].ref_path.as_str(), rows[0].agent_id.as_deref(), rows[0].reads), ("/old/src", Some("a1"), 2));
+        // 兩次讀取只通知畫面一次（節流）。
+        assert_eq!(changes.load(std::sync::atomic::Ordering::SeqCst) - before, 1);
     }
 
     #[tokio::test]

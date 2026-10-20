@@ -510,6 +510,16 @@ pub async fn agents_skill_uses(
     crate::tasks::custom_skills::recent_uses(&p.pool, 100).await.map_err(|e| e.to_string())
 }
 
+/// 讀了參考資料的記錄（桌布上「讀取中」的線與活動記錄）。
+#[tauri::command]
+pub async fn agents_reference_reads(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<Vec<crate::tasks::references::ReferenceReadRow>, String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::references::recent_reads(&p.pool, 100).await.map_err(|e| e.to_string())
+}
+
 /// 這個專案的程式庫（套用團隊範本用）：桌布上 Agent 的 → 這個專案記住的。都沒有是 None，由使用者選。
 #[tauri::command]
 pub async fn agents_project_repo(

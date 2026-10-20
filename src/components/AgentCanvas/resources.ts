@@ -1,4 +1,4 @@
-import type { AgentRow, DbQueryRow, DbSkillMode, Reference } from "../../ipc/agents";
+import type { AgentRow, DbQueryRow, DbSkillMode, Reference, ReferenceReadRow } from "../../ipc/agents";
 import { parseDbSkill, SKILL_LINGER_SECS } from "./dbSkill";
 
 /** 資源區：多位 Agent 共用的外部資源（資料庫、參考資料夾）。原型見 .superpowers/brainstorm/agent-db-resource。 */
@@ -69,6 +69,21 @@ export function accessLinks(rows: DbQueryRow[], nowSecs: number): AccessLink[] {
     else if (r.decision === "denied") {
       if (nowSecs - (r.finished_at ?? r.started_at) <= DENIED_FLASH_SECS) links.push({ ...base, state: "denied" });
     } else if (r.finished_at === null || nowSecs - r.finished_at <= SKILL_LINGER_SECS) links.push({ ...base, state: "query" });
+  }
+  return links;
+}
+
+/** 參考資料夾的讀取線：最近幾秒內讀過的 Agent → 那個資料夾（跟資料庫查詢剛結束時同樣停留）。 */
+export function folderLinks(rows: ReferenceReadRow[], nowSecs: number): AccessLink[] {
+  const seen = new Set<string>();
+  const links: AccessLink[] = [];
+  for (const r of rows) {
+    if (!r.agent_id || nowSecs - r.last_at > SKILL_LINGER_SECS) continue;
+    const resourceId = `ref:${r.ref_path}`;
+    const key = `${r.agent_id}\n${resourceId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    links.push({ agentId: r.agent_id, resourceId, state: "query" });
   }
   return links;
 }

@@ -1084,6 +1084,7 @@ impl Dispatcher for RealDispatcher {
             };
             let db = db_skill.clone();
             let skill_dirs: Vec<(String, std::path::PathBuf)> = skills.iter().map(|k| (k.name.clone(), k.path.clone().into())).collect();
+            let ref_dirs: Vec<String> = references.iter().map(|r| r.path.clone()).collect();
             move |tab_id: &str| {
                 quota.register(&task_id, tab_id, pool, label);
                 if codex {
@@ -1091,6 +1092,7 @@ impl Dispatcher for RealDispatcher {
                 }
                 quota.set_db_skill(&task_id, db);
                 quota.set_custom_skills(&task_id, skill_dirs);
+                quota.set_references(&task_id, ref_dirs);
             }
         });
         drop(git_prep);

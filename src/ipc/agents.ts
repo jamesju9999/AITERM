@@ -227,6 +227,18 @@ export interface SkillUseRow {
   at: number;
 }
 
+/** 讀了參考資料的記錄：每張卡、每個參考資料夾一筆（讀了幾次、第一次與最後一次）。 */
+export interface ReferenceReadRow {
+  task_id: string;
+  agent_id: string | null;
+  /** 跟 Reference.path 一字不差。 */
+  ref_path: string;
+  reads: number;
+  first_at: number;
+  last_at: number;
+}
+export const listReferenceReads = (projectId: string): Promise<ReferenceReadRow[]> => invoke("agents_reference_reads", { projectId });
+
 /** 程式庫的 .claude/skills 與使用者的 ~/.claude/skills。 */
 export const listSkills = (repoDir: string): Promise<SkillInfo[]> => invoke("agents_list_skills", { repoDir });
 /** 使用者選的資料夾裡的技能：它本身、它底下，或它的 .claude/skills（macOS 選不到隱藏的 .claude）。 */
