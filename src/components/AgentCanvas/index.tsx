@@ -204,8 +204,8 @@ export function AgentCanvasView({
   const [dbQueriesOf, setDbQueriesOf] = useState<{ projectId: string; rows: DbQueryRow[] } | null>(null);
   /** 連線 id → 名稱（技能標籤顯示用）。 */
   const [connNames, setConnNames] = useState<Record<string, { name: string; sub: string }>>({});
-  /** 資源區的底端（桌布座標）；桌布高度要把它算進去。 */
-  const [railBottom, setRailBottom] = useState(0);
+  /** 資源區的右緣與底端（桌布座標）；桌布大小要把它算進去。 */
+  const [railExtent, setRailExtent] = useState({ right: 0, bottom: 0 });
   /** 專案的參考資料夾；記著是哪個專案的。 */
   const [refsOf, setRefsOf] = useState<{ projectId: string; list: Reference[] } | null>(null);
   const [refsOpen, setRefsOpen] = useState(false);
@@ -921,8 +921,8 @@ export function AgentCanvasView({
       w = Math.max(w, a.canvas_x + NODE_W);
       h = Math.max(h, a.canvas_y + NODE_H);
     }
-    return { w: w + WORLD_MARGIN, h: Math.max(h, railBottom) + WORLD_MARGIN };
-  }, [shownAgents, railBottom]);
+    return { w: Math.max(w, railExtent.right) + WORLD_MARGIN, h: Math.max(h, railExtent.bottom) + WORLD_MARGIN };
+  }, [shownAgents, railExtent]);
 
   const summary = useMemo(() => projectSummary(agents, tasks), [agents, tasks]);
   const hasOrchestrator = agents.some((a) => a.kind === "orchestrator");
@@ -1312,7 +1312,7 @@ export function AgentCanvasView({
                   links={links}
                   agentName={agentName}
                   revision={tasks}
-                  onBottom={setRailBottom}
+                  onExtent={setRailExtent}
                 />
                 {shownAgents.map((shown) => {
                   const a = agents.find((x) => x.id === shown.id) as AgentRow;

@@ -6,9 +6,10 @@ import type { AccessLink, Resource } from "./resources";
 import { linkPath, railItems } from "./resources";
 import { RoleIcon } from "./RoleIcon";
 
-/** 資源區與最下面那張 Agent 卡的距離、資源區最小寬度（桌布座標）。 */
+/** 資源區與最下面那張 Agent 卡的距離；資源區最寬多寬才換行（桌布座標）。
+ *  資源一律橫排：直排時線要穿過上面的膠囊才接得到下面的（實機截圖）。 */
 const RAIL_GAP = 64;
-const RAIL_MIN_W = 520;
+const RAIL_MAX_W = 1200;
 
 interface Pos {
   x: number;
@@ -29,7 +30,7 @@ export function ResourceLayer({
   links,
   agentName,
   revision,
-  onBottom,
+  onExtent,
 }: {
   containerRef: RefObject<HTMLElement | null>;
   agents: AgentRow[];
@@ -38,13 +39,13 @@ export function ResourceLayer({
   agentName: (id: string) => string;
   /** 卡片內容一變高度就可能變，用它觸發重新量測。 */
   revision: unknown;
-  /** 資源區（含展開的清單）的底端；桌布高度要把它算進去。 */
-  onBottom: (y: number) => void;
+  /** 資源區（含展開的清單）的右緣與底端；桌布大小要把它算進去。 */
+  onExtent: (e: { right: number; bottom: number }) => void;
 }) {
   const { t } = useLocale();
   const [hover, setHover] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
-  const [geo, setGeo] = useState<{ rail: Pos; agents: Record<string, Pos>; pills: Record<string, Pos> } | null>(null);
+  const [geo, setGeo] = useState<{ rail: Pos; railW: number; agents: Record<string, Pos>; pills: Record<string, Pos> } | null>(null);
 
   const busy = new Set(links.filter((l) => l.state !== "denied").map((l) => l.resourceId));
   const items = railItems(resources, busy);
@@ -68,22 +69,23 @@ export function ResourceLayer({
       right = Math.max(right, p.x + p.w);
     }
     if (!Number.isFinite(left)) left = 24;
-    const rail = { x: left, y: bottom + RAIL_GAP, w: Math.max(RAIL_MIN_W, right - left), h: 0 };
+    const rail = { x: left, y: bottom + RAIL_GAP, w: Math.max(RAIL_MAX_W, right - left), h: 0 };
     const railEl = root.querySelector<HTMLElement>("[data-resource-rail]");
     rail.h = railEl?.offsetHeight || 72;
+    const railW = railEl?.offsetWidth || 0;
     const pills: Record<string, Pos> = {};
     root.querySelectorAll<HTMLElement>("[data-resource-id]").forEach((el) => {
       pills[el.dataset.resourceId as string] = { x: rail.x + el.offsetLeft, y: rail.y + el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
     });
-    const next = { rail, agents: agentPos, pills };
+    const next = { rail, railW, agents: agentPos, pills };
     if (JSON.stringify(next) !== JSON.stringify(geo)) setGeo(next);
   }, [containerRef, agents, resources, links, revision, open, geo]);
 
   useEffect(() => {
     if (!geo) return;
     const pop = containerRef.current?.querySelector<HTMLElement>("[data-resource-pop]");
-    onBottom(geo.rail.y + geo.rail.h + (pop?.offsetHeight ?? 0));
-  }, [geo, open, containerRef, onBottom]);
+    onExtent({ right: geo.rail.x + Math.max(geo.railW, pop?.offsetWidth ?? 0), bottom: geo.rail.y + geo.rail.h + (pop?.offsetHeight ?? 0) });
+  }, [geo, open, containerRef, onExtent]);
 
   // 點別處就收起清單。
   useEffect(() => {
@@ -138,8 +140,8 @@ export function ResourceLayer({
         className="ac-res-rail"
         data-resource-rail
         data-testid="ac-resource-rail"
-        // 寬度跟著內容（膠囊少時不拉成一整條空框），最寬到團隊的寬度。
-        style={geo ? { left: geo.rail.x, top: geo.rail.y, maxWidth: geo.rail.w } : { visibility: "hidden" }}
+        // 寬度跟著內容橫排（不受桌布目前的寬度限制），超過上限才換行；桌布再依它長大。
+        style={geo ? { left: geo.rail.x, top: geo.rail.y, width: "max-content", maxWidth: geo.rail.w } : { visibility: "hidden" }}
       >
         <span className="ac-res-rail-label" title={t.ac_res_rail_tip}>
           {t.ac_res_rail}
