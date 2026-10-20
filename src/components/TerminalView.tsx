@@ -55,12 +55,12 @@ import { CommandBookmarksPicker, bookmarkCommand } from "./CommandBookmarks";
 import { getActiveTheme, type AppTheme } from "../lib/themes";
 import { readLineExcludingInlinePrediction } from "../lib/terminalLinePrediction";
 import { attentionForExitCode, type AttentionKind } from "../lib/terminalAttention";
-import { RobotIcon, SparklesIcon, SmartphoneIcon, ZapIcon } from "./Icons";
+import { RobotIcon, SparklesIcon, SmartphoneIcon, WorkflowIcon, ZapIcon } from "./Icons";
 import { SuggestionSplit } from "./SuggestionSidebar/SuggestionSplit";
 import { SuggestionSidebar } from "./SuggestionSidebar/SuggestionSidebar";
 import { ClaudeActivityPanel } from "./ClaudeActivity/ClaudeActivityPanel";
 import { useClaudeActivity } from "./ClaudeActivity/useClaudeActivity";
-import { useClaudeActivityEnabled } from "./ClaudeActivity/settings";
+import { setClaudeActivityEnabled, useClaudeActivityEnabled } from "./ClaudeActivity/settings";
 import { useClaudeActivityAlerts } from "./ClaudeActivity/useClaudeActivityAlerts";
 import { useSuggestionSidebar } from "./SuggestionSidebar/useSuggestionSidebar";
 import { useScreenHistory } from "./SuggestionSidebar/useScreenHistory";
@@ -506,8 +506,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const claudeActivity = useClaudeActivity(sessionId);
   const claudeActivityEnabled = useClaudeActivityEnabled();
   // 有 subagent，或主 Claude 本輪已經用過工具，就顯示（後者讓沒開 subagent 時也看得到主 Claude 在做什麼）。
-  const claudeActivityVisible =
-    claudeActivityEnabled && (claudeActivity.nodes.length > 0 || claudeActivity.main_tool_count > 0);
+  const claudeActivityHasData =
+    claudeActivity.nodes.length > 0 || claudeActivity.main_tool_count > 0 || claudeActivity.tools.length > 0;
+  const claudeActivityVisible = claudeActivityEnabled && claudeActivityHasData;
   useClaudeActivityAlerts(claudeActivity, isActive);
   const [suggestionGoal, setSuggestionGoal] = useState(initialSuggestionGoal ?? "");
   const [suggestionMilestones, setSuggestionMilestones] = useState<MilestoneState | undefined>(initialSuggestionMilestones);
@@ -2156,6 +2157,21 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             <SmartphoneIcon size={14} />
             <span>Remote</span>
           </button>
+          {claudeActivityHasData && (
+            <button
+              className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm aiterm-claude-activity-toggle${claudeActivityEnabled ? " aiterm-sugg-toggle--open" : ""}`}
+              title={claudeActivityEnabled ? t.claude_activity_btn_title_open : t.claude_activity_btn_title_closed}
+              aria-pressed={claudeActivityEnabled}
+              onClick={(e) => {
+                e.stopPropagation();
+                setClaudeActivityEnabled(!claudeActivityEnabled);
+              }}
+              style={{ display: "flex", alignItems: "center", gap: "6px" }}
+            >
+              <WorkflowIcon size={14} />
+              <span>{t.claude_activity_btn_label}</span>
+            </button>
+          )}
           <button
             className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm aiterm-sugg-toggle${suggestionSidebar.open ? " aiterm-sugg-toggle--open" : suggestionSidebar.aiCliRunning ? " aiterm-sugg-toggle--ready" : ""}`}
             title={suggestionSidebar.open

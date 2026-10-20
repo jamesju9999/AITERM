@@ -127,4 +127,31 @@ describe("終端機分頁的 Claude 協作側欄", () => {
     await emit({ nodes: [], main_tool: null, main_tool_count: 0, main_recent: [], tools: [], turn: 0 });
     expect(container.querySelector(".aiterm-cact")).toBeNull();
   });
+
+  it("終端機標題列有「協作圖」開關：有活動才出現，點一下收起／重新顯示側欄，並與設定同步", async () => {
+    const { container, getByRole, queryByRole } = mount();
+    await waitFor(() => expect(listenHandlers.has("claude-activity://test-session")).toBe(true));
+    expect(queryByRole("button", { name: /協作圖/ })).toBeNull();
+    await emit(snap(node("a1", "整理檔案")));
+    const btn = await waitFor(() => getByRole("button", { name: /協作圖/ }));
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector(".aiterm-cact")).not.toBeNull();
+    await act(async () => { btn.click(); });
+    expect(container.querySelector(".aiterm-cact")).toBeNull();
+    expect(getByRole("button", { name: /協作圖/ }).getAttribute("aria-pressed")).toBe("false");
+    expect(localStorage.getItem("aiterm-claude-activity-enabled")).toBe("0");
+    await act(async () => { getByRole("button", { name: /協作圖/ }).click(); });
+    expect(container.querySelector(".aiterm-cact")).not.toBeNull();
+  });
+
+  it("設定關閉時按鈕仍在（有活動），可以從這裡重新打開", async () => {
+    localStorage.setItem("aiterm-claude-activity-enabled", "0");
+    const { container, getByRole } = mount();
+    await waitFor(() => expect(listenHandlers.has("claude-activity://test-session")).toBe(true));
+    await emit(snap(node("a1", "整理檔案")));
+    const btn = await waitFor(() => getByRole("button", { name: /協作圖/ }));
+    expect(container.querySelector(".aiterm-cact")).toBeNull();
+    await act(async () => { btn.click(); });
+    expect(container.querySelector(".aiterm-cact")).not.toBeNull();
+  });
 });
