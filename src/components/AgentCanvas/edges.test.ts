@@ -32,12 +32,14 @@ describe("computeEdges", () => {
   it("沒有 Reviewer 時 Coder 直接接 Orchestrator", () => {
     expect(computeEdges([C1, O])).toEqual([{ from: "c1", to: "o" }]);
   });
-  it("有產出規格的工程師時，協調者派工給其他工程師（虛線）", () => {
+  it("有產出規格的工程師時，派工虛線從他出發指向其他工程師（實際拆卡的是協調者）", () => {
     const spec = { ...C1, produces_spec: true };
     expect(computeEdges([spec, C2, R, O])).toEqual([
       { from: "c1", to: "r" }, { from: "c2", to: "r" }, { from: "r", to: "o" },
-      { from: "o", to: "c2", kind: "dispatch" },
+      { from: "c1", to: "c2", kind: "dispatch" },
     ]);
+    // 沒有協調者就沒有人拆卡，不畫派工線。
+    expect(computeEdges([spec, C2, R]).some((e) => e.kind === "dispatch")).toBe(false);
   });
   it("有驗收者時協調者接驗收者；沒有協調者就不接", () => {
     const V = ag("v", "verifier");
@@ -107,13 +109,13 @@ describe("diffPulses", () => {
     ]);
   });
 
-  it("拆解卡：r→o 綠；拆出的實作卡：o→Coder 紫", () => {
+  it("拆解卡：r→o 綠；拆出的實作卡：規格撰寫的工程師→Coder 紫", () => {
     const spec = card({ id: "S", agent_id: "c1", status: "done", outcome: "success", is_spec: true });
     const plan = card({ id: "P", card_kind: "plan", module_id: "S", agent_id: "o" });
     expect(diffPulses([spec], [spec, plan], agents).map((p) => [p.key, p.from, p.to])).toEqual([["P:plan", "r", "o"]]);
     const impl = card({ id: "I", agent_id: "c1", from_spec: "S" });
     expect(diffPulses([spec, plan], [spec, plan, impl], agents)).toEqual([
-      { key: "I:dispatch", from: "o", to: "c1", color: EDGE_COLORS.dispatch, reverse: false },
+      { key: "I:dispatch", from: "c1", to: "c1", color: EDGE_COLORS.dispatch, reverse: false },
     ]);
   });
 
@@ -122,9 +124,9 @@ describe("diffPulses", () => {
     const agents = [spec, C2, O];
     const edges = computeEdges(agents);
     const impl = card({ id: "I", agent_id: "c2", from_spec: "S", status: "running" });
-    expect(edgeActivity(edges, agents, [impl]).get("o>c2")).toBe(EDGE_COLORS.dispatch);
-    expect(edgeActivity(edges, agents, [{ ...impl, status: "done" }]).has("o>c2")).toBe(false);
-    expect(edgeActivity(edges, agents, [{ ...impl, from_spec: null }]).has("o>c2")).toBe(false);
+    expect(edgeActivity(edges, agents, [impl]).get("c1>c2")).toBe(EDGE_COLORS.dispatch);
+    expect(edgeActivity(edges, agents, [{ ...impl, status: "done" }]).has("c1>c2")).toBe(false);
+    expect(edgeActivity(edges, agents, [{ ...impl, from_spec: null }]).has("c1>c2")).toBe(false);
   });
 });
 

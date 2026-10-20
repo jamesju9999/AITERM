@@ -27,4 +27,12 @@ describe("autoLayout", () => {
     const coderMid = (pos.get("c1")!.y + pos.get("c2")!.y + 100) / 2;
     expect(pos.get("r")!.y + 50).toBe(coderMid);
   });
+
+  it("產出規格的工程師排在最左邊一欄，其他工程師往右一欄", () => {
+    const spec = { ...n("s", "coder", 300), spec: true };
+    const pos = autoLayout([n("c1", "coder", 0), spec, n("c2", "coder", 200), n("r", "reviewer")]);
+    expect(pos.get("s")!.x).toBeLessThan(pos.get("c1")!.x);
+    expect(pos.get("c1")!.x).toBe(pos.get("c2")!.x);
+    expect(pos.get("r")!.x).toBeGreaterThan(pos.get("c1")!.x);
+  });
 });

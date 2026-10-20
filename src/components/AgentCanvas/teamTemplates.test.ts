@@ -118,9 +118,13 @@ describe("舊系統盤點範本", () => {
   const zh = translations["zh-TW"];
   const inv = builtinTemplates(zh).find((x) => x.id === "inventory");
 
-  it("三位研究工程師＋彙整工程師、文件審核者、協調者；不需要驗收者", () => {
+  it("需求分析師（產出規格）＋三位研究工程師＋彙整工程師、文件審核者、協調者；不需要驗收者", () => {
     const kinds = inv?.agents.map((a) => a.kind) ?? [];
-    expect(kinds.filter((k) => k === "coder")).toHaveLength(4);
+    expect(kinds.filter((k) => k === "coder")).toHaveLength(5);
+    const analyst = inv?.agents.find((a) => a.produces_spec);
+    expect(analyst?.role).toBe(zh.ac_role_analyst);
+    expect(analyst?.prompt_prefix).toMatch(/釐清需求/);
+    expect(analyst?.prompt_prefix).toMatch(/拆/);
     expect(kinds).toContain("reviewer");
     expect(kinds).toContain("orchestrator");
     expect(kinds).not.toContain("verifier");
@@ -131,5 +135,24 @@ describe("舊系統盤點範本", () => {
     expect(researcher?.prompt_prefix).toMatch(/只寫文件|不要修改/);
     expect(researcher?.prompt_prefix).toMatch(/路徑/);
     expect(inv?.agents.find((a) => a.kind === "reviewer")?.prompt_prefix).toMatch(/路徑|來源/);
+  });
+});
+
+describe("範本的排列", () => {
+  it("有產出規格的工程師時，他在最左邊一欄，其他工程師在他右邊，流程角色再往右", () => {
+    for (const tpl of builtinTemplates(translations["zh-TW"])) {
+      const specs = tpl.agents.filter((a) => a.kind === "coder" && a.produces_spec);
+      if (specs.length === 0) continue;
+      const others = tpl.agents.filter((a) => a.kind === "coder" && !a.produces_spec);
+      const flow = tpl.agents.filter((a) => a.kind !== "coder");
+      const maxSpec = Math.max(...specs.map((a) => a.dx));
+      expect(Math.min(...others.map((a) => a.dx)), tpl.name).toBeGreaterThan(maxSpec);
+      expect(Math.min(...flow.map((a) => a.dx)), tpl.name).toBeGreaterThan(Math.max(...others.map((a) => a.dx)));
+    }
+  });
+
+  it("舊系統轉換的最前面也是需求分析（產出規格）", () => {
+    const mig = builtinTemplates(translations["zh-TW"]).find((x) => x.id === "migration");
+    expect(mig?.agents.filter((a) => a.produces_spec)).toHaveLength(1);
   });
 });

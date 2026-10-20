@@ -112,7 +112,7 @@ export function builtinTemplates(t: Translations): BuiltinTemplate[] {
   };
   const general = { role: t.ac_role_general_reviewer, prefix: t.ac_role_general_reviewer_desc };
   const combined = { role: t.ac_role_combined_reviewer, prefix: t.ac_role_combined_reviewer_desc };
-  return [
+  return ([
     {
       id: "quick", builtin: true, name: t.ac_tpl_quick, description: t.ac_tpl_quick_desc,
       agents: [coder(1, t.ls_preset_coder, t.ls_preset_coder_desc), ...flow(1, false, false, general)],
@@ -137,24 +137,43 @@ export function builtinTemplates(t: Translations): BuiltinTemplate[] {
     {
       id: "migration", builtin: true, name: t.ac_tpl_migration, description: t.ac_tpl_migration_desc,
       agents: [
-        coder(1, t.ac_role_migration, t.ac_role_migration_desc, true),
-        coder(2, t.ls_preset_coder, t.ls_preset_coder_desc),
-        coder(3, t.ls_preset_coder, t.ls_preset_coder_desc),
+        coder(1, t.ac_role_analyst, t.ac_role_analyst_desc, true),
+        coder(2, t.ac_role_migration, t.ac_role_migration_desc),
+        coder(3, t.ac_role_migration, t.ac_role_migration_desc),
         ...flow(3, true, true, combined),
       ],
     },
     {
-      // 盤點：產出是文件不是程式，不需要驗收者；協調者負責把各人的文件合併起來。
+      // 盤點：產出是文件不是程式，不需要驗收者；需求分析師決定盤點哪些模組，協調者照他的
+      // 規格拆給研究工程師，最後把各人的文件合併起來。
       id: "inventory", builtin: true, name: t.ac_tpl_inventory, description: t.ac_tpl_inventory_desc,
       agents: [
-        coder(1, t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
+        coder(1, t.ac_role_analyst, t.ac_role_analyst_desc, true),
         coder(2, t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
         coder(3, t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
-        coder(4, t.ls_preset_docs, t.ac_tpl_inventory_synthesizer),
-        ...flow(4, true, false, { role: t.ac_tpl_inventory_reviewer_role, prefix: t.ac_tpl_inventory_reviewer }),
+        coder(4, t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
+        coder(5, t.ls_preset_docs, t.ac_tpl_inventory_synthesizer),
+        ...flow(5, true, false, { role: t.ac_tpl_inventory_reviewer_role, prefix: t.ac_tpl_inventory_reviewer }),
       ],
     },
-  ];
+  ] as BuiltinTemplate[]).map((tpl) => ({ ...tpl, agents: specColumnFirst(tpl.agents) }));
+}
+
+/**
+ * 跟桌布的「自動排列」一致：產出規格的工程師在最左一欄（派工線從他出發），其他工程師
+ * 在下一欄，流程角色在其他工程師那一欄的中間高度、依序往右。沒有產出規格的不動。
+ */
+function specColumnFirst(agents: TemplateAgent[]): TemplateAgent[] {
+  const specs = agents.filter((a) => a.kind === "coder" && a.produces_spec);
+  if (specs.length === 0) return agents;
+  const others = agents.filter((a) => a.kind === "coder" && !a.produces_spec);
+  const mid = ((Math.max(others.length, 1) - 1) * ROW) / 2;
+  const specTop = mid - ((specs.length - 1) * ROW) / 2;
+  return agents.map((a) => {
+    if (a.kind !== "coder") return { ...a, dx: a.dx + COL, dy: mid };
+    if (a.produces_spec) return { ...a, dx: 0, dy: specTop + specs.indexOf(a) * ROW };
+    return { ...a, dx: COL, dy: others.indexOf(a) * ROW };
+  });
 }
 
 /** 名稱已經有人用時往後編號：「工程師1」→「工程師2」…（結尾不是數字的就加上「2」「3」…）。 */

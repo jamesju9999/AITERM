@@ -1,7 +1,13 @@
 import type { AgentKind } from "../../ipc/agents";
 
-/** 由左到右的流程順序：沒放的角色不佔欄。 */
-const COLUMN_ORDER: AgentKind[] = ["coder", "reviewer", "orchestrator", "verifier"];
+/** 由左到右的流程順序：產出規格的工程師（釐清需求、拆工作）→ 其他工程師 → 審核者 → 協調者 → 驗收者。沒放的角色不佔欄。 */
+const COLUMNS: ((n: LayoutNode) => boolean)[] = [
+  (n) => n.kind === "coder" && !!n.spec,
+  (n) => n.kind === "coder" && !n.spec,
+  (n) => n.kind === "reviewer",
+  (n) => n.kind === "orchestrator",
+  (n) => n.kind === "verifier",
+];
 const ORIGIN = 40;
 const COL_GAP = 110;
 const ROW_GAP = 40;
@@ -14,6 +20,8 @@ export interface LayoutNode {
   y: number;
   w: number;
   h: number;
+  /** 產出規格的工程師：排在最前面一欄。 */
+  spec?: boolean;
 }
 
 /**
@@ -21,9 +29,7 @@ export interface LayoutNode {
  * 每一欄都對齊最高那一欄的垂直中心，連線就不會斜穿整個畫面。
  */
 export function autoLayout(nodes: LayoutNode[]): Map<string, { x: number; y: number }> {
-  const columns = COLUMN_ORDER.map((k) =>
-    nodes.filter((n) => n.kind === k).sort((a, b) => a.y - b.y || a.x - b.x),
-  ).filter((col) => col.length > 0);
+  const columns = COLUMNS.map((inCol) => nodes.filter(inCol).sort((a, b) => a.y - b.y || a.x - b.x)).filter((col) => col.length > 0);
   const heightOf = (col: LayoutNode[]) => col.reduce((s, n) => s + n.h, 0) + ROW_GAP * (col.length - 1);
   const tallest = Math.max(0, ...columns.map(heightOf));
 

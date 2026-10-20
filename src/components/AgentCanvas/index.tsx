@@ -845,7 +845,7 @@ export function AgentCanvasView({
     const pos = autoLayout(
       agents.map((a) => {
         const el = root?.querySelector<HTMLElement>(`[data-agent-id="${a.id}"]`);
-        return { id: a.id, kind: a.kind, x: a.canvas_x, y: a.canvas_y, w: el?.offsetWidth || NODE_W, h: el?.offsetHeight || NODE_H };
+        return { id: a.id, kind: a.kind, spec: a.produces_spec, x: a.canvas_x, y: a.canvas_y, w: el?.offsetWidth || NODE_W, h: el?.offsetHeight || NODE_H };
       }),
     );
     const moved = agents.filter((a) => {

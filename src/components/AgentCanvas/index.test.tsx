@@ -1213,7 +1213,7 @@ describe("AgentCanvasView", () => {
       ]);
       vi.mocked(listTasks).mockResolvedValue([]);
       view();
-      const edge = await screen.findByTestId("edge-o1-a1");
+      const edge = await screen.findByTestId("edge-w-a1");
       expect(edge.querySelector("path")?.getAttribute("class")).toContain("ac-edge-base--idle");
     });
 
@@ -1327,7 +1327,7 @@ describe("AgentCanvasView", () => {
       ]);
       vi.mocked(listTasks).mockResolvedValue([]);
       view();
-      const edge = await screen.findByTestId("edge-o1-a1");
+      const edge = await screen.findByTestId("edge-w-a1");
       expect(edge.querySelector("title")?.textContent).toMatch(/由系統依忙碌程度與相依關係分派|assigns them by workload and dependencies/);
     });
   });

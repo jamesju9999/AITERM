@@ -5,7 +5,7 @@ import type { TaskRow } from "../../ipc/tasks";
 export interface Edge {
   from: string;
   to: string;
-  /** `dispatch` = 協調者把拆好的實作卡派給工程師（規格先行），畫成虛線。 */
+  /** `dispatch` = 規格拆出的實作卡派給工程師（規格先行），畫成虛線：從規格撰寫的工程師出發。 */
   kind?: "dispatch";
 }
 
@@ -25,10 +25,15 @@ export function computeEdges(agents: AgentRow[]): Edge[] {
   // 驗收者驗的是協調者合併的結果。
   const verifier = agents.find((a) => a.kind === "verifier");
   if (orch && verifier) out.push({ from: orch.id, to: verifier.id });
-  // 規格先行：有產出規格的工程師時，協調者會把拆出來的實作卡派給其他工程師。
-  if (orch && agents.some((a) => a.kind === "coder" && a.produces_spec)) {
-    for (const c of agents.filter((a) => a.kind === "coder" && !a.produces_spec)) {
-      out.push({ from: orch.id, to: c.id, kind: "dispatch" });
+  // 規格先行：產出規格的工程師釐清需求、寫規格，審核通過後由協調者拆卡派給其他工程師。
+  // 派工線從規格撰寫的那位畫出去——畫面上要看得出「工作是從他的規格拆出來的」；
+  // 沒有協調者就沒有人拆卡，不畫。
+  if (orch) {
+    const specs = agents.filter((a) => a.kind === "coder" && a.produces_spec);
+    for (const s of specs) {
+      for (const c of agents.filter((a) => a.kind === "coder" && !a.produces_spec)) {
+        out.push({ from: s.id, to: c.id, kind: "dispatch" });
+      }
     }
   }
   return out;
@@ -128,9 +133,10 @@ export function diffPulses(prev: TaskRow[] | null, next: TaskRow[], agents: Agen
       const from = reviewer?.id ?? byId.get(t.module_id ?? "")?.agent_id;
       if (from) out.push({ key: `${t.id}:plan`, from, to: orch.id, color: EDGE_COLORS.pass, reverse: false });
     }
-    // 協調者把拆出來的實作卡派給 Coder。
+    // 規格拆出來的實作卡派給 Coder：光點從規格撰寫的工程師出發（找不到才從協調者）。
     if (!old && t.card_kind === "work" && t.from_spec && t.agent_id && orch) {
-      out.push({ key: `${t.id}:dispatch`, from: orch.id, to: t.agent_id, color: EDGE_COLORS.dispatch, reverse: false });
+      const from = byId.get(t.from_spec)?.agent_id ?? orch.id;
+      out.push({ key: `${t.id}:dispatch`, from, to: t.agent_id, color: EDGE_COLORS.dispatch, reverse: false });
     }
     // 合併完成、交給驗收者。
     if (!old && t.card_kind === "verify" && orch && t.agent_id) {
