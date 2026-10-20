@@ -866,7 +866,7 @@ export function AgentCanvasView({
 
   // ── 縮放與「全部顯示」 ───────────────────────────────────────────────────
 
-  /** 節點在桌布座標裡的外框（尺寸從 DOM 量，量不到用估計值）。 */
+  /** 節點與資源區在桌布座標裡的外框（尺寸從 DOM 量，量不到用估計值）。 */
   const nodeBounds = useCallback(() => {
     const root = canvasRef.current;
     let minX = Infinity;
@@ -880,8 +880,13 @@ export function AgentCanvasView({
       maxX = Math.max(maxX, a.canvas_x + (el?.offsetWidth || NODE_W));
       maxY = Math.max(maxY, a.canvas_y + (el?.offsetHeight || NODE_H));
     }
+    // 資源區在最下面一排卡片的下方（左緣跟卡片對齊），它的右緣與底端也要看得到。
+    if (resources.length > 0) {
+      maxX = Math.max(maxX, railExtent.right);
+      maxY = Math.max(maxY, railExtent.bottom);
+    }
     return { minX, minY, maxX, maxY };
-  }, [agents]);
+  }, [agents, resources.length, railExtent]);
 
   /** 縮放並捲動到所有節點都看得到。畫面還沒有尺寸（分頁隱藏中）時回 false。 */
   const fitToView = useCallback((): boolean => {

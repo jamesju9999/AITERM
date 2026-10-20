@@ -1398,6 +1398,23 @@ describe("AgentCanvasView", () => {
       expect(pct).toHaveTextContent("40%");
       expect(screen.getByTestId("ac-world").style.transform).toBe("scale(0.4)");
     });
+
+    it("全部顯示也把資源區算進去（在最下面一排卡片的下方）", async () => {
+      vi.mocked(getReferences).mockResolvedValue([{ path: "/Users/me/HTBTW_Source", note: "" }]);
+      vi.mocked(listAgents).mockResolvedValue([
+        agent({ canvas_x: 0, canvas_y: 0 }),
+        agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 1800, canvas_y: 1200 }),
+      ]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      await screen.findByTestId("ac-resource-rail");
+      const canvas = document.querySelector<HTMLElement>('[data-drop="canvas"]') as HTMLElement;
+      Object.defineProperty(canvas, "clientWidth", { configurable: true, value: 1000 });
+      Object.defineProperty(canvas, "clientHeight", { configurable: true, value: 600 });
+      fireEvent.click(screen.getByRole("button", { name: /全部顯示|Fit all/ }));
+      // 資源區在最低的卡片（1200＋估計高 120）下方 64，估計高 72 → 底端 1456；536 / 1456 → 37%。
+      expect(screen.getByTestId("ac-zoom-pct")).toHaveTextContent("37%");
+    });
   });
 
   describe("相依關係與派工", () => {
