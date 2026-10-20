@@ -58,6 +58,8 @@ import { attentionForExitCode, type AttentionKind } from "../lib/terminalAttenti
 import { RobotIcon, SparklesIcon, SmartphoneIcon, ZapIcon } from "./Icons";
 import { SuggestionSplit } from "./SuggestionSidebar/SuggestionSplit";
 import { SuggestionSidebar } from "./SuggestionSidebar/SuggestionSidebar";
+import { ClaudeActivityPanel } from "./ClaudeActivity/ClaudeActivityPanel";
+import { useClaudeActivity } from "./ClaudeActivity/useClaudeActivity";
 import { useSuggestionSidebar } from "./SuggestionSidebar/useSuggestionSidebar";
 import { useScreenHistory } from "./SuggestionSidebar/useScreenHistory";
 import { SCROLL_ECHO_MS } from "./SuggestionSidebar/terminalIdle";
@@ -499,6 +501,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // 偵測只點亮開關按鈕，不會自動開啟——側欄一開終端機就變窄、觸發 PTY resize。
   const [customAiCliNames, setCustomAiCliNames] = useState<string[]>(loadCustomNames);
   const suggestionSidebar = useSuggestionSidebar(blocks, customAiCliNames);
+  const claudeActivity = useClaudeActivity(sessionId);
   const [suggestionGoal, setSuggestionGoal] = useState(initialSuggestionGoal ?? "");
   const [suggestionMilestones, setSuggestionMilestones] = useState<MilestoneState | undefined>(initialSuggestionMilestones);
   // 側欄關著也要記錄 AI 工具每一輪的穩定畫面，所以掛在這裡而不是側欄元件裡。
@@ -2018,26 +2021,37 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   };
   const handleCancel = () => setPreview(INITIAL_PREVIEW);
 
+  const suggestionsShown = suggestionSidebar.open && !!sessionId;
+  const sidebarContent =
+    claudeActivity.length > 0 || suggestionsShown ? (
+      <>
+        {claudeActivity.length > 0 && (
+          <ClaudeActivityPanel nodes={claudeActivity} fill={!suggestionsShown} />
+        )}
+        {suggestionsShown && (
+          <div style={{ flex: "1 1 0%", minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <SuggestionSidebar
+              sessionId={sessionId}
+              providerId={activeProviderId || undefined}
+              disabled={false}
+              getIdleMs={() => Date.now() - lastAiOutputAtRef.current}
+              getHistory={screenHistory.getHistory}
+              aiCliRunning={suggestionSidebar.aiCliRunning}
+              customNames={customAiCliNames}
+              onCustomNamesChange={(names) => { setCustomAiCliNames(names); saveCustomNames(names); }}
+              onClose={suggestionSidebar.close}
+              goal={suggestionGoal}
+              onGoalChange={(goal) => { setSuggestionGoal(goal); onSuggestionGoalChange?.(goal); }}
+              milestones={suggestionMilestones}
+              onMilestonesChange={(next) => { setSuggestionMilestones(next); onSuggestionMilestonesChange?.(next); }}
+            />
+          </div>
+        )}
+      </>
+    ) : null;
+
   return (
-    <SuggestionSplit
-      sidebar={suggestionSidebar.open && sessionId ? (
-        <SuggestionSidebar
-          sessionId={sessionId}
-          providerId={activeProviderId || undefined}
-          disabled={false}
-          getIdleMs={() => Date.now() - lastAiOutputAtRef.current}
-          getHistory={screenHistory.getHistory}
-          aiCliRunning={suggestionSidebar.aiCliRunning}
-          customNames={customAiCliNames}
-          onCustomNamesChange={(names) => { setCustomAiCliNames(names); saveCustomNames(names); }}
-          onClose={suggestionSidebar.close}
-          goal={suggestionGoal}
-          onGoalChange={(goal) => { setSuggestionGoal(goal); onSuggestionGoalChange?.(goal); }}
-          milestones={suggestionMilestones}
-          onMilestonesChange={(next) => { setSuggestionMilestones(next); onSuggestionMilestonesChange?.(next); }}
-        />
-      ) : null}
-    >
+    <SuggestionSplit sidebar={sidebarContent}>
     <div
       style={{
         display: "flex",
