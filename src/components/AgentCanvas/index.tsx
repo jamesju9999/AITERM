@@ -51,6 +51,7 @@ import {
   type RetiredAgent,
 } from "../../ipc/formations";
 import { FormationMenu } from "./FormationMenu";
+import { BugReportDialog } from "./BugReportDialog";
 import { DbSkillDialog } from "./DbSkillDialog";
 import { ResourceLayer } from "./ResourceLayer";
 import { accessLinks, folderLinks, folderResources, resourcesOf } from "./resources";
@@ -264,6 +265,8 @@ export function AgentCanvasView({
   const [pulses, setPulses] = useState<Pulse[]>([]);
   const prevTasks = useRef<TaskWithAttachments[] | null>(null);
   const [newModule, setNewModule] = useState(false);
+  /** 回報問題（moduleId：從某個完成的模組按右鍵進來）。 */
+  const [bugFor, setBugFor] = useState<{ moduleId: string | null } | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   /** 打開驗收報告的那張驗收卡。 */
@@ -1149,6 +1152,16 @@ export function AgentCanvasView({
             onCancelPending={() => void run(() => cancelFormationSwitch(projectId))}
           />
         )}
+        {projectId && agents.some((a) => a.kind === "coder") && (
+          <button
+            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+            data-testid="ac-bug"
+            title={t.ac_bug_button_tip}
+            onClick={() => setBugFor({ moduleId: null })}
+          >
+            {t.ac_bug_button}
+          </button>
+        )}
         {/* 團隊範本是整個專案團隊的操作，放在頂列的專案動作這邊，不跟拖曳角色的 Agent 池混在一起。 */}
         {projectId && (
           <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" data-testid="ac-templates" data-guide="templates" onClick={() => setTemplatesOpen(true)}>
@@ -1463,6 +1476,7 @@ export function AgentCanvasView({
                       onRetry={() => projectId && void run(() => resolveAgent(projectId, a.id, "retry"))}
                       onSkip={() => projectId && void run(() => resolveAgent(projectId, a.id, "skip"))}
                       onTranscript={setTranscriptFor}
+                      onReportBug={(moduleId) => setBugFor({ moduleId })}
                       onOpenTab={openTab}
                       onMerge={() => doMerge(a)}
                       onAbortMerge={() => doAbortMerge(a)}
@@ -1545,7 +1559,7 @@ export function AgentCanvasView({
         !guide.hintsOff &&
         !hintDismissed &&
         // 有對話框開著時不冒提示，免得浮在對話框上面。
-        !(config || newModule || templatesOpen || briefOpen || refsOpen || customSkillsFor || verifyFor || transcriptCard || helpOpen || inbox.open) && (
+        !(config || newModule || bugFor || templatesOpen || briefOpen || refsOpen || customSkillsFor || verifyFor || transcriptCard || helpOpen || inbox.open) && (
           <GuideHint
             hint={hint}
             onDismiss={() =>
@@ -1668,6 +1682,19 @@ export function AgentCanvasView({
           onClose={() => setNewModule(false)}
           onSaved={() => {
             setNewModule(false);
+            void refresh();
+          }}
+        />
+      )}
+      {bugFor && projectId && (
+        <BugReportDialog
+          projectId={projectId}
+          agents={agents}
+          tasks={tasks}
+          moduleId={bugFor.moduleId}
+          onClose={() => setBugFor(null)}
+          onSent={() => {
+            setBugFor(null);
             void refresh();
           }}
         />

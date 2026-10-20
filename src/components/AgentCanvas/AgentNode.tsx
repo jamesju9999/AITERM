@@ -66,6 +66,7 @@ export function AgentNode({
   onRetry,
   onSkip,
   onTranscript,
+  onReportBug,
   onOpenTab,
   onMerge,
   onAbortMerge,
@@ -108,6 +109,8 @@ export function AgentNode({
   onRetry: () => void;
   onSkip: () => void;
   onTranscript: (taskId: string) => void;
+  /** 在完成的模組上按右鍵：回報這個模組的問題。 */
+  onReportBug?: (moduleId: string) => void;
   onOpenTab: (tabId: string) => void;
   onMerge: () => void;
   onAbortMerge: () => void;
@@ -462,11 +465,19 @@ export function AgentNode({
                 <span
                   key={m.id}
                   className={`ac-chip ${cls}${draggable ? " ac-chip--draggable" : ""}${waiting.length ? " ac-chip--waiting" : ""}`}
-                  title={`${m.title} · ${label}${mUsage?.cards ? ` · ${tokensText(mUsage)}` : ""}${m.provides ? `\n${t.ac_provides(m.provides)}` : ""}`}
+                  title={`${m.title} · ${label}${mUsage?.cards ? ` · ${tokensText(mUsage)}` : ""}${m.provides ? `\n${t.ac_provides(m.provides)}` : ""}${m.status === "done" && onReportBug ? `\n${t.ac_bug_chip_hint}` : ""}`}
                   data-testid={`chip-${m.id}`}
                   data-state={s}
                   onMouseDown={draggable ? (e) => onChipMouseDown(e, m.id) : undefined}
                   onClick={releasable ? () => onRelease(m.id) : m.status === "done" ? () => onTranscript(m.id) : undefined}
+                  onContextMenu={
+                    m.status === "done" && onReportBug
+                      ? (e) => {
+                          e.preventDefault();
+                          onReportBug(m.id);
+                        }
+                      : undefined
+                  }
                 >
                   {icon} {m.title}
                 </span>
