@@ -29,6 +29,7 @@ pub mod shell;
 pub mod task_board_config;
 pub mod tasks;
 pub mod agents;
+pub mod formations;
 pub mod questions;
 pub mod updater;
 pub mod usage;

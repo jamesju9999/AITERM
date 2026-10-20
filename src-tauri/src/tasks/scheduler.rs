@@ -102,6 +102,15 @@ pub fn candidate_heads(
 /// `sort_order` 是各專案獨立的浮點數，混排毫無意義，而且會破壞使用者
 /// 在單一專案內用拖曳決定的順序。每個專案只交出自己的隊首，專案內部
 /// 的嚴格優先序因此完整保留。
+/// 等待切換團隊編制時（見 tasks::formations）：Agent 不開始新的模組卡，已經開工的模組
+/// 照樣走完品管流程（審查、修正、合併、驗收）；看板的一般卡片不受影響。
+pub fn hold_for_pending(mut heads: Vec<TaskRow>, pending: bool) -> Vec<TaskRow> {
+    if pending {
+        heads.retain(|h| h.agent_id.is_none() || h.card_kind != crate::tasks::workflow::KIND_WORK);
+    }
+    heads
+}
+
 pub fn order_heads(mut heads: Vec<(String, TaskRow)>) -> Vec<(String, TaskRow)> {
     heads.sort_by(|a, b| a.1.created_at.cmp(&b.1.created_at).then(a.1.id.cmp(&b.1.id)));
     heads
@@ -1595,6 +1604,8 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
                 // 等額度的 Codex 卡：冷卻時間內這位 Agent 先不派（它的隊首就是那張卡）。
                 let now = chrono::Utc::now().timestamp();
                 heads.retain(|h| !quota_cooling(h.quota_wait_at, now));
+                let pending = matches!(crate::tasks::formations::pending(&project.pool).await, Ok(Some(_)));
+                heads = hold_for_pending(heads, pending);
                 // 用到 token 上限：Agent 卡先不派（已經在跑的照樣跑完），看板一般卡片不受影響。
                 match crate::tasks::budget::over_budget(&project.pool, &project.path).await {
                     Ok(true) => heads.retain(|h| h.agent_id.is_none()),
@@ -1835,6 +1846,16 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
             let max = config.get().task_board.max_concurrent;
             {
                 let reg = app.state::<ProjectRegistry>();
+                // 等待中的團隊編制切換：沒人在工作了就換（見 tasks::formations）。
+                for project in reg.all() {
+                    match crate::tasks::formations::try_complete_pending(&project.pool).await {
+                        Ok(true) => {
+                            let _ = app.emit("tasks-updated", ());
+                        }
+                        Ok(false) => {}
+                        Err(e) => eprintln!("formation pending switch ({}): {e}", project.name),
+                    }
+                }
                 drain_once(&reg, &dispatcher, max).await;
             }
             tokio::select! {
@@ -1954,6 +1975,24 @@ mod tests {
 
     fn ids(v: &[TaskRow]) -> Vec<&str> {
         v.iter().map(|r| r.id.as_str()).collect()
+    }
+
+    #[test]
+    fn holds_new_agent_work_while_switch_pending() {
+        let mk = |id: &str, agent: Option<&str>, kind: &str| {
+            let mut r = agent_row(id, agent, 1.0, false);
+            r.card_kind = kind.into();
+            r
+        };
+        let heads = vec![
+            mk("work", Some("a1"), "work"),
+            mk("review", Some("r"), "review"),
+            mk("fix", Some("a2"), "fix"),
+            mk("merge", Some("o"), "merge"),
+            mk("plain", None, "work"),
+        ];
+        assert_eq!(ids(&hold_for_pending(heads.clone(), false)), vec!["work", "review", "fix", "merge", "plain"]);
+        assert_eq!(ids(&hold_for_pending(heads, true)), vec!["review", "fix", "merge", "plain"]);
     }
 
     #[test]
@@ -2349,6 +2388,24 @@ mod loop_tests {
             .map(|id| all.iter().find(|r| &r.id == id).unwrap().title.clone())
             .collect();
         assert_eq!(order, vec!["A", "B"]);
+    }
+
+    /// 等待切換編制：工程師不開始新的模組，但已經開工的模組的審查照跑。
+    #[tokio::test]
+    async fn drain_once_holds_new_modules_while_a_formation_switch_is_pending() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        let c2 = agent_in(&project, "Coder2").await;
+        card_for(&project, "新模組", &c1, false).await;
+        let r = card_for(&project, "審查", &c2, false).await;
+        sqlx::query("UPDATE tasks SET card_kind = 'review' WHERE id = ?").bind(&r).execute(&project.pool).await.unwrap();
+        crate::tasks::formations::set_pending(&project.pool, Some("next")).await.unwrap();
+
+        drain_once(&reg, &NeverFinishes, 5).await;
+
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "running"), vec!["審查"]);
+        assert_eq!(titles(&all, "queued"), vec!["新模組"]);
     }
 
     #[tokio::test]
