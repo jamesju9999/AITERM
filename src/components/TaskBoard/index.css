@@ -836,6 +836,20 @@
   font-size: 13px;
 }
 
+/* 下拉選單：跟設定頁（ProviderForm／ClaudeBridge／OpenAiServer）一樣關掉原生外觀、自己畫
+   向下箭頭。否則 macOS 會畫成上下雙箭頭的系統控制項，跟其他下拉選單不一致，
+   高度也比同一列的輸入框矮。 */
+select.task-field-input {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M2.5 4.5L6 8L9.5 4.5' stroke='%23888888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+
 /* 焦點狀態。原本完全沒有定義，所以焦點框是瀏覽器預設的系統藍——跟這個
    區塊的 accent 不同調，是「業餘感」最主要的來源。用 --accent 讓它跟著
    主色走，色相之後怎麼改都不必回來動這裡。 */
