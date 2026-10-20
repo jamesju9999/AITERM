@@ -56,7 +56,7 @@ export function foldFinished(nodes: ActivityNode[], label: (count: number) => st
     current_tool: null,
     summary: null,
     tokens: null,
-    tool_count: null,
+    tool_count: null, last_event_ms: 0,
     turn: members[0].turn,
   };
   return { nodes: [group, ...nodes.filter((n) => !hidden.has(n.id))], folded: members.length };

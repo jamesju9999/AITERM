@@ -4,7 +4,7 @@ import { CARD_H, CARD_W, GAP_X, GAP_Y, PAD, ROOT_ID, ROOT_W, layoutGraph } from 
 
 const n = (id: string, parent: string | null, started = 0): ActivityNode => ({
   id, parent, agent_type: "general-purpose", description: null, status: "running",
-  started_ms: started, ended_ms: null, current_tool: null, summary: null, tokens: null, tool_count: null, turn: 1,
+  started_ms: started, ended_ms: null, current_tool: null, summary: null, tokens: null, tool_count: null, last_event_ms: 0, turn: 1,
 });
 const pos = (g: ReturnType<typeof layoutGraph>, id: string) => g.boxes.get(id)!;
 

@@ -11,13 +11,13 @@ import { ClaudeActivityPanel } from "./ClaudeActivityPanel";
 
 const node = (over: Partial<ActivityNode> & { id: string }): ActivityNode => ({
   parent: null, agent_type: "general-purpose", description: null, status: "running",
-  started_ms: 1_000, ended_ms: null, current_tool: null, summary: null, tokens: null, tool_count: null, turn: 1,
+  started_ms: 1_000, ended_ms: null, current_tool: null, summary: null, tokens: null, tool_count: null, last_event_ms: 1_000, turn: 1,
   ...over,
 });
 const done = (id: string, over: Partial<ActivityNode> = {}) =>
   node({ id, description: id, status: "done", ended_ms: 2_000, ...over });
 const snap = (nodes: ActivityNode[], over: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
-  nodes, main_tool: null, turn: Math.max(0, ...nodes.map((n) => n.turn)), ...over,
+  nodes, main_tool: null, main_tool_count: 0, main_recent: [], turn: Math.max(0, ...nodes.map((n) => n.turn)), ...over,
 });
 const renderPanel = (nodes: ActivityNode[], over: Partial<ActivitySnapshot> = {}) =>
   render(<ClaudeActivityPanel snapshot={snap(nodes, over)} fill />);

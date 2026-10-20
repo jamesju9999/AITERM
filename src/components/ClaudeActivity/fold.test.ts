@@ -4,7 +4,7 @@ import { DONE_GROUP_ID, foldFinished } from "./fold";
 
 const n = (id: string, parent: string | null, status: ActivityNode["status"] = "done", started = 1): ActivityNode => ({
   id, parent, agent_type: "general-purpose", description: id, status, started_ms: started,
-  ended_ms: status === "running" ? null : started + 1000, current_tool: null, summary: null, tokens: null, tool_count: null, turn: 1,
+  ended_ms: status === "running" ? null : started + 1000, current_tool: null, summary: null, tokens: null, tool_count: null, last_event_ms: 0, turn: 1,
 });
 const label = (c: number) => `已完成 ${c} 個`;
 

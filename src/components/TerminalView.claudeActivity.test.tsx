@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) => {
     if (cmd === "pty_create") return Promise.resolve("test-session");
-    if (cmd === "claude_activity_snapshot") return Promise.resolve({ nodes: [], main_tool: null, turn: 0 });
+    if (cmd === "claude_activity_snapshot") return Promise.resolve({ nodes: [], main_tool: null, main_tool_count: 0, main_recent: [], turn: 0 });
     return new Promise(() => {});
   }),
 }));
@@ -65,9 +65,9 @@ const emit = (payload: unknown) =>
 
 const node = (id: string, description: string) => ({
   id, parent: null, agent_type: "general-purpose", description, status: "running",
-  started_ms: 1, ended_ms: null, current_tool: "Bash: ls", summary: null, tokens: null, tool_count: null, turn: 1,
+  started_ms: 1, ended_ms: null, current_tool: "Bash: ls", summary: null, tokens: null, tool_count: null, last_event_ms: 1_000, turn: 1,
 });
-const snap = (...nodes: ReturnType<typeof node>[]) => ({ nodes, main_tool: null, turn: 1 });
+const snap = (...nodes: ReturnType<typeof node>[]) => ({ nodes, main_tool: null, main_tool_count: 0, main_recent: [], turn: 1 });
 
 describe("終端機分頁的 Claude 協作側欄", () => {
   it("沒有任何 subagent 事件時不出現側欄（版面與以前完全一樣）", async () => {

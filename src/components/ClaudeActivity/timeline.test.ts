@@ -4,7 +4,7 @@ import { buildTimeline } from "./timeline";
 
 const n = (id: string, started: number, ended: number | null, parent: string | null = null): ActivityNode => ({
   id, parent, agent_type: "general-purpose", description: id, status: ended == null ? "running" : "done",
-  started_ms: started, ended_ms: ended, current_tool: null, summary: null, tokens: null, tool_count: null, turn: 1,
+  started_ms: started, ended_ms: ended, current_tool: null, summary: null, tokens: null, tool_count: null, last_event_ms: 0, turn: 1,
 });
 
 describe("buildTimeline", () => {
