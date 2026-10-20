@@ -32,6 +32,7 @@ export function TaskEditorDialog({
   projectId,
   card,
   defaultDir,
+  bodyTemplates,
   onClose,
   onSaved,
 }: {
@@ -39,6 +40,8 @@ export function TaskEditorDialog({
   card: TaskWithAttachments | null;
   /** 新卡片的預設資料夾（Agent 協作傳專案資料夾）；沒給就用上次用過的。 */
   defaultDir?: string;
+  /** 新卡片可以一鍵帶入的內容範本（Agent 協作傳「舊系統盤點」等）。 */
+  bodyTemplates?: { label: string; title: string; body: string }[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -293,6 +296,25 @@ export function TaskEditorDialog({
     <div className="task-dialog-backdrop">
       <div className="task-dialog" onClick={(e) => e.stopPropagation()}>
         <h3 className="task-dialog-title">{isEdit ? t.board_edit_card : t.board_new_card}</h3>
+
+        {!isEdit && bodyTemplates && bodyTemplates.length > 0 && (
+          <div className="task-field-row tb-card-templates">
+            <span className="task-field-label">{t.ac_card_templates}</span>
+            {bodyTemplates.map((tpl) => (
+              <button
+                key={tpl.label}
+                type="button"
+                className="tb-btn tb-btn--ghost"
+                onClick={() => {
+                  setTitle((cur) => cur.trim() || tpl.title);
+                  setBody(tpl.body);
+                }}
+              >
+                {tpl.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="task-dialog-group">
         <label className="task-field">

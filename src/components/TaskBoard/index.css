@@ -1267,3 +1267,4 @@
   font-size: 11px;
   white-space: nowrap;
 }
+.tb-card-templates { align-items: center; gap: 6px; margin-bottom: 6px; }

@@ -1578,6 +1578,7 @@ export function AgentCanvasView({
           projectId={projectId}
           card={null}
           defaultDir={(projRepoOf?.projectId === projectId ? projRepoOf.path : null) ?? agents[0]?.project_dir}
+          bodyTemplates={[{ label: t.ac_inventory_card, title: t.ac_inventory_card_title, body: t.ac_inventory_card_body }]}
           onClose={() => setNewModule(false)}
           onSaved={() => {
             setNewModule(false);

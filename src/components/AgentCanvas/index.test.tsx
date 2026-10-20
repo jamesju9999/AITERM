@@ -622,6 +622,17 @@ describe("AgentCanvasView", () => {
     expect(((await screen.findByTestId("task-dir-input")) as HTMLInputElement).value).toBe("/repo/htbktw");
   });
 
+  it("新增模組可以一鍵帶入「舊系統盤點」卡片範本", async () => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    fireEvent.click(await screen.findByRole("button", { name: /新增模組/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /舊系統盤點/ }));
+    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
+    expect(inputs.some((i) => i.value.startsWith("盤點："))).toBe(true);
+    expect(inputs.some((i) => /docs\/inventory\//.test(i.value) && /檔案路徑/.test(i.value))).toBe(true);
+  });
+
   it("把模組拖到 Agent 上會指派給它", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([card({ id: "C", title: "C 訂單", status: "planning" })]);

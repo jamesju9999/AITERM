@@ -22,7 +22,7 @@ export interface TeamTemplate {
 
 /** 內建範本：不能刪除，名稱與角色跟著語系。 */
 export interface BuiltinTemplate extends TeamTemplate {
-  id: "quick" | "bugfix" | "standard" | "spec_first" | "migration";
+  id: "quick" | "bugfix" | "standard" | "spec_first" | "migration" | "inventory";
   description: string;
   builtin: true;
 }
@@ -141,6 +141,17 @@ export function builtinTemplates(t: Translations): BuiltinTemplate[] {
         coder(2, t.ls_preset_coder, t.ls_preset_coder_desc),
         coder(3, t.ls_preset_coder, t.ls_preset_coder_desc),
         ...flow(3, true, true, combined),
+      ],
+    },
+    {
+      // 盤點：產出是文件不是程式，不需要驗收者；協調者負責把各人的文件合併起來。
+      id: "inventory", builtin: true, name: t.ac_tpl_inventory, description: t.ac_tpl_inventory_desc,
+      agents: [
+        coder(1, t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
+        coder(2, t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
+        coder(3, t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
+        coder(4, t.ls_preset_docs, t.ac_tpl_inventory_synthesizer),
+        ...flow(4, true, false, { role: t.ac_tpl_inventory_reviewer_role, prefix: t.ac_tpl_inventory_reviewer }),
       ],
     },
   ];

@@ -61,8 +61,8 @@ describe("builtinTemplates", () => {
   const zh = translations["zh-TW"];
   const all = builtinTemplates(zh);
 
-  it("五組內建範本，各有用途說明", () => {
-    expect(all.map((x) => x.id)).toEqual(["quick", "bugfix", "standard", "spec_first", "migration"]);
+  it("六組內建範本，各有用途說明", () => {
+    expect(all.map((x) => x.id)).toEqual(["quick", "bugfix", "standard", "spec_first", "migration", "inventory"]);
     for (const tpl of all) {
       expect(tpl.builtin).toBe(true);
       expect(tpl.description.length).toBeGreaterThan(0);
@@ -111,5 +111,25 @@ describe("toCreate 名稱不重複", () => {
     const made = toCreate(tpl, [ag({ id: "a", name: "工程師1" })], "/r", 0, 0);
     // 「工程師1」已存在 → 改用下一個沒人用的「工程師2」；範本原本的「工程師2」因此順延成「工程師3」。
     expect(made.map((m) => m.name)).toEqual(["工程師2", "工程師3"]);
+  });
+});
+
+describe("舊系統盤點範本", () => {
+  const zh = translations["zh-TW"];
+  const inv = builtinTemplates(zh).find((x) => x.id === "inventory");
+
+  it("三位研究工程師＋彙整工程師、文件審核者、協調者；不需要驗收者", () => {
+    const kinds = inv?.agents.map((a) => a.kind) ?? [];
+    expect(kinds.filter((k) => k === "coder")).toHaveLength(4);
+    expect(kinds).toContain("reviewer");
+    expect(kinds).toContain("orchestrator");
+    expect(kinds).not.toContain("verifier");
+  });
+
+  it("研究工程師只讀舊程式、只寫文件、結論附來源；審核者檢查引用", () => {
+    const researcher = inv?.agents.find((a) => a.role === zh.ls_preset_researcher);
+    expect(researcher?.prompt_prefix).toMatch(/只寫文件|不要修改/);
+    expect(researcher?.prompt_prefix).toMatch(/路徑/);
+    expect(inv?.agents.find((a) => a.kind === "reviewer")?.prompt_prefix).toMatch(/路徑|來源/);
   });
 });
