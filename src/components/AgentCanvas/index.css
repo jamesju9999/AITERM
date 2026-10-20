@@ -784,7 +784,7 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-tpl-card-del { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border: none; border-radius: 5px; background: none; color: var(--text-muted); cursor: pointer; }
 .ac-tpl-card-del:hover { background: var(--bg-hover); color: var(--text-primary); }
 .ac-tpl-save { margin-top: 8px; }
-.ac-tpl-detail { margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-tertiary); }
+.ac-tpl-detail { max-height: 38vh; overflow-y: auto; margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-tertiary); }
 .ac-tpl-detail p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); }
 .ac-tpl-detail .ac-tpl-section { margin-top: 10px; }
 .ac-tpl-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 0; }
@@ -806,3 +806,11 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-form-del { flex: none; width: 28px; justify-content: center; }
 .ac-form-input { width: 100%; box-sizing: border-box; margin: 2px 0; }
 .ac-form-pending { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #fbbf24; }
+
+/* 依專案簡介推薦 */
+.ac-rec { display: flex; flex-direction: column; gap: 8px; }
+.ac-rec-hint { flex: 1; min-width: 0; }
+.ac-rec-stale { color: #fbbf24; }
+.ac-rec-reasons { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.6; color: var(--text-secondary); }
+.ac-rec-reasons b { color: var(--text-primary); font-weight: 600; }
+.ac-rec-notes { color: #fbbf24 !important; }

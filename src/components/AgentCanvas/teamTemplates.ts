@@ -94,70 +94,94 @@ export function snapshot(name: string, agents: AgentRow[]): TeamTemplate {
  * 協調者合併之後才開工，沒有協調者的話驗收者永遠等不到工作。
  */
 export function builtinTemplates(t: Translations): BuiltinTemplate[] {
-  const coder = (n: number, role: string, prefix: string, produces_spec = false): TemplateAgent => ({
-    kind: "coder", name: `${t.ac_coder}${n}`, role, prompt_prefix: prefix, model: "", produces_spec, dx: 0, dy: (n - 1) * ROW,
-  });
-  // 工程師人數決定流程角色擺的高度：在工程師那一欄的中間。
-  const flow = (coders: number, withOrch: boolean, withVerifier: boolean, reviewer: { role: string; prefix: string }): TemplateAgent[] => {
-    const mid = ((coders - 1) * ROW) / 2;
-    const out: TemplateAgent[] = [
-      { kind: "reviewer", name: t.ac_reviewer, role: reviewer.role, prompt_prefix: reviewer.prefix, model: "sonnet", produces_spec: false, dx: COL, dy: mid },
-    ];
-    if (withOrch) {
-      out.push({ kind: "orchestrator", name: t.ac_orchestrator, role: t.ac_role_integrator, prompt_prefix: t.ac_role_integrator_desc, model: "", produces_spec: false, dx: COL * 2, dy: mid });
-    }
-    if (withVerifier) {
-      out.push({ kind: "verifier", name: t.ac_verifier, role: t.ac_role_verifier, prompt_prefix: t.ac_role_verifier_desc, model: "sonnet", produces_spec: false, dx: COL * 3, dy: mid });
-    }
-    return out;
-  };
+  const c = (role: string, prefix: string, produces_spec = false): TeamCoder => ({ role, prefix, produces_spec });
   const general = { role: t.ac_role_general_reviewer, prefix: t.ac_role_general_reviewer_desc };
   const combined = { role: t.ac_role_combined_reviewer, prefix: t.ac_role_combined_reviewer_desc };
-  return ([
+  return [
     {
       id: "quick", builtin: true, name: t.ac_tpl_quick, description: t.ac_tpl_quick_desc,
-      agents: [coder(1, t.ls_preset_coder, t.ls_preset_coder_desc), ...flow(1, false, false, general)],
+      agents: assembleTeam(t, [c(t.ls_preset_coder, t.ls_preset_coder_desc)], general, false, false),
     },
     {
       id: "bugfix", builtin: true, name: t.ac_tpl_bugfix, description: t.ac_tpl_bugfix_desc,
-      agents: [coder(1, t.ac_role_bugfix, t.ac_role_bugfix_desc), coder(2, t.ls_preset_tester, t.ls_preset_tester_desc), ...flow(2, true, true, general)],
+      agents: assembleTeam(t, [c(t.ac_role_bugfix, t.ac_role_bugfix_desc), c(t.ls_preset_tester, t.ls_preset_tester_desc)], general, true, true),
     },
     {
       id: "standard", builtin: true, name: t.ac_tpl_standard, description: t.ac_tpl_standard_desc,
-      agents: [coder(1, t.ac_role_frontend, t.ac_role_frontend_desc), coder(2, t.ls_preset_coder, t.ls_preset_coder_desc), ...flow(2, true, true, general)],
+      agents: assembleTeam(t, [c(t.ac_role_frontend, t.ac_role_frontend_desc), c(t.ls_preset_coder, t.ls_preset_coder_desc)], general, true, true),
     },
     {
       id: "spec_first", builtin: true, name: t.ac_tpl_spec_first, description: t.ac_tpl_spec_first_desc,
-      agents: [
-        coder(1, t.ac_role_spec, t.ac_role_spec_desc, true),
-        coder(2, t.ls_preset_coder, t.ls_preset_coder_desc),
-        coder(3, t.ls_preset_coder, t.ls_preset_coder_desc),
-        ...flow(3, true, true, general),
-      ],
+      agents: assembleTeam(
+        t,
+        [c(t.ac_role_spec, t.ac_role_spec_desc, true), c(t.ls_preset_coder, t.ls_preset_coder_desc), c(t.ls_preset_coder, t.ls_preset_coder_desc)],
+        general,
+        true,
+        true,
+      ),
     },
     {
       id: "migration", builtin: true, name: t.ac_tpl_migration, description: t.ac_tpl_migration_desc,
-      agents: [
-        coder(1, t.ac_role_analyst, t.ac_role_analyst_desc, true),
-        coder(2, t.ac_role_migration, t.ac_role_migration_desc),
-        coder(3, t.ac_role_migration, t.ac_role_migration_desc),
-        ...flow(3, true, true, combined),
-      ],
+      agents: assembleTeam(
+        t,
+        [c(t.ac_role_analyst, t.ac_role_analyst_desc, true), c(t.ac_role_migration, t.ac_role_migration_desc), c(t.ac_role_migration, t.ac_role_migration_desc)],
+        combined,
+        true,
+        true,
+      ),
     },
     {
       // 盤點：產出是文件不是程式，不需要驗收者；需求分析師決定盤點哪些模組，協調者照他的
       // 規格拆給研究工程師，最後把各人的文件合併起來。
       id: "inventory", builtin: true, name: t.ac_tpl_inventory, description: t.ac_tpl_inventory_desc,
-      agents: [
-        coder(1, t.ac_role_analyst, t.ac_role_analyst_desc, true),
-        coder(2, t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
-        coder(3, t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
-        coder(4, t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
-        coder(5, t.ls_preset_docs, t.ac_tpl_inventory_synthesizer),
-        ...flow(5, true, false, { role: t.ac_tpl_inventory_reviewer_role, prefix: t.ac_tpl_inventory_reviewer }),
-      ],
+      agents: assembleTeam(
+        t,
+        [
+          c(t.ac_role_analyst, t.ac_role_analyst_desc, true),
+          c(t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
+          c(t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
+          c(t.ls_preset_researcher, t.ac_tpl_inventory_researcher),
+          c(t.ls_preset_docs, t.ac_tpl_inventory_synthesizer),
+        ],
+        { role: t.ac_tpl_inventory_reviewer_role, prefix: t.ac_tpl_inventory_reviewer },
+        true,
+        false,
+      ),
     },
-  ] as BuiltinTemplate[]).map((tpl) => ({ ...tpl, agents: specColumnFirst(tpl.agents) }));
+  ];
+}
+
+/** 團隊裡的一位工程師：角色名稱、提示詞、是否產出規格。 */
+export interface TeamCoder {
+  role: string;
+  prefix: string;
+  produces_spec: boolean;
+}
+
+/**
+ * 依工程師清單與流程角色組出範本的 Agent（內建範本與「依專案簡介推薦」共用）：工程師一欄往下排，
+ * 流程角色在工程師那一欄的中間高度依序往右；有產出規格的再改成規格欄在最左（見 specColumnFirst）。
+ * 審核者、驗收者預設 sonnet，跟手動建立時一樣。
+ */
+export function assembleTeam(
+  t: Translations,
+  coders: TeamCoder[],
+  reviewer: { role: string; prefix: string },
+  withOrch: boolean,
+  withVerifier: boolean,
+): TemplateAgent[] {
+  const mid = ((coders.length - 1) * ROW) / 2;
+  const out: TemplateAgent[] = coders.map((c, i) => ({
+    kind: "coder", name: `${t.ac_coder}${i + 1}`, role: c.role, prompt_prefix: c.prefix, model: "", produces_spec: c.produces_spec, dx: 0, dy: i * ROW,
+  }));
+  out.push({ kind: "reviewer", name: t.ac_reviewer, role: reviewer.role, prompt_prefix: reviewer.prefix, model: "sonnet", produces_spec: false, dx: COL, dy: mid });
+  if (withOrch) {
+    out.push({ kind: "orchestrator", name: t.ac_orchestrator, role: t.ac_role_integrator, prompt_prefix: t.ac_role_integrator_desc, model: "", produces_spec: false, dx: COL * 2, dy: mid });
+  }
+  if (withVerifier) {
+    out.push({ kind: "verifier", name: t.ac_verifier, role: t.ac_role_verifier, prompt_prefix: t.ac_role_verifier_desc, model: "sonnet", produces_spec: false, dx: COL * 3, dy: mid });
+  }
+  return specColumnFirst(out);
 }
 
 /**

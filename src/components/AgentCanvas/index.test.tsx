@@ -1064,6 +1064,71 @@ describe("AgentCanvasView", () => {
     expect(log.querySelector(".ac-log-dot--coder")).not.toBeNull();
   });
 
+  it("團隊範本：依專案簡介推薦——沒有簡介不能按；推薦後選好並顯示理由，可建立成新編制；關掉再打開還在", async () => {
+    vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "saved" });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listProviders).mockResolvedValue([
+      { id: "p-a", display_name: "Provider A", provider_type: "anthropic", base_url: null, oauth_client_id: null, model: "m",
+        supports_json_mode: true, has_api_key: true, is_default: true, auth_method: null },
+    ]);
+    vi.mocked(getProjectBrief).mockResolvedValue(null);
+    const { unmount } = view();
+    fireEvent.click(await screen.findByTestId("ac-templates-empty"));
+    let dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    expect(await within(dlg).findByText(/先在頂列的「專案簡介」寫下要做什麼/)).toBeTruthy();
+    expect(within(dlg).getByRole("button", { name: "推薦團隊" })).toBeDisabled();
+    unmount();
+
+    vi.mocked(getProjectBrief).mockResolvedValue("把 EGL 舊系統轉成網頁");
+    vi.mocked(getReferences).mockResolvedValue([{ path: "/old/src", note: "舊系統原始碼" }]);
+    vi.mocked(invokeAiComplete).mockResolvedValue({
+      content: JSON.stringify({
+        summary: "先釐清需求再移植",
+        coders: [{ role: "analyst", reason: "需求還不清楚" }, { role: "migration", name: "EGL 移植工程師", count: 2, reason: "舊系統是 EGL" }],
+        reviewer: { role: "combined", reason: "有個資" },
+        orchestrator: { include: true, reason: "合併" },
+        verifier: { include: true, reason: "要實際操作" },
+      }),
+    } as never);
+    const second = view();
+    fireEvent.click(await screen.findByTestId("ac-templates-empty"));
+    dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    const btn = within(dlg).getByRole("button", { name: "推薦團隊" });
+    await waitFor(() => expect(btn).not.toBeDisabled());
+    fireEvent.click(btn);
+    const recCard = await within(dlg).findByTestId("tpl-rec");
+    expect(recCard.textContent).toContain("EGL 移植工程師 ×2");
+    const [msgs, system] = vi.mocked(invokeAiComplete).mock.calls[0];
+    expect(msgs[0].content).toContain("把 EGL 舊系統轉成網頁");
+    expect(msgs[0].content).toContain("/old/src");
+    expect(system).toContain("inventory_researcher");
+    // 推薦完自動選好：說明區顯示摘要與理由。
+    const detail = within(dlg).getByTestId("tpl-detail");
+    expect(detail.textContent).toContain("先釐清需求再移植");
+    expect(detail.textContent).toContain("EGL 移植工程師：舊系統是 EGL");
+    const create = within(dlg).getByRole("button", { name: "建立成新編制「推薦團隊」" });
+    await waitFor(() => expect(create).not.toBeDisabled());
+    fireEvent.click(create);
+    await waitFor(() => expect(createFormation).toHaveBeenCalled());
+    const [, name, agents] = vi.mocked(createFormation).mock.calls[0];
+    expect(name).toBe("推薦團隊");
+    expect(agents.map((a) => a.role)).toEqual(
+      expect.arrayContaining(["需求分析師", "EGL 移植工程師", "綜合審核者（一般＋資安）"]),
+    );
+    expect(agents.map((a) => a.kind)).toEqual(expect.arrayContaining(["orchestrator", "verifier"]));
+    second.unmount();
+
+    // 再打開：上次的推薦還在，不必重新問 AI。
+    vi.mocked(invokeAiComplete).mockClear();
+    view();
+    fireEvent.click(await screen.findByTestId("ac-templates-empty"));
+    dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    expect(await within(dlg).findByTestId("tpl-rec")).toBeTruthy();
+    expect(within(dlg).getByRole("button", { name: "重新推薦" })).toBeTruthy();
+    expect(invokeAiComplete).not.toHaveBeenCalled();
+  });
+
   it("團隊範本：套用成新編制會記住程式庫、建立編制並切換過去", async () => {
     vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "saved" });
     vi.mocked(listAgents).mockResolvedValue([]);

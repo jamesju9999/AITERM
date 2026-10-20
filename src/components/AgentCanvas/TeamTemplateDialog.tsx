@@ -2,7 +2,12 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { checkRepo, projectRepo, setProjectRepo, type AgentRow, type ProjectRepo, type RepoCheck } from "../../ipc/agents";
+import { invokeAiComplete } from "../../ipc/ai";
+import { checkRepo, getReferences, projectRepo, setProjectRepo, type AgentRow, type ProjectRepo, type RepoCheck } from "../../ipc/agents";
+import { listProviders, type ProviderInfo } from "../../ipc/provider";
+import { getProjectBrief } from "../../ipc/tasks";
+import { ModelPickerButton } from "../ModelPickerButton";
+import { buildRecommendMessage, buildRecommendSystem, parseRecommendation, type Recommendation } from "./teamRecommend";
 import { RepoStatus } from "./RepoStatus";
 import { confirmInitRepo } from "./repoInit";
 import { KindIcon } from "./KindIcon";
@@ -16,6 +21,29 @@ import {
   type BuiltinTemplate,
   type TeamTemplate,
 } from "./teamTemplates";
+
+/** 跟專案簡介、工作卡的「AI 潤飾」共用模型偏好。 */
+const REFINE_PROVIDER_KEY = "aiterm_refine_provider";
+const REC_KEY = "rec";
+const recStoreKey = (projectId: string) => `aiterm.agentCanvas.teamRec.${projectId}`;
+
+function loadRec(projectId: string): { brief: string; reply: string } | null {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(recStoreKey(projectId)) ?? "null");
+    const o = v as { brief?: unknown; reply?: unknown } | null;
+    return o && typeof o.brief === "string" && typeof o.reply === "string" ? { brief: o.brief, reply: o.reply } : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveRec(projectId: string, rec: { brief: string; reply: string }) {
+  try {
+    localStorage.setItem(recStoreKey(projectId), JSON.stringify(rec));
+  } catch {
+    // 存不了就只留在這次的畫面
+  }
+}
 
 /**
  * 團隊範本：內建的常用團隊，加上自己存的範本，先選一組再套用到這個專案的程式庫——加到目前
@@ -129,9 +157,71 @@ export function TeamTemplateDialog({
 
   // 選中的範本：內建用 id、我的範本用名稱（名稱在「我的範本」裡唯一）。
   const [selected, setSelected] = useState<string | null>(null);
+
+  // ── 依專案簡介推薦 ─────────────────────────────────────────────────────
+  const [brief, setBrief] = useState<string | null>(null);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [providerId, setProviderId] = useState("");
+  const [recBusy, setRecBusy] = useState(false);
+  const [recError, setRecError] = useState<string | null>(null);
+  /** 上次的推薦（存 AI 原始回覆，換語系重新解析）與當時的簡介；關掉對話框再打開還在。 */
+  const [recRaw, setRecRaw] = useState<{ brief: string; reply: string } | null>(() => loadRec(projectId));
+  const rec: Recommendation | null = recRaw ? parseRecommendation(recRaw.reply, t) : null;
+  const recStale = !!recRaw && brief !== null && recRaw.brief !== brief.trim();
+
+  useEffect(() => {
+    let alive = true;
+    getProjectBrief(projectId)
+      .then((b) => alive && setBrief(b ?? ""))
+      .catch(() => alive && setBrief(""));
+    // 跟專案簡介的「AI 潤飾」共用模型偏好：記住上次選的 → is_default → 清單第一個。
+    listProviders()
+      .then((list) => {
+        if (!alive) return;
+        setProviders(list);
+        const remembered = localStorage.getItem(REFINE_PROVIDER_KEY);
+        setProviderId(remembered && list.some((p) => p.id === remembered) ? remembered : (list.find((p) => p.is_default)?.id ?? list[0]?.id ?? ""));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
+
+  const recommend = async () => {
+    const b = (brief ?? "").trim();
+    if (!b) return;
+    setRecBusy(true);
+    setRecError(null);
+    try {
+      const refs = await getReferences(projectId).catch(() => []);
+      const reply = await invokeAiComplete(
+        [{ role: "user", content: buildRecommendMessage(b, refs) }],
+        buildRecommendSystem(t),
+        "team-recommend",
+        providerId || undefined,
+      );
+      const text = reply.content ?? "";
+      if (!parseRecommendation(text, t)) {
+        setRecError(t.ac_rec_err_parse);
+        return;
+      }
+      if (providerId) localStorage.setItem(REFINE_PROVIDER_KEY, providerId);
+      const next = { brief: b, reply: text };
+      setRecRaw(next);
+      saveRec(projectId, next);
+      setSelected(REC_KEY);
+    } catch (e) {
+      setRecError(String(e));
+    } finally {
+      setRecBusy(false);
+    }
+  };
   const mine = (name: string) => `mine:${name}`;
   const chosenBuiltin: BuiltinTemplate | undefined = builtins.find((b) => b.id === selected);
-  const chosen: TeamTemplate | null = chosenBuiltin ?? templates.find((m) => mine(m.name) === selected) ?? null;
+  const chosenRec = selected === REC_KEY ? rec : null;
+  const chosen: TeamTemplate | null =
+    chosenRec?.template ?? chosenBuiltin ?? templates.find((m) => mine(m.name) === selected) ?? null;
 
   const card = (key: string, tpl: TeamTemplate, testId: string, onDelete?: () => void) => {
     const parts = composition(tpl);
@@ -203,6 +293,32 @@ export function TeamTemplateDialog({
             {repo && check && <RepoStatus repo={check} busy={initing} onFix={() => void fixRepo()} />}
           </div>
 
+          <div className="ac-tpl-section">{t.ac_rec_section}</div>
+          <div className="ac-rec" data-testid="tpl-recommend">
+            <div className="ac-tpl-row">
+              <span className="task-field-hint ac-rec-hint">
+                {brief === "" ? t.ac_rec_need_brief : providers.length === 0 ? t.ac_rec_need_provider : t.ac_rec_hint}
+              </span>
+              {providers.length > 0 && (
+                <ModelPickerButton providers={providers} selectedId={providerId} onChange={setProviderId} disabled={recBusy} />
+              )}
+              <button
+                className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                disabled={!brief?.trim() || providers.length === 0 || recBusy}
+                onClick={() => void recommend()}
+              >
+                {recBusy ? t.ac_rec_busy : rec ? t.ac_rec_again : t.ac_rec_button}
+              </button>
+            </div>
+            {recError && <p className="ac-bad-text">{recError}</p>}
+            {rec && (
+              <div className="ac-tpl-grid">
+                {card(REC_KEY, rec.template, "tpl-rec")}
+              </div>
+            )}
+            {rec && recStale && <span className="task-field-hint ac-rec-stale">{t.ac_rec_stale}</span>}
+          </div>
+
           <div className="ac-tpl-section">{t.ac_tpl_builtin}</div>
           <div className="ac-tpl-grid">{builtins.map((tpl) => card(tpl.id, tpl, `tpl-builtin-${tpl.id}`))}</div>
 
@@ -243,6 +359,7 @@ export function TeamTemplateDialog({
             <div className="ac-tpl-detail" data-testid="tpl-detail">
               <b>{chosen.name}</b>
               {chosenBuiltin && <p>{chosenBuiltin.description}</p>}
+              {chosenRec?.summary && <p>{chosenRec.summary}</p>}
               <div className="ac-tpl-section">{t.ac_tpl_flow}</div>
               <div className="ac-tpl-flow">
                 {composition(chosen).map((p, i) => (
@@ -260,6 +377,23 @@ export function TeamTemplateDialog({
                   </span>
                 ))}
               </div>
+              {chosenRec && chosenRec.reasons.length > 0 && (
+                <>
+                  <div className="ac-tpl-section">{t.ac_rec_reasons}</div>
+                  <ul className="ac-rec-reasons">
+                    {chosenRec.reasons.map((r) => (
+                      <li key={r.label}>
+                        <b>{r.label}</b>：{r.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {chosenRec && chosenRec.notes.length > 0 && (
+                <p className="ac-rec-notes">
+                  {t.ac_rec_notes}：{chosenRec.notes.join("；")}
+                </p>
+              )}
             </div>
           )}
           {error && <p className="ac-bad-text">{error}</p>}
