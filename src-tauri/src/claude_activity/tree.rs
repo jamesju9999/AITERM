@@ -11,6 +11,7 @@ use serde_json::Value;
 pub const MAX_NODES: usize = 200;
 const SUMMARY_MAX_CHARS: usize = 400;
 const HINT_MAX_CHARS: usize = 80;
+pub const MAIN_RECENT_MAX: usize = 10;
 
 static NULL: Value = Value::Null;
 /// 建立節點時還不知道型別的暫用名稱，之後 SubagentStart 帶著真型別來會被換掉。
@@ -38,6 +39,8 @@ pub struct Node {
     pub summary: Option<String>,
     pub tokens: Option<u64>,
     pub tool_count: Option<u64>,
+    /// 這個 agent 最近一次有任何事件的時間；前端用它判斷「卡住」。
+    pub last_event_ms: u64,
     /// 建立這個節點時的提問輪次（見 `Tree::turn`），前端用它分組。
     pub turn: u32,
 }
@@ -48,6 +51,10 @@ pub struct Snapshot {
     pub nodes: Vec<Node>,
     /// 主 Claude 現在在用的工具（沒有 subagent 時側欄不顯示，所以只是附帶資訊）。
     pub main_tool: Option<String>,
+    /// 本輪主 Claude 的工具呼叫次數（含呼叫 Agent 本身）。
+    pub main_tool_count: u64,
+    /// 本輪主 Claude 最近的工具提示，舊的在前，最多 `MAIN_RECENT_MAX` 筆。
+    pub main_recent: Vec<String>,
     /// 目前的提問輪次；0＝還沒有過提問。
     pub turn: u32,
 }
@@ -91,6 +98,8 @@ pub struct Tree {
     nodes: Vec<Node>,
     pending: VecDeque<Pending>,
     main_tool: Option<String>,
+    main_tool_count: u64,
+    main_recent: VecDeque<String>,
     turn: u32,
 }
 
@@ -138,12 +147,27 @@ impl Tree {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot { nodes: self.nodes.clone(), main_tool: self.main_tool.clone(), turn: self.turn }
+        Snapshot {
+            nodes: self.nodes.clone(),
+            main_tool: self.main_tool.clone(),
+            main_tool_count: self.main_tool_count,
+            main_recent: self.main_recent.iter().cloned().collect(),
+            turn: self.turn,
+        }
+    }
+
+    /// 判斷「有沒有變」用的快照：不含 `last_event_ms`，重複事件只刷新時間戳不該再通知前端。
+    fn visible_snapshot(&self) -> Snapshot {
+        let mut s = self.snapshot();
+        for n in &mut s.nodes {
+            n.last_event_ms = 0;
+        }
+        s
     }
 
     /// 套用一個 hook 事件；回傳節點有沒有變化（沒變就不必通知前端）。
     pub fn apply(&mut self, kind: Kind, body: &Value, now_ms: u64) -> bool {
-        let before = self.snapshot();
+        let before = self.visible_snapshot();
         let tool = str_of(body, "tool_name");
         let caller = str_of(body, "agent_id");
         let is_agent_tool = matches!(tool.as_deref(), Some("Agent") | Some("Task"));
@@ -151,13 +175,19 @@ impl Tree {
             Kind::Pre if is_agent_tool => {
                 if caller.is_none() {
                     let desc = str_of(field(body, "tool_input"), "description").unwrap_or_default();
-                    self.main_tool = Some(truncate(&format!("Agent: {desc}"), HINT_MAX_CHARS));
+                    let hint = truncate(&format!("Agent: {desc}"), HINT_MAX_CHARS);
+                    self.main_tool = Some(hint.clone());
+                    self.note_main_tool(hint);
                 }
                 self.queue_spawn(body, caller)
             }
             Kind::Pre => match (tool.as_deref(), caller.as_deref()) {
                 (Some(tool), Some(agent)) => self.on_tool_pre(tool, agent, body, now_ms),
-                (Some(tool), None) => self.main_tool = Some(tool_hint(tool, field(body, "tool_input"))),
+                (Some(tool), None) => {
+                    let hint = tool_hint(tool, field(body, "tool_input"));
+                    self.main_tool = Some(hint.clone());
+                    self.note_main_tool(hint);
+                }
                 _ => {}
             },
             Kind::Post if is_agent_tool => {
@@ -170,6 +200,7 @@ impl Tree {
                 Some(a) => {
                     if let Some(i) = self.index_of(a) {
                         self.nodes[i].current_tool = None;
+                        self.nodes[i].last_event_ms = now_ms;
                     }
                 }
                 None => self.main_tool = None,
@@ -187,6 +218,7 @@ impl Tree {
                         return false;
                     }
                     let i = self.ensure(&id, agent_type_of(body), now_ms);
+                    self.nodes[i].last_event_ms = now_ms;
                     Self::finish(&mut self.nodes[i], Status::Done, now_ms);
                 }
             }
@@ -196,15 +228,17 @@ impl Tree {
                 self.nodes.clear();
                 self.pending.clear();
                 self.main_tool = None;
+                self.reset_main_activity();
                 self.turn = 0;
             }
             Kind::Prompt => {
                 self.turn += 1;
                 self.main_tool = None;
+                self.reset_main_activity();
             }
         }
         self.trim();
-        self.snapshot() != before
+        self.visible_snapshot() != before
     }
 
     /// 結束後從 subagent 的 transcript 算出的 token 數（互動模式的 Agent 是非同步的，
@@ -217,6 +251,19 @@ impl Tree {
             }
             _ => false,
         }
+    }
+
+    fn note_main_tool(&mut self, hint: String) {
+        self.main_tool_count += 1;
+        self.main_recent.push_back(hint);
+        while self.main_recent.len() > MAIN_RECENT_MAX {
+            self.main_recent.pop_front();
+        }
+    }
+
+    fn reset_main_activity(&mut self) {
+        self.main_tool_count = 0;
+        self.main_recent.clear();
     }
 
     fn index_of(&self, id: &str) -> Option<usize> {
@@ -239,6 +286,7 @@ impl Tree {
             summary: None,
             tokens: None,
             tool_count: None,
+            last_event_ms: now_ms,
             turn: self.turn,
         });
         self.nodes.len() - 1
@@ -267,6 +315,7 @@ impl Tree {
     fn on_start(&mut self, id: &str, agent_type: Option<String>, now_ms: u64) {
         let existed = self.index_of(id).is_some();
         let i = self.ensure(id, agent_type.clone(), now_ms);
+        self.nodes[i].last_event_ms = now_ms;
         if let Some(t) = agent_type {
             if self.nodes[i].agent_type == FALLBACK_TYPE {
                 self.nodes[i].agent_type = t; // 先由別的事件建起來、當時不知道型別
@@ -290,6 +339,7 @@ impl Tree {
     fn on_tool_pre(&mut self, tool: &str, agent: &str, body: &Value, now_ms: u64) {
         let input = field(body, "tool_input");
         let i = self.ensure(agent, str_of(body, "agent_type"), now_ms);
+        self.nodes[i].last_event_ms = now_ms;
         if tool == "SubagentHandback" {
             if let Some(m) = str_of(input, "message") {
                 self.nodes[i].summary = Some(truncate(&m, SUMMARY_MAX_CHARS));
@@ -647,5 +697,70 @@ mod tests {
         assert_eq!(Kind::parse("session-end"), Some(Kind::SessionEnd));
         assert_eq!(Kind::parse("prompt"), Some(Kind::Prompt));
         assert_eq!(Kind::parse("nope"), None);
+    }
+
+    #[test]
+    fn node_events_refresh_last_event_ms() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &pre_agent("tu1", None, "Run ls", "general-purpose"), 1);
+        t.apply(Kind::SubStart, &start("a1", "general-purpose"), 10);
+        assert_eq!(node(&t, "a1").last_event_ms, 10);
+        t.apply(Kind::Pre, &tool_pre("a1", "Bash", json!({"command": "ls"})), 50);
+        assert_eq!(node(&t, "a1").last_event_ms, 50);
+        t.apply(Kind::Post, &tool_post("a1", "Bash"), 70);
+        assert_eq!(node(&t, "a1").last_event_ms, 70);
+        t.apply(Kind::SubStop, &stop("a1"), 90);
+        assert_eq!(node(&t, "a1").last_event_ms, 90);
+    }
+
+    fn main_pre(tool: &str, input: Value) -> Value {
+        json!({ "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input })
+    }
+
+    #[test]
+    fn main_agent_tools_are_counted_and_kept_as_recent() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &main_pre("Read", json!({"file_path": "/a.rs"})), 1);
+        t.apply(Kind::Pre, &main_pre("Bash", json!({"command": "ls"})), 2);
+        let s = t.snapshot();
+        assert_eq!(s.main_tool_count, 2);
+        assert_eq!(s.main_recent, vec!["Read: /a.rs".to_owned(), "Bash: ls".to_owned()]);
+    }
+
+    #[test]
+    fn main_recent_keeps_only_the_latest_ten() {
+        let mut t = Tree::default();
+        for i in 0..13 {
+            t.apply(Kind::Pre, &main_pre("Grep", json!({"pattern": format!("p{i}")})), i);
+        }
+        let s = t.snapshot();
+        assert_eq!(s.main_tool_count, 13);
+        assert_eq!(s.main_recent.len(), 10);
+        assert_eq!(s.main_recent.first().map(String::as_str), Some("Grep: p3"));
+        assert_eq!(s.main_recent.last().map(String::as_str), Some("Grep: p12"));
+    }
+
+    #[test]
+    fn main_agent_spawning_an_agent_counts_but_subagent_tools_do_not() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &pre_agent("tu1", None, "Run ls", "general-purpose"), 1);
+        t.apply(Kind::SubStart, &start("a1", "general-purpose"), 2);
+        t.apply(Kind::Pre, &tool_pre("a1", "Bash", json!({"command": "ls"})), 3);
+        let s = t.snapshot();
+        assert_eq!(s.main_tool_count, 1, "只有 Agent 呼叫本身；subagent 的工具不算主 Claude");
+        assert_eq!(s.main_recent, vec!["Agent: Run ls".to_owned()]);
+    }
+
+    #[test]
+    fn prompt_and_session_end_reset_main_activity() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &main_pre("Bash", json!({"command": "ls"})), 1);
+        t.apply(Kind::Prompt, &json!({}), 2);
+        let s = t.snapshot();
+        assert_eq!((s.main_tool_count, s.main_recent.len()), (0, 0));
+        t.apply(Kind::Pre, &main_pre("Bash", json!({"command": "ls"})), 3);
+        t.apply(Kind::SessionEnd, &json!({}), 4);
+        let s = t.snapshot();
+        assert_eq!((s.main_tool_count, s.main_recent.len()), (0, 0));
     }
 }
