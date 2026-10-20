@@ -766,7 +766,10 @@ button.ac-log-title:hover { color: var(--text-primary); }
 /* 團隊範本：套用到哪個程式庫、內建／我的範本分區 */
 /* 內容捲動、底部的套用按鈕固定（選了範本不必捲回下面找按鈕）。 */
 .ac-tpl-dialog { width: min(760px, 94vw); max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
-.ac-tpl-body { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+/* 跟 .task-dialog 一樣的直排＋間距：.ac-dialog-desc 的負上邊界是照這個間距設計的，少了它說明會疊到標題上。 */
+.ac-tpl-body { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 16px; }
+.ac-tpl-body > * { flex-shrink: 0; }
+.ac-tpl-body > .ac-tpl-section { margin: 0 0 -8px; }
 .ac-tpl-footer { flex: none; border-top: 1px solid var(--border-color); margin-top: 10px; padding-top: 10px; }
 .ac-tpl-footer .task-dialog-actions { margin-top: 0; align-items: center; }
 .ac-tpl-hint { margin-right: auto; }
