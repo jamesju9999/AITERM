@@ -608,6 +608,18 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(deleteTask).toHaveBeenCalledWith("p1", "C", false));
   });
 
+  it("新增模組時自動帶入這個專案的專案資料夾，不用上次在看板用過的", async () => {
+    localStorage.setItem("aiterm_last_task_dir", "/somewhere/else");
+    vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "saved" });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const add = await screen.findByRole("button", { name: /新增模組/ });
+    await waitFor(() => expect(projectRepo).toHaveBeenCalled());
+    fireEvent.click(add);
+    expect(((await screen.findByTestId("task-dir-input")) as HTMLInputElement).value).toBe("/repo/htbktw");
+  });
+
   it("把模組拖到 Agent 上會指派給它", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([card({ id: "C", title: "C 訂單", status: "planning" })]);

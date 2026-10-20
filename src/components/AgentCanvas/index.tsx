@@ -22,6 +22,7 @@ import {
   setDbSkill,
   getReferences,
   setReferences,
+  projectRepo,
   listSkillUses,
   setCustomSkills,
   type SkillUseRow,
@@ -207,6 +208,8 @@ export function AgentCanvasView({
   /** 專案的參考資料夾；記著是哪個專案的。 */
   const [refsOf, setRefsOf] = useState<{ projectId: string; list: Reference[] } | null>(null);
   const [refsOpen, setRefsOpen] = useState(false);
+  /** 這個專案的專案資料夾（使用者指定過的程式庫）；新增模組時帶入。記著是哪個專案的。 */
+  const [projRepoOf, setProjRepoOf] = useState<{ projectId: string; path: string | null } | null>(null);
   /** 模組庫裡正在確認要不要刪除的模組。 */
   const [deletingModule, setDeletingModule] = useState<string | null>(null);
   /** 自訂技能的使用記錄；記著是哪個專案的。 */
@@ -324,6 +327,9 @@ export function AgentCanvasView({
         .catch(() => {});
       getReferences(projectId)
         .then((list) => alive && setRefsOf({ projectId, list }))
+        .catch(() => {});
+      projectRepo(projectId)
+        .then((r) => alive && setProjRepoOf({ projectId, path: r?.path ?? null }))
         .catch(() => {});
       listSkillUses(projectId)
         .then((rows) => alive && setSkillUsesOf({ projectId, rows }))
@@ -1550,6 +1556,7 @@ export function AgentCanvasView({
         <TaskEditorDialog
           projectId={projectId}
           card={null}
+          defaultDir={(projRepoOf?.projectId === projectId ? projRepoOf.path : null) ?? agents[0]?.project_dir}
           onClose={() => setNewModule(false)}
           onSaved={() => {
             setNewModule(false);

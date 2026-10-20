@@ -31,11 +31,14 @@ const REFINE_PROVIDER_KEY = "aiterm_refine_provider";
 export function TaskEditorDialog({
   projectId,
   card,
+  defaultDir,
   onClose,
   onSaved,
 }: {
   projectId: string;
   card: TaskWithAttachments | null;
+  /** 新卡片的預設資料夾（Agent 協作傳專案資料夾）；沒給就用上次用過的。 */
+  defaultDir?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -43,7 +46,7 @@ export function TaskEditorDialog({
   const isEdit = card !== null;
   const [title, setTitle] = useState(card?.title ?? "");
   const [body, setBody] = useState(card?.body ?? "");
-  const [dir, setDir] = useState(card?.project_dir ?? localStorage.getItem(LAST_DIR_KEY) ?? "");
+  const [dir, setDir] = useState(card?.project_dir ?? (defaultDir || localStorage.getItem(LAST_DIR_KEY)) ?? "");
   const [label, setLabel] = useState(card?.label ?? "");
   const [parallelOk, setParallelOk] = useState(card?.parallel_ok ?? true);
   const [interactive, setInteractive] = useState(card?.interactive ?? false);
