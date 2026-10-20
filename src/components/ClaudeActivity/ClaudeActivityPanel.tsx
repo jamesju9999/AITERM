@@ -8,11 +8,13 @@ import { GraphCanvas } from "./GraphCanvas";
 import { layoutGraph, ROOT_ID } from "./graphLayout";
 import { formatTokens } from "./format";
 import { tokenStats } from "./tokens";
+import { attachTools, toolsToNodes } from "./toolNodes";
 import { TimelineView } from "./TimelineView";
 import "./ClaudeActivityPanel.css";
 
 const COLLAPSED_KEY = "aiterm-claude-activity-collapsed";
 const MODE_KEY = "aiterm-claude-activity-mode";
+const TOOLS_KEY = "aiterm-claude-activity-tools";
 
 type Mode = "graph" | "timeline";
 
@@ -20,6 +22,13 @@ function loadCollapsed(): boolean {
   try {
     // 沒存過＝預設收合；使用者展開過才記住展開。
     return localStorage.getItem(COLLAPSED_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+function loadShowTools(): boolean {
+  try {
+    return localStorage.getItem(TOOLS_KEY) !== "0";
   } catch {
     return true;
   }
@@ -57,19 +66,31 @@ export function ClaudeActivityPanel({ snapshot, fill }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pickedTurn, setPickedTurn] = useState<number | null>(null);
   const [showDone, setShowDone] = useState(false);
+  const [showTools, setShowTools] = useState(loadShowTools);
+  const [allTools, setAllTools] = useState(false);
 
   const all = snapshot.nodes;
   const running = all.filter((n) => n.status === "running").length;
   const now = useNow(running > 0);
 
   // 依提問輪次分組：預設看最新一輪；挑到的輪次不存在了（例如離開 claude 後重來）就回到最新。
-  const turns = useMemo(() => [...new Set(all.map((n) => n.turn))].sort((a, b) => a - b), [all]);
+  // 輪次也要算進工具：沒有 subagent、只有主 Claude 的工具時，輪次只存在於工具上。
+  const turns = useMemo(
+    () => [...new Set([...all.map((n) => n.turn), ...snapshot.tools.map((c) => c.turn)])].sort((a, b) => a - b),
+    [all, snapshot.tools],
+  );
   const turn = pickedTurn !== null && turns.includes(pickedTurn) ? pickedTurn : turns[turns.length - 1] ?? 0;
   const turnIndex = Math.max(0, turns.indexOf(turn));
   const turnNodes = useMemo(() => all.filter((n) => n.turn === turn), [all, turn]);
 
   const folded = useMemo(() => foldFinished(turnNodes, t.claude_activity_done_group), [turnNodes, t]);
-  const visible = showDone ? turnNodes : folded.nodes;
+  const turnTools = useMemo(() => snapshot.tools.filter((c) => c.turn === turn), [snapshot.tools, turn]);
+  const toolNodes = useMemo(
+    () => (showTools ? toolsToNodes(turnTools, turn, { all: allTools, moreLabel: t.claude_activity_tools_more }) : []),
+    [showTools, allTools, turnTools, turn, t],
+  );
+  const visibleAgents = showDone ? turnNodes : folded.nodes;
+  const visible = useMemo(() => attachTools(visibleAgents, toolNodes), [visibleAgents, toolNodes]);
   const graph = useMemo(() => layoutGraph(visible), [visible]);
   // 時間軸不折疊，所以選中的節點要在整輪裡找；圖則在折疊後看得到的節點裡找。
   const stats = useMemo(() => tokenStats(turnNodes), [turnNodes]);
@@ -89,6 +110,11 @@ export function ClaudeActivityPanel({ snapshot, fill }: Props) {
     const next = !collapsed;
     setCollapsed(next);
     try { localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0"); } catch { /* ignore */ }
+  };
+  const toggleTools = () => {
+    const next = !showTools;
+    setShowTools(next);
+    try { localStorage.setItem(TOOLS_KEY, next ? "1" : "0"); } catch { /* ignore */ }
   };
   const pickMode = (m: Mode) => {
     setMode(m);
@@ -136,6 +162,11 @@ export function ClaudeActivityPanel({ snapshot, fill }: Props) {
           {t.claude_activity_view_timeline}
         </button>
       </span>
+      {turnTools.length > 0 && (
+        <button type="button" className="aiterm-cact__btn" onClick={toggleTools}>
+          {showTools ? t.claude_activity_hide_tools : t.claude_activity_show_tools}
+        </button>
+      )}
       {folded.folded > 0 && (
         <button type="button" className="aiterm-cact__btn" onClick={() => setShowDone((v) => !v)}>
           {showDone ? t.claude_activity_hide_done : t.claude_activity_show_done(folded.folded)}
@@ -159,6 +190,7 @@ export function ClaudeActivityPanel({ snapshot, fill }: Props) {
           mainToolCount={snapshot.main_tool_count}
           heaviestId={stats.heaviestId}
           onExpandDone={() => setShowDone(true)}
+          onExpandTools={() => setAllTools(true)}
         />
       ) : (
         <TimelineView nodes={turnNodes} now={now} selectedId={selectedId} onSelect={setSelectedId} />

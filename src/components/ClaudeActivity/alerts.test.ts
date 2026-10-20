@@ -9,7 +9,7 @@ const n = (id: string, status: ActivityNode["status"], over: Partial<ActivityNod
   tool_count: null, last_event_ms: NOW - 1_000, turn: 1, ...over,
 });
 const snap = (...nodes: ActivityNode[]): ActivitySnapshot => ({
-  nodes, main_tool: null, main_tool_count: 0, main_recent: [], turn: 1,
+  nodes, main_tool: null, main_tool_count: 0, main_recent: [], tools: [], turn: 1,
 });
 
 describe("detectTransitions", () => {

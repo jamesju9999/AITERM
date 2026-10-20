@@ -20,7 +20,7 @@ const node = (id: string): ActivityNode => ({
   id, parent: null, agent_type: "general-purpose", description: id, status: "running",
   started_ms: 1, ended_ms: null, current_tool: null, summary: null, tokens: null, tool_count: null, last_event_ms: 1_000, turn: 1,
 });
-const snap = (...nodes: ActivityNode[]): ActivitySnapshot => ({ nodes, main_tool: null, main_tool_count: 0, main_recent: [], turn: 1 });
+const snap = (...nodes: ActivityNode[]): ActivitySnapshot => ({ nodes, main_tool: null, main_tool_count: 0, main_recent: [], tools: [], turn: 1 });
 
 beforeEach(() => {
   getClaudeActivity.mockReset();

@@ -119,3 +119,10 @@ button.aiterm-cact__card { cursor: pointer; }
   margin: 4px 0 0; padding-left: 16px; font-family: var(--font-mono, monospace); font-size: 11px;
   color: #93c5fd; word-break: break-all;
 }
+.aiterm-cact__card--tool { border-left-color: #94a3b8; }
+.aiterm-cact__card--cat-file { border-left-color: #38bdf8; }
+.aiterm-cact__card--cat-shell { border-left-color: #a3e635; }
+.aiterm-cact__card--cat-web { border-left-color: #c084fc; }
+.aiterm-cact__card--cat-database { border-left-color: #fb923c; }
+.aiterm-cact__card--cat-mcp { border-left-color: #f472b6; }
+.aiterm-cact__card--tool.is-failed { outline: 1px solid #f87171; }

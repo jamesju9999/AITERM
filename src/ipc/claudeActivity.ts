@@ -22,6 +22,22 @@ export interface ActivityNode {
   turn: number;
 }
 
+export type ToolCategory = "file" | "shell" | "web" | "database" | "mcp" | "other";
+
+/** 對應 Rust `claude_activity::tree::ToolCall`：一次工具呼叫，圖上的葉節點。 */
+export interface ToolCall {
+  id: string;
+  /** 呼叫者 agent_id；主 Claude 為 null。 */
+  parent: string | null;
+  tool: string;
+  hint: string;
+  category: ToolCategory;
+  status: ActivityStatus;
+  started_ms: number;
+  ended_ms: number | null;
+  turn: number;
+}
+
 /** 對應 Rust `claude_activity::tree::Snapshot`。 */
 export interface ActivitySnapshot {
   nodes: ActivityNode[];
@@ -31,10 +47,11 @@ export interface ActivitySnapshot {
   main_tool_count: number;
   /** 本輪主 Claude 最近的工具提示，舊的在前，最多 10 筆。 */
   main_recent: string[];
+  tools: ToolCall[];
   turn: number;
 }
 
-export const EMPTY_SNAPSHOT: ActivitySnapshot = { nodes: [], main_tool: null, main_tool_count: 0, main_recent: [], turn: 0 };
+export const EMPTY_SNAPSHOT: ActivitySnapshot = { nodes: [], main_tool: null, main_tool_count: 0, main_recent: [], tools: [], turn: 0 };
 
 export const claudeActivityEvent = (sessionId: string): string =>
   `claude-activity://${sessionId}`;

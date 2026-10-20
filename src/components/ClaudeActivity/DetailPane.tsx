@@ -1,6 +1,7 @@
 import type { ActivityNode, ActivityStatus } from "../../ipc/claudeActivity";
 import { useLocale } from "../../contexts/LocaleContext";
 import { formatDuration, formatTokens } from "./format";
+import { isToolId } from "./toolNodes";
 
 export interface MainActivity {
   count: number;
@@ -38,6 +39,19 @@ export function DetailPane({ node, now, share = null, main = null }: { node: Act
     failed: t.claude_activity_status_failed,
     interrupted: t.claude_activity_status_interrupted,
   };
+  if (isToolId(node.id)) {
+    const category = t[`claude_activity_cat_${node.agent_type}` as keyof typeof t];
+    return (
+      <div className="aiterm-cact__detail">
+        <div className="aiterm-cact__detail-title">{node.description}</div>
+        <div className="aiterm-cact__meta">
+          <span className="aiterm-cact__badge">{typeof category === "string" ? category : t.claude_activity_cat_other}</span>
+          <span>{statusLabel[node.status]}</span>
+          <span>{formatDuration((node.ended_ms ?? now) - node.started_ms)}</span>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="aiterm-cact__detail">
       <div className="aiterm-cact__detail-title">{node.description ?? t.claude_activity_untitled}</div>

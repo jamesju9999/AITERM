@@ -4,6 +4,7 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { DONE_GROUP_ID } from "./fold";
 import { formatDuration, formatTokens } from "./format";
 import { CARD_H, ROOT_ID, colX, type Graph } from "./graphLayout";
+import { CATEGORY_ICON, isToolId, isToolsMoreId } from "./toolNodes";
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 1.5;
@@ -23,6 +24,8 @@ interface Props {
   heaviestId: string | null;
   /** 點群組卡（已完成 N 個）：展開被折起來的節點。 */
   onExpandDone: () => void;
+  /** 點「更早 N 個工具」群組卡：展開全部工具。 */
+  onExpandTools: () => void;
 }
 
 /** 到根的祖先鏈（含自己與根）；選中節點時用來高亮路徑。 */
@@ -38,7 +41,7 @@ function pathTo(id: string | null, graph: Graph): Set<string> {
   return path;
 }
 
-export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCount, mainTool, mainToolCount, heaviestId, onExpandDone }: Props) {
+export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCount, mainTool, mainToolCount, heaviestId, onExpandDone, onExpandTools }: Props) {
   const { t } = useLocale();
   const uid = useId().replace(/:/g, "");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -140,6 +143,47 @@ export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCo
               const n = byId.get(id);
               if (!n) return null;
               const title = n.description ?? t.claude_activity_untitled;
+              if (isToolsMoreId(id)) {
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`aiterm-cact__card aiterm-cact__card--group${dim ? " is-dim" : ""}`}
+                    style={style}
+                    data-node-id={id}
+                    data-col={col}
+                    onClick={onExpandTools}
+                  >
+                    <span className="aiterm-cact__card-title">{title}</span>
+                  </button>
+                );
+              }
+              if (isToolId(id)) {
+                const cat = n.agent_type || "other";
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`aiterm-cact__card aiterm-cact__card--tool aiterm-cact__card--cat-${cat}${n.status === "failed" ? " is-failed" : ""}${selectedId === id ? " is-selected" : ""}${path.has(id) && selectedId !== id ? " is-path" : ""}${dim ? " is-dim" : ""}`}
+                    style={style}
+                    data-node-id={id}
+                    data-col={col}
+                    aria-pressed={selectedId === id}
+                    title={title}
+                    onClick={() => onSelect(selectedId === id ? null : id)}
+                  >
+                    <span className="aiterm-cact__card-title">
+                      <span aria-hidden="true">{CATEGORY_ICON[cat] ?? CATEGORY_ICON.other}</span>
+                      <span className="aiterm-cact__card-text">{title}</span>
+                    </span>
+                    <span className="aiterm-cact__card-sub">
+                      <span className={`aiterm-cact__dot aiterm-cact__dot--${n.status}`} aria-hidden="true" />
+                      <span>{statusLabel[n.status]}</span>
+                    </span>
+                    <span className="aiterm-cact__card-line">{formatDuration((n.ended_ms ?? now) - n.started_ms)}</span>
+                  </button>
+                );
+              }
               if (id === DONE_GROUP_ID) {
                 return (
                   <button

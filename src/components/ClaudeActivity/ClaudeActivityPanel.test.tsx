@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { ActivityNode, ActivitySnapshot } from "../../ipc/claudeActivity";
+import type { ActivityNode, ActivitySnapshot, ToolCall } from "../../ipc/claudeActivity";
 
 vi.mock("../../contexts/LocaleContext", async () => {
   const { translations } = await vi.importActual<typeof import("../../lib/i18n")>("../../lib/i18n");
@@ -17,7 +17,7 @@ const node = (over: Partial<ActivityNode> & { id: string }): ActivityNode => ({
 const done = (id: string, over: Partial<ActivityNode> = {}) =>
   node({ id, description: id, status: "done", ended_ms: 2_000, ...over });
 const snap = (nodes: ActivityNode[], over: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
-  nodes, main_tool: null, main_tool_count: 0, main_recent: [], turn: Math.max(0, ...nodes.map((n) => n.turn)), ...over,
+  nodes, main_tool: null, main_tool_count: 0, main_recent: [], tools: [], turn: Math.max(0, ...nodes.map((n) => n.turn)), ...over,
 });
 const renderPanel = (nodes: ActivityNode[], over: Partial<ActivitySnapshot> = {}) =>
   render(<ClaudeActivityPanel snapshot={snap(nodes, over)} fill />);
@@ -272,5 +272,59 @@ describe("縮放與時間軸", () => {
     expect(card("__root__").textContent).toContain("2 次工具呼叫");
     fireEvent.click(card("__root__"));
     expect(screen.getByText("Bash: ls")).toBeInTheDocument();
+  });
+
+  const tool = (id: string, over: Partial<ToolCall> = {}): ToolCall => ({
+    id, parent: null, tool: "Bash", hint: `Bash: ${id}`, category: "shell", status: "done",
+    started_ms: 1_000, ended_ms: 1_500, turn: 1, ...over,
+  });
+
+  it("沒有 subagent 時，主 Claude 的每次工具呼叫是根底下的一個節點（含類別）", () => {
+    renderPanel([], { tools: [tool("u1", { category: "web", hint: "WebFetch: x" }), tool("u2", { category: "database", hint: "psql" })] });
+    expect(card("tool:u1").textContent).toContain("WebFetch: x");
+    expect(card("tool:u1").className).toContain("cat-web");
+    expect(card("tool:u2").className).toContain("cat-database");
+    expect(screen.getByTestId("edge-__root__-tool:u1")).toBeInTheDocument();
+  });
+
+  it("subagent 的工具掛在那個 subagent 底下", () => {
+    renderPanel([node({ id: "ag1", description: "查檔" })], { tools: [tool("u1", { parent: "ag1" })] });
+    expect(screen.getByTestId("edge-ag1-tool:u1")).toBeInTheDocument();
+  });
+
+  it("失敗的工具用文字標示失敗；點工具節點詳情顯示類別與完整提示", () => {
+    renderPanel([], { tools: [tool("u1", { status: "failed", category: "file", hint: "Read: /x/y" })] });
+    expect(card("tool:u1").textContent).toContain("失敗");
+    fireEvent.click(card("tool:u1"));
+    const detail = document.querySelector(".aiterm-cact__detail") as HTMLElement;
+    expect(detail.textContent).toContain("Read: /x/y");
+    expect(detail.textContent).toContain("檔案");
+  });
+
+  it("工具太多時收成「更早 N 個工具」；點它展開全部", () => {
+    const tools = Array.from({ length: 9 }, (_, i) => tool(`u${i}`, { started_ms: 1_000 + i }));
+    renderPanel([], { tools });
+    expect(card("tool:u0")).toBeNull();
+    fireEvent.click(screen.getByText("更早 3 個工具"));
+    expect(card("tool:u0")).not.toBeNull();
+  });
+
+  it("工具開關：關掉就只剩 subagent，並記在 localStorage", () => {
+    const { unmount } = renderPanel([done("a")], { tools: [tool("u1")] });
+    expect(card("tool:u1")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "隱藏工具" }));
+    expect(card("tool:u1")).toBeNull();
+    expect(card("a")).not.toBeNull();
+    unmount();
+    renderPanel([done("a")], { tools: [tool("u1")] });
+    expect(card("tool:u1")).toBeNull();
+    expect(screen.getByRole("button", { name: "顯示工具" })).toBeInTheDocument();
+  });
+
+  it("已折進「已完成 N 個」的 subagent，它的工具一併隱藏", () => {
+    const agents = ["a", "b", "c"].map((id) => done(id));
+    renderPanel(agents, { tools: [tool("u1", { parent: "a" }), tool("u2")] });
+    expect(card("tool:u1")).toBeNull();
+    expect(card("tool:u2")).not.toBeNull();
   });
 });
