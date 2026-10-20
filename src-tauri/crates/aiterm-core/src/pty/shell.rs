@@ -133,6 +133,24 @@ Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
     }
     [Console]::Write("$([char]27)]133;C$([char]7)")
 }
+
+# ── AITerm: Claude subagent 協作側欄 ──
+# 使用者自己已有 claude 函式／別名就不覆蓋；沒有 AITERM_CLAUDE_SETTINGS 時原樣轉交。
+if ($env:AITERM_CLAUDE_SETTINGS -and -not (Get-Command claude -CommandType Function,Alias -ErrorAction SilentlyContinue)) {
+    function global:claude {
+        $real = Get-Command claude -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $real) { Write-Error "claude: command not found"; return }
+        $hasSettings = $false
+        foreach ($a in $args) {
+            if ($a -is [string] -and ($a -eq '--settings' -or $a -like '--settings=*')) { $hasSettings = $true }
+        }
+        if ($hasSettings -or -not $env:AITERM_CLAUDE_SETTINGS) {
+            & $real.Source @args
+        } else {
+            & $real.Source --settings $env:AITERM_CLAUDE_SETTINGS @args
+        }
+    }
+}
 "#;
 
 /// Inject OSC 133 shell integration into PowerShell (pwsh.exe / powershell.exe).
@@ -378,6 +396,24 @@ __aiterm_precmd() {
 
 add-zsh-hook preexec __aiterm_preexec
 add-zsh-hook precmd __aiterm_precmd
+
+# ── AITerm: Claude subagent 協作側欄 ──
+# 在使用者 rc 之後才定義，所以函式一定贏過 PATH 上任何位置的 claude。
+# 使用者自己已有 claude 別名／函式就不覆蓋（該分頁不會有側欄，但行為完全是他原本的）。
+# 沒有 AITERM_CLAUDE_SETTINGS（例如 aiterm-host）時原樣轉交。
+if (( ! ${+aliases[claude]} )) && (( ! ${+functions[claude]} )); then
+  function claude {
+    local a
+    if [[ -n "$AITERM_CLAUDE_SETTINGS" ]]; then
+      for a in "$@"; do
+        case "$a" in --settings|--settings=*) command claude "$@"; return;; esac
+      done
+      command claude --settings "$AITERM_CLAUDE_SETTINGS" "$@"
+    else
+      command claude "$@"
+    fi
+  }
+fi
 "#;
         let _ = std::fs::write(temp_dir.join(".zshrc"), zshrc_content);
 
@@ -436,6 +472,23 @@ __aiterm_append_b_marker() {
 }
 
 PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_append_b_marker"
+
+# ── AITerm: Claude subagent 協作側欄 ──
+# 在使用者 rc 之後才定義，所以函式一定贏過 PATH 上任何位置的 claude。
+# 使用者自己已有 claude 別名／函式就不覆蓋；沒有 AITERM_CLAUDE_SETTINGS 時原樣轉交。
+if ! alias claude >/dev/null 2>&1 && ! declare -F claude >/dev/null 2>&1; then
+  function claude {
+    local a
+    if [[ -n "$AITERM_CLAUDE_SETTINGS" ]]; then
+      for a in "$@"; do
+        case "$a" in --settings|--settings=*) command claude "$@"; return;; esac
+      done
+      command claude --settings "$AITERM_CLAUDE_SETTINGS" "$@"
+    else
+      command claude "$@"
+    fi
+  }
+fi
 "#;
         let _ = std::fs::write(&rcfile, bashrc_content);
         args.push("--rcfile".into());
@@ -797,5 +850,127 @@ mod tests {
             "local ec=$? must come before __aiterm_in_precmd=1 is set, or the exit code \
              capture breaks for every command"
         );
+    }
+
+    /// 假的 claude：把收到的每個參數一行寫進 $FAKE_CLAUDE_OUT。
+    #[cfg(not(windows))]
+    fn fake_claude_bin() -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("aiterm-fake-claude-{}", uuid::Uuid::new_v4()));
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = bin.join("claude");
+        std::fs::write(&script, "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$FAKE_CLAUDE_OUT\"\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (root, bin)
+    }
+
+    /// 用 AITerm 實際產生的整合設定啟動一個互動式 shell 跑 `line`，回傳假 claude 收到的參數。
+    #[cfg(not(windows))]
+    fn run_claude_line(shell: &str, line: &str, settings_env: Option<&str>) -> Option<Vec<String>> {
+        use std::process::Command;
+        if !std::path::Path::new(shell).exists() {
+            return None;
+        }
+        let (root, bin) = fake_claude_bin();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let out = root.join("args.txt");
+        let spec = inject_shell_integration(PathBuf::from(shell));
+        let mut cmd = Command::new(&spec.program);
+        cmd.args(&spec.args).args(["-i", "-c", line]);
+        cmd.env_clear()
+            .env("HOME", &home)
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("FAKE_CLAUDE_OUT", &out);
+        for (k, v) in &spec.envs {
+            cmd.env(k, v);
+        }
+        if let Some(s) = settings_env {
+            cmd.env("AITERM_CLAUDE_SETTINGS", s);
+        }
+        let status = cmd.status().unwrap();
+        assert!(status.success(), "{shell} exited with {status}");
+        let text = std::fs::read_to_string(&out).ok()?;
+        Some(text.lines().map(str::to_owned).collect())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn claude_function_adds_settings_in_bash_and_zsh() {
+        for shell in ["/bin/bash", "/bin/zsh"] {
+            let Some(args) = run_claude_line(shell, "claude --model haiku 'a b'", Some("/tmp/s p/x.json")) else {
+                eprintln!("skip {shell}: not installed");
+                continue;
+            };
+            assert_eq!(args, ["--settings", "/tmp/s p/x.json", "--model", "haiku", "a b"], "{shell}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn claude_function_leaves_explicit_settings_alone() {
+        for shell in ["/bin/bash", "/bin/zsh"] {
+            for line in ["claude --settings /d/s.json -p hi", "claude --settings=/d/s.json -p hi"] {
+                let Some(args) = run_claude_line(shell, line, Some("/tmp/x.json")) else { continue };
+                assert!(!args.contains(&"/tmp/x.json".to_owned()), "{shell} {line}: {args:?}");
+                assert_eq!(args.last().map(String::as_str), Some("hi"), "{shell} {line}");
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn claude_function_passes_through_when_no_settings_env() {
+        for shell in ["/bin/bash", "/bin/zsh"] {
+            let Some(args) = run_claude_line(shell, "claude -p hi", None) else { continue };
+            assert_eq!(args, ["-p", "hi"], "{shell}");
+        }
+    }
+
+    #[test]
+    fn powershell_script_defines_the_claude_function_without_clobbering_user_ones() {
+        let s = POWERSHELL_INTEGRATION_SCRIPT;
+        assert!(s.contains("function global:claude"));
+        assert!(s.contains("$env:AITERM_CLAUDE_SETTINGS"));
+        assert!(
+            s.contains("-not (Get-Command claude -CommandType Function,Alias"),
+            "使用者自己的 claude 別名／函式優先"
+        );
+        assert!(s.contains("--settings"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn claude_function_does_not_override_a_user_alias() {
+        for (shell, rc) in [("/bin/bash", ".bashrc"), ("/bin/zsh", ".zshrc")] {
+            if !std::path::Path::new(shell).exists() {
+                continue;
+            }
+            let (root, bin) = fake_claude_bin();
+            let home = root.join("home");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::write(home.join(rc), "alias claude='claude --user-alias'\nshopt -s expand_aliases 2>/dev/null\n").unwrap();
+            let out = root.join("args.txt");
+            let spec = inject_shell_integration(PathBuf::from(shell));
+            let mut cmd = std::process::Command::new(&spec.program);
+            cmd.args(&spec.args).args(["-i", "-c", "claude hi"]);
+            cmd.env_clear()
+                .env("HOME", &home)
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .env("FAKE_CLAUDE_OUT", &out)
+                .env("AITERM_CLAUDE_SETTINGS", "/tmp/x.json");
+            for (k, v) in &spec.envs {
+                cmd.env(k, v);
+            }
+            let output = cmd.output().unwrap();
+            assert!(output.status.success());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // 別名在 parse 階段就會展開：`claude() {` 會被展開成別名內容而語法錯誤，
+            // 即使外面的 if 守衛不會執行它。所以函式必須用 `function claude {` 的寫法定義。
+            assert!(!stderr.contains("syntax error"), "{shell}：不能在每個分頁啟動時噴語法錯誤：{stderr}");
+            let args: Vec<String> = std::fs::read_to_string(&out).unwrap().lines().map(str::to_owned).collect();
+            assert_eq!(args, ["--user-alias", "hi"], "{shell}：別名要原樣生效，不被 AITerm 的函式蓋掉");
+        }
     }
 }

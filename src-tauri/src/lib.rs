@@ -2,6 +2,7 @@ pub mod agent_transcript;
 pub mod ai;
 pub use aiterm_core::appimage_env;
 pub mod bridge;
+pub mod claude_activity;
 pub mod chatgpt_web;
 pub mod code_assistant;
 pub mod computer;
@@ -307,6 +308,18 @@ pub fn run() {
         .manage(Arc::new(share::ShareServerState::new()))
         .manage(Arc::new(share::viewer_manager::ViewerManager::new()))
         .setup(|app| {
+            {
+                use tauri::{Emitter as _, Manager as _};
+                let handle = app.handle().clone();
+                let dir = dirs::data_dir()
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("AITERM")
+                    .join("claude-activity");
+                let emit: claude_activity::Emitter = Arc::new(move |sid, nodes| {
+                    let _ = handle.emit(&format!("claude-activity://{sid}"), nodes);
+                });
+                app.manage(claude_activity::ClaudeActivity::new(dir, emit));
+            }
             // macOS：Cmd+Q 換成會先問前端的自訂選單項目（見 quit.rs）。
             #[cfg(target_os = "macos")]
             quit::install_quit_menu(app)?;
@@ -509,6 +522,7 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_close,
+            claude_activity::commands::claude_activity_snapshot,
             pty_get_cwd,
             pty_get_recent_output,
             pty_get_shell_type,

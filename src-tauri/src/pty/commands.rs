@@ -66,9 +66,12 @@ pub fn pty_resize(
 #[tauri::command]
 pub fn pty_close(
     manager: State<'_, std::sync::Arc<PtyManager>>,
+    activity: State<'_, std::sync::Arc<crate::claude_activity::ClaudeActivity>>,
     id: String,
 ) -> Result<(), PtyError> {
-    manager.close(&id)
+    let result = manager.close(&id);
+    activity.forget(&id);
+    result
 }
 
 /// Return the shell type for a PTY session ("pwsh", "cmd", "bash", or "unknown").

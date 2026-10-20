@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use portable_pty::PtySize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use aiterm_core::pty::error::PtyResult;
 use aiterm_core::pty::events::{data_event_name, PtyDataPayload};
@@ -68,6 +68,11 @@ pub fn create_with_app_env(
     envs.extend(extra_env);
 
     let id = uuid::Uuid::new_v4().to_string();
+    // 手動在這個分頁跑的 claude 會透過 shell 整合腳本的 `claude` 函式讀到這個設定檔，
+    // 它的 subagent 事件才會打回 AITerm 的側欄。id 必須在 spawn 前就決定，設定檔才寫得出網址。
+    if let Some(activity) = app.try_state::<std::sync::Arc<crate::claude_activity::ClaudeActivity>>() {
+        envs.extend(activity.prepare(&id));
+    }
     let event_name = data_event_name(&id);
 
     manager.create_with_callback_and_id(size, id, cwd, envs, env_removals, move |chunk| {
