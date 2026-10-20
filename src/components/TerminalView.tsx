@@ -505,6 +505,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const suggestionSidebar = useSuggestionSidebar(blocks, customAiCliNames);
   const claudeActivity = useClaudeActivity(sessionId);
   const claudeActivityEnabled = useClaudeActivityEnabled();
+  // 有 subagent，或主 Claude 本輪已經用過工具，就顯示（後者讓沒開 subagent 時也看得到主 Claude 在做什麼）。
+  const claudeActivityVisible =
+    claudeActivityEnabled && (claudeActivity.nodes.length > 0 || claudeActivity.main_tool_count > 0);
   useClaudeActivityAlerts(claudeActivity, isActive);
   const [suggestionGoal, setSuggestionGoal] = useState(initialSuggestionGoal ?? "");
   const [suggestionMilestones, setSuggestionMilestones] = useState<MilestoneState | undefined>(initialSuggestionMilestones);
@@ -2027,9 +2030,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   const suggestionsShown = suggestionSidebar.open && !!sessionId;
   const sidebarContent =
-    (claudeActivityEnabled && claudeActivity.nodes.length > 0) || suggestionsShown ? (
+    claudeActivityVisible || suggestionsShown ? (
       <>
-        {claudeActivityEnabled && claudeActivity.nodes.length > 0 && (
+        {claudeActivityVisible && (
           <ClaudeActivityPanel snapshot={claudeActivity} fill={!suggestionsShown} />
         )}
         {suggestionsShown && (

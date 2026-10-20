@@ -266,4 +266,11 @@ describe("縮放與時間軸", () => {
     // 選根不該把其他卡片全部淡掉
     expect(card("a").className).not.toContain("is-dim");
   });
+
+  it("沒有 subagent 時只剩根節點，仍可點開看主 Claude 最近的工具", () => {
+    renderPanel([], { main_tool_count: 2, main_recent: ["Read: a", "Bash: ls"] });
+    expect(card("__root__").textContent).toContain("2 次工具呼叫");
+    fireEvent.click(card("__root__"));
+    expect(screen.getByText("Bash: ls")).toBeInTheDocument();
+  });
 });
