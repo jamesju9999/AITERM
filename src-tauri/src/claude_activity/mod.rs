@@ -297,4 +297,32 @@ mod tests {
         assert_eq!(seen.lock().unwrap().len(), 1);
         assert_eq!(a.snapshot("s1")[0].id, "a1");
     }
+
+    /// 手動驗收（要有登入過的 `claude`，會花一點額度）：真的 claude → AITerm 的整合 shell 裡的
+    /// `claude` 函式 → HTTP hook → 接收器 → 狀態機。
+    /// `cargo test --lib real_claude_pipeline -- --ignored --nocapture`
+    #[cfg(unix)]
+    #[ignore = "needs a logged-in claude CLI and spends a little quota"]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn real_claude_pipeline() {
+        let (a, _) = activity("real");
+        let env = a.prepare("real-session");
+        assert_eq!(env.len(), 1, "接收器沒起來");
+        let spec = aiterm_core::pty::shell::default_shell().expect("a default shell");
+        let mut cmd = std::process::Command::new(&spec.program);
+        cmd.args(&spec.args).args([
+            "-i",
+            "-c",
+            "claude -p --model haiku 'Use the Agent tool to spawn two subagents in parallel; each runs `ls` with Bash and reports the first filename. Then say done.' </dev/null",
+        ]);
+        for (k, v) in spec.envs.iter().chain(env.iter()) {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().unwrap();
+        println!("claude said: {}", String::from_utf8_lossy(&out.stdout));
+        let nodes = a.snapshot("real-session");
+        println!("{}", serde_json::to_string_pretty(&nodes).unwrap());
+        assert!(nodes.len() >= 2, "應該看到兩個 subagent：{nodes:?}");
+        assert!(nodes.iter().all(|n| n.description.is_some() && n.tokens.is_some()), "{nodes:?}");
+    }
 }
