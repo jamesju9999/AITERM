@@ -725,6 +725,10 @@ const zhTW = {
     ac_tpl_mine: "我的範本",
     ac_tpl_target: "專案資料夾",
     ac_tpl_change_repo: "更換",
+    ac_clear_team: "清空團隊",
+    ac_clear_team_tip: "移除桌布上全部 Agent，重新開始",
+    ac_clear_team_confirm: (n: number) =>
+      `移除桌布上全部 ${n} 位 Agent？\n\n排隊中的模組會退回模組庫，可以再指派；已完成的成果、程式庫與專案資料夾設定都保留。有 Agent 正在執行工作時不會清空。`,
     ac_tpl_repo_locked: "團隊正在使用這個資料夾。一個團隊只能用一個程式庫；要換資料夾，請先移除桌布上的 Agent。",
     ac_tpl_desc: "挑一組團隊直接放到這個專案。內建五組常用團隊；也可以把桌布上的團隊存成自己的範本（存在這台電腦）。",
     ac_tpl_name: "範本名稱",
@@ -3007,6 +3011,10 @@ const enRaw = {
     ac_tpl_mine: "My templates",
     ac_tpl_target: "Project folder",
     ac_tpl_change_repo: "Change",
+    ac_clear_team: "Clear team",
+    ac_clear_team_tip: "Remove every agent from the canvas and start over",
+    ac_clear_team_confirm: (n: number) =>
+      `Remove all ${n} agents from the canvas?\n\nQueued modules go back to the library so you can assign them again; finished work, the repo and the project folder setting are kept. Nothing is cleared while an agent is running.`,
     ac_tpl_repo_locked: "The team is using this folder. A team can only use one repo; to switch folders, remove the agents on the canvas first.",
     ac_tpl_desc: "Pick a team and drop it straight into this project. Five common teams are built in; you can also save the team on the canvas as your own template (stored on this computer).",
     ac_tpl_name: "Template name",

@@ -243,3 +243,6 @@ export interface ProjectRepo {
 export const projectRepo = (projectId: string): Promise<ProjectRepo | null> => invoke("agents_project_repo", { projectId });
 /** 記住這個專案的程式庫（套用範本時選過一次就不再問）。 */
 export const setProjectRepo = (projectId: string, path: string): Promise<void> => invoke("agents_set_project_repo", { projectId, path });
+
+/** 清空團隊：移除桌布上全部 Agent。有人在執行就整個拒絕（錯誤訊息列出是誰）。回傳移除了幾位。 */
+export const deleteAllAgents = (projectId: string): Promise<number> => invoke("agents_delete_all", { projectId });

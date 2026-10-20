@@ -154,6 +154,15 @@ pub async fn agents_delete(
     Ok(())
 }
 
+/// 清空團隊：移除桌布上全部 Agent。有人在執行就整個拒絕。回傳移除了幾位。
+#[tauri::command]
+pub async fn agents_delete_all(project_id: String, reg: State<'_, ProjectRegistry>, app: AppHandle) -> Result<usize, String> {
+    let p = project(&reg, &project_id)?;
+    let n = agents::delete_all_agents(&p.pool).await?;
+    emit_updated(&app);
+    Ok(n)
+}
+
 #[tauri::command]
 pub async fn tasks_assign_agent(
     project_id: String,

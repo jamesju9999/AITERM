@@ -55,6 +55,7 @@ vi.mock("../../ipc/agents", () => ({
   listSkillUses: vi.fn(),
   projectRepo: vi.fn(),
   setProjectRepo: vi.fn().mockResolvedValue(undefined),
+  deleteAllAgents: vi.fn().mockResolvedValue(2),
 }));
 vi.mock("../../ipc/db", async () => ({
   ...(await vi.importActual<typeof import("../../ipc/db")>("../../ipc/db")),
@@ -111,6 +112,7 @@ import {
   listSkillUses,
   projectRepo,
   setProjectRepo,
+  deleteAllAgents,
   initRepo,
   listAgents,
   mergeAgent,
@@ -808,6 +810,27 @@ describe("AgentCanvasView", () => {
     drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
     dlg = await screen.findByRole("dialog");
     await waitFor(() => expect((within(dlg).getByLabelText(/程式庫|Repository/) as HTMLInputElement).value).toBe("/repo/chosen"));
+  });
+
+  it("清空團隊：確認後移除全部 Agent；取消就不動；桌布空的時候不出現", async () => {
+    const { confirm } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "a2", name: "工程師2" })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    const { unmount } = view();
+    const btn = await screen.findByTestId("ac-clear-team");
+    vi.mocked(confirm).mockResolvedValueOnce(false);
+    fireEvent.click(btn);
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/2 位/), expect.anything()));
+    expect(deleteAllAgents).not.toHaveBeenCalled();
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+    fireEvent.click(btn);
+    await waitFor(() => expect(deleteAllAgents).toHaveBeenCalledWith("p1"));
+    unmount();
+
+    vi.mocked(listAgents).mockResolvedValue([]);
+    view();
+    await screen.findByTestId("ac-templates-empty");
+    expect(screen.queryByTestId("ac-clear-team")).toBeNull();
   });
 
   it("團隊範本：存下桌布上的團隊成為我的範本，可以刪除", async () => {

@@ -260,6 +260,25 @@ pub async fn delete_agent(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error
     Ok(())
 }
 
+/// 清空團隊：移除桌布上全部 Agent（各自照 `delete_agent` 處理卡片）。有人還在執行就
+/// 整個拒絕、一位都不刪，錯誤訊息列出是誰。回傳移除了幾位。
+pub async fn delete_all_agents(pool: &SqlitePool) -> Result<usize, String> {
+    let all = list_agents(pool).await.map_err(|e| e.to_string())?;
+    let mut busy = Vec::new();
+    for a in &all {
+        if agent_has_running(pool, &a.id).await.map_err(|e| e.to_string())? {
+            busy.push(a.name.clone());
+        }
+    }
+    if !busy.is_empty() {
+        return Err(format!("{} 還有工作在執行，等它們做完或先停止再清空", busy.join("、")));
+    }
+    for a in &all {
+        delete_agent(pool, &a.id).await.map_err(|e| e.to_string())?;
+    }
+    Ok(all.len())
+}
+
 async fn max_order(pool: &SqlitePool, status: &str) -> Result<f64, sqlx::Error> {
     sqlx::query_scalar("SELECT CAST(COALESCE(MAX(sort_order), 0) AS REAL) FROM tasks WHERE status = ?")
         .bind(status)
@@ -445,6 +464,29 @@ mod tests {
         let t = store::get_task(&pool, &tid).await.unwrap().unwrap();
         assert_eq!(t.agent_id, None);
         assert_eq!(t.status, store::STATUS_PLANNING);
+    }
+
+    /// 清空團隊：有人在跑就整個拒絕（一位都不刪），並說出是誰；否則全部移除、排隊中的模組退回計畫中。
+    #[tokio::test]
+    async fn delete_all_is_all_or_nothing_and_names_who_is_busy() {
+        let pool = mem_pool().await;
+        let a1 = coder(&pool, "工程師1").await;
+        let a2 = coder(&pool, "工程師2").await;
+        let queued = store::create_task(&pool, "queued", "", "/r", true, false).await.unwrap();
+        let running = store::create_task(&pool, "running", "", "/r", true, false).await.unwrap();
+        assign_task(&pool, &queued, Some(&a1)).await.unwrap();
+        assign_task(&pool, &running, Some(&a2)).await.unwrap();
+        store::dispatch_for_test(&pool, &running, "tab").await;
+
+        let err = delete_all_agents(&pool).await.unwrap_err();
+        assert!(err.contains("工程師2") && !err.contains("工程師1"), "{err}");
+        assert_eq!(list_agents(&pool).await.unwrap().len(), 2, "有人在跑就一位都不刪");
+
+        store::finish_task(&pool, &running, "success", None, None).await.unwrap();
+        assert_eq!(delete_all_agents(&pool).await.unwrap(), 2);
+        assert!(list_agents(&pool).await.unwrap().is_empty());
+        let q = store::get_task(&pool, &queued).await.unwrap().unwrap();
+        assert_eq!((q.status.as_str(), q.agent_id.as_deref()), (store::STATUS_PLANNING, None));
     }
 
     #[tokio::test]

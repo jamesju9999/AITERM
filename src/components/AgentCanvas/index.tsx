@@ -23,6 +23,7 @@ import {
   getReferences,
   setReferences,
   projectRepo,
+  deleteAllAgents,
   listSkillUses,
   setCustomSkills,
   type SkillUseRow,
@@ -723,6 +724,14 @@ export function AgentCanvasView({
     void run(() => deleteAgent(projectId, a.id));
   };
 
+  /** 清空團隊：確認後移除全部 Agent（有人在執行時後端會拒絕並說出是誰）。 */
+  const clearTeam = async () => {
+    if (!projectId || agents.length === 0) return;
+    const ok = await confirm(t.ac_clear_team_confirm(agents.length), { kind: "warning" });
+    if (!ok) return;
+    void run(() => deleteAllAgents(projectId));
+  };
+
   const describeMerge = (o: MergeOutcome): { text: string; conflict: boolean } => {
     switch (o.status) {
       case "merged":
@@ -1058,6 +1067,16 @@ export function AgentCanvasView({
         {projectId && (
           <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" data-testid="ac-templates" data-guide="templates" onClick={() => setTemplatesOpen(true)}>
             {t.ac_tpl_button}
+          </button>
+        )}
+        {projectId && agents.length > 0 && (
+          <button
+            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm ac-clear-team"
+            data-testid="ac-clear-team"
+            title={t.ac_clear_team_tip}
+            onClick={() => void clearTeam()}
+          >
+            {t.ac_clear_team}
           </button>
         )}
         {projectId && (
