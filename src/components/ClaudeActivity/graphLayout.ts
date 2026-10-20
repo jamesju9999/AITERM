@@ -2,10 +2,10 @@ import type { ActivityNode, ActivityStatus } from "../../ipc/claudeActivity";
 
 /** 圖上代表「你正在對話的那個 Claude」的虛擬根節點。 */
 export const ROOT_ID = "__root__";
-/** 根節點只放「Claude」與執行中數量，做窄一點，讓預設寬度的側欄放得下第一層 subagent。 */
-export const ROOT_W = 84;
+/** 根節點只放「Claude」、執行中數量與主 Claude 目前的工具，做窄一點，讓預設寬度的側欄放得下第一層 subagent。 */
+export const ROOT_W = 110;
 export const CARD_W = 160;
-export const CARD_H = 74;
+export const CARD_H = 92;
 export const GAP_X = 36;
 export const GAP_Y = 14;
 export const PAD = 12;
@@ -52,7 +52,9 @@ export function layoutGraph(nodes: ActivityNode[]): Graph {
       rootKids.push(x);
     }
   }
-  const byStart = (a: ActivityNode, b: ActivityNode) => a.started_ms - b.started_ms;
+  // 失敗的排在同一層最前面（最需要看到），其餘依開始順序。
+  const byStart = (a: ActivityNode, b: ActivityNode) =>
+    Number(b.status === "failed") - Number(a.status === "failed") || a.started_ms - b.started_ms;
   for (const list of children.values()) list.sort(byStart);
   // 循環中的節點沒有任何根可達：接到根。
   const reachable = new Set<string>();

@@ -18,7 +18,7 @@ use axum::routing::post;
 use parking_lot::Mutex;
 use serde_json::Value;
 
-use tree::{Kind, Node, Tree};
+use tree::{Kind, Snapshot, Tree};
 
 /// 子行程環境變數：該 session 的 hooks 設定檔路徑。
 pub const SETTINGS_ENV: &str = "AITERM_CLAUDE_SETTINGS";
@@ -26,7 +26,7 @@ pub const SETTINGS_ENV: &str = "AITERM_CLAUDE_SETTINGS";
 const STALE_AFTER: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// 狀態變更時的通知：(session id, 完整快照)。正式版 emit Tauri 事件，測試收進 Vec。
-pub type Emitter = Arc<dyn Fn(&str, &[Node]) + Send + Sync>;
+pub type Emitter = Arc<dyn Fn(&str, &Snapshot) + Send + Sync>;
 
 /// 交給 `claude --settings` 的設定檔內容；`base` 是 `http://127.0.0.1:<port>/activity/<secret>/<sid>`。
 pub fn settings_json(base: &str) -> String {
@@ -38,6 +38,7 @@ pub fn settings_json(base: &str) -> String {
             "SubagentStart": hook("sub-start"),
             "SubagentStop": hook("sub-stop"),
             "SessionEnd": hook("session-end"),
+            "UserPromptSubmit": hook("prompt"),
         }
     })
     .to_string()
@@ -119,7 +120,7 @@ impl ClaudeActivity {
             if !tree.apply(kind, body, now_ms) {
                 return;
             }
-            tree.nodes().to_vec()
+            tree.snapshot()
         };
         (self.emit)(session_id, &snapshot);
     }
@@ -132,13 +133,13 @@ impl ClaudeActivity {
             if !tree.set_tokens(agent_id, tokens) {
                 return;
             }
-            tree.nodes().to_vec()
+            tree.snapshot()
         };
         (self.emit)(session_id, &snapshot);
     }
 
-    pub fn snapshot(&self, session_id: &str) -> Vec<Node> {
-        self.sessions.lock().get(session_id).map(|t| t.nodes().to_vec()).unwrap_or_default()
+    pub fn snapshot(&self, session_id: &str) -> Snapshot {
+        self.sessions.lock().get(session_id).map(Tree::snapshot).unwrap_or_default()
     }
 
     /// PTY 關閉：丟掉狀態並刪設定檔。只處理登記過的 id，所以不能拿路徑字元亂刪檔。
@@ -211,11 +212,11 @@ mod tests {
         d
     }
 
-    type Seen = Arc<StdMutex<Vec<(String, Vec<Node>)>>>;
+    type Seen = Arc<StdMutex<Vec<(String, Snapshot)>>>;
     fn activity(tag: &str) -> (Arc<ClaudeActivity>, Seen) {
         let seen: Seen = Arc::default();
         let sink = seen.clone();
-        let emit: Emitter = Arc::new(move |sid, nodes| sink.lock().unwrap().push((sid.to_owned(), nodes.to_vec())));
+        let emit: Emitter = Arc::new(move |sid, nodes| sink.lock().unwrap().push((sid.to_owned(), nodes.clone())));
         (ClaudeActivity::new(temp_dir(tag), emit), seen)
     }
 
@@ -228,6 +229,7 @@ mod tests {
             ("SubagentStart", "sub-start"),
             ("SubagentStop", "sub-stop"),
             ("SessionEnd", "session-end"),
+            ("UserPromptSubmit", "prompt"),
         ] {
             let h = &v["hooks"][event][0]["hooks"][0];
             assert_eq!(h["type"], "http", "{event}");
@@ -256,7 +258,7 @@ mod tests {
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].0, "s1");
-        assert_eq!(a.snapshot("s1").len(), 1);
+        assert_eq!(a.snapshot("s1").nodes.len(), 1);
     }
 
     #[test]
@@ -265,7 +267,7 @@ mod tests {
         a.prepare("s1");
         a.ingest("s1", Kind::SubStart, &json!({ "agent_id": "a1", "agent_type": "general-purpose" }), 1);
         a.ingest_tokens("s1", "a1", 777);
-        assert_eq!(a.snapshot("s1")[0].tokens, Some(777));
+        assert_eq!(a.snapshot("s1").nodes[0].tokens, Some(777));
         assert_eq!(seen.lock().unwrap().len(), 2);
         a.ingest_tokens("s1", "a1", 777);
         assert_eq!(seen.lock().unwrap().len(), 2, "沒變就不再通知");
@@ -276,7 +278,7 @@ mod tests {
         let (a, seen) = activity("unknown");
         a.ingest("ghost", Kind::SubStart, &json!({ "agent_id": "a1" }), 1);
         assert!(seen.lock().unwrap().is_empty());
-        assert!(a.snapshot("ghost").is_empty());
+        assert_eq!(a.snapshot("ghost"), Snapshot::default());
     }
 
     #[test]
@@ -286,7 +288,7 @@ mod tests {
         a.forget("s1");
         assert!(!std::path::Path::new(&env[0].1).exists());
         a.ingest("s1", Kind::SubStart, &json!({ "agent_id": "a1" }), 1);
-        assert!(a.snapshot("s1").is_empty(), "忘記之後的事件不再被接受");
+        assert!(a.snapshot("s1").nodes.is_empty(), "忘記之後的事件不再被接受");
     }
 
     #[test]
@@ -335,7 +337,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.text().await.unwrap(), "{}", "Claude 會把回應當 hook 輸出解析，空物件＝沒意見");
         assert_eq!(seen.lock().unwrap().len(), 1);
-        assert_eq!(a.snapshot("s1")[0].id, "a1");
+        assert_eq!(a.snapshot("s1").nodes[0].id, "a1");
     }
 
     /// 手動驗收（要有登入過的 `claude`，會花一點額度）：真的 claude → AITerm 的整合 shell 裡的
@@ -361,8 +363,8 @@ mod tests {
         let out = cmd.output().unwrap();
         println!("claude said: {}", String::from_utf8_lossy(&out.stdout));
         // claude 結束時會送 SessionEnd、圖被清空，所以看「清空前最後一份快照」。
-        let nodes = seen.lock().unwrap().iter().map(|(_, n)| n.clone()).filter(|n| !n.is_empty()).last().unwrap_or_default();
-        assert!(a.snapshot("real-session").is_empty(), "claude 結束後圖要清空");
+        let nodes = seen.lock().unwrap().iter().map(|(_, s)| s.nodes.clone()).filter(|n| !n.is_empty()).last().unwrap_or_default();
+        assert!(a.snapshot("real-session").nodes.is_empty(), "claude 結束後圖要清空");
         println!("{}", serde_json::to_string_pretty(&nodes).unwrap());
         assert!(nodes.len() >= 2, "應該看到兩個 subagent：{nodes:?}");
         assert!(nodes.iter().all(|n| n.description.is_some() && n.tokens.is_some()), "{nodes:?}");

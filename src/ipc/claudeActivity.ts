@@ -16,19 +16,31 @@ export interface ActivityNode {
   summary: string | null;
   tokens: number | null;
   tool_count: number | null;
+  /** 建立時的提問輪次（使用者每送出一次提問 +1）。 */
+  turn: number;
 }
+
+/** 對應 Rust `claude_activity::tree::Snapshot`。 */
+export interface ActivitySnapshot {
+  nodes: ActivityNode[];
+  /** 主 Claude 現在在用的工具。 */
+  main_tool: string | null;
+  turn: number;
+}
+
+export const EMPTY_SNAPSHOT: ActivitySnapshot = { nodes: [], main_tool: null, turn: 0 };
 
 export const claudeActivityEvent = (sessionId: string): string =>
   `claude-activity://${sessionId}`;
 
-export function getClaudeActivity(sessionId: string): Promise<ActivityNode[]> {
-  return invoke<ActivityNode[]>("claude_activity_snapshot", { sessionId });
+export function getClaudeActivity(sessionId: string): Promise<ActivitySnapshot> {
+  return invoke<ActivitySnapshot>("claude_activity_snapshot", { sessionId });
 }
 
 /** 事件酬載永遠是完整快照，所以收到就整個取代。 */
 export function listenClaudeActivity(
   sessionId: string,
-  onSnapshot: (nodes: ActivityNode[]) => void,
+  onSnapshot: (snapshot: ActivitySnapshot) => void,
 ): Promise<UnlistenFn> {
-  return listen<ActivityNode[]>(claudeActivityEvent(sessionId), (e) => onSnapshot(e.payload));
+  return listen<ActivitySnapshot>(claudeActivityEvent(sessionId), (e) => onSnapshot(e.payload));
 }

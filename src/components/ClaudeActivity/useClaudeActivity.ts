@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import {
+  EMPTY_SNAPSHOT,
   getClaudeActivity,
   listenClaudeActivity,
-  type ActivityNode,
+  type ActivitySnapshot,
 } from "../../ipc/claudeActivity";
 
 /**
@@ -12,11 +13,9 @@ import {
  * （事件永遠是完整快照，比一次性的 invoke 結果新）。`alive` 防卸載後 setState
  * （Tauri listen 是非同步的，跟 useAiChat 的 mountedRef 同一個坑）。
  */
-const NONE: ActivityNode[] = [];
-
-export function useClaudeActivity(sessionId: string): ActivityNode[] {
+export function useClaudeActivity(sessionId: string): ActivitySnapshot {
   // 連同 sessionId 一起存：換 session 時舊清單自然對不上而被忽略，不必在 effect 裡同步清空。
-  const [state, setState] = useState<{ sessionId: string; nodes: ActivityNode[] }>({ sessionId: "", nodes: NONE });
+  const [state, setState] = useState<{ sessionId: string; snapshot: ActivitySnapshot }>({ sessionId: "", snapshot: EMPTY_SNAPSHOT });
 
   useEffect(() => {
     if (!sessionId) return;
@@ -27,7 +26,7 @@ export function useClaudeActivity(sessionId: string): ActivityNode[] {
     listenClaudeActivity(sessionId, (next) => {
       if (!alive) return;
       gotEvent = true;
-      setState({ sessionId, nodes: next });
+      setState({ sessionId, snapshot: next });
     })
       .then((u) => {
         if (alive) unlisten = u;
@@ -37,7 +36,7 @@ export function useClaudeActivity(sessionId: string): ActivityNode[] {
 
     getClaudeActivity(sessionId)
       .then((snap) => {
-        if (alive && !gotEvent) setState({ sessionId, nodes: snap });
+        if (alive && !gotEvent) setState({ sessionId, snapshot: snap });
       })
       .catch(() => {});
 
@@ -47,5 +46,5 @@ export function useClaudeActivity(sessionId: string): ActivityNode[] {
     };
   }, [sessionId]);
 
-  return state.sessionId === sessionId ? state.nodes : NONE;
+  return state.sessionId === sessionId ? state.snapshot : EMPTY_SNAPSHOT;
 }

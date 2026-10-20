@@ -2023,10 +2023,10 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   const suggestionsShown = suggestionSidebar.open && !!sessionId;
   const sidebarContent =
-    claudeActivity.length > 0 || suggestionsShown ? (
+    claudeActivity.nodes.length > 0 || suggestionsShown ? (
       <>
-        {claudeActivity.length > 0 && (
-          <ClaudeActivityPanel nodes={claudeActivity} fill={!suggestionsShown} />
+        {claudeActivity.nodes.length > 0 && (
+          <ClaudeActivityPanel snapshot={claudeActivity} fill={!suggestionsShown} />
         )}
         {suggestionsShown && (
           <div style={{ flex: "1 1 0%", minHeight: 0, display: "flex", flexDirection: "column" }}>

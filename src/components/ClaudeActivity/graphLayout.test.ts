@@ -4,7 +4,7 @@ import { CARD_H, CARD_W, GAP_X, GAP_Y, PAD, ROOT_ID, ROOT_W, layoutGraph } from 
 
 const n = (id: string, parent: string | null, started = 0): ActivityNode => ({
   id, parent, agent_type: "general-purpose", description: null, status: "running",
-  started_ms: started, ended_ms: null, current_tool: null, summary: null, tokens: null, tool_count: null,
+  started_ms: started, ended_ms: null, current_tool: null, summary: null, tokens: null, tool_count: null, turn: 1,
 });
 const pos = (g: ReturnType<typeof layoutGraph>, id: string) => g.boxes.get(id)!;
 
@@ -35,6 +35,13 @@ describe("layoutGraph", () => {
     expect(row("b")).toBe(2);
     expect(row(ROOT_ID)).toBe(1.25);
     expect(g.height).toBe(PAD * 2 + 3 * CARD_H + 2 * GAP_Y);
+  });
+
+  it("同一層失敗的排在最前面，其餘依開始順序", () => {
+    const failed = { ...n("f", null, 9), status: "failed" as const };
+    const g = layoutGraph([n("a", null, 1), n("b", null, 2), failed]);
+    const row = (id: string) => (pos(g, id).y - PAD) / (CARD_H + GAP_Y);
+    expect([row("f"), row("a"), row("b")]).toEqual([0, 1, 2]);
   });
 
   it("父節點不存在或循環參照的節點接到根，不消失、不無限迴圈", () => {

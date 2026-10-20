@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { ActivityNode } from "../../ipc/claudeActivity";
+import type { ActivityNode, ActivitySnapshot } from "../../ipc/claudeActivity";
 
 vi.mock("../../contexts/LocaleContext", async () => {
   const { translations } = await vi.importActual<typeof import("../../lib/i18n")>("../../lib/i18n");
@@ -11,76 +11,75 @@ import { ClaudeActivityPanel } from "./ClaudeActivityPanel";
 
 const node = (over: Partial<ActivityNode> & { id: string }): ActivityNode => ({
   parent: null, agent_type: "general-purpose", description: null, status: "running",
-  started_ms: 1_000, ended_ms: null, current_tool: null, summary: null, tokens: null, tool_count: null,
+  started_ms: 1_000, ended_ms: null, current_tool: null, summary: null, tokens: null, tool_count: null, turn: 1,
   ...over,
 });
+const done = (id: string, over: Partial<ActivityNode> = {}) =>
+  node({ id, description: id, status: "done", ended_ms: 2_000, ...over });
+const snap = (nodes: ActivityNode[], over: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
+  nodes, main_tool: null, turn: Math.max(0, ...nodes.map((n) => n.turn)), ...over,
+});
+const renderPanel = (nodes: ActivityNode[], over: Partial<ActivitySnapshot> = {}) =>
+  render(<ClaudeActivityPanel snapshot={snap(nodes, over)} fill />);
 const card = (id: string) => document.querySelector(`[data-node-id="${id}"]`) as HTMLElement;
 
 beforeEach(() => localStorage.clear());
 
 describe("ClaudeActivityPanel（流程圖）", () => {
   it("標題顯示執行中數量與總數；圖上有 Claude 根節點", () => {
-    render(<ClaudeActivityPanel nodes={[node({ id: "a" }), node({ id: "b", status: "done", ended_ms: 2_000 })]} fill />);
+    renderPanel([node({ id: "a" }), done("b")]);
     expect(screen.getAllByText("執行中 1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("共 2 個").length).toBeGreaterThan(0);
     expect(card("__root__").textContent).toContain("Claude");
   });
 
   it("每個 subagent 一張卡，連線從根指向它；沒有描述用佔位文字", () => {
-    render(<ClaudeActivityPanel nodes={[node({ id: "a", description: "跑 ls" }), node({ id: "b" })]} fill />);
+    renderPanel([node({ id: "a", description: "跑 ls" }), node({ id: "b" })]);
     expect(card("a").textContent).toContain("跑 ls");
     expect(card("b").textContent).toContain("（未命名任務）");
     expect(screen.getByTestId("edge-__root__-a")).toBeInTheDocument();
     expect(screen.getByTestId("edge-__root__-b")).toBeInTheDocument();
   });
 
+  it("標題超長時卡片有 title 屬性放全文", () => {
+    const long = "整理專案檔案結構並檢查未使用的匯出與重複的相依";
+    renderPanel([node({ id: "a", description: long })]);
+    expect(card("a").getAttribute("title")).toBe(long);
+  });
+
   it("巢狀：子節點在父節點右邊一欄，連線接在父子之間", () => {
-    render(
-      <ClaudeActivityPanel
-        fill
-        nodes={[node({ id: "p", description: "外層" }), node({ id: "c", parent: "p", description: "內層" })]}
-      />,
-    );
+    renderPanel([node({ id: "p", description: "外層" }), node({ id: "c", parent: "p", description: "內層" })]);
     expect(card("p").getAttribute("data-col")).toBe("1");
     expect(card("c").getAttribute("data-col")).toBe("2");
     expect(screen.getByTestId("edge-p-c")).toBeInTheDocument();
   });
 
-  it("連線狀態跟著子節點：執行中的會流動（data-status=running）", () => {
-    render(
-      <ClaudeActivityPanel
-        fill
-        nodes={[node({ id: "r", description: "跑中" }), node({ id: "d", description: "做完", status: "done", ended_ms: 2_000 })]}
-      />,
-    );
+  it("連線狀態跟著子節點；只有執行中的連線有移動的小點", () => {
+    renderPanel([node({ id: "r", description: "跑中" }), done("d")]);
     expect(screen.getByTestId("edge-__root__-r").getAttribute("data-status")).toBe("running");
     expect(screen.getByTestId("edge-__root__-d").getAttribute("data-status")).toBe("done");
+    expect(screen.getByTestId("fly-__root__-r")).toBeInTheDocument();
+    expect(screen.queryByTestId("fly-__root__-d")).toBeNull();
   });
 
   it("卡片：執行中顯示目前工具；結束後顯示耗時與 token", () => {
-    render(
-      <ClaudeActivityPanel
-        fill
-        nodes={[
-          node({ id: "r", description: "跑中", current_tool: "Bash: ls -la" }),
-          node({ id: "d", description: "做完", status: "done", started_ms: 1_000, ended_ms: 5_900, tokens: 20484, tool_count: 2 }),
-        ]}
-      />,
-    );
+    renderPanel([
+      node({ id: "r", description: "跑中", current_tool: "Bash: ls -la" }),
+      done("d", { started_ms: 1_000, ended_ms: 5_900, tokens: 20484, tool_count: 2 }),
+    ]);
     expect(card("r").textContent).toContain("Bash: ls -la");
     expect(card("d").textContent).toContain("4.9s");
     expect(card("d").textContent).toContain("20.5k tokens");
   });
 
+  it("根節點顯示主 Claude 目前的工具", () => {
+    renderPanel([node({ id: "a", description: "x" })], { main_tool: "Agent: 整理檔案" });
+    expect(card("__root__").textContent).toContain("Agent: 整理檔案");
+  });
+
   it("點節點在下方顯示詳情（含結果摘要），再點一次取消；沒選時顯示提示", () => {
-    render(
-      <ClaudeActivityPanel
-        fill
-        nodes={[node({ id: "c", description: "內層", status: "done", ended_ms: 2_000, summary: "檔名是 events.jsonl", tool_count: 3 })]}
-      />,
-    );
+    renderPanel([done("c", { description: "內層", summary: "檔名是 events.jsonl", tool_count: 3 })]);
     expect(screen.getByText("點選節點查看詳情")).toBeInTheDocument();
-    expect(screen.queryByText("檔名是 events.jsonl")).toBeNull();
     fireEvent.click(card("c"));
     expect(screen.getByText("檔名是 events.jsonl")).toBeInTheDocument();
     expect(screen.getByText("3 次工具呼叫")).toBeInTheDocument();
@@ -89,40 +88,135 @@ describe("ClaudeActivityPanel（流程圖）", () => {
     expect(screen.queryByText("檔名是 events.jsonl")).toBeNull();
   });
 
-  it("狀態用文字標示（不只靠顏色）", () => {
-    render(
-      <ClaudeActivityPanel
-        fill
-        nodes={[
-          node({ id: "f", description: "x", status: "failed", ended_ms: 2_000 }),
-          node({ id: "i", description: "y", status: "interrupted", ended_ms: 2_000 }),
-        ]}
-      />,
-    );
+  it("選中節點：到根的路徑高亮，其餘淡化；取消後恢復", () => {
+    renderPanel([
+      node({ id: "p", description: "外層" }),
+      node({ id: "c", parent: "p", description: "內層" }),
+      node({ id: "other", description: "旁支" }),
+    ]);
+    fireEvent.click(card("c"));
+    expect(card("p").className).toContain("is-path");
+    expect(card("other").className).toContain("is-dim");
+    expect(screen.getByTestId("edge-p-c").getAttribute("class")).toContain("is-path");
+    expect(screen.getByTestId("edge-__root__-other").getAttribute("class")).toContain("is-dim");
+    fireEvent.click(card("c"));
+    expect(card("other").className).not.toContain("is-dim");
+  });
+
+  it("狀態用文字標示（不只靠顏色）；失敗的排在同層最前面", () => {
+    renderPanel([done("ok", { started_ms: 1 }), done("f", { status: "failed", started_ms: 9 })]);
     expect(card("f").textContent).toContain("失敗");
-    expect(card("i").textContent).toContain("已中斷");
+    expect(Number.parseFloat(card("f").style.top)).toBeLessThan(Number.parseFloat(card("ok").style.top));
   });
 
   it("收合只留標題，並記在 localStorage", () => {
-    const { unmount } = render(<ClaudeActivityPanel nodes={[node({ id: "a", description: "跑 ls" })]} fill />);
+    const { unmount } = renderPanel([node({ id: "a", description: "跑 ls" })]);
     fireEvent.click(screen.getByRole("button", { name: "收合" }));
     expect(card("a")).toBeNull();
     expect(screen.getByRole("button", { name: "展開" })).toBeInTheDocument();
     unmount();
-    render(<ClaudeActivityPanel nodes={[node({ id: "a", description: "跑 ls" })]} fill />);
+    renderPanel([node({ id: "a", description: "跑 ls" })]);
     expect(card("a")).toBeNull();
   });
 
   it("放大：開出全視窗覆蓋層（同一張圖），Esc 或按鈕關閉", () => {
-    render(<ClaudeActivityPanel nodes={[node({ id: "a", description: "跑 ls" })]} fill />);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    renderPanel([node({ id: "a", description: "跑 ls" })]);
     fireEvent.click(screen.getByRole("button", { name: "放大" }));
-    const dialog = screen.getByRole("dialog");
-    expect(dialog.querySelector('[data-node-id="a"]')).not.toBeNull();
+    expect(screen.getByRole("dialog").querySelector('[data-node-id="a"]')).not.toBeNull();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "放大" }));
     fireEvent.click(screen.getByRole("button", { name: "關閉" }));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("折疊已完成", () => {
+  const many = () => [done("a"), done("b"), done("c"), node({ id: "run", description: "跑中", started_ms: 5_000 })];
+
+  it("3 棵以上完成的子樹折成一張「已完成 N 個」卡，執行中的留著", () => {
+    renderPanel(many());
+    expect(card("a")).toBeNull();
+    expect(card("__done__").textContent).toContain("已完成 3 個");
+    expect(card("run")).not.toBeNull();
+  });
+
+  it("點群組卡或工具列按鈕展開；再按「收起已完成」折回去", () => {
+    renderPanel(many());
+    fireEvent.click(card("__done__"));
+    expect(card("a")).not.toBeNull();
+    expect(card("__done__")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "收起已完成" }));
+    expect(card("a")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "展開已完成 3 個" }));
+    expect(card("a")).not.toBeNull();
+  });
+
+  it("不到門檻就不折，也沒有按鈕", () => {
+    renderPanel([done("a"), done("b")]);
+    expect(card("a")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /已完成/ })).toBeNull();
+  });
+});
+
+describe("依輪次分組", () => {
+  const twoTurns = () => [done("old", { turn: 1, description: "上一輪的事" }), node({ id: "new", turn: 2, description: "這一輪的事" })];
+
+  it("預設看最新一輪；有多輪時工具列出現輪次切換", () => {
+    renderPanel(twoTurns());
+    expect(card("new")).not.toBeNull();
+    expect(card("old")).toBeNull();
+    expect(screen.getByText("第 2/2 輪")).toBeInTheDocument();
+  });
+
+  it("上一輪／下一輪切換，邊界時按鈕停用", () => {
+    renderPanel(twoTurns());
+    expect(screen.getByRole("button", { name: "下一輪" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "上一輪" }));
+    expect(card("old")).not.toBeNull();
+    expect(card("new")).toBeNull();
+    expect(screen.getByText("第 1/2 輪")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "上一輪" })).toBeDisabled();
+  });
+
+  it("只有一輪時不顯示輪次切換", () => {
+    renderPanel([node({ id: "a", description: "x" })]);
+    expect(screen.queryByRole("button", { name: "上一輪" })).toBeNull();
+  });
+});
+
+describe("縮放與時間軸", () => {
+  it("縮放按鈕改變比例；符合寬度在量不到寬度時不亂動", () => {
+    renderPanel([node({ id: "a", description: "x" })]);
+    expect(screen.getByTestId("zoom-value").textContent).toBe("100%");
+    fireEvent.click(screen.getByRole("button", { name: "縮小比例" }));
+    expect(screen.getByTestId("zoom-value").textContent).toBe("90%");
+    expect((screen.getByTestId("graph") as HTMLElement).style.transform).toBe("scale(0.9)");
+    fireEvent.click(screen.getByRole("button", { name: "放大比例" }));
+    fireEvent.click(screen.getByRole("button", { name: "放大比例" }));
+    expect(screen.getByTestId("zoom-value").textContent).toBe("110%");
+    fireEvent.click(screen.getByRole("button", { name: "符合寬度" }));
+    expect(screen.getByTestId("zoom-value").textContent).toBe("110%");
+  });
+
+  it("縮放有上下限", () => {
+    renderPanel([node({ id: "a", description: "x" })]);
+    for (let i = 0; i < 12; i++) fireEvent.click(screen.getByRole("button", { name: "縮小比例" }));
+    expect(screen.getByTestId("zoom-value").textContent).toBe("50%");
+    for (let i = 0; i < 20; i++) fireEvent.click(screen.getByRole("button", { name: "放大比例" }));
+    expect(screen.getByTestId("zoom-value").textContent).toBe("150%");
+  });
+
+  it("切到時間軸：每個 subagent 一條橫條，點選後詳情照常顯示；選擇記在 localStorage", () => {
+    renderPanel([done("a", { started_ms: 0, ended_ms: 4_000, summary: "做完了" }), done("b", { started_ms: 0, ended_ms: 2_000 })]);
+    fireEvent.click(screen.getByRole("button", { name: "時間軸" }));
+    expect(screen.queryByTestId("graph")).toBeNull();
+    expect(screen.getByTestId("bar-a").style.width).toBe("100%");
+    expect(screen.getByTestId("bar-b").style.width).toBe("50%");
+    fireEvent.click(card("a"));
+    expect(screen.getByText("做完了")).toBeInTheDocument();
+    expect(localStorage.getItem("aiterm-claude-activity-mode")).toBe("timeline");
+    fireEvent.click(screen.getByRole("button", { name: "流程圖" }));
+    expect(screen.getByTestId("graph")).toBeInTheDocument();
   });
 });

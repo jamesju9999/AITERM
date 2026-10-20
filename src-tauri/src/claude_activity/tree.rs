@@ -38,6 +38,18 @@ pub struct Node {
     pub summary: Option<String>,
     pub tokens: Option<u64>,
     pub tool_count: Option<u64>,
+    /// 建立這個節點時的提問輪次（見 `Tree::turn`），前端用它分組。
+    pub turn: u32,
+}
+
+/// 送給前端的完整狀態；事件與快照指令共用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct Snapshot {
+    pub nodes: Vec<Node>,
+    /// 主 Claude 現在在用的工具（沒有 subagent 時側欄不顯示，所以只是附帶資訊）。
+    pub main_tool: Option<String>,
+    /// 目前的提問輪次；0＝還沒有過提問。
+    pub turn: u32,
 }
 
 /// 事件種類；字串就是 settings 檔裡 hook 網址的最後一段。
@@ -48,6 +60,8 @@ pub enum Kind {
     SubStart,
     SubStop,
     SessionEnd,
+    /// `UserPromptSubmit`：使用者送出新的提問。
+    Prompt,
 }
 
 impl Kind {
@@ -58,6 +72,7 @@ impl Kind {
             "sub-start" => Some(Kind::SubStart),
             "sub-stop" => Some(Kind::SubStop),
             "session-end" => Some(Kind::SessionEnd),
+            "prompt" => Some(Kind::Prompt),
             _ => None,
         }
     }
@@ -75,6 +90,8 @@ struct Pending {
 pub struct Tree {
     nodes: Vec<Node>,
     pending: VecDeque<Pending>,
+    main_tool: Option<String>,
+    turn: u32,
 }
 
 fn field<'a>(v: &'a Value, key: &str) -> &'a Value {
@@ -120,25 +137,43 @@ impl Tree {
         &self.nodes
     }
 
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot { nodes: self.nodes.clone(), main_tool: self.main_tool.clone(), turn: self.turn }
+    }
+
     /// 套用一個 hook 事件；回傳節點有沒有變化（沒變就不必通知前端）。
     pub fn apply(&mut self, kind: Kind, body: &Value, now_ms: u64) -> bool {
-        let before = self.nodes.clone();
+        let before = self.snapshot();
         let tool = str_of(body, "tool_name");
         let caller = str_of(body, "agent_id");
         let is_agent_tool = matches!(tool.as_deref(), Some("Agent") | Some("Task"));
         match kind {
-            Kind::Pre if is_agent_tool => self.queue_spawn(body, caller),
-            Kind::Pre => {
-                if let (Some(tool), Some(agent)) = (tool.as_deref(), caller.as_deref()) {
-                    self.on_tool_pre(tool, agent, body, now_ms);
+            Kind::Pre if is_agent_tool => {
+                if caller.is_none() {
+                    let desc = str_of(field(body, "tool_input"), "description").unwrap_or_default();
+                    self.main_tool = Some(truncate(&format!("Agent: {desc}"), HINT_MAX_CHARS));
                 }
+                self.queue_spawn(body, caller)
             }
-            Kind::Post if is_agent_tool => self.on_agent_post(body, caller, now_ms),
-            Kind::Post => {
-                if let Some(i) = caller.as_deref().and_then(|a| self.index_of(a)) {
-                    self.nodes[i].current_tool = None;
+            Kind::Pre => match (tool.as_deref(), caller.as_deref()) {
+                (Some(tool), Some(agent)) => self.on_tool_pre(tool, agent, body, now_ms),
+                (Some(tool), None) => self.main_tool = Some(tool_hint(tool, field(body, "tool_input"))),
+                _ => {}
+            },
+            Kind::Post if is_agent_tool => {
+                if caller.is_none() {
+                    self.main_tool = None;
                 }
+                self.on_agent_post(body, caller, now_ms)
             }
+            Kind::Post => match caller.as_deref() {
+                Some(a) => {
+                    if let Some(i) = self.index_of(a) {
+                        self.nodes[i].current_tool = None;
+                    }
+                }
+                None => self.main_tool = None,
+            },
             Kind::SubStart => {
                 if let Some(id) = str_of(body, "agent_id") {
                     self.on_start(&id, agent_type_of(body), now_ms);
@@ -160,10 +195,16 @@ impl Tree {
             Kind::SessionEnd => {
                 self.nodes.clear();
                 self.pending.clear();
+                self.main_tool = None;
+                self.turn = 0;
+            }
+            Kind::Prompt => {
+                self.turn += 1;
+                self.main_tool = None;
             }
         }
         self.trim();
-        self.nodes != before
+        self.snapshot() != before
     }
 
     /// 結束後從 subagent 的 transcript 算出的 token 數（互動模式的 Agent 是非同步的，
@@ -198,6 +239,7 @@ impl Tree {
             summary: None,
             tokens: None,
             tool_count: None,
+            turn: self.turn,
         });
         self.nodes.len() - 1
     }
@@ -354,7 +396,8 @@ mod tests {
     #[test]
     fn happy_path_links_description_tokens_and_summary() {
         let mut t = Tree::default();
-        assert!(!t.apply(Kind::Pre, &pre_agent("tu1", None, "Run ls", "general-purpose"), 1), "只排隊，還沒有節點");
+        t.apply(Kind::Pre, &pre_agent("tu1", None, "Run ls", "general-purpose"), 1);
+        assert!(t.nodes().is_empty(), "只排隊，還沒有節點");
         assert!(t.apply(Kind::SubStart, &start("a1", "general-purpose"), 2));
         assert_eq!(node(&t, "a1").description.as_deref(), Some("Run ls"));
         assert_eq!(node(&t, "a1").status, Status::Running);
@@ -419,11 +462,11 @@ mod tests {
     }
 
     #[test]
-    fn main_agent_tool_calls_are_ignored() {
+    fn main_agent_tool_calls_never_create_nodes() {
         let mut t = Tree::default();
         let ev = json!({ "tool_name": "Bash", "tool_input": { "command": "ls" } });
-        assert!(!t.apply(Kind::Pre, &ev, 1));
-        assert!(!t.apply(Kind::Post, &ev, 2));
+        t.apply(Kind::Pre, &ev, 1);
+        t.apply(Kind::Post, &ev, 2);
         assert!(t.nodes().is_empty());
     }
 
@@ -551,12 +594,58 @@ mod tests {
     }
 
     #[test]
+    fn each_prompt_starts_a_new_turn_and_nodes_remember_theirs() {
+        let mut t = Tree::default();
+        assert_eq!(t.snapshot().turn, 0);
+        assert!(t.apply(Kind::Prompt, &json!({}), 1));
+        t.apply(Kind::SubStart, &start("a", "general-purpose"), 2);
+        t.apply(Kind::Prompt, &json!({}), 3);
+        t.apply(Kind::SubStart, &start("b", "general-purpose"), 4);
+        assert_eq!((node(&t, "a").turn, node(&t, "b").turn), (1, 2));
+        assert_eq!(t.snapshot().turn, 2);
+    }
+
+    #[test]
+    fn main_agent_tool_use_is_tracked_separately_from_subagents() {
+        let mut t = Tree::default();
+        let pre = json!({ "tool_name": "Bash", "tool_input": { "command": "git status" } });
+        assert!(t.apply(Kind::Pre, &pre, 1));
+        assert_eq!(t.snapshot().main_tool.as_deref(), Some("Bash: git status"));
+        assert!(t.nodes().is_empty(), "主 agent 的工具呼叫不產生節點");
+        assert!(t.apply(Kind::Post, &json!({ "tool_name": "Bash" }), 2));
+        assert_eq!(t.snapshot().main_tool, None);
+        assert!(!t.apply(Kind::Post, &json!({ "tool_name": "Bash" }), 3), "沒變化就不通知");
+    }
+
+    #[test]
+    fn main_agent_shows_the_agent_it_is_waiting_on() {
+        let mut t = Tree::default();
+        t.apply(Kind::Pre, &pre_agent("tu1", None, "整理檔案", "general-purpose"), 1);
+        assert_eq!(t.snapshot().main_tool.as_deref(), Some("Agent: 整理檔案"));
+        t.apply(Kind::Post, &post_agent("tu1", None, "整理檔案", "a1", "async_launched"), 2);
+        assert_eq!(t.snapshot().main_tool, None);
+        // subagent 自己再開 Agent 不算主 agent 在等。
+        t.apply(Kind::Pre, &pre_agent("tu2", Some("a1"), "內層", "general-purpose"), 3);
+        assert_eq!(t.snapshot().main_tool, None);
+    }
+
+    #[test]
+    fn session_end_also_resets_the_turn_and_main_tool() {
+        let mut t = Tree::default();
+        t.apply(Kind::Prompt, &json!({}), 1);
+        t.apply(Kind::Pre, &json!({ "tool_name": "Bash", "tool_input": { "command": "ls" } }), 2);
+        t.apply(Kind::SessionEnd, &json!({}), 3);
+        assert_eq!(t.snapshot(), Snapshot::default());
+    }
+
+    #[test]
     fn kind_parse_matches_the_urls_in_the_settings_file() {
         assert_eq!(Kind::parse("pre"), Some(Kind::Pre));
         assert_eq!(Kind::parse("post"), Some(Kind::Post));
         assert_eq!(Kind::parse("sub-start"), Some(Kind::SubStart));
         assert_eq!(Kind::parse("sub-stop"), Some(Kind::SubStop));
         assert_eq!(Kind::parse("session-end"), Some(Kind::SessionEnd));
+        assert_eq!(Kind::parse("prompt"), Some(Kind::Prompt));
         assert_eq!(Kind::parse("nope"), None);
     }
 }
