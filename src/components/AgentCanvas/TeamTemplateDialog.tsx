@@ -2,16 +2,16 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { checkRepo, createProjectRepo, projectRepo, setProjectRepo, type AgentRow, type ProjectRepo, type RepoCheck } from "../../ipc/agents";
+import { checkRepo, projectRepo, setProjectRepo, type AgentRow, type ProjectRepo, type RepoCheck } from "../../ipc/agents";
 import { RepoStatus } from "./RepoStatus";
 import { confirmInitRepo } from "./repoInit";
 import { builtinTemplates, deleteTemplate, loadTemplates, saveTemplate, snapshot, type TeamTemplate } from "./teamTemplates";
 
 /**
- * 團隊範本：內建五組常用團隊，加上自己存的範本，直接套用到這個專案的程式庫——
- * 程式庫依序取桌布上 Agent 的、專案記住的、看板資料夾所在的；都沒有才請使用者選一次
- * （選過就記住）。還不是 git／沒有 commit 的話這裡就能一鍵初始化：套用範本通常是在
- * 空桌布上，沒有別的地方可以初始化。
+ * 團隊範本：內建五組常用團隊，加上自己存的範本，套用到這個專案的程式庫。程式庫一律是
+ * 使用者自己指定的：桌布上 Agent 用的、或這個專案記住的（在這裡選過一次就記住）；都沒有
+ * 就請使用者選，系統不自己猜、不自己建立。還不是 git／沒有 commit 的話這裡就能一鍵
+ * 初始化：套用範本通常是在空桌布上，沒有別的地方可以初始化。
  */
 export function TeamTemplateDialog({
   projectId,
@@ -61,9 +61,7 @@ export function TeamTemplateDialog({
       alive = false;
     };
   }, [repo, checkRev]);
-  // 預設的 workspace 還沒建立（資料夾不存在）：套用時才建立並初始化，所以也算可以套用。
-  const willCreate = !picked && found?.source === "default" && check?.status === "missing";
-  const repoOk = !!repo && (check?.status === "ok" || willCreate);
+  const repoOk = !!repo && check?.status === "ok";
   // 沒有程式庫或使用者要換：顯示選擇；否則只顯示「套用到：<路徑>」。
   const showPicker = resolved !== undefined && (!resolved || changing);
 
@@ -91,7 +89,6 @@ export function TeamTemplateDialog({
     setBusy(true);
     setError(null);
     try {
-      if (willCreate) await createProjectRepo(projectId, repo);
       await onApply(tpl, repo);
       // 自己選的程式庫記在專案裡，下次不用再選。
       if (picked && picked.trim() !== resolved) await setProjectRepo(projectId, repo);
@@ -145,11 +142,7 @@ export function TeamTemplateDialog({
               )}
             </div>
           )}
-          {willCreate ? (
-            <span className="task-field-hint">{t.ac_tpl_will_create}</span>
-          ) : (
-            repo && check && <RepoStatus repo={check} busy={initing} onFix={() => void fixRepo()} />
-          )}
+          {repo && check && <RepoStatus repo={check} busy={initing} onFix={() => void fixRepo()} />}
         </div>
 
         <div className="ac-tpl-section">{t.ac_tpl_builtin}</div>

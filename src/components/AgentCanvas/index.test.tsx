@@ -55,7 +55,6 @@ vi.mock("../../ipc/agents", () => ({
   listSkillUses: vi.fn(),
   projectRepo: vi.fn(),
   setProjectRepo: vi.fn().mockResolvedValue(undefined),
-  createProjectRepo: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../ipc/db", async () => ({
   ...(await vi.importActual<typeof import("../../ipc/db")>("../../ipc/db")),
@@ -112,7 +111,6 @@ import {
   listSkillUses,
   projectRepo,
   setProjectRepo,
-  createProjectRepo,
   initRepo,
   listAgents,
   mergeAgent,
@@ -768,15 +766,17 @@ describe("AgentCanvasView", () => {
   });
 
   /** 空桌布、專案還沒有程式庫：選一次並記住；不是程式庫的話在對話框裡初始化。 */
-  it("團隊範本：按「更換」選別的資料夾（不是 git 就初始化），套用後記住", async () => {
-    vi.mocked(projectRepo).mockResolvedValue({ path: "/boards/TEST-1/workspace", source: "default" });
+  it("團隊範本：專案還沒有程式庫時由使用者選（不是 git 就初始化），套用後記住", async () => {
+    vi.mocked(projectRepo).mockResolvedValue(null);
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
-    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "missing" }).mockResolvedValueOnce({ status: "not_repo" }).mockResolvedValue({ status: "ok", branch: "main" });
+    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "not_repo" }).mockResolvedValue({ status: "ok", branch: "main" });
     view();
     fireEvent.click(await screen.findByTestId("ac-templates-empty"));
     const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
-    fireEvent.click(await within(dlg).findByRole("button", { name: "更換" }));
+    // 專案還沒有程式庫：系統不自己帶入，請使用者選。
+    expect(await within(dlg).findByText(/按「選擇…」挑 Agent 要寫程式的資料夾/)).toBeTruthy();
+    expect(within(dlg).queryByText(/workspace/)).toBeNull();
     fireEvent.click(within(dlg).getByRole("button", { name: "選擇…" }));
     fireEvent.click(await within(dlg).findByRole("button", { name: "初始化為 git repo" }));
     await waitFor(() => expect(initRepo).toHaveBeenCalledWith("/repo", "p1"));
@@ -787,37 +787,15 @@ describe("AgentCanvasView", () => {
     expect(setProjectRepo).toHaveBeenCalledWith("p1", "/repo");
   });
 
-  it("團隊範本：專案還沒有程式庫時不用選，直接在看板專案資料夾裡建立 workspace 再套用", async () => {
-    vi.mocked(projectRepo).mockResolvedValue({ path: "/boards/TEST-1/workspace", source: "default" });
-    vi.mocked(listAgents).mockResolvedValue([]);
-    vi.mocked(listTasks).mockResolvedValue([]);
-    vi.mocked(checkRepo).mockResolvedValue({ status: "missing" });
-    view();
-    fireEvent.click(await screen.findByTestId("ac-templates-empty"));
-    const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
-    expect(await within(dlg).findByText("/boards/TEST-1/workspace")).toBeTruthy();
-    // 說明要等程式庫檢查回來（資料夾不存在）才出現，不能在看到路徑後馬上同步找。
-    expect(await within(dlg).findByText(/套用時會在看板專案資料夾裡建立 workspace/)).toBeTruthy();
-    expect(within(dlg).queryByRole("button", { name: "選擇…" })).toBeNull();
-    const apply = within(within(dlg).getByTestId("tpl-builtin-quick")).getByRole("button", { name: "套用" });
-    await waitFor(() => expect(apply).not.toBeDisabled());
-    fireEvent.click(apply);
-    await waitFor(() => expect(createAgent).toHaveBeenCalledWith("p1", expect.objectContaining({ project_dir: "/boards/TEST-1/workspace" })));
-    expect(createProjectRepo).toHaveBeenCalledWith("p1", "/boards/TEST-1/workspace");
-    expect(vi.mocked(createProjectRepo).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(createAgent).mock.invocationCallOrder[0]);
-    expect(setProjectRepo).not.toHaveBeenCalled();
-  });
-
   it("團隊範本：選到看板專案資料夾要說清楚，而且不給初始化", async () => {
-    vi.mocked(projectRepo).mockResolvedValue({ path: "/boards/TEST-1/workspace", source: "default" });
+    vi.mocked(projectRepo).mockResolvedValue(null);
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
-    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "missing" }).mockResolvedValueOnce({ status: "board_folder" });
+    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "board_folder" });
     view();
     fireEvent.click(await screen.findByTestId("ac-templates-empty"));
     const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
-    fireEvent.click(await within(dlg).findByRole("button", { name: "更換" }));
-    fireEvent.click(within(dlg).getByRole("button", { name: "選擇…" }));
+    fireEvent.click(await within(dlg).findByRole("button", { name: "選擇…" }));
     expect((await within(dlg).findByTestId("repo-status")).textContent).toMatch(/看板專案資料夾，不是程式碼/);
     expect(within(dlg).queryByRole("button", { name: /初始化|第一個 commit/ })).toBeNull();
     expect(within(within(dlg).getByTestId("tpl-builtin-quick")).getByRole("button", { name: "套用" })).toBeDisabled();
