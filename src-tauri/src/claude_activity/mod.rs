@@ -345,7 +345,7 @@ mod tests {
     #[ignore = "needs a logged-in claude CLI and spends a little quota"]
     #[tokio::test(flavor = "multi_thread")]
     async fn real_claude_pipeline() {
-        let (a, _) = activity("real");
+        let (a, seen) = activity("real");
         let env = a.prepare("real-session");
         assert_eq!(env.len(), 1, "接收器沒起來");
         let spec = aiterm_core::pty::shell::default_shell().expect("a default shell");
@@ -360,7 +360,9 @@ mod tests {
         }
         let out = cmd.output().unwrap();
         println!("claude said: {}", String::from_utf8_lossy(&out.stdout));
-        let nodes = a.snapshot("real-session");
+        // claude 結束時會送 SessionEnd、圖被清空，所以看「清空前最後一份快照」。
+        let nodes = seen.lock().unwrap().iter().map(|(_, n)| n.clone()).filter(|n| !n.is_empty()).last().unwrap_or_default();
+        assert!(a.snapshot("real-session").is_empty(), "claude 結束後圖要清空");
         println!("{}", serde_json::to_string_pretty(&nodes).unwrap());
         assert!(nodes.len() >= 2, "應該看到兩個 subagent：{nodes:?}");
         assert!(nodes.iter().all(|n| n.description.is_some() && n.tokens.is_some()), "{nodes:?}");

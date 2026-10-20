@@ -51,7 +51,7 @@ claude（已知限制，說明文字註明）；Codex 等其他 CLI。
 - **事件不可信**：端點只收 localhost，驗證 `AITERM_SESSION_ID` 對應真實 PTY session，
   未知 session 的事件丟棄。
 - **亂序／遺失**：`Stop` 先於 `Start` 時補建節點再標完成；重複事件冪等。Claude 結束
-  或 PTY 關閉時，未結束節點一律標「已中斷」。
+  （`SessionEnd`：/exit、Ctrl+C、/clear）時整張圖清空、側欄消失；PTY 關閉時丟棄該 session 狀態。
 - **範圍**：只對 AITerm 開的 PTY、以 `claude` 名稱啟動者生效。
 
 ## 測試

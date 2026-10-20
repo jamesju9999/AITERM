@@ -155,10 +155,10 @@ impl Tree {
                     Self::finish(&mut self.nodes[i], Status::Done, now_ms);
                 }
             }
+            // 離開 claude（/exit、Ctrl+C、/clear）：圖屬於那一次對話，一併清空，
+            // 側欄跟著消失；沒有轉圈到一半被留下來的節點。
             Kind::SessionEnd => {
-                for n in &mut self.nodes {
-                    Self::finish(n, Status::Interrupted, now_ms);
-                }
+                self.nodes.clear();
                 self.pending.clear();
             }
         }
@@ -471,19 +471,18 @@ mod tests {
     }
 
     #[test]
-    fn session_end_interrupts_only_running_nodes() {
+    fn session_end_clears_the_whole_graph() {
         let mut t = Tree::default();
         t.apply(Kind::SubStart, &start("done", "general-purpose"), 1);
         t.apply(Kind::SubStop, &stop("done"), 2);
         t.apply(Kind::SubStart, &start("run", "general-purpose"), 3);
-        t.apply(Kind::Pre, &tool_pre("run", "Bash", json!({ "command": "sleep 99" })), 4);
         t.apply(Kind::Pre, &pre_agent("tu9", None, "never started", "general-purpose"), 5);
         assert!(t.apply(Kind::SessionEnd, &json!({}), 10));
-        assert_eq!(node(&t, "done").status, Status::Done);
-        assert_eq!(node(&t, "run").status, Status::Interrupted);
-        assert_eq!(node(&t, "run").ended_ms, Some(10));
-        assert_eq!(node(&t, "run").current_tool, None);
-        assert!(!t.apply(Kind::SessionEnd, &json!({}), 11), "第二次沒有變化");
+        assert!(t.nodes().is_empty());
+        assert!(!t.apply(Kind::SessionEnd, &json!({}), 11), "已經是空的，沒有變化");
+        // 排隊中的 Agent 呼叫也一併清掉：下一次對話的 SubagentStart 不會認領到舊描述。
+        t.apply(Kind::SubStart, &start("next", "general-purpose"), 12);
+        assert_eq!(node(&t, "next").description, None);
     }
 
     #[test]
