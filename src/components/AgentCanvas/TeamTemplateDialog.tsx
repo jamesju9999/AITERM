@@ -17,6 +17,7 @@ export function TeamTemplateDialog({
   projectId,
   agents,
   onApply,
+  onApplyAsFormation,
   onRepoChange,
   onClose,
 }: {
@@ -25,6 +26,8 @@ export function TeamTemplateDialog({
   /** 使用者換了專案資料夾（已記住）：讓協作頁的「新增模組」也跟著帶新的。 */
   onRepoChange?: (path: string) => void;
   onApply: (tpl: TeamTemplate, repoDir: string) => Promise<void>;
+  /** 用範本建立一組新編制並切換過去（原本的團隊留在原來的編制）。 */
+  onApplyAsFormation?: (tpl: TeamTemplate, repoDir: string) => Promise<void>;
   onClose: () => void;
 }) {
   const { t } = useLocale();
@@ -94,11 +97,12 @@ export function TeamTemplateDialog({
     }
   };
 
-  const apply = async (tpl: TeamTemplate) => {
+  const apply = async (tpl: TeamTemplate, asFormation = false) => {
     setBusy(true);
     setError(null);
     try {
-      await onApply(tpl, repo);
+      if (asFormation && onApplyAsFormation) await onApplyAsFormation(tpl, repo);
+      else await onApply(tpl, repo);
       // 手動輸入的路徑在套用時記住（用「選擇…」挑的已經記住了）。
       if (picked && picked.trim() !== resolved) {
         await setProjectRepo(projectId, repo);
@@ -113,9 +117,21 @@ export function TeamTemplateDialog({
   };
 
   const applyButton = (tpl: TeamTemplate) => (
-    <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={!repoOk || busy} onClick={() => void apply(tpl)}>
-      {t.ac_tpl_apply}
-    </button>
+    <>
+      {onApplyAsFormation && (
+        <button
+          className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+          disabled={!repoOk || busy}
+          title={t.ac_tpl_apply_new_tip}
+          onClick={() => void apply(tpl, true)}
+        >
+          {t.ac_tpl_apply_new}
+        </button>
+      )}
+      <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={!repoOk || busy} onClick={() => void apply(tpl)}>
+        {t.ac_tpl_apply}
+      </button>
+    </>
   );
 
   return (

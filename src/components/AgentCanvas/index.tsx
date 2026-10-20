@@ -26,6 +26,7 @@ import {
   deleteAllAgents,
   listSkillUses,
   setCustomSkills,
+  setProjectRepo,
   type SkillUseRow,
   type AgentKind,
   type AgentRow,
@@ -34,6 +35,20 @@ import {
   type ToolsCheck,
 } from "../../ipc/agents";
 import { dbListConnections } from "../../ipc/db";
+import {
+  cancelFormationSwitch,
+  createFormation,
+  deleteFormation,
+  formationsState,
+  listRetiredAgents,
+  renameFormation,
+  requestFormationSwitch,
+  saveFormationAs,
+  switchFormation,
+  type FormationsState,
+  type RetiredAgent,
+} from "../../ipc/formations";
+import { FormationMenu } from "./FormationMenu";
 import { DbSkillDialog } from "./DbSkillDialog";
 import { ResourceLayer } from "./ResourceLayer";
 import { accessLinks, folderResources, resourcesOf } from "./resources";
@@ -74,7 +89,7 @@ import { idList } from "./prerequisites";
 import { QuestionInbox } from "./QuestionInbox";
 import { VerifyReportDialog } from "./VerifyReportDialog";
 import { TeamTemplateDialog } from "./TeamTemplateDialog";
-import { toCreate } from "./teamTemplates";
+import { toCreate, toFormationAgents } from "./teamTemplates";
 import { answerQuestion, listQuestions, onQuestionsUpdated, type QuestionView } from "../../ipc/questions";
 import { projectSummary, type ProjectSummary } from "./projectSummary";
 import { sumUsage } from "./tokenUsage";
@@ -215,6 +230,15 @@ export function AgentCanvasView({
   const [deletingModule, setDeletingModule] = useState<string | null>(null);
   /** 自訂技能的使用記錄；記著是哪個專案的。 */
   const [skillUsesOf, setSkillUsesOf] = useState<{ projectId: string; rows: SkillUseRow[] } | null>(null);
+  /** 團隊編制（見 FormationMenu）。 */
+  const [formsOf, setFormsOf] = useState<{ projectId: string; state: FormationsState } | null>(null);
+  const forms = formsOf?.projectId === projectId ? formsOf.state : null;
+  /** 已經從桌布移除的 Agent：已完成卡片的歷史還指向它們。 */
+  const [retiredOf, setRetiredOf] = useState<{ projectId: string; rows: RetiredAgent[] } | null>(null);
+  const formDefaultName = useRef(t.ac_form_default);
+  useEffect(() => {
+    formDefaultName.current = t.ac_form_default;
+  }, [t]);
   /** 正在設定自訂技能的 Agent。 */
   const [customSkillsFor, setCustomSkillsFor] = useState<AgentRow | null>(null);
   /** 正在設定資料庫技能的 Agent。 */
@@ -334,6 +358,12 @@ export function AgentCanvasView({
         .catch(() => {});
       listSkillUses(projectId)
         .then((rows) => alive && setSkillUsesOf({ projectId, rows }))
+        .catch(() => {});
+      formationsState(projectId, formDefaultName.current)
+        .then((state) => alive && setFormsOf({ projectId, state }))
+        .catch(() => {});
+      listRetiredAgents(projectId)
+        .then((rows) => alive && setRetiredOf({ projectId, rows }))
         .catch(() => {});
       Promise.all([listAgents(projectId), listTasks(projectId)])
         .then(([a, ts]) => {
@@ -520,7 +550,16 @@ export function AgentCanvasView({
     (agentId: string) => tasks.filter((x) => x.agent_id === agentId),
     [tasks],
   );
-  const agentName = useCallback((id: string | null) => agents.find((a) => a.id === id)?.name ?? "?", [agents]);
+  const retired = useMemo(() => (retiredOf?.projectId === projectId ? retiredOf.rows : []), [retiredOf, projectId]);
+  // 換過編制或刪掉的 Agent 不在桌布上了，歷史裡還是要看得出是誰。
+  const agentName = useCallback(
+    (id: string | null) => agents.find((a) => a.id === id)?.name ?? retired.find((a) => a.id === id)?.name ?? "?",
+    [agents, retired],
+  );
+  const agentKind = useCallback(
+    (id: string | null): AgentKind | undefined => agents.find((a) => a.id === id)?.kind ?? retired.find((a) => a.id === id)?.kind,
+    [agents, retired],
+  );
 
   const activity = useMemo(() => {
     const ev: { at: number; text: string; kind: "start" | "ok" | "bad" | "dispatch"; role?: AgentKind }[] = [];
@@ -528,7 +567,7 @@ export function AgentCanvasView({
     for (const c of tasks) {
       if (!c.agent_id) continue;
       const who = agentName(c.agent_id);
-      const role = agents.find((a) => a.id === c.agent_id)?.kind;
+      const role = agentKind(c.agent_id);
       const first = ev.length;
       const title = localizedCardTitle(c, t);
       // 派工過程（由系統決定，見 docs/superpowers/specs/2026-10-16-agent-task-dependencies-design.md §7）。
@@ -557,13 +596,13 @@ export function AgentCanvasView({
     }
     // 自訂技能：讀了哪個技能。
     for (const u of skillUsesOf?.projectId === projectId ? skillUsesOf.rows : []) {
-      const role = agents.find((a) => a.id === u.agent_id)?.kind;
+      const role = agentKind(u.agent_id);
       ev.push({ at: u.at, text: t.ac_log_skill_used(agentName(u.agent_id), u.skill), kind: "dispatch", role });
     }
     // 資料庫技能的查詢：活動記錄顯示完整 SQL。
     for (const q of dbQueries) {
       const who = agentName(q.agent_id);
-      const role = agents.find((a) => a.id === q.agent_id)?.kind;
+      const role = agentKind(q.agent_id);
       const sql = q.sql.replace(/\s+/g, " ").trim();
       if (q.decision === "pending" && q.finished_at === null) {
         ev.push({ at: q.started_at, text: t.ac_log_db_pending(who, q.connection_name, sql), kind: "dispatch", role });
@@ -578,8 +617,11 @@ export function AgentCanvasView({
         ev.push({ at: q.finished_at, text: t.ac_log_db_query(who, q.connection_name, sql, q.rows, secs), kind: "ok", role });
       }
     }
+    for (const l of forms?.log ?? []) {
+      ev.push({ at: l.at, text: t.ac_log_formation(l.from_name, l.to_name), kind: "dispatch" });
+    }
     return ev.sort((a, b) => b.at - a.at).slice(0, 40);
-  }, [tasks, agents, agentName, dbQueries, skillUsesOf, projectId, t]);
+  }, [tasks, agentName, agentKind, dbQueries, skillUsesOf, projectId, forms, t]);
 
   // ── 拖曳 ───────────────────────────────────────────────────────────────
 
@@ -730,6 +772,16 @@ export function AgentCanvasView({
     const ok = await confirm(t.ac_clear_team_confirm(agents.length), { kind: "warning" });
     if (!ok) return;
     void run(() => deleteAllAgents(projectId));
+  };
+
+  /** 切換編制；有人在工作時問要不要做完後再換。 */
+  const doSwitchFormation = async (id: string) => {
+    if (!projectId) return;
+    const o = await switchFormation(projectId, id);
+    if (o.status === "busy") {
+      const ok = await confirm(t.ac_form_busy_confirm(o.names.join("、")), { kind: "warning" });
+      if (ok) await requestFormationSwitch(projectId, id);
+    }
   };
 
   const describeMerge = (o: MergeOutcome): { text: string; conflict: boolean } => {
@@ -1063,6 +1115,21 @@ export function AgentCanvasView({
           </button>
         )}
         <span className="ac-spacer" />
+        {projectId && forms && (
+          <FormationMenu
+            state={forms}
+            onSwitch={(id) => void run(() => doSwitchFormation(id))}
+            onCreate={(name) => void run(async () => doSwitchFormation(await createFormation(projectId, name, [])))}
+            onSaveAs={(name) => void run(() => saveFormationAs(projectId, name))}
+            onRename={(id, name) => void run(() => renameFormation(projectId, id, name))}
+            onDelete={(id, name) =>
+              void run(async () => {
+                if (await confirm(t.ac_form_delete_confirm(name), { kind: "warning" })) await deleteFormation(projectId, id);
+              })
+            }
+            onCancelPending={() => void run(() => cancelFormationSwitch(projectId))}
+          />
+        )}
         {/* 團隊範本是整個專案團隊的操作，放在頂列的專案動作這邊，不跟拖曳角色的 Agent 池混在一起。 */}
         {projectId && (
           <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" data-testid="ac-templates" data-guide="templates" onClick={() => setTemplatesOpen(true)}>
@@ -1596,6 +1663,16 @@ export function AgentCanvasView({
             for (const args of toCreate(tpl, agents, repoDir, 40, y)) {
               await createAgent(projectId, args);
             }
+            void refresh();
+          }}
+          onApplyAsFormation={async (tpl, repoDir) => {
+            // 新編制從空桌布開始，程式庫用專案記住的（切換時桌布上已經沒有 Agent 可以參考）。
+            await setProjectRepo(projectId, repoDir);
+            const taken = new Set(forms?.formations.map((f) => f.name));
+            let name = tpl.name;
+            for (let n = 2; taken.has(name); n++) name = `${tpl.name} ${n}`;
+            const id = await createFormation(projectId, name, toFormationAgents(tpl, 40, 40));
+            await doSwitchFormation(id);
             void refresh();
           }}
           onRepoChange={(path) => projectId && setProjRepoOf({ projectId, path })}

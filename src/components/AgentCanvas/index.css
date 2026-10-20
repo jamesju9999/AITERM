@@ -774,3 +774,12 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-tpl-path { flex: 1; min-width: 0; padding: 3px 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-tertiary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ac-tpl-section { margin: 14px 0 6px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 .ac-tpl-item .ac-tpl-desc { display: block; color: var(--text-secondary); margin: 2px 0; white-space: normal; }
+
+/* 團隊編制選單 */
+.ac-form-menu { left: 0; right: auto; min-width: 260px; }
+.ac-form-check { width: 14px; flex: none; color: var(--accent, #60a5fa); }
+.ac-form-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-form-del { flex: none; width: 28px; justify-content: center; }
+.ac-form-input { width: 100%; box-sizing: border-box; margin: 2px 0; }
+.ac-form-pending { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #fbbf24; }
+.ac-tpl-item > button { flex: none; white-space: nowrap; }

@@ -57,6 +57,17 @@ vi.mock("../../ipc/agents", () => ({
   setProjectRepo: vi.fn().mockResolvedValue(undefined),
   deleteAllAgents: vi.fn().mockResolvedValue(2),
 }));
+vi.mock("../../ipc/formations", () => ({
+  formationsState: vi.fn(),
+  createFormation: vi.fn().mockResolvedValue("f-new"),
+  saveFormationAs: vi.fn().mockResolvedValue("f-new"),
+  renameFormation: vi.fn().mockResolvedValue(undefined),
+  deleteFormation: vi.fn().mockResolvedValue(undefined),
+  switchFormation: vi.fn().mockResolvedValue({ status: "switched" }),
+  requestFormationSwitch: vi.fn().mockResolvedValue(undefined),
+  cancelFormationSwitch: vi.fn().mockResolvedValue(undefined),
+  listRetiredAgents: vi.fn(),
+}));
 vi.mock("../../ipc/db", async () => ({
   ...(await vi.importActual<typeof import("../../ipc/db")>("../../ipc/db")),
   dbListConnections: vi.fn().mockResolvedValue([
@@ -129,7 +140,20 @@ import { writeTextFile } from "../../ipc/fs";
 import { listProjects } from "../../ipc/projects";
 import { invokeAiComplete } from "../../ipc/ai";
 import { listProviders } from "../../ipc/provider";
+import { createFormation, formationsState, listRetiredAgents, requestFormationSwitch, switchFormation, type FormationsState } from "../../ipc/formations";
 import { AgentCanvasView } from "./index";
+
+const formations = (over: Partial<FormationsState> = {}): FormationsState => ({
+  formations: [
+    { id: "f1", name: "盤點", agent_count: 1 },
+    { id: "f2", name: "轉換", agent_count: 3 },
+  ],
+  active: "f1",
+  pending: null,
+  busy: [],
+  log: [],
+  ...over,
+});
 
 const agent = (over: Partial<AgentRow> = {}): AgentRow => ({
   id: "a1", kind: "coder", name: "Coder Agent1", role: "Senior Coder", prompt_prefix: "p",
@@ -184,6 +208,9 @@ beforeEach(() => {
   ]);
   vi.mocked(listSkillUses).mockResolvedValue([]);
   vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "agents" });
+  vi.mocked(formationsState).mockResolvedValue(formations());
+  vi.mocked(listRetiredAgents).mockResolvedValue([]);
+  vi.mocked(switchFormation).mockResolvedValue({ status: "switched" });
   // 個別測試會改 checkRepo 的回傳，clearAllMocks 不會還原，每個測試開始時重設。
   vi.mocked(checkRepo).mockResolvedValue({ status: "ok", branch: "main" });
   vi.mocked(setReferences).mockImplementation(async (_p, refs) => refs);
@@ -950,6 +977,58 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(resolveAgent).toHaveBeenCalledWith("p1", "a1", "retry"));
     fireEvent.click(within(node).getByText(/跳過|Skip/));
     await waitFor(() => expect(resolveAgent).toHaveBeenCalledWith("p1", "a1", "skip"));
+  });
+
+  it("團隊編制：切換時有人在工作，確認後改成做完後切換；取消就不排", async () => {
+    const { confirm } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(switchFormation).mockResolvedValue({ status: "busy", names: ["Coder Agent1"] });
+    view();
+    fireEvent.click(await screen.findByTestId("ac-formation"));
+    vi.mocked(confirm).mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByRole("menuitem", { name: /轉換/ }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/Coder Agent1 還在工作/), expect.anything()));
+    expect(requestFormationSwitch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("ac-formation"));
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+    fireEvent.click(screen.getByRole("menuitem", { name: /轉換/ }));
+    await waitFor(() => expect(requestFormationSwitch).toHaveBeenCalledWith("p1", "f2"));
+  });
+
+  it("團隊編制：活動記錄有切換紀錄；換掉的 Agent 完成的卡片仍顯示他的名字與角色", async () => {
+    vi.mocked(formationsState).mockResolvedValue(formations({ log: [{ at: 500, from_name: "盤點", to_name: "轉換" }] }));
+    vi.mocked(listRetiredAgents).mockResolvedValue([{ id: "gone", name: "研究工程師1", kind: "coder" }]);
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "盤點 AC", status: "done", outcome: "success", agent_id: "gone", dispatched_at: 100, finished_at: 200 }),
+    ]);
+    view();
+    const log = (await screen.findByTestId("agent-a1")) && (document.querySelector(".ac-log") as HTMLElement);
+    await waitFor(() => expect(log.textContent).toContain("切換編制：盤點 → 轉換"));
+    expect(log.textContent).toContain("研究工程師1");
+    expect(log.textContent).not.toContain("?");
+    expect(log.querySelector(".ac-log-dot--coder")).not.toBeNull();
+  });
+
+  it("團隊範本：套用成新編制會記住程式庫、建立編制並切換過去", async () => {
+    vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "saved" });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    fireEvent.click(await screen.findByTestId("ac-templates-empty"));
+    const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
+    const item = within(dlg).getByTestId("tpl-builtin-inventory");
+    const btn = within(item).getByRole("button", { name: "套用成新編制" });
+    await waitFor(() => expect(btn).not.toBeDisabled());
+    fireEvent.click(btn);
+    await waitFor(() => expect(switchFormation).toHaveBeenCalledWith("p1", "f-new"));
+    expect(setProjectRepo).toHaveBeenCalledWith("p1", "/repo/htbktw");
+    const [, name, agents] = vi.mocked(createFormation).mock.calls[0];
+    expect(name).toBe("舊系統盤點");
+    expect(agents.map((a) => a.kind)).toContain("orchestrator");
+    expect(agents.every((a) => a.dx >= 40 && a.dy >= 40)).toBe(true);
   });
 
   it("活動記錄每一行有角色色點", async () => {

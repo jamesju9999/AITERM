@@ -1,4 +1,5 @@
 import type { AgentCli, AgentKind, AgentRow, NewAgentArgs } from "../../ipc/agents";
+import type { FormationAgent } from "../../ipc/formations";
 import type { Translations } from "../../lib/i18n";
 
 /** 範本裡的一位 Agent：角色設定與相對位置，不含程式庫（套用時再選）。 */
@@ -213,4 +214,19 @@ export function toCreate(tpl: TeamTemplate, existing: AgentRow[], repoDir: strin
       model: a.model,
       cli: a.cli ?? "claude",
     }));
+}
+
+/** 範本 → 新編制的 Agent：從 (x, y) 開始擺。新編制是空桌布，單一角色不必跳過、名稱不會撞。 */
+export function toFormationAgents(tpl: TeamTemplate, x: number, y: number): FormationAgent[] {
+  return tpl.agents.map((a) => ({
+    kind: a.kind,
+    name: a.name,
+    role: a.role,
+    prompt_prefix: a.prompt_prefix,
+    model: a.model,
+    cli: a.cli ?? "claude",
+    produces_spec: a.produces_spec,
+    dx: x + a.dx,
+    dy: y + a.dy,
+  }));
 }
