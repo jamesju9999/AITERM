@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { ActivityNode, ActivityStatus } from "../../ipc/claudeActivity";
 import { useLocale } from "../../contexts/LocaleContext";
 import { formatDuration, formatTokens } from "./format";
-import { CARD_H, CARD_W, GAP_X, PAD, ROOT_ID, layoutGraph, type Graph } from "./graphLayout";
+import { CARD_H, ROOT_ID, colX, layoutGraph, type Graph } from "./graphLayout";
 import "./ClaudeActivityPanel.css";
 
 const COLLAPSED_KEY = "aiterm-claude-activity-collapsed";
@@ -41,6 +41,7 @@ function GraphView({ graph, nodes, now, selectedId, onSelect, runningCount }: Gr
   const { t } = useLocale();
   const uid = useId().replace(/:/g, "");
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const cols = useMemo(() => new Map(Array.from({ length: 12 }, (_, d) => [colX(d), d] as const)), []);
   const selected = selectedId ? byId.get(selectedId) ?? null : null;
 
   const statusLabel: Record<ActivityStatus, string> = {
@@ -74,15 +75,13 @@ function GraphView({ graph, nodes, now, selectedId, onSelect, runningCount }: Gr
             ))}
           </svg>
           {[...graph.boxes].map(([id, box]) => {
-            const style = { left: box.x, top: box.y, width: CARD_W, height: CARD_H };
-            const col = Math.round((box.x - PAD) / (CARD_W + GAP_X));
+            const style = { left: box.x, top: box.y, width: box.w, height: CARD_H };
+            const col = id === ROOT_ID ? 0 : cols.get(box.x) ?? 0;
             if (id === ROOT_ID) {
               return (
                 <div key={id} className="aiterm-cact__card aiterm-cact__card--root" style={style} data-node-id={id} data-col={col}>
                   <span className="aiterm-cact__card-title">{t.claude_activity_root}</span>
-                  <span className="aiterm-cact__card-sub">
-                    {t.claude_activity_running(runningCount)} · {t.claude_activity_total(nodes.length)}
-                  </span>
+                  <span className="aiterm-cact__card-sub">{t.claude_activity_running(runningCount)}</span>
                 </div>
               );
             }

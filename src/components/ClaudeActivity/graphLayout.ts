@@ -2,15 +2,18 @@ import type { ActivityNode, ActivityStatus } from "../../ipc/claudeActivity";
 
 /** 圖上代表「你正在對話的那個 Claude」的虛擬根節點。 */
 export const ROOT_ID = "__root__";
-export const CARD_W = 190;
+/** 根節點只放「Claude」與執行中數量，做窄一點，讓預設寬度的側欄放得下第一層 subagent。 */
+export const ROOT_W = 84;
+export const CARD_W = 160;
 export const CARD_H = 74;
-export const GAP_X = 56;
+export const GAP_X = 36;
 export const GAP_Y = 14;
 export const PAD = 12;
 
 export interface Box {
   x: number;
   y: number;
+  w: number;
 }
 export interface GraphEdge {
   from: string;
@@ -24,6 +27,11 @@ export interface Graph {
   edges: GraphEdge[];
   width: number;
   height: number;
+}
+
+/** 第 `depth` 欄的左緣：第 0 欄是窄的根，之後每欄 CARD_W。 */
+export function colX(depth: number): number {
+  return depth === 0 ? PAD : PAD + ROOT_W + GAP_X + (depth - 1) * (CARD_W + GAP_X);
 }
 
 /**
@@ -88,12 +96,12 @@ export function layoutGraph(nodes: ActivityNode[]): Graph {
   for (const [id, row] of rows) {
     const depth = depths.get(id)!;
     maxDepth = Math.max(maxDepth, depth);
-    boxes.set(id, { x: PAD + depth * (CARD_W + GAP_X), y: PAD + row * (CARD_H + GAP_Y) });
+    boxes.set(id, { x: colX(depth), y: PAD + row * (CARD_H + GAP_Y), w: depth === 0 ? ROOT_W : CARD_W });
   }
   const edges: GraphEdge[] = edgesRaw.map((e) => {
     const a = boxes.get(e.from)!;
     const b = boxes.get(e.to)!;
-    const x1 = a.x + CARD_W;
+    const x1 = a.x + a.w;
     const y1 = a.y + CARD_H / 2;
     const x2 = b.x;
     const y2 = b.y + CARD_H / 2;
@@ -103,7 +111,7 @@ export function layoutGraph(nodes: ActivityNode[]): Graph {
   return {
     boxes,
     edges,
-    width: PAD * 2 + (maxDepth + 1) * CARD_W + maxDepth * GAP_X,
+    width: colX(maxDepth) + (maxDepth === 0 ? ROOT_W : CARD_W) + PAD,
     height: PAD * 2 + nextRow * CARD_H + (nextRow - 1) * GAP_Y,
   };
 }

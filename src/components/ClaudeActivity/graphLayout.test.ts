@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityNode } from "../../ipc/claudeActivity";
-import { CARD_H, CARD_W, GAP_X, GAP_Y, PAD, ROOT_ID, layoutGraph } from "./graphLayout";
+import { CARD_H, CARD_W, GAP_X, GAP_Y, PAD, ROOT_ID, ROOT_W, layoutGraph } from "./graphLayout";
 
 const n = (id: string, parent: string | null, started = 0): ActivityNode => ({
   id, parent, agent_type: "general-purpose", description: null, status: "running",
@@ -13,15 +13,16 @@ describe("layoutGraph", () => {
     const g = layoutGraph([]);
     expect([...g.boxes.keys()]).toEqual([ROOT_ID]);
     expect(g.edges).toEqual([]);
-    expect(g.width).toBe(PAD * 2 + CARD_W);
+    expect(g.width).toBe(PAD * 2 + ROOT_W);
     expect(g.height).toBe(PAD * 2 + CARD_H);
   });
 
   it("subagent 接在根後面，每往下一層就往右一欄", () => {
     const g = layoutGraph([n("a", null, 1), n("a1", "a", 2)]);
     expect(pos(g, ROOT_ID).x).toBe(PAD);
-    expect(pos(g, "a").x).toBe(PAD + (CARD_W + GAP_X));
-    expect(pos(g, "a1").x).toBe(PAD + 2 * (CARD_W + GAP_X));
+    expect(pos(g, "a").x).toBe(PAD + ROOT_W + GAP_X);
+    expect(pos(g, "a1").x).toBe(PAD + ROOT_W + GAP_X + (CARD_W + GAP_X));
+    expect(g.width).toBe(PAD * 2 + ROOT_W + 2 * (GAP_X + CARD_W));
     expect(g.edges.map((e) => [e.from, e.to])).toEqual([[ROOT_ID, "a"], ["a", "a1"]]);
   });
 
@@ -49,12 +50,16 @@ describe("layoutGraph", () => {
     expect(g.edges.find((e) => e.to === "b")!.status).toBe("running");
   });
 
+  it("預設寬度的側欄（340px）放得下根＋第一層 subagent，不必橫向捲動", () => {
+    expect(layoutGraph([n("a", null, 1), n("b", null, 2)]).width).toBeLessThanOrEqual(340);
+  });
+
   it("連線路徑從父卡右緣中點到子卡左緣中點", () => {
     const g = layoutGraph([n("a", null, 1)]);
     const e = g.edges[0];
     const r = pos(g, ROOT_ID);
     const a = pos(g, "a");
-    expect(e.d.startsWith(`M ${r.x + CARD_W} ${r.y + CARD_H / 2}`)).toBe(true);
+    expect(e.d.startsWith(`M ${r.x + ROOT_W} ${r.y + CARD_H / 2}`)).toBe(true);
     expect(e.d.endsWith(`${a.x} ${a.y + CARD_H / 2}`)).toBe(true);
   });
 });
