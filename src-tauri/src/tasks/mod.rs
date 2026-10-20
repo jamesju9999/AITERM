@@ -28,6 +28,7 @@ pub mod sql_guard;
 pub mod db_skill;
 pub mod references;
 pub mod custom_skills;
+pub mod formations;
 
 use std::path::{Path, PathBuf};
 
@@ -265,6 +266,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     db_skill::init_schema(pool).await?;
     // Agent 的自訂技能與使用記錄，見 tasks/custom_skills.rs。
     custom_skills::init_schema(pool).await?;
+    // 團隊編制，見 docs/superpowers/specs/2026-10-20-agent-canvas-team-formations-design.md。
+    formations::init_schema(pool).await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, sort_order)")
         .execute(pool)
         .await?;

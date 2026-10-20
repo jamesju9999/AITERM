@@ -255,6 +255,14 @@ pub async fn delete_agent(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error
     .bind(STATUS_QUEUED)
     .execute(&mut *tx)
     .await?;
+    // 已完成卡片的歷史還指向它：記下名稱，畫面才顯示得出是誰做的（見 tasks::formations）。
+    sqlx::query(
+        "INSERT OR REPLACE INTO retired_agents (id, name, kind, retired_at)
+         SELECT id, name, kind, CAST(strftime('%s', 'now') AS INTEGER) FROM agents WHERE id = ?",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("DELETE FROM agents WHERE id = ?").bind(id).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(())
