@@ -5,6 +5,7 @@
 //! Claude 的 HTTP hook 打到本機接收器 → `Tree` 狀態機 → emit 完整快照給前端。
 
 pub mod commands;
+pub mod transcript;
 pub mod tree;
 
 use std::collections::HashMap;
@@ -123,6 +124,19 @@ impl ClaudeActivity {
         (self.emit)(session_id, &snapshot);
     }
 
+    /// subagent 結束後補上從 transcript 算出的 token 數。
+    pub fn ingest_tokens(&self, session_id: &str, agent_id: &str, tokens: u64) {
+        let snapshot = {
+            let mut map = self.sessions.lock();
+            let Some(tree) = map.get_mut(session_id) else { return };
+            if !tree.set_tokens(agent_id, tokens) {
+                return;
+            }
+            tree.nodes().to_vec()
+        };
+        (self.emit)(session_id, &snapshot);
+    }
+
     pub fn snapshot(&self, session_id: &str) -> Vec<Node> {
         self.sessions.lock().get(session_id).map(|t| t.nodes().to_vec()).unwrap_or_default()
     }
@@ -165,6 +179,20 @@ async fn handle(
         if let Some(kind) = Kind::parse(&kind) {
             let json: Value = serde_json::from_slice(&body).unwrap_or_default();
             st.activity.ingest(&sid, kind, &json, now_ms());
+            if kind == Kind::SubStop {
+                if let (Some(agent), Some(path)) = (
+                    json.get("agent_id").and_then(Value::as_str),
+                    json.get("agent_transcript_path").and_then(Value::as_str),
+                ) {
+                    let (activity, agent, path, sid) = (st.activity.clone(), agent.to_owned(), PathBuf::from(path), sid.clone());
+                    // 檔案讀取放到阻塞執行緒池，不卡住接收器（hook 在等我們回應）。
+                    tokio::task::spawn_blocking(move || {
+                        if let Some(tokens) = transcript::transcript_tokens(&path) {
+                            activity.ingest_tokens(&sid, &agent, tokens);
+                        }
+                    });
+                }
+            }
         }
     }
     // Claude Code 會把回應當成 hook 輸出解析；空物件 = 沒有意見。
@@ -229,6 +257,18 @@ mod tests {
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].0, "s1");
         assert_eq!(a.snapshot("s1").len(), 1);
+    }
+
+    #[test]
+    fn ingest_tokens_updates_the_node_and_emits() {
+        let (a, seen) = activity("tokens");
+        a.prepare("s1");
+        a.ingest("s1", Kind::SubStart, &json!({ "agent_id": "a1", "agent_type": "general-purpose" }), 1);
+        a.ingest_tokens("s1", "a1", 777);
+        assert_eq!(a.snapshot("s1")[0].tokens, Some(777));
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        a.ingest_tokens("s1", "a1", 777);
+        assert_eq!(seen.lock().unwrap().len(), 2, "沒變就不再通知");
     }
 
     #[test]

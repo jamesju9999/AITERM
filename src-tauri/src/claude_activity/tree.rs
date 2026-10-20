@@ -13,6 +13,8 @@ const SUMMARY_MAX_CHARS: usize = 400;
 const HINT_MAX_CHARS: usize = 80;
 
 static NULL: Value = Value::Null;
+/// 建立節點時還不知道型別的暫用名稱，之後 SubagentStart 帶著真型別來會被換掉。
+const FALLBACK_TYPE: &str = "agent";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,6 +85,11 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
     v.get(key)?.as_str().map(str::to_owned)
 }
 
+/// 事件裡的 agent_type；空字串當成沒有。
+fn agent_type_of(body: &Value) -> Option<String> {
+    str_of(body, "agent_type").filter(|t| !t.is_empty())
+}
+
 fn truncate(s: &str, max: usize) -> String {
     let s = s.trim();
     if s.chars().count() <= max {
@@ -134,12 +141,17 @@ impl Tree {
             }
             Kind::SubStart => {
                 if let Some(id) = str_of(body, "agent_id") {
-                    self.on_start(&id, str_of(body, "agent_type"), now_ms);
+                    self.on_start(&id, agent_type_of(body), now_ms);
                 }
             }
             Kind::SubStop => {
                 if let Some(id) = str_of(body, "agent_id") {
-                    let i = self.ensure(&id, str_of(body, "agent_type"), now_ms);
+                    // 互動模式下 Claude 會為內部輔助工作送出沒有型別、也沒有對應 Start 的
+                    // SubagentStop（實測：agent_type 是空字串）。不是使用者開的 subagent，不顯示。
+                    if self.index_of(&id).is_none() && agent_type_of(body).is_none() {
+                        return false;
+                    }
+                    let i = self.ensure(&id, agent_type_of(body), now_ms);
                     Self::finish(&mut self.nodes[i], Status::Done, now_ms);
                 }
             }
@@ -154,6 +166,18 @@ impl Tree {
         self.nodes != before
     }
 
+    /// 結束後從 subagent 的 transcript 算出的 token 數（互動模式的 Agent 是非同步的，
+    /// `PostToolUse` 沒有總數）。回傳有沒有變化。
+    pub fn set_tokens(&mut self, id: &str, tokens: u64) -> bool {
+        match self.index_of(id) {
+            Some(i) if self.nodes[i].tokens != Some(tokens) => {
+                self.nodes[i].tokens = Some(tokens);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn index_of(&self, id: &str) -> Option<usize> {
         self.nodes.iter().position(|n| n.id == id)
     }
@@ -165,7 +189,7 @@ impl Tree {
         self.nodes.push(Node {
             id: id.to_owned(),
             parent: None,
-            agent_type: agent_type.unwrap_or_else(|| "agent".to_owned()),
+            agent_type: agent_type.unwrap_or_else(|| FALLBACK_TYPE.to_owned()),
             description: None,
             status: Status::Running,
             started_ms: now_ms,
@@ -200,7 +224,12 @@ impl Tree {
 
     fn on_start(&mut self, id: &str, agent_type: Option<String>, now_ms: u64) {
         let existed = self.index_of(id).is_some();
-        let i = self.ensure(id, agent_type, now_ms);
+        let i = self.ensure(id, agent_type.clone(), now_ms);
+        if let Some(t) = agent_type {
+            if self.nodes[i].agent_type == FALLBACK_TYPE {
+                self.nodes[i].agent_type = t; // 先由別的事件建起來、當時不知道型別
+            }
+        }
         if existed && self.nodes[i].description.is_some() {
             return; // 重複事件
         }
@@ -478,6 +507,48 @@ mod tests {
         let s = node(&t, "a1").summary.clone().unwrap();
         assert_eq!(s.chars().count(), 401, "400 個字 + …");
         assert!(s.ends_with('…'));
+    }
+
+    #[test]
+    fn untyped_stop_for_an_unknown_agent_is_an_internal_helper_and_is_ignored() {
+        // 實測：互動模式會送 agent_type 為空字串、且從沒 Start 過的 SubagentStop。
+        let mut t = Tree::default();
+        let ev = json!({ "hook_event_name": "SubagentStop", "agent_id": "ghost", "agent_type": "" });
+        assert!(!t.apply(Kind::SubStop, &ev, 1));
+        assert!(t.nodes().is_empty());
+        // 有型別的才算（上面「stop_without_start…」那條）。
+    }
+
+    #[test]
+    fn untyped_stop_for_a_known_agent_still_finishes_it() {
+        let mut t = Tree::default();
+        t.apply(Kind::SubStart, &start("a1", "general-purpose"), 1);
+        let ev = json!({ "agent_id": "a1", "agent_type": "" });
+        assert!(t.apply(Kind::SubStop, &ev, 2));
+        assert_eq!(node(&t, "a1").status, Status::Done);
+        assert_eq!(node(&t, "a1").agent_type, "general-purpose");
+    }
+
+    #[test]
+    fn a_later_start_replaces_the_placeholder_type() {
+        let mut t = Tree::default();
+        // Post(Agent) 先到、回應沒帶型別 → 節點先以暫用型別建起來。
+        let mut post = post_agent("tu1", None, "Run pwd", "a1", "async_launched");
+        post["tool_response"].as_object_mut().unwrap().remove("agentType");
+        t.apply(Kind::Post, &post, 1);
+        assert_eq!(node(&t, "a1").agent_type, "agent");
+        t.apply(Kind::SubStart, &start("a1", "Explore"), 2);
+        assert_eq!(node(&t, "a1").agent_type, "Explore");
+    }
+
+    #[test]
+    fn set_tokens_updates_a_known_node_and_reports_change_once() {
+        let mut t = Tree::default();
+        t.apply(Kind::SubStart, &start("a1", "general-purpose"), 1);
+        assert!(t.set_tokens("a1", 1234));
+        assert!(!t.set_tokens("a1", 1234));
+        assert!(!t.set_tokens("nope", 1));
+        assert_eq!(node(&t, "a1").tokens, Some(1234));
     }
 
     #[test]
