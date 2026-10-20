@@ -46,6 +46,7 @@ import { LocaleProvider } from "../contexts/LocaleContext";
 beforeEach(() => {
   listenHandlers.clear();
   localStorage.clear();
+  localStorage.setItem("aiterm-claude-activity-collapsed", "0");
 });
 
 const mount = () =>
@@ -101,5 +102,14 @@ describe("終端機分頁的 Claude 協作側欄", () => {
     expect(side.querySelector(".aiterm-cact")).not.toBeNull();
     expect(side.querySelector(".aiterm-cact--fill")).toBeNull();
     expect(side.querySelector(".aiterm-sugg-sidebar")).not.toBeNull();
+  });
+
+  it("設定關閉時，即使有 subagent 事件也不出現側欄", async () => {
+    localStorage.setItem("aiterm-claude-activity-enabled", "0");
+    const { container } = mount();
+    await waitFor(() => expect(listenHandlers.has("claude-activity://test-session")).toBe(true));
+    await emit(snap(node("a1", "整理檔案")));
+    expect(container.querySelector(".aiterm-cact")).toBeNull();
+    expect(container.querySelector(".aiterm-sugg-split__side")).toBeNull();
   });
 });

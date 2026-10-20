@@ -7,6 +7,7 @@ import type { PythonEnvStatus } from "../../ipc/pythonEnv";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { Locale } from "../../lib/i18n";
 import { THEMES, getActiveTheme, applyTheme, type ThemeId } from "../../lib/themes";
+import { useClaudeActivityEnabled, setClaudeActivityEnabled } from "../ClaudeActivity/settings";
 import "./GeneralPage.css";
 
 const STEP_VALUES = [5, 10, 20, 50, 100, 0];
@@ -52,6 +53,7 @@ export function GeneralPage() {
   const [timingMode, setTimingMode] = useState<"full" | "compact">(
     () => (localStorage.getItem(LOOP_TIMING_KEY) as "full" | "compact" | null) ?? "compact"
   );
+  const claudeActivityEnabled = useClaudeActivityEnabled();
   const [appimage, setAppimage] = useState<AppImageIntegrationState>({ state: "not_appimage" });
   const [appimageError, setAppimageError] = useState<string | null>(null);
   const [pyEnv, setPyEnv] = useState<PythonEnvStatus | null>(null);
@@ -501,6 +503,21 @@ export function GeneralPage() {
             </div>
           </label>
         </div>
+      </section>
+
+      <section className="settings-section">
+        <h3>{t.claude_activity_setting_title}</h3>
+        <label className="mode-option">
+          <input
+            type="checkbox"
+            checked={claudeActivityEnabled}
+            onChange={(e) => setClaudeActivityEnabled(e.target.checked)}
+          />
+          <div className="mode-text">
+            <span className="mode-label">{t.claude_activity_setting_label}</span>
+            <span className="mode-desc">{t.claude_activity_setting_desc}</span>
+          </div>
+        </label>
       </section>
 
       <section className="settings-section">

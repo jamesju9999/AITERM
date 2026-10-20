@@ -16,9 +16,10 @@ type Mode = "graph" | "timeline";
 
 function loadCollapsed(): boolean {
   try {
-    return localStorage.getItem(COLLAPSED_KEY) === "1";
+    // 沒存過＝預設收合；使用者展開過才記住展開。
+    return localStorage.getItem(COLLAPSED_KEY) !== "0";
   } catch {
-    return false;
+    return true;
   }
 }
 function loadMode(): Mode {

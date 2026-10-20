@@ -60,6 +60,7 @@ import { SuggestionSplit } from "./SuggestionSidebar/SuggestionSplit";
 import { SuggestionSidebar } from "./SuggestionSidebar/SuggestionSidebar";
 import { ClaudeActivityPanel } from "./ClaudeActivity/ClaudeActivityPanel";
 import { useClaudeActivity } from "./ClaudeActivity/useClaudeActivity";
+import { useClaudeActivityEnabled } from "./ClaudeActivity/settings";
 import { useSuggestionSidebar } from "./SuggestionSidebar/useSuggestionSidebar";
 import { useScreenHistory } from "./SuggestionSidebar/useScreenHistory";
 import { SCROLL_ECHO_MS } from "./SuggestionSidebar/terminalIdle";
@@ -502,6 +503,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   const [customAiCliNames, setCustomAiCliNames] = useState<string[]>(loadCustomNames);
   const suggestionSidebar = useSuggestionSidebar(blocks, customAiCliNames);
   const claudeActivity = useClaudeActivity(sessionId);
+  const claudeActivityEnabled = useClaudeActivityEnabled();
   const [suggestionGoal, setSuggestionGoal] = useState(initialSuggestionGoal ?? "");
   const [suggestionMilestones, setSuggestionMilestones] = useState<MilestoneState | undefined>(initialSuggestionMilestones);
   // 側欄關著也要記錄 AI 工具每一輪的穩定畫面，所以掛在這裡而不是側欄元件裡。
@@ -2023,9 +2025,9 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
 
   const suggestionsShown = suggestionSidebar.open && !!sessionId;
   const sidebarContent =
-    claudeActivity.nodes.length > 0 || suggestionsShown ? (
+    (claudeActivityEnabled && claudeActivity.nodes.length > 0) || suggestionsShown ? (
       <>
-        {claudeActivity.nodes.length > 0 && (
+        {claudeActivityEnabled && claudeActivity.nodes.length > 0 && (
           <ClaudeActivityPanel snapshot={claudeActivity} fill={!suggestionsShown} />
         )}
         {suggestionsShown && (

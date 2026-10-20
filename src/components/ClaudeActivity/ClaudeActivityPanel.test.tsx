@@ -23,7 +23,11 @@ const renderPanel = (nodes: ActivityNode[], over: Partial<ActivitySnapshot> = {}
   render(<ClaudeActivityPanel snapshot={snap(nodes, over)} fill />);
 const card = (id: string) => document.querySelector(`[data-node-id="${id}"]`) as HTMLElement;
 
-beforeEach(() => localStorage.clear());
+// 預設是收合；其餘測試要看圖，所以先記成「展開過」。
+beforeEach(() => {
+  localStorage.clear();
+  localStorage.setItem("aiterm-claude-activity-collapsed", "0");
+});
 
 describe("ClaudeActivityPanel（流程圖）", () => {
   it("標題顯示執行中數量與總數；圖上有 Claude 根節點", () => {
@@ -107,6 +111,17 @@ describe("ClaudeActivityPanel（流程圖）", () => {
     renderPanel([done("ok", { started_ms: 1 }), done("f", { status: "failed", started_ms: 9 })]);
     expect(card("f").textContent).toContain("失敗");
     expect(Number.parseFloat(card("f").style.top)).toBeLessThan(Number.parseFloat(card("ok").style.top));
+  });
+
+  it("第一次（沒存過偏好）預設收合；展開後記住展開", () => {
+    localStorage.clear();
+    const { unmount } = renderPanel([node({ id: "a", description: "跑 ls" })]);
+    expect(card("a")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "展開" }));
+    expect(card("a")).not.toBeNull();
+    unmount();
+    renderPanel([node({ id: "a", description: "跑 ls" })]);
+    expect(card("a")).not.toBeNull();
   });
 
   it("收合只留標題，並記在 localStorage", () => {
