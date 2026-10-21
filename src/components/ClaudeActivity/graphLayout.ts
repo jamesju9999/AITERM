@@ -9,7 +9,7 @@ export const CARD_W = 160;
 export const CARD_H = 92;
 /** 工具卡只有單行（圖示＋指令＋耗時），比 subagent 卡矮很多，同樣高度放得下更多個。 */
 export const TOOL_H = 36;
-export const GAP_X = 36;
+export const GAP_X = 64;
 export const GAP_Y = 14;
 export const PAD = 12;
 

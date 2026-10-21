@@ -57,8 +57,8 @@ describe("layoutGraph", () => {
     expect(g.edges.find((e) => e.to === "b")!.status).toBe("running");
   });
 
-  it("預設寬度的側欄（340px）放得下根＋第一層 subagent，不必橫向捲動", () => {
-    expect(layoutGraph([n("a", null, 1), n("b", null, 2)]).width).toBeLessThanOrEqual(340);
+  it("根＋第一層 subagent 的寬度不超過 360px；再窄的側欄由圖第一次顯示時的自動縮放吸收", () => {
+    expect(layoutGraph([n("a", null, 1), n("b", null, 2)]).width).toBeLessThanOrEqual(360);
   });
 
   it("連線路徑從父卡右緣中點到子卡左緣中點", () => {

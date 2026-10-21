@@ -164,10 +164,12 @@ export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCo
                   <path d="M0,0 L10,5 L0,10 z" className="aiterm-cact__arrow" />
                 </marker>
               </defs>
-              {graph.edges.map((e) => {
+              {/* 執行中的連線最後畫（疊在共用主幹的綠線上面），並墊一層實線底色，流動才看得到。 */}
+              {[...graph.edges].sort((x, y) => Number(x.status === "running") - Number(y.status === "running")).map((e) => {
                 const onPath = path.has(e.from) && path.has(e.to);
                 return (
                   <g key={`${e.from}>${e.to}`}>
+                    {e.status === "running" && <path className="aiterm-cact__edge-under" d={e.d} />}
                     <path
                       data-testid={`edge-${e.from}-${e.to}`}
                       data-status={e.status}
@@ -175,21 +177,22 @@ export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCo
                       d={e.d}
                       markerEnd={`url(#${uid}-arrow)`}
                     />
-                    {e.status === "running" && (
-                      <>
-                        {[[1.5, 0.25, "-1.28s"], [2.2, 0.5, "-1.4s"]].map(([r, o, begin]) => (
-                          <circle key={begin as string} r={r as number} opacity={o as number} className="aiterm-cact__fly">
-                            <animateMotion dur="1.6s" begin={begin as string} repeatCount="indefinite" path={e.d} />
-                          </circle>
-                        ))}
-                        <circle r="3" className="aiterm-cact__fly" data-testid={`fly-${e.from}-${e.to}`}>
-                          <animateMotion dur="1.6s" repeatCount="indefinite" path={e.d} />
-                        </circle>
-                      </>
-                    )}
                   </g>
                 );
               })}
+              {/* 流動的小點獨立一層畫在所有連線之上，不會被後畫的連線蓋住。 */}
+              {graph.edges.filter((e) => e.status === "running").map((e) => (
+                <g key={`fly-${e.from}>${e.to}`}>
+                  {[[1.5, 0.25, "-1.28s"], [2.2, 0.5, "-1.4s"]].map(([r, o, begin]) => (
+                    <circle key={begin as string} r={r as number} opacity={o as number} className="aiterm-cact__fly">
+                      <animateMotion dur="1.6s" begin={begin as string} repeatCount="indefinite" path={e.d} />
+                    </circle>
+                  ))}
+                  <circle r="3" className="aiterm-cact__fly" data-testid={`fly-${e.from}-${e.to}`}>
+                    <animateMotion dur="1.6s" repeatCount="indefinite" path={e.d} />
+                  </circle>
+                </g>
+              ))}
             </svg>
             {[...graph.boxes].map(([id, box]) => {
               const style = { left: box.x, top: box.y, width: box.w, height: box.h };
