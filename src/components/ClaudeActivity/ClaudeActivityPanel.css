@@ -156,3 +156,50 @@ button.aiterm-cact__card { cursor: pointer; }
   flex: 0 0 42%; max-height: none; border-left: 1px solid var(--border-color, #2a2a2a);
 }
 .aiterm-cact__body--split .aiterm-cact__detail { border-top: none; }
+
+/* ── 視覺美化：卡片層次、點陣畫布、子樹外框、小地圖、進場動畫 ── */
+.aiterm-cact__canvas { position: relative; flex: 1 1 auto; min-height: 120px; display: flex; flex-direction: column; }
+.aiterm-cact__canvas > .aiterm-cact__scroll { flex: 1 1 auto; min-height: 0; }
+.aiterm-cact__scroll--canvas {
+  background-image: radial-gradient(circle, rgba(148, 163, 184, 0.16) 1px, transparent 1.2px);
+  background-attachment: local;
+}
+.aiterm-cact__card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.035));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  transition: box-shadow 0.15s ease, opacity 0.15s ease;
+  animation: aiterm-cact-in 0.22s ease-out;
+}
+button.aiterm-cact__card:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.08); }
+.aiterm-cact__card.is-running { box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.45), 0 0 14px rgba(96, 165, 250, 0.3); }
+.aiterm-cact__card--root {
+  background: linear-gradient(135deg, rgba(192, 132, 252, 0.28), rgba(192, 132, 252, 0.06));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 14px rgba(192, 132, 252, 0.18);
+}
+.aiterm-cact__root-mark { flex: 0 0 auto; margin-top: 1px; color: var(--accent, #c084fc); }
+.aiterm-cact__icon { flex: 0 0 auto; opacity: 0.85; }
+.aiterm-cact__card--cat-file .aiterm-cact__icon { color: #38bdf8; }
+.aiterm-cact__card--cat-shell .aiterm-cact__icon { color: #a3e635; }
+.aiterm-cact__card--cat-web .aiterm-cact__icon { color: #c084fc; }
+.aiterm-cact__card--cat-database .aiterm-cact__icon { color: #fb923c; }
+.aiterm-cact__card--cat-mcp .aiterm-cact__icon { color: #f472b6; }
+.aiterm-cact__tool-text { font-family: var(--font-mono, monospace); font-size: 11.5px; font-weight: 500; }
+.aiterm-cact__tool-dur { opacity: 0.8; }
+.aiterm-cact__frame {
+  position: absolute; border-radius: 12px; pointer-events: none;
+  background: rgba(255, 255, 255, 0.025); border: 1px dashed rgba(148, 163, 184, 0.22);
+}
+.aiterm-cact__frame.is-dim { opacity: 0.5; }
+.aiterm-cact__mini {
+  position: absolute; right: 10px; bottom: 10px; z-index: 2; cursor: pointer; overflow: hidden;
+  background: rgba(15, 17, 23, 0.82); border: 1px solid var(--border-color, #2a2a2a); border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45); backdrop-filter: blur(4px);
+}
+.aiterm-cact__mini-box { position: absolute; border-radius: 1px; opacity: 0.8; }
+.aiterm-cact__mini-view { position: absolute; border: 1px solid #e6e6e6; background: rgba(255, 255, 255, 0.1); pointer-events: none; }
+.aiterm-cact__dot--done { animation: aiterm-cact-pop 0.5s ease-out; }
+@keyframes aiterm-cact-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes aiterm-cact-pop { 0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); } 100% { box-shadow: 0 0 0 7px rgba(74, 222, 128, 0); } }
+@media (prefers-reduced-motion: reduce) {
+  .aiterm-cact__card, .aiterm-cact__dot--done { animation: none; }
+}

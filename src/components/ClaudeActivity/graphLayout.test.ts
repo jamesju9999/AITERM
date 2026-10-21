@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityNode } from "../../ipc/claudeActivity";
-import { CARD_H, CARD_W, GAP_X, GAP_Y, PAD, ROOT_ID, ROOT_W, layoutGraph } from "./graphLayout";
+import { CARD_H, CARD_W, GAP_X, GAP_Y, PAD, ROOT_ID, ROOT_W, elbowPath, layoutGraph } from "./graphLayout";
 
 const n = (id: string, parent: string | null, started = 0): ActivityNode => ({
   id, parent, agent_type: "general-purpose", description: null, status: "running",
@@ -85,5 +85,19 @@ describe("layoutGraph：單行工具卡比父卡矮時不重疊", () => {
     const ys = ["a", "b", "c"].map((id) => g.boxes.get(id)!.y);
     expect(ys[1] - ys[0]).toBeGreaterThanOrEqual(CARD_H + GAP_Y);
     expect(ys[2] - ys[1]).toBeGreaterThanOrEqual(CARD_H + GAP_Y);
+  });
+});
+
+describe("elbowPath", () => {
+  it("同一高度走直線，不同高度走圓角折線並抵達終點", () => {
+    expect(elbowPath(0, 10, 50, 10)).toBe("M 0 10 L 50 10");
+    const d = elbowPath(0, 0, 60, 40);
+    expect(d.startsWith("M 0 0")).toBe(true);
+    expect(d).toContain("Q");
+    expect(d.endsWith("L 60 40")).toBe(true);
+  });
+  it("同一父節點的子連線共用同一條垂直主幹", () => {
+    const trunk = (d: string) => d.match(/Q (\S+) /)![1];
+    expect(trunk(elbowPath(10, 50, 70, 10))).toBe(trunk(elbowPath(10, 50, 70, 90)));
   });
 });

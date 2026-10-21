@@ -38,6 +38,20 @@ export function colX(depth: number): number {
   return depth === 0 ? PAD : PAD + ROOT_W + GAP_X + (depth - 1) * (CARD_W + GAP_X);
 }
 
+const CORNER_R = 8;
+
+/**
+ * 圓角折線：水平出發、在兩卡中間的垂直主幹轉彎、水平抵達。同一父節點的子連線共用
+ * 同一條主幹（x 相同），看起來像匯流排而不是一把扇形的線。
+ */
+export function elbowPath(x1: number, y1: number, x2: number, y2: number): string {
+  if (y1 === y2) return `M ${x1} ${y1} L ${x2} ${y2}`;
+  const mid = x1 + (x2 - x1) / 2;
+  const dir = y2 > y1 ? 1 : -1;
+  const r = Math.min(CORNER_R, Math.abs(y2 - y1) / 2, (x2 - x1) / 2);
+  return `M ${x1} ${y1} L ${mid - r} ${y1} Q ${mid} ${y1} ${mid} ${y1 + dir * r} L ${mid} ${y2 - dir * r} Q ${mid} ${y2} ${mid + r} ${y2} L ${x2} ${y2}`;
+}
+
 /**
  * 由左到右的分層樹狀排版：每深一層往右一欄；葉節點由上往下依序占一列，
  * 父節點垂直置中在子節點中間。卡片高度固定，所以不必量 DOM。
@@ -130,8 +144,7 @@ export function layoutGraph(nodes: ActivityNode[]): Graph {
     const y1 = a.y + a.h / 2;
     const x2 = b.x;
     const y2 = b.y + b.h / 2;
-    const dx = GAP_X / 2;
-    return { ...e, d: `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}` };
+    return { ...e, d: elbowPath(x1, y1, x2, y2) };
   });
   return {
     boxes,

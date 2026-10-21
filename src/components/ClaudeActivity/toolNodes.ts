@@ -5,10 +5,6 @@ export const TOOLS_MORE_PREFIX = "tools-more:";
 /** 每個呼叫者最多顯示最近幾個已完成的工具；更早的收成一張群組卡。 */
 export const TOOL_WINDOW = 6;
 
-export const CATEGORY_ICON: Record<string, string> = {
-  file: "📄", shell: "⌨️", web: "🌐", database: "🗄️", mcp: "🔌", other: "⚙️",
-};
-
 export const isToolId = (id: string): boolean => id.startsWith(TOOL_PREFIX);
 export const isToolsMoreId = (id: string): boolean => id.startsWith(TOOLS_MORE_PREFIX);
 

@@ -74,6 +74,18 @@ describe("ClaudeActivityPanel（流程圖）", () => {
     expect(screen.queryByTestId("fly-__root__-d")).toBeNull();
   });
 
+  it("有子節點的 subagent 有外框；沒有子節點的沒有；jsdom 量不到視窗時不顯示小地圖", () => {
+    renderPanel([node({ id: "p", description: "外層" }), node({ id: "c", parent: "p", description: "內層" })]);
+    expect(screen.getByTestId("frame-p")).toBeInTheDocument();
+    expect(screen.queryByTestId("frame-c")).toBeNull();
+    expect(screen.queryByTestId("minimap")).toBeNull();
+  });
+
+  it("執行中的連線有彗星尾巴（小點之外還有兩個漸淡的點）", () => {
+    renderPanel([node({ id: "r", description: "跑中" })]);
+    expect(document.querySelectorAll("circle.aiterm-cact__fly").length).toBe(3);
+  });
+
   it("卡片：執行中顯示目前工具；結束後顯示耗時與 token", () => {
     renderPanel([
       node({ id: "r", description: "跑中", current_tool: "Bash: ls -la" }),
@@ -139,14 +151,23 @@ describe("ClaudeActivityPanel（流程圖）", () => {
     expect(card("a")).not.toBeNull();
   });
 
-  it("收合只留標題，並記在 localStorage", () => {
-    const { unmount } = renderPanel([node({ id: "a", description: "跑 ls" })]);
+  it("與建議側欄並排時：收合只留標題，並記在 localStorage", () => {
+    const nodes = [node({ id: "a", description: "跑 ls" })];
+    const { unmount } = render(<ClaudeActivityPanel snapshot={snap(nodes)} fill={false} sessionId="sess-1" />);
     fireEvent.click(screen.getByRole("button", { name: "收合" }));
     expect(card("a")).toBeNull();
     expect(screen.getByRole("button", { name: "展開" })).toBeInTheDocument();
     unmount();
-    renderPanel([node({ id: "a", description: "跑 ls" })]);
+    render(<ClaudeActivityPanel snapshot={snap(nodes)} fill={false} sessionId="sess-1" />);
     expect(card("a")).toBeNull();
+  });
+
+  it("獨佔整欄時沒有收合按鈕，且忽略先前存的收合偏好（否則會卡在空白、無法展開）", () => {
+    localStorage.setItem("aiterm-claude-activity-collapsed", "1");
+    renderPanel([node({ id: "a", description: "跑 ls" })]);
+    expect(screen.queryByRole("button", { name: "收合" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "展開" })).toBeNull();
+    expect(card("a")).not.toBeNull();
   });
 
   it("放大：開出全視窗覆蓋層（同一張圖），Esc 或按鈕關閉", () => {

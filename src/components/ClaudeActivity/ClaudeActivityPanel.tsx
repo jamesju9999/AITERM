@@ -85,7 +85,9 @@ interface Props {
 
 export function ClaudeActivityPanel({ snapshot, fill, sessionId }: Props) {
   const { t } = useLocale();
-  const [collapsed, setCollapsed] = useState(() => loadCollapsed(fill));
+  const [collapsedPref, setCollapsed] = useState(() => loadCollapsed(fill));
+  // 獨佔整欄時收合只會留下一塊空白，所以不提供收合（也忽略先前存的收合偏好）；要隱藏就關掉協作圖按鈕。
+  const collapsed = collapsedPref && !fill;
   const [enlarged, setEnlarged] = useState(false);
   const [mode, setMode] = useState<Mode>(loadMode);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -193,9 +195,11 @@ export function ClaudeActivityPanel({ snapshot, fill, sessionId }: Props) {
           <button type="button" className="aiterm-cact__btn aiterm-cact__btn--first" onClick={() => setEnlarged(true)}>
             {t.claude_activity_enlarge}
           </button>
-          <button type="button" className="aiterm-cact__btn" aria-expanded={!collapsed} onClick={toggleCollapsed}>
-            {collapsed ? t.claude_activity_expand : t.claude_activity_collapse}
-          </button>
+          {!fill && (
+            <button type="button" className="aiterm-cact__btn" aria-expanded={!collapsed} onClick={toggleCollapsed}>
+              {collapsed ? t.claude_activity_expand : t.claude_activity_collapse}
+            </button>
+          )}
         </>
       )}
     </header>
