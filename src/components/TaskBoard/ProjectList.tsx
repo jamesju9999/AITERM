@@ -52,7 +52,8 @@ export function ProjectList({
       // （工作剛開始跑）。後端的拒絕要講出來，不能靜靜失敗——那會讓
       // 使用者以為自己按錯了。
       await message(`${t.proj_remove_failed}${String(e)}`, { title: p.name, kind: "error" });
-      return;
+      // 失敗也要重抓清單：畫面上的卡片可能是殘影（專案早已不在後端，例如上次移除到
+      // 一半失敗），只顯示錯誤的話那張卡永遠移除不掉。
     }
     await onRefresh();
   };

@@ -144,7 +144,8 @@ describe("ProjectList", () => {
 
     await waitFor(() => expect(messageDialog).toHaveBeenCalled());
     expect(String(messageDialog.mock.calls[0][0])).toContain("執行中");
-    expect(onRefresh).not.toHaveBeenCalled();
+    // 失敗也要重抓清單：卡片可能早就是殘影（專案已不存在），不重抓就永遠移除不掉。
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
   });
 
   it("每張專案卡片都有產生報告的入口", async () => {
