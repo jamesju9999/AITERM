@@ -97,10 +97,10 @@ button.aiterm-cact__card { cursor: pointer; }
 .aiterm-cact__card-title .aiterm-cact__dot { margin-top: 4px; }
 .aiterm-cact__card-line--main { color: #c4b5fd; }
 .aiterm-cact__card--group { border-style: dashed; border-left-color: #4ade80; justify-content: center; cursor: pointer; }
-.aiterm-cact__card.is-dim { opacity: 0.4; }
+.aiterm-cact__card.is-dim { opacity: 0.7; }
 .aiterm-cact__card.is-path { border-color: var(--accent, #c084fc); }
 .aiterm-cact__edge.is-path { stroke-width: 2.6; }
-.aiterm-cact__edge.is-dim { opacity: 0.2; }
+.aiterm-cact__edge.is-dim { opacity: 0.45; }
 .aiterm-cact__fly { fill: #93c5fd; }
 .aiterm-cact__timeline { padding: 6px 8px; }
 .aiterm-cact__timeline-span { color: var(--text-secondary, #9a9a9a); font-size: 11px; margin-bottom: 4px; }
@@ -131,3 +131,28 @@ button.aiterm-cact__card { cursor: pointer; }
   font-family: var(--font-mono, monospace); font-size: 11px; border-radius: 6px;
   background: var(--bg-glass, rgba(255, 255, 255, 0.06)); color: var(--text-primary, #d4d4d4);
 }
+.aiterm-cact__card--tool { padding: 0 9px; }
+.aiterm-cact__tool-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.aiterm-cact__tool-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.aiterm-cact__tool-dur { flex: 0 0 auto; color: var(--text-secondary, #9a9a9a); font-size: 11px; font-family: var(--font-mono, monospace); }
+.aiterm-cact__tool-state { flex: 0 0 auto; color: var(--text-secondary, #9a9a9a); font-size: 11px; }
+
+/* ── 詳情區：小面板上下排（可拖曳、可收合），放大時左右分欄 ── */
+.aiterm-cact__body, .aiterm-cact__main { display: contents; }
+.aiterm-cact__dock { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; max-height: 40%; }
+.aiterm-cact__dock .aiterm-cact__detail { flex: 1 1 auto; max-height: none; min-height: 0; }
+.aiterm-cact__handle {
+  flex: 0 0 auto; display: flex; justify-content: center; align-items: center; height: 14px;
+  cursor: row-resize; border-top: 1px solid var(--border-color, #2a2a2a); touch-action: none; position: relative;
+}
+.aiterm-cact__handle::before { content: ""; width: 32px; height: 3px; border-radius: 2px; background: var(--border-color, #3a3a3a); }
+.aiterm-cact__handle-btn {
+  position: absolute; right: 6px; top: 0; height: 14px; padding: 0 6px; line-height: 1;
+  background: none; border: none; color: var(--text-secondary, #9a9a9a); cursor: pointer; font-size: 11px;
+}
+.aiterm-cact__body--split { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: row; }
+.aiterm-cact__body--split .aiterm-cact__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.aiterm-cact__body--split .aiterm-cact__dock {
+  flex: 0 0 42%; max-height: none; border-left: 1px solid var(--border-color, #2a2a2a);
+}
+.aiterm-cact__body--split .aiterm-cact__detail { border-top: none; }

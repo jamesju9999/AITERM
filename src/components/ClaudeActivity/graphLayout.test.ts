@@ -70,3 +70,20 @@ describe("layoutGraph", () => {
     expect(e.d.endsWith(`${a.x} ${a.y + CARD_H / 2}`)).toBe(true);
   });
 });
+
+describe("layoutGraph：單行工具卡比父卡矮時不重疊", () => {
+  it("每個只掛一個工具的 subagent 之間仍保持間距", () => {
+    const mk = (id: string, parent: string | null, ms: number): ActivityNode => ({
+      id, parent, agent_type: "general-purpose", description: id, status: "done", started_ms: ms, ended_ms: ms + 1,
+      current_tool: null, summary: null, tokens: null, tool_count: null, last_event_ms: ms, turn: 1,
+    });
+    const g = layoutGraph([
+      mk("a", null, 1), mk("tool:a1", "a", 2),
+      mk("b", null, 3), mk("tool:b1", "b", 4),
+      mk("c", null, 5), mk("tool:c1", "c", 6),
+    ]);
+    const ys = ["a", "b", "c"].map((id) => g.boxes.get(id)!.y);
+    expect(ys[1] - ys[0]).toBeGreaterThanOrEqual(CARD_H + GAP_Y);
+    expect(ys[2] - ys[1]).toBeGreaterThanOrEqual(CARD_H + GAP_Y);
+  });
+});

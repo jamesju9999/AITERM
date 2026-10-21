@@ -3,7 +3,7 @@ import type { ActivityNode, ActivityStatus } from "../../ipc/claudeActivity";
 import { useLocale } from "../../contexts/LocaleContext";
 import { DONE_GROUP_ID } from "./fold";
 import { formatDuration, formatTokens } from "./format";
-import { CARD_H, ROOT_ID, colX, type Graph } from "./graphLayout";
+import { ROOT_ID, colX, type Graph } from "./graphLayout";
 import { CATEGORY_ICON, isToolId, isToolsMoreId } from "./toolNodes";
 
 const MIN_ZOOM = 0.5;
@@ -118,7 +118,7 @@ export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCo
               })}
             </svg>
             {[...graph.boxes].map(([id, box]) => {
-              const style = { left: box.x, top: box.y, width: box.w, height: CARD_H };
+              const style = { left: box.x, top: box.y, width: box.w, height: box.h };
               const col = id === ROOT_ID ? 0 : cols.get(box.x) ?? 0;
               const dim = dimming && !path.has(id);
               if (id === ROOT_ID) {
@@ -172,15 +172,13 @@ export function GraphCanvas({ graph, nodes, now, selectedId, onSelect, runningCo
                     title={title}
                     onClick={() => onSelect(selectedId === id ? null : id)}
                   >
-                    <span className="aiterm-cact__card-title">
+                    <span className="aiterm-cact__tool-row">
                       <span aria-hidden="true">{CATEGORY_ICON[cat] ?? CATEGORY_ICON.other}</span>
-                      <span className="aiterm-cact__card-text">{title}</span>
+                      <span className={`aiterm-cact__dot aiterm-cact__dot--${n.status}`} role="img" aria-label={statusLabel[n.status]} />
+                      <span className="aiterm-cact__tool-text">{title}</span>
+                      {n.status !== "done" && <span className="aiterm-cact__tool-state">{statusLabel[n.status]}</span>}
+                      <span className="aiterm-cact__tool-dur">{formatDuration((n.ended_ms ?? now) - n.started_ms)}</span>
                     </span>
-                    <span className="aiterm-cact__card-sub">
-                      <span className={`aiterm-cact__dot aiterm-cact__dot--${n.status}`} aria-hidden="true" />
-                      <span>{statusLabel[n.status]}</span>
-                    </span>
-                    <span className="aiterm-cact__card-line">{formatDuration((n.ended_ms ?? now) - n.started_ms)}</span>
                   </button>
                 );
               }

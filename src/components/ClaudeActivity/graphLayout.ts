@@ -1,4 +1,5 @@
 import type { ActivityNode, ActivityStatus } from "../../ipc/claudeActivity";
+import { isToolId } from "./toolNodes";
 
 /** 圖上代表「你正在對話的那個 Claude」的虛擬根節點。 */
 export const ROOT_ID = "__root__";
@@ -6,6 +7,8 @@ export const ROOT_ID = "__root__";
 export const ROOT_W = 110;
 export const CARD_W = 160;
 export const CARD_H = 92;
+/** 工具卡只有單行（圖示＋指令＋耗時），比 subagent 卡矮很多，同樣高度放得下更多個。 */
+export const TOOL_H = 36;
 export const GAP_X = 36;
 export const GAP_Y = 14;
 export const PAD = 12;
@@ -14,6 +17,7 @@ export interface Box {
   x: number;
   y: number;
   w: number;
+  h: number;
 }
 export interface GraphEdge {
   from: string;
@@ -71,42 +75,61 @@ export function layoutGraph(nodes: ActivityNode[]): Graph {
     }
   }
 
-  const rows = new Map<string, number>();
+  const heightOf = (id: string) => (isToolId(id) ? TOOL_H : CARD_H);
+  /** 各節點中心線的 y；葉節點由上往下堆疊，父節點置中在子節點之間。 */
+  const centers = new Map<string, number>();
+  const order: string[] = [];
   const depths = new Map<string, number>();
   const edgesRaw: { from: string; to: string; status: ActivityStatus }[] = [];
-  let nextRow = 0;
+  let nextY = PAD;
   const placed = new Set<string>();
   const place = (id: string, kids: ActivityNode[], depth: number) => {
     depths.set(id, depth);
     const fresh = kids.filter((k) => !placed.has(k.id));
     if (fresh.length === 0) {
-      rows.set(id, nextRow++);
+      const h = heightOf(id);
+      centers.set(id, nextY + h / 2);
+      order.push(id);
+      nextY += h + GAP_Y;
       return;
     }
     for (const k of fresh) placed.add(k.id);
+    const startY = nextY;
+    const startIdx = order.length;
     for (const k of fresh) {
       edgesRaw.push({ from: id, to: k.id, status: k.status });
       place(k.id, children.get(k.id) ?? [], depth + 1);
     }
-    rows.set(id, (rows.get(fresh[0].id)! + rows.get(fresh[fresh.length - 1].id)!) / 2);
+    // 子節點（例如單行工具卡）疊起來比父卡矮時，父卡會蓋到相鄰的卡：
+    // 把整組子孫往下推，讓這一塊至少有父卡自己的高度。
+    const own = heightOf(id);
+    const span = nextY - GAP_Y - startY;
+    if (span < own) {
+      const delta = (own - span) / 2;
+      for (const d of order.slice(startIdx)) centers.set(d, centers.get(d)! + delta);
+      nextY += own - span;
+    }
+    centers.set(id, (centers.get(fresh[0].id)! + centers.get(fresh[fresh.length - 1].id)!) / 2);
+    order.push(id);
   };
   rootKids.sort(byStart);
   place(ROOT_ID, rootKids, 0);
 
   const boxes = new Map<string, Box>();
   let maxDepth = 0;
-  for (const [id, row] of rows) {
+  for (const [id, cy] of centers) {
     const depth = depths.get(id)!;
     maxDepth = Math.max(maxDepth, depth);
-    boxes.set(id, { x: colX(depth), y: PAD + row * (CARD_H + GAP_Y), w: depth === 0 ? ROOT_W : CARD_W });
+    const h = heightOf(id);
+    boxes.set(id, { x: colX(depth), y: cy - h / 2, w: depth === 0 ? ROOT_W : CARD_W, h });
   }
   const edges: GraphEdge[] = edgesRaw.map((e) => {
     const a = boxes.get(e.from)!;
     const b = boxes.get(e.to)!;
     const x1 = a.x + a.w;
-    const y1 = a.y + CARD_H / 2;
+    const y1 = a.y + a.h / 2;
     const x2 = b.x;
-    const y2 = b.y + CARD_H / 2;
+    const y2 = b.y + b.h / 2;
     const dx = GAP_X / 2;
     return { ...e, d: `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}` };
   });
@@ -114,6 +137,6 @@ export function layoutGraph(nodes: ActivityNode[]): Graph {
     boxes,
     edges,
     width: colX(maxDepth) + (maxDepth === 0 ? ROOT_W : CARD_W) + PAD,
-    height: PAD * 2 + nextRow * CARD_H + (nextRow - 1) * GAP_Y,
+    height: nextY - GAP_Y + PAD,
   };
 }
