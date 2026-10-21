@@ -220,7 +220,11 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       const id = (e as CustomEvent<{ tabId?: string }>).detail?.tabId;
       if (!id) return;
       const tab = tabs.find((tb) => tb.ptySessionId === id) ?? tabs.find((tb) => tb.id === id);
-      if (!tab) return;
+      if (!tab) {
+        // 分頁已經被關掉：不能毫無反應，讓發出請求的畫面（協作頁）告訴使用者。
+        window.dispatchEvent(new CustomEvent("aiterm:focus-tab-missing", { detail: { tabId: id } }));
+        return;
+      }
       setHomeActive(false);
       setBoardActive(false);
       selectTab(tab.id);

@@ -805,6 +805,38 @@ pub fn parse_verify_json(text: &str) -> Result<VerifyReport, String> {
     Ok(v)
 }
 
+/// 驗收報告沒有涵蓋到的模組（標題）。涵蓋 = 至少有一條 `module_id` 指向它的條目；
+/// `manual` 也算——那是驗收者明講「這條沒驗」並寫了原因，不是默默漏掉。
+/// 模組清單跟驗收卡提示裡列給驗收者的是同一份（`coder_modules`）。
+pub async fn uncovered_modules(pool: &SqlitePool, report: &VerifyReport) -> Result<Vec<String>, sqlx::Error> {
+    let all_agents = agents::list_agents(pool).await?;
+    let tasks = store::list_tasks(pool).await?;
+    let covered: HashSet<&str> = report.items.iter().filter_map(|i| i.module_id.as_deref()).collect();
+    Ok(coder_modules(&all_agents, &tasks)
+        .into_iter()
+        .filter(|m| !covered.contains(m.id.as_str()))
+        .map(|m| m.title.clone())
+        .collect())
+}
+
+/// 驗收卡最後的判定。報告說 `pass` 但有模組根本沒被驗到（實機：12 個模組只驗了 1 個文件模組就「通過」），
+/// 不能當成通過——改成 `attention`（需要使用者處理：重跑驗收，或看過報告後自己放行）。
+/// 已經是 `fail` 的照原本的退回流程走；`reasons` 只放沒通過的條件。
+pub fn verify_verdict(report: &VerifyReport, uncovered: &[String]) -> ReviewVerdict {
+    if report.verdict == "pass" && !uncovered.is_empty() {
+        return ReviewVerdict {
+            verdict: "attention".into(),
+            reasons: vec![format!("驗收報告沒有涵蓋這些模組（{} 個）：{}", uncovered.len(), uncovered.join("、"))],
+            provides: None,
+        };
+    }
+    ReviewVerdict {
+        verdict: report.verdict.clone(),
+        reasons: report.items.iter().filter(|i| i.status == "fail").map(|i| i.criterion.clone()).collect(),
+        provides: None,
+    }
+}
+
 fn take_chars(s: &str, n: usize) -> String {
     let mut out: String = s.chars().take(n).collect();
     if s.chars().count() > n {
@@ -849,12 +881,14 @@ pub fn verify_body(modules: &[&TaskRow], spec_text: &str, json_path: &Path, evid
          格式：\n\
          {{\"verdict\": \"pass\" 或 \"fail\", \"project_type\": \"web\", \"items\": [\
          {{\"criterion\": \"驗收條件\", \"status\": \"pass\" 或 \"fail\" 或 \"manual\", \
-         \"module_id\": \"出問題的模組 id（找不出來就省略）\", \
+         \"module_id\": \"這條屬於哪個模組的 id（跨模組的全域條件才省略）\", \
          \"evidence\": [\"evidence/start.png\", \"指令輸出摘要\"], \
          \"steps\": \"重現步驟（fail 必填）\", \"expected\": \"預期\", \"actual\": \"實際\", \
          \"notes\": \"manual 的原因或其他說明\"}}], \"notes\": \"其他觀察\"}}\n\
          任何一條 fail，verdict 就是 fail。manual 不算失敗，但一定要寫原因。\
-         evidence 裡的檔案路徑寫成相對於 {dir} 的路徑。\n",
+         evidence 裡的檔案路徑寫成相對於 {dir} 的路徑。\n\
+         \n上面清單裡的每個模組都至少要有一條 items（通過的也要寫，用 module_id 標明是哪個模組）；\
+         實在驗不了的模組也要寫一條 status 為 manual 的並說明原因。漏掉任何一個模組，這次驗收會被判成「需處理」，不會算通過。\n",
         evidence = evidence.display(),
         install = crate::tasks::ask::BROWSER_INSTALL,
         json = json_path.display(),
@@ -1034,12 +1068,12 @@ pub async fn after_card_finished(
                 create_verify_card(pool, project_path, &task, verifier).await?;
             }
             None => {
-                let verdict = fast_forward_repo(&task.project_dir, task.end_sha.as_deref()).await;
+                let verdict = fast_forward_repo(&task.project_dir, project_path, task.end_sha.as_deref()).await;
                 sqlx::query("UPDATE tasks SET verdict = ? WHERE id = ?").bind(verdict).bind(&task.id).execute(pool).await?;
             }
         },
         KIND_VERIFY if success && task.verdict.as_deref() == Some("pass") => {
-            on_verify_passed(pool, &task).await?;
+            on_verify_passed(pool, project_path, &task).await?;
         }
         KIND_VERIFY if success && task.verdict.as_deref() == Some("fail") => {
             events.extend(on_verify_failed(pool, project_path, &task).await?);
@@ -1130,8 +1164,8 @@ async fn create_verify_card(pool: &SqlitePool, project_path: &Path, merge: &Task
 }
 
 /// 驗收通過（或使用者放行）：程式庫快轉到受驗版本，結果記在受驗的合併卡上。
-async fn on_verify_passed(pool: &SqlitePool, verify: &TaskRow) -> Result<(), sqlx::Error> {
-    let verdict = fast_forward_repo(&verify.project_dir, verify.end_sha.as_deref()).await;
+async fn on_verify_passed(pool: &SqlitePool, project_path: &Path, verify: &TaskRow) -> Result<(), sqlx::Error> {
+    let verdict = fast_forward_repo(&verify.project_dir, project_path, verify.end_sha.as_deref()).await;
     if let Some(merge) = verify.review_of.as_deref() {
         sqlx::query("UPDATE tasks SET verdict = ? WHERE id = ?").bind(verdict).bind(merge).execute(pool).await?;
     }
@@ -1243,13 +1277,13 @@ async fn on_verify_failed(pool: &SqlitePool, project_path: &Path, verify: &TaskR
 }
 
 /// 使用者放行一張沒通過的驗收卡：當成通過，更新程式庫。
-pub async fn accept_verification(pool: &SqlitePool, verify_id: &str) -> Result<(), sqlx::Error> {
+pub async fn accept_verification(pool: &SqlitePool, project_path: &Path, verify_id: &str) -> Result<(), sqlx::Error> {
     let task = store::get_task(pool, verify_id).await?.ok_or(sqlx::Error::RowNotFound)?;
     if task.card_kind != KIND_VERIFY || !matches!(task.verdict.as_deref(), Some("fail") | Some("attention")) {
         return Err(sqlx::Error::Protocol("只有沒通過的驗收可以放行".into()));
     }
     sqlx::query("UPDATE tasks SET verdict = 'pass' WHERE id = ?").bind(verify_id).execute(pool).await?;
-    on_verify_passed(pool, &task).await
+    on_verify_passed(pool, project_path, &task).await
 }
 
 /// 合併卡的 `verdict`：整合分支有沒有合回程式庫目前的分支。不是 `repo_merged`
@@ -1263,8 +1297,13 @@ pub const REPO_DIVERGED: &str = "repo_diverged";
 ///
 /// 只做快轉：程式庫有未提交的改動、停在沒收尾的合併、或分支已經分岔
 /// （使用者在程式庫自己 commit 過）都不動，留給使用者按「合併分支」決定。
-async fn fast_forward_repo(repo_dir: &str, end_sha: Option<&str>) -> &'static str {
+async fn fast_forward_repo(repo_dir: &str, project_path: &Path, end_sha: Option<&str>) -> &'static str {
     let Some(sha) = end_sha else { return REPO_DIVERGED };
+    // 看板專案資料夾在程式庫裡面時別讓它把程式庫弄髒（派工時排除過，但舊的專案、或程式庫是
+    // git 最上層的子資料夾時當時沒排到，這裡補一次）。
+    if let Err(e) = crate::tasks::repo_check::exclude_inside(Path::new(repo_dir), project_path) {
+        eprintln!("exclude board folder: {e}");
+    }
     let repo = crate::vcs::git::GitClient::new(repo_dir.to_string(), None);
     if repo.is_merge_in_progress().await {
         return REPO_MERGE_IN_PROGRESS;
@@ -2214,12 +2253,12 @@ pub(crate) mod tests {
         finish_verify(&pool, project.path(), &verify, r#"{"verdict":"fail","items":[{"criterion":"a","status":"fail"}]}"#).await;
         after_card_finished(&pool, project.path(), &verify).await.unwrap();
 
-        assert!(accept_verification(&pool, &merge).await.is_err(), "只接受驗收卡");
-        accept_verification(&pool, &verify).await.unwrap();
+        assert!(accept_verification(&pool, project.path(), &merge).await.is_err(), "只接受驗收卡");
+        accept_verification(&pool, project.path(), &verify).await.unwrap();
         assert_eq!(store::get_task(&pool, &verify).await.unwrap().unwrap().verdict.as_deref(), Some("pass"));
         assert_eq!(store::get_task(&pool, &merge).await.unwrap().unwrap().verdict.as_deref(), Some(REPO_MERGED));
         assert_eq!(head(repo.path()), integrated);
-        assert!(accept_verification(&pool, &verify).await.is_err(), "已經通過的不能再放行");
+        assert!(accept_verification(&pool, project.path(), &verify).await.is_err(), "已經通過的不能再放行");
     }
 
     /// 合併卡成功後，程式庫目前的分支快轉到整合結果；程式庫不乾淨或已分岔
@@ -2688,6 +2727,64 @@ pub(crate) mod tests {
         assert!(parse_verify_json(r#"{"verdict":"maybe","items":[]}"#).is_err());
         assert!(parse_verify_json(r#"{"verdict":"pass","items":[{"criterion":"a","status":"skipped"}]}"#).is_err());
         assert!(parse_verify_json("\u{feff}{\"verdict\":\"pass\",\"items\":[]}").is_ok(), "BOM");
+    }
+
+    fn item_for(module: Option<&str>, status: &str) -> VerifyItem {
+        VerifyItem {
+            criterion: "c".into(),
+            status: status.into(),
+            module_id: module.map(Into::into),
+            evidence: vec![],
+            steps: None,
+            expected: None,
+            actual: None,
+            notes: None,
+        }
+    }
+
+    fn report_of(verdict: &str, items: Vec<VerifyItem>) -> VerifyReport {
+        VerifyReport { verdict: verdict.into(), project_type: None, items, notes: None }
+    }
+
+    /// 實機（ARES GUI To Web）：12 個模組，驗收報告只有 W4 一個模組的條目，卻判「通過」。
+    #[test]
+    fn a_passing_report_that_skips_modules_needs_attention() {
+        let report = report_of("pass", vec![item_for(Some("m1"), "pass"), item_for(None, "pass")]);
+        let v = verify_verdict(&report, &["B 後端".to_string(), "C 前端".to_string()]);
+        assert_eq!(v.verdict, "attention", "漏了模組就不能算通過");
+        assert!(v.reasons.iter().any(|r| r.contains("B 後端") && r.contains("C 前端")), "{:?}", v.reasons);
+    }
+
+    #[test]
+    fn full_coverage_keeps_the_verdict_and_failures_stay_failures() {
+        let pass = verify_verdict(&report_of("pass", vec![item_for(Some("m1"), "pass")]), &[]);
+        assert_eq!((pass.verdict.as_str(), pass.reasons.len()), ("pass", 0));
+        // 已經有 fail 項：照原本的退回流程走，不改成 attention，也不因漏模組多一條理由。
+        let fail = verify_verdict(&report_of("fail", vec![item_for(Some("m1"), "fail")]), &["B 後端".to_string()]);
+        assert_eq!(fail.verdict, "fail");
+        assert_eq!(fail.reasons, vec!["c".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn modules_without_a_report_item_are_listed_and_manual_counts_as_covered() {
+        let pool = mem_pool().await;
+        let c = agent(&pool, "coder", "C1").await;
+        let a = done_module(&pool, &c, "A 登入", "e1").await;
+        let b = done_module(&pool, &c, "B 報表", "e2").await;
+        let _d = done_module(&pool, &c, "D 設定", "e3").await;
+
+        let report = report_of("pass", vec![item_for(Some(&a), "pass"), item_for(Some(&b), "manual")]);
+        assert_eq!(uncovered_modules(&pool, &report).await.unwrap(), vec!["D 設定".to_string()], "manual 是明講沒驗，算涵蓋；沒條目才算漏");
+        let all_covered = report_of("pass", vec![item_for(Some(&a), "pass"), item_for(Some(&b), "pass"), item_for(Some(&_d), "pass")]);
+        assert!(uncovered_modules(&pool, &all_covered).await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_verify_prompt_requires_every_module_to_have_an_item() {
+        let m = TaskRow { title: "計時器".into(), body: "按開始倒數".into(), ..test_row("m1") };
+        let body = verify_body(&[&m], "", Path::new("/j"), Path::new("/e"));
+        assert!(body.contains("每個模組都至少要有一條"), "{body}");
+        assert!(body.contains("需處理"), "要說清楚漏掉的後果：{body}");
     }
 
     #[test]

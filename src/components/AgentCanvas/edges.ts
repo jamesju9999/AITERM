@@ -186,3 +186,13 @@ export function edgePath(a: Box, b: Box): string {
   return `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
 }
 
+
+/**
+ * 彗星繞完一條線要幾秒。速度大致固定（約 260px／秒），線越長跑越久；夾在 1–4 秒，
+ * 太短的線不會一閃而過，太長的線也不會慢到看不出在動。用兩張卡中心的直線距離估，
+ * 不必真的量曲線長度。
+ */
+export function cometDuration(a: Box, b: Box): number {
+  const dist = Math.hypot(a.x + a.w / 2 - (b.x + b.w / 2), a.y + a.h / 2 - (b.y + b.h / 2));
+  return Math.min(4, Math.max(1, dist / 260));
+}

@@ -20,12 +20,14 @@ interface Placement {
   side: "right" | "below";
   left: number;
   top: number;
+  /** 放在下方時箭頭離卡片左緣多遠：卡片被夾回畫面內後，箭頭仍要指著目標的中心。 */
+  arrowLeft?: number;
   /** 目標外框（畫呼吸光暈用）。 */
   ring: { left: number; top: number; width: number; height: number };
 }
 
 const same = (a: Placement | null, b: Placement) =>
-  !!a && a.side === b.side && a.left === b.left && a.top === b.top && a.ring.left === b.ring.left && a.ring.top === b.ring.top &&
+  !!a && a.side === b.side && a.left === b.left && a.top === b.top && a.arrowLeft === b.arrowLeft && a.ring.left === b.ring.left && a.ring.top === b.ring.top &&
   a.ring.width === b.ring.width && a.ring.height === b.ring.height;
 
 /**
@@ -47,10 +49,15 @@ export function GuideHint({ hint, onDismiss }: { hint: Hint; onDismiss: () => vo
       }
       const ring = { left: r.left - 3, top: r.top - 3, width: r.width + 6, height: r.height + 6 };
       // 右邊放得下就放右邊（跟目標上緣對齊，箭頭指著目標的標題列），否則放在目標下方。
-      const next: Placement =
-        r.right + GAP + W < vw
-          ? { side: "right", left: r.right + GAP, top: Math.min(Math.max(8, r.top + 6), vh - 90), ring }
-          : { side: "below", left: Math.min(Math.max(8, r.left), vw - W - 8), top: Math.min(r.bottom + GAP, vh - 90), ring };
+      let next: Placement;
+      if (r.right + GAP + W < vw) {
+        next = { side: "right", left: r.right + GAP, top: Math.min(Math.max(8, r.top + 6), vh - 90), ring };
+      } else {
+        const left = Math.min(Math.max(8, r.left), vw - W - 8);
+        // 箭頭是 10px 的方塊；夾在卡片圓角以內，免得掉到卡片外面。
+        const arrowLeft = Math.min(Math.max(r.left + r.width / 2 - left - 5, 14), W - 24);
+        next = { side: "below", left, top: Math.min(r.bottom + GAP, vh - 90), arrowLeft, ring };
+      }
       setPos((p) => (same(p, next) ? p : next));
     };
     measure();
@@ -83,7 +90,7 @@ export function GuideHint({ hint, onDismiss }: { hint: Hint; onDismiss: () => vo
         role="note"
         style={{ left: pos.left, top: pos.top, maxWidth: W }}
       >
-        <span className="ac-hint-arrow" aria-hidden />
+        <span className="ac-hint-arrow" aria-hidden style={pos.arrowLeft === undefined ? undefined : { left: pos.arrowLeft }} />
         <span className="ac-hint-icon" aria-hidden>
           <SparklesIcon size={14} />
         </span>

@@ -256,5 +256,15 @@ export const projectRepo = (projectId: string): Promise<ProjectRepo | null> => i
 /** 記住這個專案的程式庫（套用範本時選過一次就不再問）。 */
 export const setProjectRepo = (projectId: string, path: string): Promise<void> => invoke("agents_set_project_repo", { projectId, path });
 
+/** 手動暫停的現況：全部暫停？哪些 Agent 個別暫停？（跟失敗暫停的 `paused_task_id` 是兩回事。） */
+export interface ManualPause {
+  all: boolean;
+  agents: string[];
+}
+export const manualPauseState = (projectId: string): Promise<ManualPause> => invoke("agents_manual_pause_state", { projectId });
+/** 手動暫停／繼續：不再派新卡，在跑的卡照樣跑完。`agentId` 為 null = 全部。 */
+export const setManualPause = (projectId: string, agentId: string | null, paused: boolean): Promise<void> =>
+  invoke("agents_set_manual_pause", { projectId, agentId, paused });
+
 /** 清空團隊：移除桌布上全部 Agent。有人在執行就整個拒絕（錯誤訊息列出是誰）。回傳移除了幾位。 */
 export const deleteAllAgents = (projectId: string): Promise<number> => invoke("agents_delete_all", { projectId });

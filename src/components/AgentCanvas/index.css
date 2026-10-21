@@ -156,6 +156,33 @@
 .ac-canvas-empty-body { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 /* 外層不接滑鼠（拖曳角色要能放到桌布上），只有這顆按鈕要能點。 */
 .ac-canvas-empty-body button { pointer-events: auto; }
+.ac-canvas-empty-body .ac-req { pointer-events: auto; }
+.ac-req { display: flex; flex-direction: column; gap: 12px; width: min(560px, 90%); padding: 24px; border-radius: 14px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35); }
+.ac-req-title { margin: 0; font-size: 20px; font-weight: 600; text-align: center; }
+.ac-req-sub { margin: -6px 0 4px; font-size: 13px; color: var(--text-muted); text-align: center; }
+.ac-req-input { width: 100%; box-sizing: border-box; resize: vertical; min-height: 96px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-primary, var(--bg-tertiary)); color: inherit; font: inherit; font-size: 15px; line-height: 1.5; }
+.ac-req-input::placeholder { color: var(--text-muted); opacity: 0.7; }
+.ac-req-input:focus { outline: none; border-color: var(--accent-color, #6c8cff); }
+.ac-req-tools { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: -4px; }
+.ac-req-repo { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.ac-req-repo-label { color: var(--text-muted); flex: none; }
+.ac-req-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 8px; border-radius: 6px; background: var(--bg-tertiary); font-family: var(--font-mono, monospace); }
+.ac-req-path--empty { font-family: inherit; color: var(--text-muted); background: transparent; padding-left: 0; white-space: normal; }
+.ac-req-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; }
+.ac-req-shortcut { font-size: 12px; color: var(--text-muted); }
+.ac-req-or { font-size: 12px; opacity: 0.8; }
+.ac-req-notice { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; gap: 10px; align-items: flex-start; width: min(520px, calc(100% - 32px)); max-height: 60%; overflow: auto; padding: 10px 10px 10px 12px; border-radius: 12px; border: 1px solid var(--accent-border, var(--border-color)); background: linear-gradient(135deg, color-mix(in srgb, var(--accent, #6c8cff) 12%, var(--bg-secondary)), var(--bg-secondary) 70%); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4); font-size: 13px; color: var(--text-primary); }
+.ac-req-notice-icon { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; background: var(--accent-bg, rgba(108, 140, 255, 0.15)); color: var(--accent, #6c8cff); }
+.ac-req-notice-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ac-req-notice-title { font-size: 13.5px; }
+.ac-req-notice-sum { margin: 0; color: var(--text-muted); line-height: 1.5; }
+.ac-req-notice-toggle { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--accent, #6c8cff); font: inherit; font-size: 12px; cursor: pointer; }
+.ac-req-notice-list { margin: 4px 0 0; display: grid; gap: 8px; }
+.ac-req-notice-row { display: grid; gap: 1px; }
+.ac-req-notice-row dt { font-weight: 600; font-size: 12.5px; }
+.ac-req-notice-row dd { margin: 0; color: var(--text-muted); line-height: 1.5; }
+.ac-req-notice-close { flex: none; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none; color: var(--text-muted); font-size: 18px; line-height: 1; cursor: pointer; }
+.ac-req-notice-close:hover { background: var(--bg-tertiary); color: var(--text-primary); }
 
 /* Agent 卡片 */
 .ac-agent {
@@ -469,8 +496,9 @@
 }
 .ac-edge-base { fill: none; stroke: #3a3f4b; stroke-width: 2; }
 .ac-edge-glow { fill: none; stroke-width: 9; opacity: 0.28; filter: url(#ac-blur); }
-.ac-edge-flow { fill: none; stroke-width: 2.5; stroke-dasharray: 7 9; animation: ac-flow 0.55s linear infinite; }
-@keyframes ac-flow { to { stroke-dashoffset: -16; } }
+/* 流動中的線：一條淡的實線打底，上面由彗星（小點＋尾巴，見 EdgeLayer 的 Comet）帶出流向。 */
+.ac-edge-flow { fill: none; stroke-width: 3.5; opacity: 0.5; stroke-linecap: round; }
+.ac-comet { filter: drop-shadow(0 0 3px currentColor); pointer-events: none; }
 .ac-pulse { filter: drop-shadow(0 0 4px currentColor); }
 .ac-agent { z-index: 1; }
 
@@ -847,3 +875,16 @@ button.ac-log-title:hover { color: var(--text-primary); }
 @media (max-width: 1280px) {
   .ac-top-label { display: none; }
 }
+/* 視窗窄時頂列與角色列的文字不換行（標題、標籤被擠成兩行很難看）；放不下的由狀態列自己縮短。 */
+.ac-top, .ac-pool { flex-wrap: nowrap; }
+.ac-top > *, .ac-pool > .ac-pool-label, .ac-pool > .ac-pool-item { flex: none; white-space: nowrap; }
+/* 進度摘要是唯一可以被縮短（⋯）的，其餘都不換行也不被擠扁。 */
+.ac-top > .ac-summary { flex: 0 1 auto; min-width: 0; }
+
+/* 手動暫停／停止 */
+.ac-badge--paused { background: rgba(234, 179, 8, 0.16); color: #fde68a; border-color: rgba(234, 179, 8, 0.4); }
+.ac-agent-ctl { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-bottom: 1px solid var(--ac-edge); }
+.ac-ctlbtn { background: none; border: 1px solid var(--border-color); color: var(--text-muted); border-radius: 6px; padding: 1px 8px; font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.ac-ctlbtn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.ac-ctlbtn--stop { color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
+.ac-ctlbtn--stop:hover { color: #ef4444; }

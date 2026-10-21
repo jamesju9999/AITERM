@@ -627,11 +627,13 @@ pub(crate) async fn finalize_verify_card(
             .and_then(|t| crate::tasks::workflow::parse_verify_json(&t))
         {
             Ok(report) => {
-                let verdict = crate::tasks::workflow::ReviewVerdict {
-                    verdict: report.verdict.clone(),
-                    reasons: report.items.iter().filter(|i| i.status == "fail").map(|i| i.criterion.clone()).collect(),
-                    provides: None,
+                // 報告說通過但漏了模組：改判「需處理」。查不到模組清單時不擋（照報告）。
+                let uncovered = if report.verdict == "pass" {
+                    crate::tasks::workflow::uncovered_modules(pool, &report).await.unwrap_or_default()
+                } else {
+                    Vec::new()
                 };
+                let verdict = crate::tasks::workflow::verify_verdict(&report, &uncovered);
                 match crate::tasks::workflow::set_verdict(pool, task_id, &verdict).await {
                     Ok(()) => monitor::TaskOutcome::Success,
                     Err(e) => monitor::TaskOutcome::Failed(format!("寫入驗收結果失敗：{e}")),
@@ -1584,7 +1586,7 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
                         break 'scan;
                     }
                 };
-                let paused: std::collections::HashSet<String> =
+                let mut paused: std::collections::HashSet<String> =
                     match crate::tasks::agents::paused_agent_ids(&project.pool).await {
                         Ok(v) => v.into_iter().collect(),
                         Err(e) => {
@@ -1592,6 +1594,14 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
                             break 'scan;
                         }
                     };
+                // 使用者手動暫停（個別或全部）：跟失敗暫停一樣不派新卡。
+                match crate::tasks::manual_pause::blocked_agent_ids(&project.pool).await {
+                    Ok(ids) => paused.extend(ids),
+                    Err(e) => {
+                        eprintln!("scheduler manual pause ({}): {e}", project.name);
+                        break 'scan;
+                    }
+                }
                 let blocked = match crate::tasks::workflow::blocked_cards(&project.pool).await {
                     Ok(b) => b,
                     Err(e) => {
@@ -2405,6 +2415,42 @@ mod loop_tests {
         let all = store::list_tasks(&project.pool).await.unwrap();
         assert_eq!(titles(&all, "running"), vec!["審查"]);
         assert_eq!(titles(&all, "queued"), vec!["新模組"]);
+    }
+
+    #[tokio::test]
+    async fn drain_once_skips_manually_paused_agents_and_all_when_everything_is_paused() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        let c2 = agent_in(&project, "Coder2").await;
+        card_for(&project, "A", &c1, false).await;
+        card_for(&project, "D", &c2, false).await;
+        crate::tasks::manual_pause::set(&project.pool, Some(&c1), true).await.unwrap();
+
+        drain_once(&reg, &NeverFinishes, 5).await;
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "running"), vec!["D"], "手動暫停的 Agent 不派新卡");
+        assert_eq!(titles(&all, "queued"), vec!["A"]);
+
+        crate::tasks::manual_pause::set(&project.pool, None, false).await.unwrap();
+        crate::tasks::manual_pause::set(&project.pool, Some(&c1), false).await.unwrap();
+        drain_once(&reg, &NeverFinishes, 5).await;
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert_eq!(titles(&all, "running"), vec!["A", "D"], "繼續後照常派");
+    }
+
+    #[tokio::test]
+    async fn drain_once_dispatches_nothing_to_agents_while_all_is_paused() {
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        let c2 = agent_in(&project, "Coder2").await;
+        card_for(&project, "A", &c1, false).await;
+        card_for(&project, "D", &c2, false).await;
+        crate::tasks::manual_pause::set(&project.pool, None, true).await.unwrap();
+
+        drain_once(&reg, &NeverFinishes, 5).await;
+        let all = store::list_tasks(&project.pool).await.unwrap();
+        assert!(titles(&all, "running").is_empty());
+        assert_eq!(titles(&all, "queued"), vec!["A", "D"]);
     }
 
     #[tokio::test]

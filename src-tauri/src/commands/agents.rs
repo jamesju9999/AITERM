@@ -163,6 +163,35 @@ pub async fn agents_delete_all(project_id: String, reg: State<'_, ProjectRegistr
     Ok(n)
 }
 
+/// 手動暫停的現況：全部暫停？哪些 Agent 個別暫停？
+#[tauri::command]
+pub async fn agents_manual_pause_state(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<crate::tasks::manual_pause::ManualPause, String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::manual_pause::get(&p.pool).await.map_err(|e| e.to_string())
+}
+
+/// 手動暫停／繼續。`agent_id` 是 `None` = 全部；已經在跑的卡不受影響（要中斷用停止）。
+#[tauri::command]
+pub async fn agents_set_manual_pause(
+    project_id: String,
+    agent_id: Option<String>,
+    paused: bool,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+    scheduler: State<'_, SchedulerHandle>,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::manual_pause::set(&p.pool, agent_id.as_deref(), paused).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    if !paused {
+        scheduler.poke();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn tasks_assign_agent(
     project_id: String,
@@ -220,7 +249,7 @@ pub async fn agents_resolve(
         }
         other => return Err(format!("未知的動作：{other}")),
     }
-    agents::set_paused(&p.pool, &agent.id, None).await.map_err(|e| e.to_string())?;
+    agents::resume_after_resolve(&p.pool, &agent.id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
     scheduler.poke();
     Ok(())
@@ -252,6 +281,10 @@ pub async fn agents_merge(
     }
     let branch = agent.branch.clone().ok_or_else(|| "這個 Agent 還沒有分支（尚未派過工）".to_string())?;
 
+    // 看板專案資料夾在程式庫裡面時先排除，免得它讓程式庫變成「有未提交的改動」而合不回去。
+    if let Err(e) = crate::tasks::repo_check::exclude_inside(std::path::Path::new(&agent.project_dir), &p.path) {
+        eprintln!("exclude board folder: {e}");
+    }
     let base = GitClient::new(agent.project_dir.clone(), None);
     if base.is_merge_in_progress().await {
         return Ok(MergeOutcome::Blocked {
@@ -370,7 +403,7 @@ pub async fn agents_accept_verification(
     app: AppHandle,
 ) -> Result<(), String> {
     let p = project(&reg, &project_id)?;
-    crate::tasks::workflow::accept_verification(&p.pool, &task_id).await.map_err(|e| e.to_string())?;
+    crate::tasks::workflow::accept_verification(&p.pool, &p.path, &task_id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
     Ok(())
 }

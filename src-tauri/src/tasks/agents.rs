@@ -203,6 +203,13 @@ pub async fn set_paused(pool: &SqlitePool, id: &str, task_id: Option<&str>) -> R
     Ok(())
 }
 
+/// 使用者對一位暫停中的 Agent 按了「重試」或「跳過」：卡片的暫停解除，同時這一位的手動暫停也解除
+/// ——按下去就是要它繼續做事。別的 Agent 的手動暫停、「全部暫停」都不動。
+pub async fn resume_after_resolve(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    set_paused(pool, id, None).await?;
+    crate::tasks::manual_pause::set(pool, Some(id), false).await
+}
+
 /// 暫停中的 Agent id。排程器每一輪用它決定哪些 Agent 的佇列不能動。
 pub async fn paused_agent_ids(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
     sqlx::query_scalar("SELECT id FROM agents WHERE paused_task_id IS NOT NULL")
@@ -529,6 +536,40 @@ mod tests {
         set_paused(&pool, &b, None).await.unwrap();
         assert!(paused_agent_ids(&pool).await.unwrap().is_empty());
         let _ = a;
+    }
+
+    /// 刪掉讓 Agent 暫停的那張卡：暫停必須跟著解除，否則 UI 找不到卡就沒有「重試／跳過」，
+    /// Agent 永遠卡在「需處理」（實機：問題回報卡被刪掉後工程師3 就這樣卡死）。
+    #[tokio::test]
+    async fn deleting_the_card_that_paused_an_agent_unpauses_it() {
+        let pool = mem_pool().await;
+        let stuck = coder(&pool, "C1").await;
+        let other = coder(&pool, "C2").await;
+        set_paused(&pool, &stuck, Some("t-gone")).await.unwrap();
+        set_paused(&pool, &other, Some("t-kept")).await.unwrap();
+
+        store::delete_task(&pool, "t-gone").await.unwrap();
+
+        assert_eq!(paused_agent_ids(&pool).await.unwrap(), vec![other.clone()], "只解除被刪那張卡造成的暫停");
+    }
+
+    /// 使用者先手動暫停、又關掉分頁（卡被取消，Agent 因此也暫停），之後按「重試」：
+    /// 重試就是要它跑——只解掉卡的暫停、手動暫停還在的話，卡會排進佇列卻永遠不派，
+    /// 畫面上看起來 Agent 沒了、前往分頁也沒用。
+    #[tokio::test]
+    async fn resolving_a_paused_agent_also_lifts_its_manual_pause() {
+        let pool = mem_pool().await;
+        let a = coder(&pool, "A").await;
+        let other = coder(&pool, "B").await;
+        set_paused(&pool, &a, Some("t1")).await.unwrap();
+        crate::tasks::manual_pause::set(&pool, Some(&a), true).await.unwrap();
+        crate::tasks::manual_pause::set(&pool, Some(&other), true).await.unwrap();
+
+        resume_after_resolve(&pool, &a).await.unwrap();
+
+        assert!(paused_agent_ids(&pool).await.unwrap().is_empty());
+        let blocked = crate::tasks::manual_pause::blocked_agent_ids(&pool).await.unwrap();
+        assert_eq!(blocked, std::collections::HashSet::from([other]), "只解除這一位，別人的手動暫停不動");
     }
 
     #[tokio::test]

@@ -15,6 +15,9 @@ import {
   openRepo,
   overrideModule,
   resolveAgent,
+  manualPauseState,
+  setManualPause,
+  type ManualPause,
   acceptVerification,
   updateAgent,
   checkTools,
@@ -75,6 +78,7 @@ import {
   setTokenBudget,
   getProjectBrief,
   markTaskDone,
+  stopTask,
   onTasksUpdated,
   type MergeOutcome,
   type TaskWithAttachments,
@@ -102,6 +106,9 @@ import { projectSummary, type ProjectSummary } from "./projectSummary";
 import { sumUsage } from "./tokenUsage";
 import { TokenBudgetChip } from "./TokenBudgetChip";
 import { ProjectBriefDialog } from "./ProjectBriefDialog";
+import { RequirementStart } from "./RequirementStart";
+import { StartNotice } from "./StartNotice";
+import type { StartResult } from "./startFromRequirement";
 import { GuideChecklist } from "./guide/GuideChecklist";
 import { GuideHelp } from "./guide/GuideHelp";
 import { GuideHint } from "./guide/GuideHint";
@@ -233,6 +240,11 @@ export function AgentCanvasView({
   const [refsOpen, setRefsOpen] = useState(false);
   /** 這個專案的專案資料夾（使用者指定過的程式庫）；新增模組時帶入。記著是哪個專案的。 */
   const [projRepoOf, setProjRepoOf] = useState<{ projectId: string; path: string | null } | null>(null);
+  /** 使用者手動暫停的現況（全部／個別）。 */
+  const [pauseOf, setPauseOf] = useState<{ projectId: string; state: ManualPause } | null>(null);
+  const manualPause = pauseOf?.projectId === projectId ? pauseOf.state : { all: false, agents: [] };
+  /** 需求先行組好團隊後的說明（可關閉）。 */
+  const [startNotice, setStartNotice] = useState<StartResult | null>(null);
   /** 模組庫裡正在確認要不要刪除的模組。 */
   const [deletingModule, setDeletingModule] = useState<string | null>(null);
   /** 自訂技能的使用記錄；記著是哪個專案的。 */
@@ -380,6 +392,9 @@ export function AgentCanvasView({
       listRetiredAgents(projectId)
         .then((rows) => alive && setRetiredOf({ projectId, rows }))
         .catch(() => {});
+      manualPauseState(projectId)
+        .then((state) => alive && setPauseOf({ projectId, state }))
+        .catch(() => {});
       Promise.all([listAgents(projectId), listTasks(projectId)])
         .then(([a, ts]) => {
           if (!alive) return;
@@ -516,6 +531,13 @@ export function AgentCanvasView({
     const h = window.setTimeout(() => setToast(null), 3500);
     return () => window.clearTimeout(h);
   }, [toast]);
+
+  // 「前往分頁」找不到分頁（已經被關掉）：TerminalApp 會丟這個事件，這裡說明白。
+  useEffect(() => {
+    const onMissing = () => setToast(t.ac_tab_gone);
+    window.addEventListener("aiterm:focus-tab-missing", onMissing);
+    return () => window.removeEventListener("aiterm:focus-tab-missing", onMissing);
+  }, [t]);
 
   const run = useCallback(
     async (fn: () => Promise<unknown>) => {
@@ -1185,6 +1207,20 @@ export function AgentCanvasView({
             </button>
           </>
         )}
+        {projectId && agents.length > 0 && (
+          <>
+            <span className="ac-top-sep" aria-hidden />
+            <button
+              className={`aiterm-btn aiterm-btn--sm ac-top-btn${manualPause.all ? " aiterm-btn--primary" : ""}`}
+              data-testid="ac-pause-all"
+              title={t.ac_pause_all_hint}
+              onClick={() => void run(() => setManualPause(projectId, null, !manualPause.all))}
+            >
+              <span aria-hidden>{manualPause.all ? "▶" : "⏸"}</span>
+              <span className="ac-top-label">{manualPause.all ? t.ac_resume_all : t.ac_pause_all}</span>
+            </button>
+          </>
+        )}
         {projectId && agents.some((a) => a.kind === "coder") && (
           <>
             <span className="ac-top-sep" aria-hidden />
@@ -1373,7 +1409,18 @@ export function AgentCanvasView({
             {agents.length === 0 && (
               <div className="ac-canvas-empty">
                 <div className="ac-canvas-empty-body">
-                  <span>{t.ac_empty_canvas}</span>
+                  {projectId && (
+                    <RequirementStart
+                      projectId={projectId}
+                      repo={projRepoOf?.projectId === projectId ? projRepoOf.path : null}
+                      onRepoChange={(path) => setProjRepoOf({ projectId, path })}
+                      onStarted={(r) => {
+                        setStartNotice(r);
+                        void refresh();
+                      }}
+                    />
+                  )}
+                  <span className="ac-req-or">{t.ac_req_or}：{t.ac_empty_canvas}</span>
                   <button
                     className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
                     data-testid="ac-templates-empty"
@@ -1384,6 +1431,7 @@ export function AgentCanvasView({
                 </div>
               </div>
             )}
+            {startNotice && agents.length > 0 && <StartNotice result={startNotice} onClose={() => setStartNotice(null)} />}
             <div className="ac-sizer" style={{ width: world.w * zoom, height: world.h * zoom }}>
               <div
                 className="ac-world"
@@ -1468,6 +1516,12 @@ export function AgentCanvasView({
                       }}
                       onEdit={() => setConfig({ kind: a.kind, agent: a, x: a.canvas_x, y: a.canvas_y })}
                       onDelete={() => void removeAgent(a)}
+                      manualPaused={manualPause.agents.includes(a.id)}
+                      allPaused={manualPause.all}
+                      onStop={(taskId) => projectId && void run(() => stopTask(projectId, taskId))}
+                      onTogglePause={() =>
+                        projectId && void run(() => setManualPause(projectId, a.id, !manualPause.agents.includes(a.id)))
+                      }
                       onRetry={() => projectId && void run(() => resolveAgent(projectId, a.id, "retry"))}
                       onSkip={() => projectId && void run(() => resolveAgent(projectId, a.id, "skip"))}
                       onTranscript={setTranscriptFor}

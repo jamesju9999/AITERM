@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentRow } from "../../ipc/agents";
 import type { TaskRow } from "../../ipc/tasks";
-import { computeEdges, diffPulses, EDGE_COLORS, edgeActivity, edgePath } from "./edges";
+import { cometDuration, computeEdges, diffPulses, EDGE_COLORS, edgeActivity, edgePath } from "./edges";
 
 const ag = (id: string, kind: AgentRow["kind"]): AgentRow => ({
   id, kind, name: id, role: "", prompt_prefix: "", project_dir: "/r", canvas_x: 0, canvas_y: 0,
@@ -154,5 +154,18 @@ describe("edgePath", () => {
     const t = tail(edgePath({ x: 0, y: 0, w: 200, h: 100 }, { x: 50, y: 300, w: 200, h: 100 }));
     expect([t.x, t.y]).toEqual([150, 300]);
     expect(t.cy).toBeLessThan(t.y);
+  });
+});
+
+describe("cometDuration", () => {
+  const box = (x: number, y: number) => ({ x, y, w: 100, h: 100 });
+  it("長的線跑得久，速度大致一樣", () => {
+    const short = cometDuration(box(0, 0), box(200, 0));
+    const long = cometDuration(box(0, 0), box(900, 0));
+    expect(long).toBeGreaterThan(short);
+  });
+  it("太短或太長都夾在範圍內，不會閃過去也不會爬很久", () => {
+    expect(cometDuration(box(0, 0), box(101, 0))).toBeGreaterThanOrEqual(1);
+    expect(cometDuration(box(0, 0), box(9000, 0))).toBeLessThanOrEqual(4);
   });
 });

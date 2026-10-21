@@ -742,6 +742,12 @@ pub async fn delete_task(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error>
         .bind(id)
         .execute(pool)
         .await?;
+    // 讓某個 Agent 暫停的那張卡被刪掉：暫停要跟著解除。留著的話 UI 找不到失敗的卡，
+    // 就沒有「重試／跳過」可按，Agent 永遠卡在「需處理」。
+    sqlx::query("UPDATE agents SET paused_task_id = NULL WHERE paused_task_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

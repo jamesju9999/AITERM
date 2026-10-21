@@ -65,6 +65,10 @@ export function AgentNode({
   onDelete,
   onRetry,
   onSkip,
+  manualPaused = false,
+  allPaused = false,
+  onStop,
+  onTogglePause,
   onTranscript,
   onReportBug,
   onOpenTab,
@@ -108,6 +112,13 @@ export function AgentNode({
   onDelete: () => void;
   onRetry: () => void;
   onSkip: () => void;
+  /** 使用者手動暫停了這位（不再派新卡）。 */
+  manualPaused?: boolean;
+  /** 整個專案「全部暫停」中。 */
+  allPaused?: boolean;
+  /** 中斷正在跑的這張卡。 */
+  onStop?: (taskId: string) => void;
+  onTogglePause?: () => void;
   onTranscript: (taskId: string) => void;
   /** 在完成的模組上按右鍵：回報這個模組的問題。 */
   onReportBug?: (moduleId: string) => void;
@@ -303,6 +314,7 @@ export function AgentNode({
         return (
           <span>
             <span className="ac-bad-text">⚠ {t.ac_verify_attention}</span> · {report}{" "}
+            {reasonsOf(lastVerify)[0] && <span className="ac-attention-msg">{reasonsOf(lastVerify)[0]} </span>}
             <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={() => onAcceptVerify?.(lastVerify.id)}>
               {t.ac_verify_accept}
             </button>
@@ -385,6 +397,34 @@ export function AgentNode({
           ×
         </button>
       </div>
+      {/* 暫停／停止：標題列已經很擠（名稱會被截成「工…」），另外放一列有文字的小按鈕。 */}
+      {(manualPaused || allPaused || (running && !agent.paused_task_id && onStop) || (onTogglePause && !allPaused && !agent.paused_task_id)) && (
+        <div className="ac-agent-ctl">
+          {(manualPaused || allPaused) && <span className="ac-badge ac-badge--paused">{t.ac_paused_badge}</span>}
+          <span className="ac-spacer" />
+          {running && !agent.paused_task_id && onStop && (
+            <button
+              className="ac-ctlbtn ac-ctlbtn--stop"
+              data-testid={`agent-stop-${agent.id}`}
+              title={t.ac_stop_hint}
+              onClick={() => onStop(running.id)}
+            >
+              ■ {t.ac_stop_short}
+            </button>
+          )}
+          {/* 手動暫停中就一定要有「繼續」，就算同時有張卡被取消卡住（失敗暫停的畫面不能把它蓋掉）。 */}
+          {onTogglePause && !allPaused && (manualPaused || !agent.paused_task_id) && (
+            <button
+              className="ac-ctlbtn"
+              data-testid={`agent-pause-${agent.id}`}
+              title={manualPaused ? t.ac_resume : t.ac_pause_hint}
+              onClick={onTogglePause}
+            >
+              {manualPaused ? `▶ ${t.ac_resume_short}` : `⏸ ${t.ac_pause_short}`}
+            </button>
+          )}
+        </div>
+      )}
       {/* 技能列：自己一整列（標題那欄太窄，連線名稱會被截掉）。查詢中整列亮起來，第二行顯示 SQL 開頭。 */}
       {dbSkill && (
         <button
@@ -428,7 +468,7 @@ export function AgentNode({
       <div className="ac-agent-body">
         {failed ? (
           <div className="ac-attention" role="alert">
-            <div className="ac-attention-title">{t.ac_failed_title}</div>
+            <div className="ac-attention-title">{failed.outcome === "cancelled" ? t.ac_stopped_title : t.ac_failed_title}</div>
             <div className="ac-attention-card">✗ {localizedCardTitle(failed, t)}</div>
             {failed.error_message && <div className="ac-attention-msg">{failed.error_message}</div>}
             <div className="ac-attention-actions">
@@ -440,6 +480,17 @@ export function AgentNode({
               </button>
               <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => onTranscript(failed.id)}>
                 {t.ac_transcript}
+              </button>
+            </div>
+          </div>
+        ) : agent.paused_task_id ? (
+          // 讓它暫停的那張卡已經被刪掉：沒有卡可以重試，但還是要有出口，不然永遠卡在「需處理」。
+          <div className="ac-attention" role="alert">
+            <div className="ac-attention-title">{t.ac_failed_title}</div>
+            <div className="ac-attention-msg">{t.ac_paused_card_gone}</div>
+            <div className="ac-attention-actions">
+              <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={onSkip}>
+                {t.ac_unpause}
               </button>
             </div>
           </div>

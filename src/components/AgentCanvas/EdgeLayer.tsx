@@ -1,7 +1,13 @@
 import { useLayoutEffect, useState, type RefObject } from "react";
 
 import type { AgentRow } from "../../ipc/agents";
-import { edgePath, type Box, type Edge, type Pulse } from "./edges";
+import { cometDuration, edgePath, type Box, type Edge, type Pulse } from "./edges";
+
+/** 彗星：一顆亮點拖著逐漸變小、變淡的尾巴。尾巴是同一條路上晚幾格出發的小點。 */
+const TAIL = 8;
+const TAIL_STEP = 0.045; // 尾巴每一點比前一點晚幾秒（佔一圈的比例，見 Comet）
+const COMETS_PER_EDGE = 2;
+
 
 /**
  * 桌布上的連線層。節點尺寸要從 DOM 量（內容多寡會改變高度），所以每次
@@ -86,6 +92,9 @@ export function EdgeLayer({
               <>
                 <path className="ac-edge-glow" d={d} stroke={color} />
                 <path className="ac-edge-flow" d={d} stroke={color} />
+                {Array.from({ length: COMETS_PER_EDGE }, (_, k) => (
+                  <Comet key={k} d={d} color={color} dur={cometDuration(a, b)} phase={k / COMETS_PER_EDGE} />
+                ))}
               </>
             )}
           </g>
@@ -110,5 +119,28 @@ export function EdgeLayer({
         );
       })}
     </svg>
+  );
+}
+
+
+/**
+ * 沿著 `d` 流動的彗星。每個點都是 animateMotion，用負的 begin 讓它們一開始就各就各位
+ * （正的 begin 在出發前會畫在 SVG 原點）；越靠尾巴越晚出發，所以落在彗頭後面。
+ * `phase`（0–1）把幾顆彗星錯開，同一條線上不會同時擠在一起。
+ */
+function Comet({ d, color, dur, phase }: { d: string; color: string; dur: number; phase: number }) {
+  return (
+    <g className="ac-comet" fill={color} style={{ color }}>
+      {Array.from({ length: TAIL }, (_, i) => {
+        const lag = i * TAIL_STEP * dur; // 這一點落後彗頭多少秒
+        const begin = -(phase * dur + (TAIL * TAIL_STEP * dur - lag));
+        const t = i / (TAIL - 1);
+        return (
+          <circle key={i} r={i === 0 ? 3.6 : 3.2 * (1 - t * 0.7)} opacity={i === 0 ? 1 : 0.55 * (1 - t) ** 1.4}>
+            <animateMotion dur={`${dur}s`} begin={`${begin}s`} repeatCount="indefinite" path={d} calcMode="linear" />
+          </circle>
+        );
+      })}
+    </g>
   );
 }

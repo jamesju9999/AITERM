@@ -21,6 +21,7 @@ pub mod ask;
 pub mod usage;
 pub mod verify_ports;
 pub mod budget;
+pub mod manual_pause;
 pub mod codex;
 pub mod context;
 pub mod tools_check;

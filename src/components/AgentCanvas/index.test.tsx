@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
@@ -28,6 +28,7 @@ vi.mock("../../ipc/tasks", () => ({
   createTask: vi.fn().mockResolvedValue("bug-1"),
   addAttachment: vi.fn().mockResolvedValue({ id: "att", task_id: "bug-1", filename: "x", stored_path: "x" }),
   markTaskDone: vi.fn().mockResolvedValue(undefined),
+  stopTask: vi.fn().mockResolvedValue(undefined),
   deleteTask: vi.fn().mockResolvedValue(undefined),
   codexInfo: vi.fn().mockResolvedValue({ models: [], login: null, error: null }),
 }));
@@ -37,6 +38,8 @@ vi.mock("../../ipc/agents", () => ({
   updateAgent: vi.fn().mockResolvedValue(undefined),
   deleteAgent: vi.fn().mockResolvedValue(undefined),
   resolveAgent: vi.fn().mockResolvedValue(undefined),
+  manualPauseState: vi.fn().mockResolvedValue({ all: false, agents: [] }),
+  setManualPause: vi.fn().mockResolvedValue(undefined),
   mergeAgent: vi.fn().mockResolvedValue({ status: "merged" }),
   abortAgentMerge: vi.fn().mockResolvedValue(undefined),
   assignAgent: vi.fn().mockResolvedValue(undefined),
@@ -89,6 +92,7 @@ vi.mock("../../ipc/provider", () => ({ listProviders: vi.fn().mockResolvedValue(
 vi.mock("../../ipc/ai", async () => ({
   ...(await vi.importActual<typeof import("../../ipc/ai")>("../../ipc/ai")),
   invokeAiComplete: vi.fn(),
+  invokeAiChat: vi.fn(),
 }));
 // ModelPickerButton 會拉配額資訊。
 vi.mock("../../ipc/usage", () => ({
@@ -134,11 +138,13 @@ import {
   openRepo,
   overrideModule,
   resolveAgent,
+  manualPauseState,
+  setManualPause,
   updateAgent,
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
-import { addAttachment, codexInfo, createTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, setProjectBrief, type TaskWithAttachments } from "../../ipc/tasks";
+import { addAttachment, codexInfo, createTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { listProjects } from "../../ipc/projects";
@@ -598,6 +604,18 @@ describe("AgentCanvasView", () => {
       expect(screen.getByTestId("ac-summary").textContent).toMatch(/等待重新合併/);
     });
 
+    it("驗收報告漏了模組而需處理：驗收者卡上直接寫出原因", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), orch, ver]);
+      vi.mocked(listTasks).mockResolvedValue([
+        modA,
+        merged,
+        verify({ verdict: "attention", review_reasons: JSON.stringify(["驗收報告沒有涵蓋這些模組（2 個）：B 後端、C 前端"]) }),
+      ]);
+      view();
+      const node = await screen.findByTestId("agent-v1");
+      await waitFor(() => expect(within(node).getByText(/B 後端、C 前端/)).toBeTruthy());
+    });
+
     it("驗收要你決定：卡上可以放行，報告列出每項與截圖", async () => {
       vi.mocked(listAgents).mockResolvedValue([agent(), orch, ver]);
       vi.mocked(listTasks).mockResolvedValue([modA, merged, verify({ verdict: "attention", review_reasons: JSON.stringify(["整體樣式"]) })]);
@@ -786,6 +804,57 @@ describe("AgentCanvasView", () => {
     expect(await screen.findByRole("dialog", { name: "團隊範本" })).toBeTruthy();
   });
 
+  it("需求先行：空桌布打需求 → 建預設團隊、需求派給第一位工程師；有 Agent 時不出現", async () => {
+    vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "saved" });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    let n = 0;
+    vi.mocked(createAgent).mockImplementation(async () => `ag${++n}`);
+    // clearAllMocks 不還原實作：測完把 createAgent 還原，免得影響後面的測試。
+    onTestFinished(() => void vi.mocked(createAgent).mockResolvedValue("new-agent"));
+    const { createTask } = await import("../../ipc/tasks");
+    vi.mocked(createTask).mockResolvedValueOnce("t-first");
+    const { unmount } = view();
+    const send = (await screen.findByTestId("ac-req-send")) as HTMLButtonElement;
+    expect(send.disabled).toBe(true); // 還沒打需求
+    fireEvent.change(screen.getByTestId("ac-req-input"), { target: { value: "做一個待辦清單\n要能勾選" } });
+    await waitFor(() => expect(send.disabled).toBe(false)); // 程式庫檢查通過
+    fireEvent.click(send);
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledWith("p1", "t-first", "ag1"));
+    expect(createAgent).toHaveBeenCalled();
+    expect(vi.mocked(createTask).mock.calls[0][1]).toMatchObject({ title: "做一個待辦清單", project_dir: "/repo/htbktw" });
+    unmount();
+
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    view();
+    await screen.findByTestId("agent-a1");
+    expect(screen.queryByTestId("ac-req")).toBeNull();
+  });
+
+  it("需求先行：AI 潤飾會改寫輸入框，可以還原", async () => {
+    const { listProviders } = await import("../../ipc/provider");
+    const { invokeAiChat } = await import("../../ipc/ai");
+    vi.mocked(listProviders).mockResolvedValue([
+      { id: "pv", name: "P", provider_type: "openai", model: "m", is_default: true } as never,
+    ]);
+    onTestFinished(() => void vi.mocked(listProviders).mockResolvedValue([]));
+    vi.mocked(invokeAiChat).mockResolvedValue({ content: "目標：待辦清單網站\n驗收：可勾選" } as never);
+    vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "saved" });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const input = (await screen.findByTestId("ac-req-input")) as HTMLTextAreaElement;
+    const refine = screen.getByTestId("ac-req-refine") as HTMLButtonElement;
+    expect(refine.disabled).toBe(true); // 還沒打字
+    fireEvent.change(input, { target: { value: "做待辦清單" } });
+    await waitFor(() => expect(refine.disabled).toBe(false));
+    fireEvent.click(refine);
+    await waitFor(() => expect(input.value).toContain("驗收：可勾選"));
+    fireEvent.click(screen.getByTestId("ac-req-refine-undo"));
+    expect(input.value).toBe("做待辦清單");
+    expect(screen.queryByTestId("ac-req-refine-undo")).toBeNull();
+  });
+
   it("每個分頁用自己記住的看板專案；切換專案寫回這個分頁", async () => {
     const proj = (id: string, name: string) => ({
       id, name, description: "", path: `/${id}`, status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null,
@@ -960,7 +1029,8 @@ describe("AgentCanvasView", () => {
     vi.mocked(projectRepo).mockResolvedValue(null);
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
-    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "not_repo" }).mockResolvedValue({ status: "ok", branch: "main" });
+    // 空桌布上的需求框也會檢查同一個程式庫（排在對話框之前），先讓它拿一筆。
+    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "ok", branch: "main" }).mockResolvedValueOnce({ status: "not_repo" }).mockResolvedValue({ status: "ok", branch: "main" });
     view();
     fireEvent.click(await screen.findByTestId("ac-templates-empty"));
     const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
@@ -981,7 +1051,8 @@ describe("AgentCanvasView", () => {
     vi.mocked(projectRepo).mockResolvedValue(null);
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
-    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "board_folder" });
+    // 空桌布上的需求框也會檢查同一個程式庫（排在對話框之前），先讓它拿一筆。
+    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "ok", branch: "main" }).mockResolvedValueOnce({ status: "board_folder" });
     view();
     fireEvent.click(await screen.findByTestId("ac-templates-empty"));
     const dlg = await screen.findByRole("dialog", { name: "團隊範本" });
@@ -1046,6 +1117,103 @@ describe("AgentCanvasView", () => {
     fireEvent.click(within(node).getByText(/重試|Retry/));
     await waitFor(() => expect(resolveAgent).toHaveBeenCalledWith("p1", "a1", "retry"));
     fireEvent.click(within(node).getByText(/跳過|Skip/));
+    await waitFor(() => expect(resolveAgent).toHaveBeenCalledWith("p1", "a1", "skip"));
+  });
+
+  describe("暫停與停止", () => {
+    const running = () => card({ id: "R1", title: "做登入", status: "running", agent_id: "a1" });
+
+    it("執行中的 Agent 有「停止」：中斷目前這張卡", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([running()]);
+      view();
+      fireEvent.click(await screen.findByTestId("agent-stop-a1"));
+      await waitFor(() => expect(stopTask).toHaveBeenCalledWith("p1", "R1"));
+    });
+
+    it("沒在跑的 Agent 沒有「停止」", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      await screen.findByTestId("agent-a1");
+      expect(screen.queryByTestId("agent-stop-a1")).toBeNull();
+    });
+
+    it("每位 Agent 可以暫停與繼續，暫停中顯示「已暫停」", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      fireEvent.click(await screen.findByTestId("agent-pause-a1"));
+      await waitFor(() => expect(setManualPause).toHaveBeenCalledWith("p1", "a1", true));
+
+      onTestFinished(() => void vi.mocked(manualPauseState).mockResolvedValue({ all: false, agents: [] }));
+      vi.mocked(manualPauseState).mockResolvedValue({ all: false, agents: ["a1"] });
+      act(() => tasksUpdated?.());
+      expect(await within(screen.getByTestId("agent-a1")).findByText("已暫停")).toBeTruthy();
+      fireEvent.click(screen.getByTestId("agent-pause-a1"));
+      await waitFor(() => expect(setManualPause).toHaveBeenCalledWith("p1", "a1", false));
+    });
+
+    it("頂列「全部暫停」暫停整個專案，再按一次繼續", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "a2", name: "B" })]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      fireEvent.click(await screen.findByTestId("ac-pause-all"));
+      await waitFor(() => expect(setManualPause).toHaveBeenCalledWith("p1", null, true));
+
+      onTestFinished(() => void vi.mocked(manualPauseState).mockResolvedValue({ all: false, agents: [] }));
+      vi.mocked(manualPauseState).mockResolvedValue({ all: true, agents: [] });
+      act(() => tasksUpdated?.());
+      await waitFor(() => expect(screen.getByTestId("ac-pause-all").textContent).toMatch(/全部繼續/));
+      expect(within(screen.getByTestId("agent-a2")).getByText("已暫停")).toBeTruthy();
+      fireEvent.click(screen.getByTestId("ac-pause-all"));
+      await waitFor(() => expect(setManualPause).toHaveBeenCalledWith("p1", null, false));
+    });
+
+    it("手動暫停又被取消卡住的 Agent：「繼續」仍然看得到，不會被失敗暫停的畫面蓋掉", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent({ paused_task_id: "S" })]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "S", title: "做登入", status: "done", outcome: "cancelled", error_message: "使用者停止", agent_id: "a1" }),
+      ]);
+      onTestFinished(() => void vi.mocked(manualPauseState).mockResolvedValue({ all: false, agents: [] }));
+      vi.mocked(manualPauseState).mockResolvedValue({ all: false, agents: ["a1"] });
+      view();
+      const node = await screen.findByTestId("agent-a1");
+      await waitFor(() => expect(within(node).getByText("已暫停")).toBeTruthy());
+      expect(within(node).getByTestId("agent-pause-a1").textContent).toMatch(/繼續/);
+    });
+
+    it("按「前往分頁」但分頁已經被關掉：要告訴使用者，不能毫無反應", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      await screen.findByTestId("agent-a1");
+      act(() => {
+        window.dispatchEvent(new CustomEvent("aiterm:focus-tab-missing", { detail: { tabId: "gone" } }));
+      });
+      expect((await screen.findByRole("status")).textContent).toMatch(/分頁已經被關閉/);
+    });
+
+    it("使用者按停止後的卡不寫成「失敗」，而是「已停止」", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent({ paused_task_id: "S" })]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "S", title: "做登入", status: "done", outcome: "cancelled", error_message: "使用者停止", agent_id: "a1" }),
+      ]);
+      view();
+      const alert = within(await screen.findByTestId("agent-a1")).getByRole("alert");
+      expect(alert.textContent).toMatch(/已停止/);
+      expect(alert.textContent).not.toMatch(/卡片失敗/);
+    });
+  });
+
+  it("暫停的那張卡已經不存在（被刪掉）：仍要有出口可以解除暫停", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent({ paused_task_id: "GONE" })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const node = await screen.findByTestId("agent-a1");
+    expect(within(node).getByRole("alert")).toHaveTextContent(/已經不在|no longer exists/);
+    expect(within(node).queryByRole("button", { name: /重試|Retry/ })).toBeNull(); // 沒有卡可以重試
+    fireEvent.click(within(node).getByRole("button", { name: /解除暫停|Resume/ }));
     await waitFor(() => expect(resolveAgent).toHaveBeenCalledWith("p1", "a1", "skip"));
   });
 
@@ -1201,6 +1369,22 @@ describe("AgentCanvasView", () => {
       expect(screen.queryByRole("dialog", { name: "回報問題" })).toBeNull();
     });
 
+    it("不附截圖也能送出，而且卡片不會叫 Agent 去看不存在的截圖", async () => {
+      vi.mocked(listAgents).mockResolvedValue(team());
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      fireEvent.click(await screen.findByTestId("ac-bug"));
+      const dlg = await screen.findByRole("dialog", { name: "回報問題" });
+      fireEvent.change(within(dlg).getByRole("textbox"), { target: { value: "按存檔沒反應" } });
+      fireEvent.click(within(dlg).getByRole("button", { name: "送出並派工" }));
+      await waitFor(() => expect(assignAgent).toHaveBeenCalled());
+      const [, args] = vi.mocked(createTask).mock.calls[0];
+      expect(args.body).toContain("按存檔沒反應");
+      expect(args.body).not.toContain("請先看附件的截圖");
+      expect(args.body).toContain("不必找截圖");
+      expect(addAttachment).not.toHaveBeenCalled();
+    });
+
     it("在完成的模組上按右鍵：帶入模組，預設交給原本做的人；也可以改給別人", async () => {
       vi.mocked(listAgents).mockResolvedValue(team());
       vi.mocked(listTasks).mockResolvedValue([card({ id: "M", title: "W3c 檔案儲存", status: "done", outcome: "success", agent_id: "a1" })]);
@@ -1335,6 +1519,10 @@ describe("AgentCanvasView", () => {
     const edge = await screen.findByTestId("edge-a1-r1");
     expect(edge.getAttribute("data-active")).not.toBe("");
     expect(screen.getByTestId("edge-r1-o1").getAttribute("data-active")).toBe("");
+    // 亮起來的線有小點拖著尾巴流動；沒亮的線沒有。
+    expect(edge.querySelectorAll(".ac-comet").length).toBeGreaterThan(0);
+    expect(edge.querySelectorAll(".ac-comet circle").length).toBeGreaterThan(1);
+    expect(screen.getByTestId("edge-r1-o1").querySelector(".ac-comet")).toBeNull();
     expect(screen.getByTestId("agent-r1").className).toContain("ac-agent--reviewing");
     expect(within(screen.getByTestId("agent-r1")).getByText(/審查 A|Reviewing A/)).toBeTruthy();
   });
@@ -1418,7 +1606,8 @@ describe("AgentCanvasView", () => {
   it("選到不是 git repo 的資料夾：當場提示，一鍵初始化後才能放上桌布", async () => {
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
-    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "not_repo" }).mockResolvedValue({ status: "ok", branch: "main" });
+    // 空桌布上的需求框也會檢查同一個程式庫（排在對話框之前），先讓它拿一筆。
+    vi.mocked(checkRepo).mockResolvedValueOnce({ status: "ok", branch: "main" }).mockResolvedValueOnce({ status: "not_repo" }).mockResolvedValue({ status: "ok", branch: "main" });
     view();
     drag(await screen.findByTestId("pool-coder"), document.querySelector('[data-drop="canvas"]') as Element);
     const dlg = await screen.findByRole("dialog");
@@ -1914,6 +2103,27 @@ describe("教學輔助", () => {
     }
   });
 
+  it("情境提示靠右邊緣時卡片被推回畫面內，箭頭仍要指著目標的中心", async () => {
+    setGuide({ hintsOff: false });
+    // 目標在視窗右緣（jsdom 視窗寬 1024）：右邊放不下，卡片會被夾回畫面內。
+    const rect = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockReturnValue({ left: 900, top: 10, right: 1000, bottom: 60, width: 100, height: 50, x: 900, y: 10, toJSON: () => ({}) });
+    try {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      view();
+      const hint = await screen.findByTestId("ac-hint-add_module");
+      expect(hint.className).toContain("ac-hint--below");
+      const cardLeft = parseFloat(hint.style.left);
+      const arrow = hint.querySelector(".ac-hint-arrow") as HTMLElement;
+      // 箭頭中心（左緣＋5）要落在目標中心 x=950。
+      expect(cardLeft + parseFloat(arrow.style.left) + 5).toBe(950);
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
   it("Agent 暫停時優先提示「需要你處理」；「×」只關這一次，不記進進度", async () => {
     setGuide({ hintsOff: false });
     const rect = vi
@@ -1926,7 +2136,7 @@ describe("教學輔助", () => {
       const hint = await screen.findByTestId("ac-hint-agent_paused");
       expect(hint.className).toContain("ac-hint--stuck");
       expect(hint.textContent).toMatch(/需要你處理/);
-      expect(hint.textContent).toMatch(/按「重試」或「跳過」/);
+      expect(hint.textContent).toMatch(/重試、跳過或解除暫停/);
       fireEvent.click(within(hint).getByRole("button", { name: "先不提示" }));
       expect(screen.queryByTestId("ac-hint-agent_paused")).toBeNull();
       expect(stored().dismissedHints).toEqual([]);

@@ -79,7 +79,7 @@ export function BugReportDialog({
     setError(null);
     try {
       const mod = modules.find((m) => m.id === related);
-      const { title, body } = bugCard(text, t.ac_bug_instructions, mod ? t.ac_bug_related(localizedCardTitle(mod, t)) : null);
+      const { title, body } = bugCard(text, images.length > 0 ? t.ac_bug_instructions : t.ac_bug_instructions_noshot, mod ? t.ac_bug_related(localizedCardTitle(mod, t)) : null);
       const id = await createTask(projectId, {
         title,
         body,

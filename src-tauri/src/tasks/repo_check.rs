@@ -72,16 +72,20 @@ pub async fn init_repo(path: &str, board: Option<&Path>) -> Result<(), String> {
     GitClient::new(path.to_string(), None).initial_commit("Initial commit (AITerm Agent Canvas)").await
 }
 
-/// `inner` 在程式庫 `repo` 裡面時，把它加進 `.git/info/exclude`（本機、不進版控）。
-/// 回傳這次有沒有新加。不在裡面、就是程式庫本身、或 `.git` 不是資料夾（例如這是
+/// `inner` 在 `repo` 所屬的 git 工作樹裡面時，把它加進 `.git/info/exclude`（本機、不進版控）。
+/// 回傳這次有沒有新加。不在裡面、就是工作樹最上層本身、或 `.git` 不是資料夾（例如這是
 /// 別的 worktree）都不動。
+///
+/// `repo` 不一定是 git 最上層：Agent 的程式庫常是最上層底下的子資料夾，看板專案資料夾
+/// 卻在子資料夾外面——所以先往上找到有 `.git` 的那一層，規則也相對於那一層。
 pub fn exclude_inside(repo: &Path, inner: &Path) -> Result<bool, String> {
     let (Ok(repo), Ok(inner)) = (repo.canonicalize(), inner.canonicalize()) else { return Ok(false) };
-    let Ok(rel) = inner.strip_prefix(&repo) else { return Ok(false) };
+    let Some(top) = repo.ancestors().find(|a| a.join(".git").exists()) else { return Ok(false) };
+    let Ok(rel) = inner.strip_prefix(top) else { return Ok(false) };
     if rel.as_os_str().is_empty() {
         return Ok(false);
     }
-    let git_dir = repo.join(".git");
+    let git_dir = top.join(".git");
     if !git_dir.is_dir() {
         return Ok(false);
     }
@@ -237,6 +241,28 @@ mod tests {
         let code = tempfile::tempdir().unwrap();
         fs::create_dir_all(code.path().join("x.aitprj")).unwrap();
         assert_eq!(check_repo(&code.path().to_string_lossy()).await, RepoCheck::NotRepo);
+    }
+
+    /// ARES GUI To Web 實機：Agent 的程式庫（project_dir）是 git 最上層的子資料夾，
+    /// 看板專案資料夾卻在最上層底下、project_dir 外面。只看 `project_dir/.git` 會找不到，
+    /// 排除就靜靜沒做，程式庫永遠「有未提交的改動」、整合結果合不回去。
+    #[test]
+    fn exclude_works_when_the_agents_repo_is_a_subfolder_of_the_git_toplevel() {
+        let top = tempfile::tempdir().unwrap();
+        git(top.path(), &["init", "-q"]);
+        let sub = top.path().join("Source");
+        let board = top.path().join("Board");
+        fs::create_dir_all(&sub).unwrap();
+        fs::create_dir_all(&board).unwrap();
+
+        assert!(exclude_inside(&sub, &board).unwrap(), "最上層底下、子資料夾外面的看板資料夾也要排除");
+        let text = fs::read_to_string(top.path().join(".git/info/exclude")).unwrap();
+        assert!(text.lines().any(|l| l == "/Board/"), "規則要相對於 git 最上層：{text}");
+        assert!(!exclude_inside(&sub, &board).unwrap(), "已經有就不重複加");
+
+        fs::write(board.join("tasks.db"), "db").unwrap();
+        let st = Command::new("git").args(["status", "--porcelain"]).current_dir(&sub).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&st.stdout), "", "看板更新不能讓程式庫變髒");
     }
 
     #[test]
