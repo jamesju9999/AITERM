@@ -205,3 +205,5 @@ button.aiterm-cact__card:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45), inse
 }
 .aiterm-cact__edge-under { fill: none; stroke: rgba(96, 165, 250, 0.28); stroke-width: 3.4; }
 .aiterm-cact__edge--running { stroke: #7cb4ff; stroke-width: 2.2; }
+/* 放大分欄時詳情區很高：輸入輸出框不設上限，整個詳情區一起捲動，不要留下一大塊空白。 */
+.aiterm-cact__body--split .aiterm-cact__pre { max-height: none; }

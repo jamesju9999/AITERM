@@ -81,6 +81,18 @@ describe("ClaudeActivityPanel（流程圖）", () => {
     expect(screen.queryByTestId("minimap")).toBeNull();
   });
 
+  it("標題的「執行中／共幾個」也算進工具，不只 subagent", () => {
+    renderPanel([node({ id: "a", description: "跑 ls" })], {
+      tools: ["running", "done"].map((status, i) => ({
+        id: `t${i}`, parent: null, tool: "Bash", hint: `Bash: t${i}`, category: "shell", status: status as "running" | "done",
+        started_ms: 1_000, ended_ms: status === "done" ? 1_500 : null, turn: 1,
+      })),
+    });
+    const header = document.querySelector(".aiterm-cact__header")!.textContent!;
+    expect(header).toContain("執行中 2");
+    expect(header).toContain("共 3 個");
+  });
+
   it("執行中的連線有彗星尾巴（小點之外還有兩個漸淡的點）", () => {
     renderPanel([node({ id: "r", description: "跑中" })]);
     expect(document.querySelectorAll("circle.aiterm-cact__fly").length).toBe(3);

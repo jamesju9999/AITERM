@@ -101,7 +101,9 @@ export function ClaudeActivityPanel({ snapshot, fill, sessionId }: Props) {
 
   const all = snapshot.nodes;
   const running = all.filter((n) => n.status === "running").length;
-  const now = useNow(running > 0);
+  // 執行中的工具也要讓耗時每秒跳動，所以計時看「subagent＋工具」；根卡片的「執行中」仍只算 subagent。
+  const runningTools = snapshot.tools.filter((c) => c.status === "running").length;
+  const now = useNow(running + runningTools > 0);
 
   // 依提問輪次分組：預設看最新一輪；挑到的輪次不存在了（例如離開 claude 後重來）就回到最新。
   // 輪次也要算進工具：沒有 subagent、只有主 Claude 的工具時，輪次只存在於工具上。
@@ -183,8 +185,8 @@ export function ClaudeActivityPanel({ snapshot, fill, sessionId }: Props) {
   const header = (closeButton: boolean) => (
     <header className="aiterm-cact__header">
       <span className="aiterm-cact__title">{t.claude_activity_title}</span>
-      <span className="aiterm-cact__count">{t.claude_activity_running(running)}</span>
-      <span className="aiterm-cact__count">{t.claude_activity_total(turnNodes.length)}</span>
+      <span className="aiterm-cact__count">{t.claude_activity_running(running + runningTools)}</span>
+      <span className="aiterm-cact__count">{t.claude_activity_total(turnNodes.length + turnTools.length)}</span>
       {stats.total > 0 && <span className="aiterm-cact__count">{t.claude_activity_tokens_total(formatTokens(stats.total))}</span>}
       {closeButton ? (
         <button type="button" className="aiterm-cact__btn aiterm-cact__btn--first" onClick={() => setEnlarged(false)}>
