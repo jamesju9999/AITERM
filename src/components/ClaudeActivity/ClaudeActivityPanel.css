@@ -79,8 +79,9 @@ button.aiterm-cact__card { cursor: pointer; }
 }
 @keyframes aiterm-cact-flow { to { stroke-dashoffset: -12; } }
 @keyframes aiterm-cact-pulse { 50% { opacity: 0.35; } }
+/* 減少動態效果時：執行中連線的流動是狀態指示不是裝飾，所以保留、只放慢；脈衝的點與其他裝飾動畫關掉。 */
 @media (prefers-reduced-motion: reduce) {
-  .aiterm-cact__edge--running { animation: none; }
+  .aiterm-cact__edge--running { animation-duration: 2.4s; }
   .aiterm-cact__dot--running { animation: none; }
 }
 
@@ -113,7 +114,6 @@ button.aiterm-cact__card { cursor: pointer; }
 .aiterm-cact__bar--done { background: #4ade80; }
 .aiterm-cact__bar--failed { background: #f87171; }
 .aiterm-cact__bar--interrupted { background: #fbbf24; }
-@media (prefers-reduced-motion: reduce) { .aiterm-cact__fly { display: none; } }
 .aiterm-cact__badge--hot { background: rgba(248, 113, 113, 0.18); color: #fca5a5; }
 .aiterm-cact__recent {
   margin: 4px 0 0; padding-left: 16px; font-family: var(--font-mono, monospace); font-size: 11px;
