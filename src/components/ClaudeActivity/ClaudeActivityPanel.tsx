@@ -18,13 +18,15 @@ const TOOLS_KEY = "aiterm-claude-activity-tools";
 
 type Mode = "graph" | "timeline";
 
-function loadCollapsed(): boolean {
+function loadCollapsed(fill: boolean): boolean {
+  // 獨佔整欄時收合只會留下一塊空白，所以沒存過偏好就預設展開；
+  // 與建議側欄上下並排時才預設收合。使用者按過就以他的選擇為準。
   try {
-    // 沒存過＝預設收合；使用者展開過才記住展開。
-    return localStorage.getItem(COLLAPSED_KEY) !== "0";
-  } catch {
-    return true;
-  }
+    const saved = localStorage.getItem(COLLAPSED_KEY);
+    if (saved === "0") return false;
+    if (saved === "1") return true;
+  } catch { /* ignore */ }
+  return !fill;
 }
 function loadShowTools(): boolean {
   try {
@@ -62,7 +64,7 @@ interface Props {
 
 export function ClaudeActivityPanel({ snapshot, fill, sessionId }: Props) {
   const { t } = useLocale();
-  const [collapsed, setCollapsed] = useState(loadCollapsed);
+  const [collapsed, setCollapsed] = useState(() => loadCollapsed(fill));
   const [enlarged, setEnlarged] = useState(false);
   const [mode, setMode] = useState<Mode>(loadMode);
   const [selectedId, setSelectedId] = useState<string | null>(null);

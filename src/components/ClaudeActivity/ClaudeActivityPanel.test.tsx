@@ -121,14 +121,21 @@ describe("ClaudeActivityPanel（流程圖）", () => {
     expect(Number.parseFloat(card("f").style.top)).toBeLessThan(Number.parseFloat(card("ok").style.top));
   });
 
-  it("第一次（沒存過偏好）預設收合；展開後記住展開", () => {
+  it("第一次（沒存過偏好）：獨佔整欄時預設展開，否則整欄只剩一塊空白", () => {
     localStorage.clear();
-    const { unmount } = renderPanel([node({ id: "a", description: "跑 ls" })]);
+    renderPanel([node({ id: "a", description: "跑 ls" })]);
+    expect(card("a")).not.toBeNull();
+  });
+
+  it("第一次（沒存過偏好）：與建議側欄並排時預設收合；展開後記住展開", () => {
+    localStorage.clear();
+    const nodes = [node({ id: "a", description: "跑 ls" })];
+    const { unmount } = render(<ClaudeActivityPanel snapshot={snap(nodes)} fill={false} sessionId="sess-1" />);
     expect(card("a")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "展開" }));
     expect(card("a")).not.toBeNull();
     unmount();
-    renderPanel([node({ id: "a", description: "跑 ls" })]);
+    render(<ClaudeActivityPanel snapshot={snap(nodes)} fill={false} sessionId="sess-1" />);
     expect(card("a")).not.toBeNull();
   });
 
