@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
@@ -17,9 +17,11 @@ vi.mock("../../ipc/architecture", () => ({
 }));
 
 const invokeAiComplete = vi.fn();
+const abortAi = vi.fn();
 vi.mock("../../ipc/ai", async (orig) => ({
   ...(await orig<typeof import("../../ipc/ai")>()),
   invokeAiComplete: (...a: unknown[]) => invokeAiComplete(...a),
+  abortAi: (...a: unknown[]) => abortAi(...a),
 }));
 
 import { ArchitectureView } from "./index";
@@ -42,6 +44,7 @@ beforeEach(() => {
   archLoad.mockResolvedValue(null);
   archScan.mockResolvedValue(SCAN);
   archReadFiles.mockResolvedValue([]);
+  abortAi.mockResolvedValue(undefined);
 });
 
 const renderView = () => render(<LocaleProvider><ArchitectureView isActive /></LocaleProvider>);
@@ -94,5 +97,53 @@ describe("ArchitectureView", () => {
     renderView();
     fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
     expect(await screen.findByText(/可能已過期|may be stale/)).toBeInTheDocument();
+  });
+
+  it("尚未選資料夾時顯示空狀態，且只有一個選擇資料夾按鈕", () => {
+    renderView();
+    expect(screen.getAllByRole("button", { name: /選擇專案資料夾|Choose project folder/ })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /AI 分析|Analyze with AI/ })).not.toBeInTheDocument();
+  });
+
+  it("選了資料夾之後，選擇按鈕也只剩工具列那一個", async () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    await screen.findByRole("button", { name: /web/ });
+    expect(screen.getAllByRole("button", { name: /選擇專案資料夾|Choose project folder/ })).toHaveLength(1);
+  });
+
+  it("AI 分析中顯示經過時間，每秒更新", async () => {
+    invokeAiComplete.mockReturnValue(new Promise(() => {}));
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    await screen.findByRole("button", { name: /web/ });
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: /AI 分析|Analyze with AI/ }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText(/0:00/)).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(83_000); });
+      expect(screen.getByText(/1:23/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("取消 AI 分析：呼叫 abortAi、回到原本的圖、不顯示錯誤", async () => {
+    let rejectAi: (e: unknown) => void = () => {};
+    invokeAiComplete.mockReturnValue(new Promise((_, rej) => { rejectAi = rej; }));
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    await screen.findByRole("button", { name: /web/ });
+    fireEvent.click(screen.getByRole("button", { name: /AI 分析|Analyze with AI/ }));
+    const cancel = await screen.findByRole("button", { name: /^(取消|Cancel)$/ });
+    const streamId = invokeAiComplete.mock.calls[0][2];
+    fireEvent.click(cancel);
+    expect(abortAi).toHaveBeenCalledWith(streamId);
+    await act(async () => { rejectAi({ kind: "model_error", message: "aborted" }); });
+    expect(screen.queryByText(/分析失敗|Analysis failed/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(取消|Cancel)$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /web/ })).toBeInTheDocument();
+    expect(archSave).not.toHaveBeenCalled();
   });
 });
