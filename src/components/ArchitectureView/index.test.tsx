@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
@@ -9,11 +9,15 @@ const archScan = vi.fn();
 const archLoad = vi.fn();
 const archSave = vi.fn();
 const archReadFiles = vi.fn();
+const archReadFile = vi.fn();
+const archOpenPath = vi.fn();
 vi.mock("../../ipc/architecture", () => ({
   archScan: (...a: unknown[]) => archScan(...a),
   archLoad: (...a: unknown[]) => archLoad(...a),
   archSave: (...a: unknown[]) => archSave(...a),
   archReadFiles: (...a: unknown[]) => archReadFiles(...a),
+  archReadFile: (...a: unknown[]) => archReadFile(...a),
+  archOpenPath: (...a: unknown[]) => archOpenPath(...a),
 }));
 
 const invokeAiComplete = vi.fn();
@@ -65,6 +69,8 @@ beforeEach(() => {
   archLoad.mockResolvedValue(null);
   archScan.mockResolvedValue(SCAN);
   archReadFiles.mockResolvedValue([]);
+  archReadFile.mockResolvedValue({ content: "const a = 1;\nexport default a;\n", truncated: false, total_bytes: 30 });
+  archOpenPath.mockResolvedValue(undefined);
   abortAi.mockResolvedValue(undefined);
 });
 
@@ -77,6 +83,26 @@ describe("ArchitectureView", () => {
     const web = await screen.findByRole("button", { name: /web/ });
     fireEvent.click(web);
     expect(await screen.findByRole("heading", { name: "web" })).toBeInTheDocument();
+  });
+
+  it("單檔模組的「預覽檔案」開啟抽屜顯示內容；換選模組後點另一個檔案會取代；Esc 關閉", async () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /web/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^(預覽檔案|Preview file)$/ }));
+    const dlg = await screen.findByRole("dialog");
+    expect(await within(dlg).findByText("export default a;")).toBeInTheDocument();
+    expect(archReadFile).toHaveBeenLastCalledWith("/p", "web/App.tsx");
+
+    archReadFile.mockResolvedValue({ content: "import flask", truncated: false, total_bytes: 12 });
+    fireEvent.click(screen.getByRole("button", { name: /server/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^(預覽檔案|Preview file)$/ }));
+    expect(await screen.findByText("import flask")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(archReadFile).toHaveBeenLastCalledWith("/p", "server/routes.py");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("AI 分析成功後以分析結果取代預設分層並存檔", async () => {

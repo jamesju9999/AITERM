@@ -77,3 +77,14 @@
 - 詳情中雙向 import 合併成一筆「互相引用」。
 - 滾輪縮放（Ctrl/⌘＋滾輪）與背景拖曳平移，「適合視窗」按鈕還原；內容比視窗矮時垂直置中。
 - 未選取模組時，右側顯示「技術棧總覽」：語言檔案數分布、各模組技術標籤彙整、依賴清單（前 30）、模組與連線數。
+
+## E. 檔案預覽
+
+點架構圖裡的檔案可直接在 App 內讀內容；唯讀，不做編輯。
+
+- **入口**：詳情面板「檔案」清單每一列；連線卡上的佐證 `file:line`（開啟並標出該行）；只有 1 個檔案的模組多一顆「預覽檔案」鈕。資料流路徑卡的步進器在 `<button>` 裡，佐證維持純文字（避免巢狀按鈕）。
+- **抽屜**：蓋在畫布右側、工具列之下，寬 `min(60%, 760px)`，`role="dialog"`，Esc／✕ 關閉。標頭有路徑（monospace，`title` 為完整路徑）、「複製路徑」（專案根 + `/` + 相對路徑的絕對路徑）、「用預設程式開啟」。內容為行號 + 等寬字（無語法上色），最多渲染 3000 行；`truncated` 時顯示「已截斷，只顯示前 N KB」。選另一個檔案直接取代目前預覽；換專案時不顯示舊專案的預覽。
+- **後端**（`architecture/store.rs`）：`resolve_in_root(root, rel)` 拒絕絕對路徑與任何非 Normal 元件（`..`、`.`、磁碟機前綴），join 後把根與結果都 `canonicalize`，結果必須仍以根開頭（指到根外的符號連結被拒）。`read_file_preview(root, rel, max_bytes)` 前 8 KB 含 NUL 視為二進位並拒絕；最多讀 `max_bytes`（指令端為 512 KB），`from_utf8_lossy` 解碼。
+- **指令**：`arch_read_file(root, path) -> FilePreview { content, truncated, total_bytes }`、`arch_open_path(root, path)`（`resolve_in_root` 通過後才呼叫 `open::that`，跨平台）。兩者皆在 `spawn_blocking` 執行。
+- **跨平台**：UI 一律用 `/`；後端用 `Path` 元件處理，Windows 的 `\` 與磁碟機前綴由 `resolve_in_root` 擋下或正規化。
+- **其他**：`.arch-node` 加 `user-select: none`（雙擊不再反白卡片文字）；預覽內文維持可選取。

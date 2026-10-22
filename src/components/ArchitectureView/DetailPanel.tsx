@@ -18,6 +18,8 @@ interface Props {
   /** 目前在畫布上高亮的資料流路徑；點同一條卡片由上層切換取消。 */
   activePath?: Edge[] | null;
   onPickPath?: (path: Edge[]) => void;
+  /** 開啟檔案預覽（可帶行號）。沒給就不顯示任何預覽入口。 */
+  onOpenFile?: (path: string, line?: number) => void;
 }
 
 function samePath(a: Edge[] | null | undefined, b: Edge[]): boolean {
@@ -26,7 +28,7 @@ function samePath(a: Edge[] | null | undefined, b: Edge[]): boolean {
 
 const FILES_COLLAPSED = 8;
 
-export function DetailPanel({ arch, selected, onSelect, scan, onExpand, activePath, onPickPath }: Props) {
+export function DetailPanel({ arch, selected, onSelect, scan, onExpand, activePath, onPickPath, onOpenFile }: Props) {
   const { t } = useLocale();
   // 記下「哪個模組展開了」，切換模組時自然回到收合，不必靠 effect 重設。
   const [expandedFor, setExpandedFor] = useState<string | null>(null);
@@ -136,6 +138,9 @@ export function DetailPanel({ arch, selected, onSelect, scan, onExpand, activePa
         {onExpand && mod.files.length > 1 && (
           <button type="button" className="arch-btn arch-btn-small arch-expand" onClick={() => onExpand(mod.id)}>{t.arch_expand}</button>
         )}
+        {onOpenFile && mod.files.length === 1 && (
+          <button type="button" className="arch-btn arch-btn-small arch-btn-primary-outline" onClick={() => onOpenFile(mod.files[0])}>{t.arch_pv_preview}</button>
+        )}
       </div>
       {ext && (ext.inbound > 0 || ext.outbound > 0) && (
         <div className="arch-ext">
@@ -171,7 +176,11 @@ export function DetailPanel({ arch, selected, onSelect, scan, onExpand, activePa
                         </span>
                       )}
                       {e.note && <div className="arch-note">{e.note}</div>}
-                      {e.evidence && <code className="arch-evidence" title={t.arch_edge_evidence}>{e.evidence.file}:{e.evidence.line}</code>}
+                      {e.evidence && (onOpenFile ? (
+                        <button type="button" className="arch-evidence" title={t.arch_edge_evidence} onClick={() => onOpenFile(e.evidence!.file, e.evidence!.line)}>
+                          {e.evidence.file}:{e.evidence.line}
+                        </button>
+                      ) : <code className="arch-evidence" title={t.arch_edge_evidence}>{e.evidence.file}:{e.evidence.line}</code>)}
                     </div>
                   ))}
                 </li>
@@ -188,7 +197,13 @@ export function DetailPanel({ arch, selected, onSelect, scan, onExpand, activePa
         </section>
       )}
       <section className="arch-card"><h4>{t.arch_detail_files} ({mod.files.length})</h4>
-        <ul className="arch-files">{files.map((f) => <li key={f}><code>{f}</code></li>)}</ul>
+        <ul className="arch-files">{files.map((f) => (
+          <li key={f}>
+            {onOpenFile
+              ? <button type="button" className="arch-file-btn" title={t.arch_pv_open_file.replace("{f}", f)} onClick={() => onOpenFile(f)}><code>{f}</code></button>
+              : <code>{f}</code>}
+          </li>
+        ))}</ul>
         {mod.files.length > FILES_COLLAPSED && (
           <button type="button" className="arch-link arch-files-toggle" onClick={() => setExpandedFor(showAll ? null : mod.id)}>
             {showAll ? t.arch_show_less : t.arch_show_all.replace("{n}", String(mod.files.length))}

@@ -11,6 +11,7 @@ import { buildBaseGraph, type Architecture, type Edge } from "./model";
 import { buildDrillGraph, drillKey } from "./drill";
 import { edgeLength, edgeMidpoint, edgePath, initialView, isCompact, layerColor, layoutGraph, neighborhood, spreadLabels, trueFitView, zoomAt, type Layout, type View } from "./layout";
 import { DetailPanel } from "./DetailPanel";
+import { FilePreview } from "./FilePreview";
 import "./index.css";
 
 const PROVIDER_KEY = "aiterm_arch_provider";
@@ -86,6 +87,9 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   // 目前選的資料流路徑；綁定當時的圖與選取，換選取或換層級就自動失效。
   const [pathPick, setPathPick] = useState<{ path: Edge[]; view: Architecture; selected: string } | null>(null);
   const [panning, setPanning] = useState(false);
+  const [preview, setPreview] = useState<{ root: string; path: string; line?: number } | null>(null);
+  const openFile = useCallback((path: string, line?: number) => root && setPreview({ root, path, line }), [root]);
+  const closePreview = useCallback(() => setPreview(null), []);
   const streamIdRef = useRef<string | null>(null);
   const runRef = useRef(0);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -492,8 +496,9 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
           )}
         </div>
         {view && layout && <button type="button" className="arch-btn arch-fit" onClick={fitView}>{t.arch_fit}</button>}
+        {root && preview && preview.root === root && <FilePreview root={root} path={preview.path} line={preview.line} onClose={closePreview} />}
         </div>
-        {view && <DetailPanel arch={view} selected={selected} onSelect={setSelected} scan={scan} onExpand={enter} activePath={activePath} onPickPath={pickPath} />}
+        {view && <DetailPanel arch={view} selected={selected} onSelect={setSelected} scan={scan} onExpand={enter} activePath={activePath} onPickPath={pickPath} onOpenFile={root ? openFile : undefined} />}
       </div>
     </div>
   );

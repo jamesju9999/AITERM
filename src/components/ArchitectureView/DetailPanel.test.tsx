@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, cleanup } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DetailPanel } from "./DetailPanel";
 import { LocaleProvider } from "../../contexts/LocaleContext";
@@ -227,6 +227,41 @@ describe("DetailPanel", () => {
     it("沒有任何路徑時不顯示資料流路徑區", () => {
       render(<LocaleProvider><DetailPanel arch={arch} selected="srv" onSelect={vi.fn()} /></LocaleProvider>);
       expect(document.querySelector("[data-flow='down']")).toBeNull();
+    });
+  });
+
+  describe("檔案預覽入口", () => {
+    const renderWith = (a: Architecture, selected: string, onOpenFile = vi.fn()) => {
+      render(<LocaleProvider><DetailPanel arch={a} selected={selected} onSelect={vi.fn()} root="/p" onOpenFile={onOpenFile} /></LocaleProvider>);
+      return onOpenFile;
+    };
+
+    it("點檔案清單的一列以該檔開啟預覽（不帶行號）", () => {
+      const onOpenFile = renderWith(multi, "web");
+      const first = multi.modules[0].files[1];
+      fireEvent.click(within(document.querySelector(".arch-files") as HTMLElement).getByRole("button", { name: new RegExp(first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) }));
+      expect(onOpenFile).toHaveBeenCalledWith(first);
+    });
+
+    it("點佐證 file:line 以該行開啟預覽", () => {
+      const onOpenFile = renderWith(arch, "web");
+      const edgeList = within(document.querySelector(".arch-edge-list") as HTMLElement);
+      fireEvent.click(edgeList.getByRole("button", { name: /web\/api\.ts:5/ }));
+      expect(onOpenFile).toHaveBeenCalledWith("web/api.ts", 5);
+    });
+
+    it("只有一個檔案的模組有顯眼的「預覽檔案」鈕，多檔沒有", () => {
+      const onOpenFile = renderWith(arch, "web");
+      fireEvent.click(screen.getByRole("button", { name: /^(預覽檔案|Preview file)$/ }));
+      expect(onOpenFile).toHaveBeenCalledWith("web/App.tsx");
+      cleanup();
+      renderWith(multi, "web");
+      expect(screen.queryByRole("button", { name: /^(預覽檔案|Preview file)$/ })).not.toBeInTheDocument();
+    });
+
+    it("沒有 onOpenFile 時檔案與佐證維持純文字", () => {
+      setup("web");
+      expect(screen.queryByRole("button", { name: /web\/App\.tsx|web\/api\.ts:5|預覽檔案/ })).not.toBeInTheDocument();
     });
   });
 });
