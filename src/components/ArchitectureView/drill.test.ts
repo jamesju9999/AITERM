@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDrillGraph, drillKey, externalRefs, filesOfModule } from "./drill";
+import { MAX_DRILL_LAYERS, buildDrillGraph, drillKey, externalRefs, filesOfModule } from "./drill";
 import type { Architecture } from "./model";
 import type { ScanResult } from "../../ipc/architecture";
 
@@ -159,5 +159,36 @@ describe("externalRefs", () => {
 
   it("沒有檔案時兩者皆為 0", () => {
     expect(externalRefs(scanOf(["a.ts"], [["a.ts", "a.ts"]]), [])).toEqual({ inbound: 0, outbound: 0 });
+  });
+});
+
+describe("buildDrillGraph 層數上限", () => {
+  it("MAX_DRILL_LAYERS 是 5", () => { expect(MAX_DRILL_LAYERS).toBe(5); });
+
+  it("長鏈 c0→…→c7 加菱形：深度 ≥ 4 的節點全進最後一層 d4，沒有 d5 以後；連線照真實連通保留", () => {
+    const chain = Array.from({ length: 8 }, (_, i) => `p/c${i}.ts`);
+    const dia = ["p/a.ts", "p/b.ts", "p/c.ts", "p/d.ts"];
+    const files = [...chain, ...dia];
+    const edges: [string, string][] = [
+      ...chain.slice(0, -1).map((f, i) => [f, chain[i + 1]] as [string, string]),
+      ["p/a.ts", "p/b.ts"], ["p/a.ts", "p/c.ts"], ["p/b.ts", "p/d.ts"], ["p/c.ts", "p/d.ts"],
+      ["p/d.ts", "p/c5.ts"], // 菱形尾巴接進鏈中段：c5 仍在 d4
+    ];
+    const { arch } = buildDrillGraph(scanOf(files, edges), files);
+    expect(arch.layers.map((l) => l.id)).toEqual(["d0", "d1", "d2", "d3", "d4"]);
+    expect(arch.layers[4].name).toBe("第 5 層起");
+    expect(arch.layers[0].name).toBe("第 1 層");
+    expect(new Set(arch.modules.map((m) => m.layer))).toEqual(new Set(["d0", "d1", "d2", "d3", "d4"]));
+    for (const i of [4, 5, 6, 7]) expect(layerOf(arch, `p/c${i}.ts`)).toBe("d4");
+    expect(layerOf(arch, "p/c3.ts")).toBe("d3");
+    expect(layerOf(arch, "p/d.ts")).toBe("d2");
+    expect(arch.edges).toHaveLength(edges.length);
+    expect(arch.edges.some((e) => e.from === "p/c6.ts" && e.to === "p/c7.ts")).toBe(true);
+  });
+
+  it("深度剛好不超過 4 時不多不少", () => {
+    const files = ["p/a.ts", "p/b.ts"];
+    const { arch } = buildDrillGraph(scanOf(files, [["p/a.ts", "p/b.ts"]]), files);
+    expect(arch.layers.map((l) => l.id)).toEqual(["d0", "d1"]);
   });
 });

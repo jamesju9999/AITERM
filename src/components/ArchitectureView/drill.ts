@@ -1,6 +1,9 @@
 import type { ScanResult } from "../../ipc/architecture";
 import type { Architecture, Edge, Module } from "./model";
 
+/** 鑽取圖最多幾層泳道；更深的節點全放進最後一層（連線仍照真實連通）。 */
+export const MAX_DRILL_LAYERS = 5;
+
 /** 鑽取路徑鍵：模組 id 以 \u0000 連接。 */
 export function drillKey(path: string[]): string {
   return path.join("\u0000");
@@ -95,10 +98,13 @@ export function buildDrillGraph(scan: ScanResult, files: string[], maxNodes = 60
     for (const v of forward.get(u)!) depth.set(v, Math.max(depth.get(v)!, depth.get(u)! + 1));
   }
 
-  const maxDepth = Math.max(-1, ...depth.values());
-  const layers = Array.from({ length: maxDepth + 1 }, (_, i) => ({ id: `d${i}`, name: `第 ${i + 1} 層` }));
+  const layerOfDepth = (d: number) => Math.min(d, MAX_DRILL_LAYERS - 1);
+  const maxLayer = layerOfDepth(Math.max(-1, ...depth.values()));
+  const layers = Array.from({ length: maxLayer + 1 }, (_, i) => ({
+    id: `d${i}`, name: i === MAX_DRILL_LAYERS - 1 ? `第 ${i + 1} 層起` : `第 ${i + 1} 層`,
+  }));
   const modules: Module[] = order.map((id) => ({
-    id, layer: `d${depth.get(id)}`, name: nodeName.get(id)!, files: nodeFiles.get(id)!, tech: [], summary: "", dataflow: "",
+    id, layer: `d${layerOfDepth(depth.get(id)!)}`, name: nodeName.get(id)!, files: nodeFiles.get(id)!, tech: [], summary: "", dataflow: "",
   }));
   const edges: Edge[] = edgePairs.map(([from, to]) => ({ from, to, kind: "import", source: "scan", confidence: 1 }));
   return {
