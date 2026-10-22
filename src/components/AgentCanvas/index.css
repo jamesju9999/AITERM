@@ -605,6 +605,10 @@
 .ac-cmd-model { flex: none; max-width: 150px; min-width: 0; display: flex; }
 .ac-cmd-model > * { min-width: 0; max-width: 100%; }
 .ac-cmd-row > .aiterm-btn { flex: none; align-self: center; }
+/* 全域的 textarea 樣式會替輸入框加底色與邊框，看起來像一個框裡又一個框。 */
+.ac-cmd-row textarea.ac-cmd-input, .ac-cmd-row textarea.ac-cmd-input:focus { border: 0 !important; background: transparent !important; box-shadow: none !important; outline: none !important; }
+.ac-cmd-model .model-picker-btn { background: transparent; border-color: transparent; color: var(--text-muted); font-size: 12px; }
+.ac-cmd-model .model-picker-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); color: var(--text-primary); }
 .ac-cmd-input { flex: 1; min-width: 0; resize: none; max-height: 120px; padding: 5px 8px; border: none; outline: none; background: transparent; color: var(--text-primary); font: inherit; font-size: 13px; line-height: 1.5; field-sizing: content; }
 .ac-cmd-plan, .ac-cmd-answer { padding: 10px 12px; border-radius: 10px; background: var(--bg-secondary); border: 1px solid var(--ac-edge); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); font-size: 12.5px; color: var(--text-secondary); max-height: 40vh; overflow: auto; }
 .ac-cmd-answer p { margin: 4px 0 8px; white-space: pre-wrap; line-height: 1.55; }
