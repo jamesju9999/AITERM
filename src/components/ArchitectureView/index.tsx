@@ -8,11 +8,32 @@ import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { ModelPickerButton } from "../ModelPickerButton";
 import { ANALYZE_SYSTEM, buildAnalyzeMessage, mergeScanEdges, parseAnalysis, pickKeyFiles } from "./analyze";
 import { buildBaseGraph, type Architecture } from "./model";
+import { buildDrillGraph, drillKey } from "./drill";
 import { edgeMidpoint, edgePath, fitScale, layerColor, layoutGraph, NODE_H, NODE_W, traceChain } from "./layout";
 import { DetailPanel } from "./DetailPanel";
 import "./index.css";
 
 const PROVIDER_KEY = "aiterm_arch_provider";
+
+/** 鑽取路徑上的一層：模組 id、它的檔案、顯示名稱（麵包屑用）。 */
+interface DrillLevel { id: string; files: string[]; name: string }
+
+/** 只含指定檔案、以及兩端都在其中的 import 的掃描結果，讓 AI 細分只看這個模組。 */
+function subScanOf(scan: ScanResult, files: string[]): ScanResult {
+  const own = new Set(files);
+  return {
+    ...scan,
+    files: scan.files.filter((f) => own.has(f.path)),
+    edges: scan.edges.filter((e) => own.has(e.from) && own.has(e.to)),
+  };
+}
+
+/** 根層重新分析後，只保留仍存在的模組的 drills（鍵的第一段是根層模組 id）。 */
+function pruneDrills(drills: Architecture["drills"], moduleIds: Set<string>): Architecture["drills"] {
+  if (!drills) return undefined;
+  const kept = Object.fromEntries(Object.entries(drills).filter(([k]) => moduleIds.has(k.split("\u0000")[0])));
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
 
 type Status = { kind: "idle" } | { kind: "busy"; msg: string } | { kind: "error"; msg: string } | { kind: "notice"; msg: string };
 
@@ -34,6 +55,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [arch, setArch] = useState<Architecture | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [drillPath, setDrillPath] = useState<DrillLevel[]>([]);
   const [stale, setStale] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [analyzing, setAnalyzing] = useState(false);
@@ -45,10 +67,12 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const streamIdRef = useRef<string | null>(null);
   const runRef = useRef(0);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const archRef = useRef<Architecture | null>(null);
 
   const load = useCallback(async (dir: string) => {
     setRoot(dir);
     setSelected(null);
+    setDrillPath([]);
     setStatus({ kind: "busy", msg: t.arch_scanning });
     try {
       const s = await archScan(dir);
@@ -92,7 +116,12 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     try { localStorage.setItem(PROVIDER_KEY, id); } catch { /* 記不住不影響使用 */ }
   }, []);
 
-  const analyze = useCallback(async () => {
+  /**
+   * 根層分析與模組細分共用：選供應商、已等時間、取消、錯誤處理都在這裡。
+   * target 是要送給 AI 的掃描範圍；apply 把驗證過的結果併進目前的整份架構並回傳新的整份，
+   * 這裡負責顯示與存檔。
+   */
+  const runAnalysis = useCallback(async (target: ScanResult, apply: (merged: Architecture, current: Architecture | null) => Architecture) => {
     if (!root || !scan) return;
     const run = ++runRef.current;
     const streamId = nanoid();
@@ -101,24 +130,24 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     setAnalyzing(true);
     setStatus({ kind: "idle" });
     try {
-      const base = buildBaseGraph(scan);
-      const files = await archReadFiles(root, pickKeyFiles(scan));
+      const base = buildBaseGraph(target);
+      const files = await archReadFiles(root, pickKeyFiles(target));
       const reply = await invokeAiComplete(
-        [{ role: "user", content: buildAnalyzeMessage(scan, base, files) }],
+        [{ role: "user", content: buildAnalyzeMessage(target, base, files) }],
         ANALYZE_SYSTEM,
         streamId,
         providerId || undefined,
       );
       if (run !== runRef.current) return; // 已取消
-      const parsed = reply.content ? parseAnalysis(reply.content, scan) : null;
+      const parsed = reply.content ? parseAnalysis(reply.content, target) : null;
       if (!parsed) {
         setStatus({ kind: "error", msg: t.arch_error.replace("{msg}", "AI 回應不是有效的架構 JSON") });
         return;
       }
-      const merged = mergeScanEdges(parsed, scan);
-      setArch(merged);
-      setStale(false);
-      await archSave(root, JSON.stringify(merged));
+      const next = apply(mergeScanEdges(parsed, target), archRef.current);
+      setArch(next);
+      setStale(next.meta.gitHead !== scan.git_head);
+      await archSave(root, JSON.stringify(next));
       setStatus(parsed.meta.dropped > 0 ? { kind: "notice", msg: t.arch_dropped.replace("{n}", String(parsed.meta.dropped)) } : { kind: "idle" });
     } catch (e) {
       if (run !== runRef.current) return; // 取消造成的錯誤不顯示
@@ -130,6 +159,27 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       if (run === runRef.current) setAnalyzing(false);
     }
   }, [root, scan, t, providerId]);
+
+  const analyze = useCallback(() => {
+    if (!scan) return Promise.resolve();
+    return runAnalysis(scan, (merged, current) => {
+      // 根圖被取代：舊 drills 只留模組 id 仍存在的；鑽取位置可能失效，回到根層。
+      setDrillPath([]);
+      setSelected(null);
+      const drills = pruneDrills(current?.drills, new Set(merged.modules.map((m) => m.id)));
+      return drills ? { ...merged, drills } : merged;
+    });
+  }, [scan, runAnalysis]);
+
+  const analyzeDrill = useCallback(() => {
+    const level = drillPath[drillPath.length - 1];
+    if (!scan || !level) return Promise.resolve();
+    const key = drillKey(drillPath.map((d) => d.id));
+    return runAnalysis(subScanOf(scan, level.files), (merged, current) => {
+      if (!current) return merged;
+      return { ...current, drills: { ...current.drills, [key]: merged } };
+    });
+  }, [scan, drillPath, runAnalysis]);
 
   const cancelAnalyze = useCallback(() => {
     runRef.current++;
@@ -153,11 +203,35 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     return () => ro.disconnect();
   }, [arch]);
 
-  const layout = useMemo(() => (arch ? layoutGraph(arch) : null), [arch]);
-  const chain = useMemo(() => (arch && selected ? traceChain(arch, selected) : null), [arch, selected]);
+  useEffect(() => { archRef.current = arch; }, [arch]);
+
+  const drillKeyNow = drillKey(drillPath.map((d) => d.id));
+  // 目前顯示的圖：根圖，或鑽取層（AI 細分結果優先，否則由掃描即時產生）。
+  const drilledFiles = drillPath.length > 0 ? drillPath[drillPath.length - 1].files : null;
+  const savedDrill = arch?.drills?.[drillKeyNow];
+  const built = useMemo(() => (drilledFiles && scan ? buildDrillGraph(scan, drilledFiles) : null), [scan, drilledFiles]);
+  const view = !arch ? null : !drilledFiles ? arch : savedDrill ?? built?.arch ?? null;
+  const hiddenCount = drilledFiles && !savedDrill ? built?.hidden ?? 0 : 0;
+  const hasAiDrill = !!savedDrill;
+
+  const goTo = useCallback((depth: number) => {
+    setDrillPath((p) => p.slice(0, depth));
+    setSelected(null);
+    setHoverEdge(null);
+  }, []);
+  const enter = useCallback((id: string) => {
+    const m = view?.modules.find((x) => x.id === id);
+    if (!m || m.files.length <= 1) return; // 單一檔案不能再鑽
+    setDrillPath((p) => [...p, { id: m.id, files: m.files, name: m.name }]);
+    setSelected(null);
+    setHoverEdge(null);
+  }, [view]);
+
+  const layout = useMemo(() => (view ? layoutGraph(view) : null), [view]);
+  const chain = useMemo(() => (view && selected ? traceChain(view, selected) : null), [view, selected]);
 
   const scale = layout ? fitScale(layout.width, viewportW) : 1;
-  const layerIndex = (id: string) => Math.max(0, arch?.layers.findIndex((l) => l.id === id) ?? 0);
+  const layerIndex = (id: string) => Math.max(0, view?.layers.findIndex((l) => l.id === id) ?? 0);
   const mmss = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
   const pickIcon = (
     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
@@ -189,6 +263,25 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
           <span className="arch-legend"><i className="arch-line-solid" />{t.arch_legend_scan}<i className="arch-line-dash" />{t.arch_legend_ai}</span>
         </header>
       )}
+      {drillPath.length > 0 && (
+        <nav className="arch-crumbs" aria-label={t.arch_crumb_nav}>
+          <button type="button" className="arch-crumb" onClick={() => goTo(0)}>{t.arch_crumb_root}</button>
+          {drillPath.map((d, i) => (
+            <span key={`${i}-${d.id}`} className="arch-crumb-item">
+              <span className="arch-crumb-sep" aria-hidden="true">›</span>
+              {i < drillPath.length - 1
+                ? <button type="button" className="arch-crumb" onClick={() => goTo(i + 1)}>{d.name}</button>
+                : <span className="arch-crumb-cur" aria-current="page">{d.name}</span>}
+            </span>
+          ))}
+          {scan && !analyzing && (
+            <button type="button" className="arch-btn arch-btn-small" onClick={analyzeDrill} disabled={status.kind === "busy"}>
+              {hasAiDrill ? t.arch_drill_reanalyze : t.arch_drill_analyze}
+            </button>
+          )}
+        </nav>
+      )}
+      {hiddenCount > 0 && <div className="arch-status arch-status-notice">{t.arch_hidden_n.replace("{n}", String(hiddenCount))}</div>}
       {status.kind !== "idle" && <div className={`arch-status arch-status-${status.kind}`}>{status.msg}</div>}
       {stale && <div className="arch-status arch-status-notice">{t.arch_stale}</div>}
       <div className="arch-body">
@@ -203,7 +296,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
               </div>
             </div>
           )}
-          {arch && layout && (
+          {view && layout && (
             <div className="arch-stage-wrap" style={{ width: layout.width * scale, height: layout.height * scale }}>
               <div className="arch-stage" style={{ width: layout.width, height: layout.height, transform: scale < 1 ? `scale(${scale})` : undefined }}>
                 {layout.columns.map((c, i) => (
@@ -221,7 +314,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                     <marker id="arch-arrow-on" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" className="arch-arrow arch-arrow-on" /></marker>
                     <filter id="arch-glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="4" /></filter>
                   </defs>
-                  {arch.edges.map((e, i) => {
+                  {view.edges.map((e, i) => {
                     const a = layout.nodes[e.from];
                     const b = layout.nodes[e.to];
                     if (!a || !b) return null;
@@ -239,7 +332,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                     );
                   })}
                 </svg>
-                {arch.modules.map((m) => {
+                {view.modules.map((m) => {
                   const p = layout.nodes[m.id];
                   if (!p) return null;
                   const dim = chain && !chain.modules.has(m.id);
@@ -247,7 +340,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                     <button key={m.id} type="button" title={m.id} aria-label={m.name}
                       className={`arch-node ${selected === m.id ? "arch-node-sel" : ""} ${dim ? "arch-node-dim" : ""}`}
                       style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H, ["--lc" as string]: layerColor(m.layer, layerIndex(m.layer)) }}
-                      onClick={() => setSelected(m.id)}>
+                      onClick={() => setSelected(m.id)} onDoubleClick={() => enter(m.id)}>
                       <span className="arch-node-head">
                         <span className="arch-node-name">{m.name}</span>
                         <span className="arch-node-files">{t.arch_files_count.replace("{n}", String(m.files.length))}</span>
@@ -259,7 +352,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                     </button>
                   );
                 })}
-                {arch.edges.map((e, i) => {
+                {view.edges.map((e, i) => {
                   const a = layout.nodes[e.from];
                   const b = layout.nodes[e.to];
                   if (!a || !b) return null;
@@ -271,7 +364,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
             </div>
           )}
         </div>
-        {arch && <DetailPanel arch={arch} selected={selected} onSelect={setSelected} />}
+        {view && <DetailPanel arch={view} selected={selected} onSelect={setSelected} scan={scan} onExpand={enter} />}
       </div>
     </div>
   );
