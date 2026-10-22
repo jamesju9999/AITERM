@@ -8,6 +8,7 @@ import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { createTask, getProjectBrief, setProjectBrief } from "../../ipc/tasks";
 import { ModelPickerButton } from "../ModelPickerButton";
 import { useRefineTask } from "../TaskBoard/useRefineTask";
+import { restoreWebviewFocus } from "../../lib/webviewFocus";
 import { RepoStatus } from "./RepoStatus";
 import { confirmInitRepo } from "./repoInit";
 import { startFromRequirement, StartError, type StartDeps, type StartResult } from "./startFromRequirement";
@@ -85,6 +86,7 @@ export function RequirementStart({
   const pick = async () => {
     try {
       const p = await open({ directory: true, defaultPath: repo || undefined });
+      await restoreWebviewFocus();
       if (typeof p === "string") {
         setCheck(null);
         await setProjectRepo(projectId, p);
