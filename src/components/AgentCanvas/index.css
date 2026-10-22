@@ -601,10 +601,12 @@
   flex-direction: column;
   gap: 6px;
 }
-.ac-cmd-row { display: flex; align-items: flex-end; gap: 6px; padding: 5px 6px; border-radius: 10px; background: var(--bg-secondary); border: 1px solid var(--ac-edge); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); }
+.ac-cmd-row { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 10px; background: var(--bg-secondary); border: 1px solid var(--ac-edge); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); }
 .ac-cmd-model { flex: none; max-width: 150px; min-width: 0; display: flex; }
 .ac-cmd-model > * { min-width: 0; max-width: 100%; }
-.ac-cmd-row > .aiterm-btn { flex: none; align-self: center; }
+.ac-cmd-row > .aiterm-btn { flex: none; }
+/* 附圖、模型選擇、送出三顆同高同樣式，才排得整齊。 */
+.ac-cmd-row > .aiterm-btn, .ac-cmd-model .model-picker-btn { box-sizing: border-box; height: 30px; padding-top: 0; padding-bottom: 0; display: inline-flex; align-items: center; justify-content: center; }
 /* 全域的 textarea 樣式會替輸入框加底色與邊框，看起來像一個框裡又一個框。 */
 .ac-cmd-row textarea.ac-cmd-input, .ac-cmd-row textarea.ac-cmd-input:focus { border: 0 !important; background: transparent !important; box-shadow: none !important; outline: none !important; }
 .ac-cmd-model .model-picker-btn { background: transparent; border-color: transparent; color: var(--text-muted); font-size: 12px; }
