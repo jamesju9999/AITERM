@@ -293,7 +293,11 @@ export function CommandBar({
             }
           }}
         />
-        {providers.length > 0 && <ModelPickerButton providers={providers} selectedId={providerId ?? ""} onChange={setProviderId} disabled={busy} />}
+        {providers.length > 0 && (
+          <span className="ac-cmd-model">
+            <ModelPickerButton providers={providers} selectedId={providerId ?? ""} onChange={setProviderId} disabled={busy} />
+          </span>
+        )}
         <button
           type="button"
           className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"

@@ -602,6 +602,9 @@
   gap: 6px;
 }
 .ac-cmd-row { display: flex; align-items: flex-end; gap: 6px; padding: 5px 6px; border-radius: 10px; background: var(--bg-secondary); border: 1px solid var(--ac-edge); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); }
+.ac-cmd-model { flex: none; max-width: 150px; min-width: 0; display: flex; }
+.ac-cmd-model > * { min-width: 0; max-width: 100%; }
+.ac-cmd-row > .aiterm-btn { flex: none; align-self: center; }
 .ac-cmd-input { flex: 1; min-width: 0; resize: none; max-height: 120px; padding: 5px 8px; border: none; outline: none; background: transparent; color: var(--text-primary); font: inherit; font-size: 13px; line-height: 1.5; field-sizing: content; }
 .ac-cmd-plan, .ac-cmd-answer { padding: 10px 12px; border-radius: 10px; background: var(--bg-secondary); border: 1px solid var(--ac-edge); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); font-size: 12.5px; color: var(--text-secondary); max-height: 40vh; overflow: auto; }
 .ac-cmd-answer p { margin: 4px 0 8px; white-space: pre-wrap; line-height: 1.55; }
