@@ -33,8 +33,9 @@
 
 - 新增 `architecture/` 模組：
   - `scanner`：遍歷檔案、解析 import 與依賴清單，遵守 `.gitignore`。
-  - `analyzer`：組 prompt，呼叫現有 AI router，用 json_schema 要求結構化輸出。
-- 新增 command：`arch_scan`、`arch_analyze`；進度以事件回報。
+  - `store`：讀寫 `.aiterm/architecture.json`、取得 git HEAD、限制在專案根目錄內的安全讀檔。
+- 新增 command：`arch_scan`／`arch_load`／`arch_save`／`arch_read_files`。
+- AI 分析在前端進行（沿用 `ai_complete`，與其他一次性 AI 補全一致），回應以掃描結果驗證，丟棄不存在的檔案、行號、模組與未知 kind。
 - 全程使用跨平台路徑處理，需在 macOS、Windows、Linux 都能運作。
 
 ## 錯誤處理
@@ -46,7 +47,7 @@
 ## 測試
 
 - Rust：以 tempfile 建小型 fixture 專案，驗證 import 解析與 JSON 結構。
-- 驗證 analyzer 會丟掉幻覺連線；fixture 必須讓正確與錯誤行為的結果可區分。
+- 前端驗證（`parseAnalysis`）會丟掉幻覺連線；fixture 必須讓正確與錯誤行為的結果可區分。
 - 前端 Vitest：點模組開啟詳情面板、虛實線渲染。
 - 實機驗收：以 AITerm 自己的 repo 為對象。
 
