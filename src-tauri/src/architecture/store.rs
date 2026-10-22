@@ -51,6 +51,49 @@ pub fn read_files(root: &Path, rels: &[String], max_bytes: usize) -> Vec<(String
         .collect()
 }
 
+/// 把專案內的相對路徑解析成「確實在專案根之內」的正規化絕對路徑。
+pub fn resolve_in_root(root: &Path, rel: &str) -> Option<PathBuf> {
+    let p = Path::new(rel);
+    if p.is_absolute() || p.components().any(|c| !matches!(c, Component::Normal(_))) {
+        return None;
+    }
+    let canon_root = root.canonicalize().ok()?;
+    let full = root.join(p).canonicalize().ok()?;
+    // 符號連結指到根外時，正規化後就不再以根開頭。
+    full.starts_with(&canon_root).then_some(full)
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct FilePreview {
+    pub content: String,
+    pub truncated: bool,
+    pub total_bytes: u64,
+}
+
+pub fn read_file_preview(root: &Path, rel: &str, max_bytes: usize) -> Result<FilePreview, String> {
+    use std::io::Read;
+    let full = resolve_in_root(root, rel).ok_or_else(|| format!("找不到檔案或路徑不在專案內：{rel}"))?;
+    let meta = std::fs::metadata(&full).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err(format!("不是一般檔案：{rel}"));
+    }
+    let total_bytes = meta.len();
+    let mut buf = Vec::new();
+    std::fs::File::open(&full)
+        .map_err(|e| e.to_string())?
+        .take(max_bytes as u64)
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    if buf.iter().take(8192).any(|&b| b == 0) {
+        return Err("這是二進位檔，無法預覽".to_string());
+    }
+    Ok(FilePreview {
+        content: String::from_utf8_lossy(&buf).into_owned(),
+        truncated: total_bytes > max_bytes as u64,
+        total_bytes,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +133,57 @@ mod tests {
 
         let evil = read_files(dir.path(), &["../secret.txt".into(), "/etc/passwd".into()], 10);
         assert!(evil.is_empty(), "越界路徑必須被丟掉: {evil:?}");
+    }
+
+    #[test]
+    fn resolve_in_root_accepts_normal_and_rejects_escapes() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src/sub")).unwrap();
+        fs::write(dir.path().join("src/a.txt"), "x").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("x"), "s").unwrap();
+
+        let ok = resolve_in_root(dir.path(), "src/a.txt").unwrap();
+        assert_eq!(ok, dir.path().join("src/a.txt").canonicalize().unwrap());
+        assert!(resolve_in_root(dir.path(), "../x").is_none());
+        assert!(resolve_in_root(dir.path(), "/etc/passwd").is_none());
+        assert!(resolve_in_root(dir.path(), "src/sub/../a.txt").is_none());
+        assert!(resolve_in_root(dir.path(), "./src/a.txt").is_none());
+        assert!(resolve_in_root(dir.path(), "src/missing.txt").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_in_root_rejects_symlink_pointing_outside() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), "s").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), dir.path().join("link.txt")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linkdir")).unwrap();
+        assert!(resolve_in_root(dir.path(), "link.txt").is_none());
+        assert!(resolve_in_root(dir.path(), "linkdir/secret.txt").is_none());
+    }
+
+    #[test]
+    fn read_file_preview_reads_truncates_and_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "hello\nworld").unwrap();
+        fs::write(dir.path().join("big.txt"), "y".repeat(100)).unwrap();
+        fs::write(dir.path().join("bin.dat"), [b'a', 0, b'b']).unwrap();
+
+        let p = read_file_preview(dir.path(), "a.txt", 1000).unwrap();
+        assert_eq!(p.content, "hello\nworld");
+        assert!(!p.truncated);
+        assert_eq!(p.total_bytes, 11);
+
+        let p = read_file_preview(dir.path(), "big.txt", 10).unwrap();
+        assert_eq!(p.content.len(), 10);
+        assert!(p.truncated);
+        assert_eq!(p.total_bytes, 100);
+
+        let e = read_file_preview(dir.path(), "bin.dat", 1000).unwrap_err();
+        assert!(e.contains("二進位"), "{e}");
+        assert!(read_file_preview(dir.path(), "../x", 10).is_err());
+        assert!(read_file_preview(dir.path(), "nope.txt", 10).is_err());
     }
 }
