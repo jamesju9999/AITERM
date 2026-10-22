@@ -33,4 +33,21 @@ describe("DetailPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "服務" }));
     expect(onSelect).toHaveBeenCalledWith("srv");
   });
+
+  it("AI 連線顯示信心度百分比", () => {
+    setup("web");
+    expect(screen.getByText(/80%/)).toBeInTheDocument();
+  });
+
+  it("檔案清單預設只列前 8 個，可展開全部再收合", () => {
+    const files = Array.from({ length: 12 }, (_, i) => `big/f${i}.ts`);
+    const big: Architecture = { ...arch, modules: [{ ...arch.modules[0], files }, arch.modules[1]] };
+    render(<LocaleProvider><DetailPanel arch={big} selected="web" onSelect={vi.fn()} /></LocaleProvider>);
+    expect(screen.getByText("big/f7.ts")).toBeInTheDocument();
+    expect(screen.queryByText("big/f8.ts")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /顯示全部 \(12\)|Show all \(12\)/ }));
+    expect(screen.getByText("big/f11.ts")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /收合|Show less/ }));
+    expect(screen.queryByText("big/f11.ts")).not.toBeInTheDocument();
+  });
 });
