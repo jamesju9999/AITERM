@@ -137,29 +137,71 @@ describe("DetailPanel", () => {
       return { ...r, onPickPath };
     };
 
-    it("列出上游與下游路徑，每步顯示 模組—kind→模組、備註與 file:line", () => {
+    it("收合的路徑卡只有一行：起點 → … → 終點 · N 步，title 帶完整鏈", () => {
       const { container } = renderFlow(null);
       expect(container.querySelectorAll('[data-flow="up"]')).toHaveLength(1);
-      const down = container.querySelectorAll('[data-flow="down"]');
+      const down = [...container.querySelectorAll('[data-flow="down"]')];
       expect(down).toHaveLength(2);
-      const ipc = [...down].find((el) => el.textContent?.includes("ipc"))!;
-      expect(ipc.textContent).toContain("Mb");
-      expect(ipc.textContent).toContain("Mc");
-      expect(ipc.textContent).toContain("呼叫指令");
-      expect(ipc.textContent).toContain("b/x.ts:7");
-      // 掃描連線只有 kind，沒有佐證
-      const http = [...down].find((el) => el.textContent?.includes("http"))!;
-      expect(http.textContent).not.toContain(":");
+      const toC = down.find((el) => el.textContent?.includes("Mc"))!;
+      expect(toC.textContent).toMatch(/Mb\s*→\s*Mc/);
+      expect(toC.textContent).toMatch(/1 步|1 step/);
+      expect(toC.getAttribute("title")).toBe("Mb → Mc");
+      // 收合時不展開逐步資訊
+      expect(toC.textContent).not.toContain("ipc");
+      expect(toC.textContent).not.toContain("呼叫指令");
+      expect(toC.textContent).not.toContain("b/x.ts:7");
+      expect(toC.querySelector(".arch-step-link")).toBeNull();
+      // 上游路徑：a → b
+      const up = container.querySelector('[data-flow="up"]')!;
+      expect(up.getAttribute("title")).toBe("Ma → Mb");
+    });
+
+    it("多步路徑收合時中間以 … 省略，步數正確", () => {
+      const chain: Architecture = {
+        ...flowArch,
+        edges: [
+          { from: "a", to: "b", kind: "import", source: "scan", confidence: 1 },
+          { from: "b", to: "c", kind: "ipc", source: "ai", confidence: 0.9 },
+          { from: "c", to: "d", kind: "sql", source: "scan", confidence: 1 },
+        ],
+      };
+      const { container } = render(<LocaleProvider><DetailPanel arch={chain} selected="a" onSelect={vi.fn()} activePath={null} onPickPath={vi.fn()} /></LocaleProvider>);
+      const card = container.querySelector('[data-flow="down"]')!;
+      expect(card.textContent).toMatch(/Ma\s*→\s*…\s*→\s*Md/);
+      expect(card.textContent).toMatch(/3 步|3 steps/);
+      expect(card.getAttribute("title")).toBe("Ma → Mb → Mc → Md");
+    });
+
+    it("使用中的路徑展開成逐節點步進器：每列一個節點，列間顯示 kind、備註與 file:line", () => {
+      const { container } = renderFlow(flowArch.edges.slice(1, 2)); // b→c（AI 連線）
+      const active = [...container.querySelectorAll('[data-flow="down"]')].find((el) => el.getAttribute("aria-pressed") === "true")!;
+      const rows = active.querySelectorAll(".arch-step-row");
+      expect([...rows].map((r) => r.textContent)).toEqual(["Mb", "Mc"]);
+      const links = active.querySelectorAll(".arch-step-link");
+      expect(links).toHaveLength(1);
+      expect(links[0].textContent).toContain("ipc");
+      expect(links[0].textContent).toContain("呼叫指令");
+      expect(links[0].textContent).toContain("b/x.ts:7");
+      // 另一張沒被選中的卡仍然收合
+      const other = [...container.querySelectorAll('[data-flow="down"]')].find((el) => el.getAttribute("aria-pressed") === "false")!;
+      expect(other.querySelector(".arch-step-row")).toBeNull();
+    });
+
+    it("掃描連線的步進器列間只有 kind，沒有佐證", () => {
+      const { container } = renderFlow(flowArch.edges.slice(2, 3)); // b→d（掃描）
+      const link = container.querySelector('[data-flow="down"][aria-pressed="true"] .arch-step-link')!;
+      expect(link.textContent).toContain("http");
+      expect(link.textContent).not.toContain(":");
     });
 
     it("點路徑卡呼叫 onPickPath(該路徑)；activePath 對應的卡 aria-pressed", () => {
       const { container, onPickPath } = renderFlow(flowArch.edges.slice(2, 3));
       const down = [...container.querySelectorAll('[data-flow="down"]')];
-      const ipc = down.find((el) => el.textContent?.includes("ipc"))!;
-      const http = down.find((el) => el.textContent?.includes("http"))!;
-      expect(http.getAttribute("aria-pressed")).toBe("true");
-      expect(ipc.getAttribute("aria-pressed")).toBe("false");
-      fireEvent.click(ipc);
+      const toC = down.find((el) => el.getAttribute("title") === "Mb → Mc")!;
+      const toD = down.find((el) => el.getAttribute("title") === "Mb → Md")!;
+      expect(toD.getAttribute("aria-pressed")).toBe("true");
+      expect(toC.getAttribute("aria-pressed")).toBe("false");
+      fireEvent.click(toC);
       expect(onPickPath).toHaveBeenCalledWith([flowArch.edges[1]]);
     });
 

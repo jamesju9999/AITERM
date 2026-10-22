@@ -89,26 +89,41 @@ export function DetailPanel({ arch, selected, onSelect, scan, onExpand, activePa
   const color = layerColor(mod.layer, Math.max(0, layerIdx));
   const pathCards = (list: Edge[][], dir: "up" | "down") => (
     <ul className="arch-edge-list">
-      {list.map((p, i) => (
-        <li key={`${dir}-${i}`}>
-          <button type="button" data-flow={dir} aria-pressed={samePath(activePath, p)}
-            className={`arch-path arch-path-${dir} ${samePath(activePath, p) ? "arch-path-on" : ""}`}
-            onClick={() => onPickPath?.(p)}>
-            {p.map((e, j) => (
-              <span key={j} className="arch-path-step">
-                <span className="arch-path-hop">
-                  <span className="arch-path-mod">{nameOf(e.from)}</span>
-                  <span className={`arch-kind arch-kind-${e.source}`}>{e.kind}</span>
-                  <span className="arch-path-arrow" aria-hidden="true">→</span>
-                  <span className="arch-path-mod">{nameOf(e.to)}</span>
-                </span>
-                {e.note && <span className="arch-note">{e.note}</span>}
-                {e.evidence && <code className="arch-evidence">{e.evidence.file}:{e.evidence.line}</code>}
+      {list.map((p, i) => {
+        const on = samePath(activePath, p);
+        // 路徑上的節點依序：第一條邊的起點，加上每條邊的終點。
+        const nodes = [p[0].from, ...p.map((e) => e.to)];
+        const full = nodes.map(nameOf).join(" → ");
+        const short = p.length === 1 ? full : `${nameOf(nodes[0])} → … → ${nameOf(nodes[nodes.length - 1])}`;
+        return (
+          <li key={`${dir}-${i}`}>
+            <button type="button" data-flow={dir} aria-pressed={on} title={full}
+              className={`arch-path arch-path-${dir} ${on ? "arch-path-on" : ""}`}
+              onClick={() => onPickPath?.(p)}>
+              <span className="arch-path-line">
+                <span className="arch-path-short">{short}</span>
+                <span className="arch-path-n">· {t.arch_flow_steps.replace("{n}", String(p.length))}</span>
               </span>
-            ))}
-          </button>
-        </li>
-      ))}
+              {on && (
+                <span className="arch-stepper">
+                  {nodes.map((id, j) => (
+                    <span key={j} className="arch-step">
+                      <span className="arch-step-row" title={nameOf(id)}>{nameOf(id)}</span>
+                      {j < p.length && (
+                        <span className="arch-step-link">
+                          <span className={`arch-kind arch-kind-${p[j].source}`}>{p[j].kind}</span>
+                          {p[j].note && <span className="arch-note">{p[j].note}</span>}
+                          {p[j].evidence && <code className="arch-evidence">{p[j].evidence!.file}:{p[j].evidence!.line}</code>}
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
   const files = showAll ? mod.files : mod.files.slice(0, FILES_COLLAPSED);
