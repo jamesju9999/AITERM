@@ -97,6 +97,10 @@ export const abortAgentMerge = (projectId: string, id: string): Promise<void> =>
 export const assignAgent = (projectId: string, taskId: string, agentId: string | null, fast?: boolean): Promise<void> =>
   invoke("tasks_assign_agent", { projectId, taskId, agentId, fast: fast ?? false });
 
+/** 問一個問題：交給最閒的 Agent 讀程式庫回答（唯讀）。答案在那張卡完成後的 `ai_summary`。 */
+export const askAgent = (projectId: string, question: string): Promise<{ task_id: string; agent_name: string }> =>
+  invoke("agents_ask", { projectId, question });
+
 /** 手動放行卡住的模組（審查不通過超過上限，或審查卡本身失敗）。 */
 export const overrideModule = (projectId: string, taskId: string): Promise<void> =>
   invoke("agents_override_module", { projectId, taskId });

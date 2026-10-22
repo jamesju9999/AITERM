@@ -28,6 +28,8 @@ pub const KIND_MERGE: &str = "merge";
 pub const KIND_PLAN: &str = "plan";
 /// 驗收卡：驗收者在合併結果上建置、測試、操作。
 pub const KIND_VERIFY: &str = "verify";
+/// 問答卡：Agent 唯讀地讀程式庫回答一個問題，答案寫在 answer.md，不進審查／合併／驗收。
+pub const KIND_ASK: &str = "ask";
 /// 一份規格最多拆成幾張實作卡。
 pub const MAX_PLAN_TASKS: usize = 20;
 /// 附在實作卡內文裡的規格全文上限（字元）。
@@ -167,6 +169,11 @@ pub enum WorkflowEvent {
 /// `<專案>/tasks/<plan_id>/tasks.json`——Orchestrator 寫拆解結果的位置。
 pub fn tasks_json_path(project_path: &Path, plan_id: &str) -> std::path::PathBuf {
     crate::tasks::task_dir(project_path, plan_id).join("tasks.json")
+}
+
+/// `<專案>/tasks/<ask_id>/answer.md`——問答卡的 Agent 寫答案的位置。
+pub fn answer_path(project_path: &Path, ask_id: &str) -> std::path::PathBuf {
+    crate::tasks::task_dir(project_path, ask_id).join("answer.md")
 }
 
 /// `<專案>/tasks/<review_id>/review.json`——Reviewer 寫判定的位置。
@@ -475,6 +482,67 @@ async fn create_plan_card(
     let body = plan_body(module, start, end, &implementers, &tasks_json_path(project_path, &id));
     sqlx::query("UPDATE tasks SET body = ? WHERE id = ?").bind(&body).bind(&id).execute(pool).await?;
     Ok(id)
+}
+
+fn ask_body(question: &str, answer: &Path) -> String {
+    format!(
+        "有人想知道下面這個問題。請你**只讀**程式庫（你在唯讀的目錄裡，不能也不要改任何檔案）：\n\
+         先看實際的程式碼、設定與文件再回答，不要憑專案簡介或印象猜；找不到的就明說找不到，不要編造。\n\
+         答案請直接回答問題，用使用者的語言（繁體中文），先給結論再補必要的依據（檔案路徑），不要長篇大論。\n\n\
+         ## 問題\n\n{}\n\n\
+         ## 回答的方式\n\n把答案寫成 Markdown 存到：{}\n寫完就結束，不需要做其他事。\n",
+        question.trim(),
+        answer.display()
+    )
+}
+
+/// 建一張問答卡。排在這個 Agent 的佇列最後；不屬於任何模組。
+pub async fn create_ask_card(
+    pool: &SqlitePool,
+    project_path: &Path,
+    agent: &AgentRow,
+    question: &str,
+) -> Result<String, sqlx::Error> {
+    let head: String = question.trim().chars().take(24).collect();
+    let title = format!("提問：{head}");
+    let id = insert_card(
+        pool,
+        &NewCard {
+            title: &title,
+            body: "",
+            project_dir: &agent.project_dir,
+            agent_id: &agent.id,
+            card_kind: KIND_ASK,
+            module_id: None,
+            review_of: None,
+            start_sha: None,
+            end_sha: None,
+            sort_order: queued_tail(pool).await?,
+            from_spec: None,
+        },
+    )
+    .await?;
+    sqlx::query("UPDATE tasks SET body = ? WHERE id = ?")
+        .bind(ask_body(question, &answer_path(project_path, &id)))
+        .bind(&id)
+        .execute(pool)
+        .await?;
+    Ok(id)
+}
+
+/// 挑誰來回答：名下排隊＋執行中的卡最少的 Agent（同數取最早建立）。
+pub async fn pick_ask_agent(pool: &SqlitePool, agents: &[AgentRow]) -> Result<Option<AgentRow>, sqlx::Error> {
+    let mut best: Option<(i64, &AgentRow)> = None;
+    for a in agents {
+        let load: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id = ? AND status IN ('queued', 'running')")
+            .bind(&a.id)
+            .fetch_one(pool)
+            .await?;
+        if best.map_or(true, |(l, b)| (load, &a.created_at) < (l, &b.created_at)) {
+            best = Some((load, a));
+        }
+    }
+    Ok(best.map(|(_, a)| a.clone()))
 }
 
 /// 依「最閒」挑 Coder：queued+running 卡數最少，再比名下 work 卡總數，再比

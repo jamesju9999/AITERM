@@ -34,6 +34,7 @@ vi.mock("../../ipc/tasks", () => ({
 }));
 vi.mock("../../ipc/agents", () => ({
   listAgents: vi.fn(),
+  askAgent: vi.fn(),
   createAgent: vi.fn().mockResolvedValue("new-agent"),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   deleteAgent: vi.fn().mockResolvedValue(undefined),

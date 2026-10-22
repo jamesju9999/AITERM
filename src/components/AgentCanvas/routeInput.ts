@@ -76,29 +76,6 @@ export async function routeInput(
   }
 }
 
-/** 問答用的現況摘要：每位 Agent 與他手上的模組。 */
-export function buildStatusSummary(agents: AgentRow[], tasks: TaskWithAttachments[]): string {
-  const lines: string[] = [];
-  for (const a of agents) {
-    const mine = tasks.filter((x) => x.agent_id === a.id && x.card_kind === "work" && !x.archived_at);
-    const state = a.paused_task_id ? "（暫停中）" : "";
-    lines.push(`- ${a.name}（${a.kind}）${state}`);
-    for (const m of mine.slice(0, 12)) {
-      const result = m.status === "done" ? (m.outcome === "success" ? "完成" : "失敗") : m.status;
-      lines.push(`  - ${m.title}：${result}`);
-    }
-  }
-  return lines.join("\n");
-}
-
-export function buildQuestionSystem(): string {
-  return [
-    "你是 AITerm「Agent 協作」專案的助理。依下面提供的專案簡介與目前進度，簡短回答使用者的問題。",
-    "只根據提供的資料回答；資料裡沒有的就直說不知道，並建議他可以把它當成新需求或 bug 交給 Agent 去查。",
-    "用使用者的語言回答，不要用 Markdown 標題。",
-  ].join("\n");
-}
-
 export interface DispatchEnv {
   projectId: string;
   repoDir: string;
@@ -110,12 +87,10 @@ export interface DispatchEnv {
 
 export interface DispatchResult {
   kind: InputKind;
-  /** 建了卡的（問題不建卡）。 */
+  /** 建的卡（問題是一張唯讀的問答卡，答案在卡完成後才有）。 */
   taskId?: string;
   /** 交給誰。 */
   agentName?: string;
-  /** 問題的回答。 */
-  answer?: string;
   /** 沒有可走快速路徑的工程師，退回完整流程。 */
   fellBack?: boolean;
 }
@@ -124,7 +99,11 @@ export class NoStationError extends Error {}
 
 /** 卡片附件（截圖）。由外面注入，測試不必 mock Tauri。 */
 export type AddAttachment = (projectId: string, taskId: string, name: string, bytes: Uint8Array) => Promise<unknown>;
-type DispatchDeps = Pick<StartDeps, "createTask" | "assignAgent" | "complete" | "getBrief"> & { addAttachment?: AddAttachment };
+type DispatchDeps = Pick<StartDeps, "createTask" | "assignAgent" | "complete" | "getBrief"> & {
+  addAttachment?: AddAttachment;
+  /** 問問題：交給 Agent 讀程式庫回答。 */
+  askAgent?: (projectId: string, question: string) => Promise<{ task_id: string; agent_name: string }>;
+};
 
 async function attachImages(d: DispatchDeps, projectId: string, taskId: string, images: File[]) {
   for (const file of images) {
@@ -159,10 +138,10 @@ export async function dispatchInput(
   const nameOf = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
 
   if (kind === "question") {
-    const brief = ((await d.getBrief(projectId).catch(() => null)) ?? "").trim();
-    const context = [brief && `專案簡介：\n${brief}`, `目前進度：\n${buildStatusSummary(agents, tasks)}`, `問題：\n${text.trim()}`].filter(Boolean).join("\n\n");
-    const answer = await d.complete([{ role: "user", content: context }], buildQuestionSystem(), "input-ask", env.providerId);
-    return { kind, answer: answer.trim() };
+    // 交給 Agent 讀程式庫回答，不是用簡介猜：簡介裡沒有的細節（用了哪個 API、某功能怎麼運作）只有看程式碼才答得出來。
+    if (!d.askAgent) throw new Error("askAgent missing");
+    const r = await d.askAgent(projectId, text.trim());
+    return { kind, taskId: r.task_id, agentName: r.agent_name };
   }
 
   if (kind === "fast" || kind === "bug") {

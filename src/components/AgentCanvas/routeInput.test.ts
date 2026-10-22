@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentRow } from "../../ipc/agents";
 import type { TaskWithAttachments } from "../../ipc/tasks";
 import { translations } from "../../lib/i18n";
-import { buildRouteSystem, buildStatusSummary, dispatchInput, NoStationError, parseRoute, routeInput, type DispatchEnv } from "./routeInput";
+import { buildRouteSystem, dispatchInput, NoStationError, parseRoute, routeInput, type DispatchEnv } from "./routeInput";
 import type { StartDeps } from "./startFromRequirement";
 
 const t = translations.en;
@@ -104,39 +104,20 @@ describe("dispatchInput", () => {
     expect(vi.mocked(d.createTask).mock.calls[0][1].body).toContain(t.ac_bug_instructions_noshot);
   });
 
-  it("question：不建卡，用簡介與進度回答", async () => {
-    const complete = vi.fn().mockResolvedValue("  計時器已完成。 ");
-    const d = deps({ complete });
-    const tasks = [task({ id: "t1", title: "計時器", agent_id: "c1", status: "done", outcome: "success" })];
-    const r = await dispatchInput("question", "計時器做完了嗎？", env([c1], tasks), d);
-    expect(r).toEqual({ kind: "question", answer: "計時器已完成。" });
+  it("question：交給 Agent 讀程式庫回答，不用本地模型、不建一般卡", async () => {
+    const complete = vi.fn();
+    const askAgent = vi.fn().mockResolvedValue({ task_id: "ask-1", agent_name: "工程師1" });
+    const d = { ...deps({ complete }), askAgent };
+    const r = await dispatchInput("question", " 新聞來源是哪裡？ ", env([c1]), d);
+    expect(r).toEqual({ kind: "question", taskId: "ask-1", agentName: "工程師1" });
+    expect(askAgent).toHaveBeenCalledWith("p", "新聞來源是哪裡？");
+    expect(complete).not.toHaveBeenCalled();
     expect(d.createTask).not.toHaveBeenCalled();
-    const sent = complete.mock.calls[0][0][0].content as string;
-    expect(sent).toContain("番茄鐘 App");
-    expect(sent).toContain("計時器：完成");
-    expect(sent).toContain("計時器做完了嗎？");
   });
 
   it("沒有工程師時 requirement 丟 NoStationError，不建卡", async () => {
     const d = deps();
     await expect(dispatchInput("requirement", "x", env([]), d)).rejects.toBeInstanceOf(NoStationError);
     expect(d.createTask).not.toHaveBeenCalled();
-  });
-});
-
-describe("buildStatusSummary", () => {
-  it("列出每位 Agent、暫停狀態與他的模組結果，略過封存與非模組卡", () => {
-    const s = buildStatusSummary(
-      [agent({ id: "c1", name: "工程師1", paused_task_id: "x" })],
-      [
-        task({ id: "a", title: "登入", agent_id: "c1", status: "done", outcome: "failed" }),
-        task({ id: "b", title: "舊的", agent_id: "c1", archived_at: 5 }),
-        task({ id: "r", title: "審查", agent_id: "c1", card_kind: "review" }),
-      ],
-    );
-    expect(s).toContain("工程師1（coder）（暫停中）");
-    expect(s).toContain("登入：失敗");
-    expect(s).not.toContain("舊的");
-    expect(s).not.toContain("審查");
   });
 });

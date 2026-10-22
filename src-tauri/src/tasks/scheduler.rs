@@ -558,7 +558,12 @@ pub(crate) async fn prepare_review_worktree(
     reviewer_id: &str,
     task: &TaskRow,
 ) -> Result<std::path::PathBuf, String> {
-    let sha = task.end_sha.as_deref().ok_or_else(|| "審查卡沒有受審版本（end_sha）".to_string())?;
+    // 問答卡沒有受審版本：看程式庫目前的 HEAD。
+    let sha = match task.end_sha.as_deref() {
+        Some(s) => s,
+        None if task.card_kind == crate::tasks::workflow::KIND_ASK => "HEAD",
+        None => return Err("審查卡沒有受審版本（end_sha）".to_string()),
+    };
     let path = crate::tasks::agents::agent_dir(project_storage_path, reviewer_id).join("reviews").join(&task.id);
     let path_str = path.to_string_lossy().into_owned();
     let repo = crate::vcs::git::GitClient::new(task.project_dir.clone(), None);
@@ -574,6 +579,38 @@ pub(crate) async fn prepare_review_worktree(
     // review.json 寫在卡片資料夾，先確保它存在。
     let _ = std::fs::create_dir_all(crate::tasks::task_dir(project_storage_path, &task.id));
     Ok(path)
+}
+
+/// 問答卡結案：答案（answer.md）存成卡片的摘要，清掉唯讀目錄。失敗不暫停 Agent——
+/// 問不出答案不該擋住整個團隊的工作。
+pub(crate) async fn finalize_ask_card(
+    pool: &sqlx::SqlitePool,
+    project_storage_path: &std::path::Path,
+    task_id: &str,
+    repo_dir: &str,
+    worktree: &std::path::Path,
+    outcome: monitor::TaskOutcome,
+) -> monitor::TaskOutcome {
+    let outcome = if matches!(outcome, monitor::TaskOutcome::Success) {
+        let path = crate::tasks::workflow::answer_path(project_storage_path, task_id);
+        match std::fs::read_to_string(&path) {
+            Ok(text) if !text.trim().is_empty() => match store::set_summary(pool, task_id, text.trim()).await {
+                Ok(()) => monitor::TaskOutcome::Success,
+                Err(e) => monitor::TaskOutcome::Failed(format!("寫入回答失敗：{e}")),
+            },
+            Ok(_) => monitor::TaskOutcome::Failed("Agent 寫的 answer.md 是空的".to_string()),
+            Err(e) => monitor::TaskOutcome::Failed(format!("Agent 沒有產出 answer.md：{e}")),
+        }
+    } else {
+        outcome
+    };
+    let repo = crate::vcs::git::GitClient::new(repo_dir.to_string(), None);
+    if let Err(e) = repo.remove_worktree_force(&worktree.to_string_lossy()).await {
+        eprintln!("remove ask worktree {}: {e}", worktree.display());
+        let _ = std::fs::remove_dir_all(worktree);
+        let _ = repo.prune_worktrees().await;
+    }
+    outcome
 }
 
 /// Reviewer 卡片結案（`finish_task` 之前）：讀 review.json 寫入判定，失敗就
@@ -927,7 +964,8 @@ impl Dispatcher for RealDispatcher {
         );
         let readonly = task.card_kind == crate::tasks::workflow::KIND_REVIEW
             || task.card_kind == crate::tasks::workflow::KIND_PLAN
-            || task.card_kind == crate::tasks::workflow::KIND_VERIFY;
+            || task.card_kind == crate::tasks::workflow::KIND_VERIFY
+            || task.card_kind == crate::tasks::workflow::KIND_ASK;
         let (effective_dir, worktree_info) = if let Some(agent) = agent.as_ref().filter(|_| readonly) {
             // 審查卡、拆解卡、驗收卡：在受審版本的唯讀目錄跑，不記 start_sha（那兩欄存的是受審範圍）。
             let wt = prepare_review_worktree(&project.path, &agent.id, task).await?;
@@ -1274,6 +1312,9 @@ impl Dispatcher for RealDispatcher {
             let outcome = match &agent_ctx {
                 Some((agent_id, _, worktree)) if card_kind == crate::tasks::workflow::KIND_REVIEW => {
                     finalize_review_card(&pool, &project_path, agent_id, &task_id, &repo_dir, worktree, outcome).await
+                }
+                Some((_, _, worktree)) if card_kind == crate::tasks::workflow::KIND_ASK => {
+                    finalize_ask_card(&pool, &project_path, &task_id, &repo_dir, worktree, outcome).await
                 }
                 Some((agent_id, _, worktree)) if card_kind == crate::tasks::workflow::KIND_PLAN => {
                     finalize_plan_card(&pool, &project_path, agent_id, &task_id, &repo_dir, worktree, outcome).await
@@ -3834,6 +3875,63 @@ mod agent_dispatch_tests {
         assert_eq!(row.review_reasons.as_deref(), Some(r#"["少了權限檢查"]"#));
         assert!(!wt.exists(), "審查目錄要清掉");
         assert_eq!(agents::get_agent(&pool, &reviewer.id).await.unwrap().unwrap().paused_task_id, None);
+    }
+
+    #[tokio::test]
+    async fn an_ask_card_reads_the_repo_head_and_its_answer_becomes_the_summary() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let tip = commit_file(repo.path(), "notes.txt", "real content");
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let agent = coder(&pool, repo.path(), "工程師1").await;
+        let id = crate::tasks::workflow::create_ask_card(&pool, storage.path(), &agent, "新聞來源是哪裡？").await.unwrap();
+        let card = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(card.card_kind, crate::tasks::workflow::KIND_ASK);
+        assert!(card.body.contains("answer.md") && card.body.contains("新聞來源是哪裡？"), "{}", card.body);
+
+        // 沒有 end_sha 也能開唯讀目錄：停在程式庫目前的 HEAD。
+        let wt = prepare_review_worktree(storage.path(), &agent.id, &card).await.unwrap();
+        assert_eq!(head(&wt), tip);
+        fs::write(crate::tasks::workflow::answer_path(storage.path(), &id), "來源是 RSS。\n").unwrap();
+        let out = finalize_ask_card(&pool, storage.path(), &id, &repo.path().to_string_lossy(), &wt, monitor::TaskOutcome::Success).await;
+        assert!(matches!(out, monitor::TaskOutcome::Success));
+        assert_eq!(store::get_task(&pool, &id).await.unwrap().unwrap().ai_summary.as_deref(), Some("來源是 RSS。"));
+        assert!(!wt.exists(), "唯讀目錄要清掉");
+    }
+
+    #[tokio::test]
+    async fn an_ask_without_answer_fails_but_does_not_pause_the_agent() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let agent = coder(&pool, repo.path(), "工程師1").await;
+        let id = crate::tasks::workflow::create_ask_card(&pool, storage.path(), &agent, "問題").await.unwrap();
+        let card = store::get_task(&pool, &id).await.unwrap().unwrap();
+        let wt = prepare_review_worktree(storage.path(), &agent.id, &card).await.unwrap();
+
+        let out = finalize_ask_card(&pool, storage.path(), &id, &repo.path().to_string_lossy(), &wt, monitor::TaskOutcome::Success).await;
+
+        match out {
+            monitor::TaskOutcome::Failed(m) => assert!(m.contains("answer.md"), "{m}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(agents::get_agent(&pool, &agent.id).await.unwrap().unwrap().paused_task_id, None);
+        assert_eq!(store::get_task(&pool, &id).await.unwrap().unwrap().ai_summary, None);
+    }
+
+    #[tokio::test]
+    async fn asks_go_to_the_least_loaded_agent() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let busy = coder(&pool, repo.path(), "忙").await;
+        let idle = coder(&pool, repo.path(), "閒").await;
+        crate::tasks::workflow::create_ask_card(&pool, storage.path(), &busy, "前一題").await.unwrap();
+        let all = agents::list_agents(&pool).await.unwrap();
+        let pick = crate::tasks::workflow::pick_ask_agent(&pool, &all).await.unwrap().unwrap();
+        assert_eq!(pick.id, idle.id);
     }
 
     #[tokio::test]

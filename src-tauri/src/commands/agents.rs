@@ -211,6 +211,39 @@ pub async fn tasks_assign_agent(
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub struct AskStarted {
+    pub task_id: String,
+    pub agent_name: String,
+}
+
+/// 問一個問題：交給最閒的 Agent 讀程式庫回答（唯讀、不進審查合併驗收）。
+/// 答案在卡片完成後出現在 `ai_summary`。
+#[tauri::command]
+pub async fn agents_ask(
+    project_id: String,
+    question: String,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+    scheduler: State<'_, SchedulerHandle>,
+) -> Result<AskStarted, String> {
+    if question.trim().is_empty() {
+        return Err("問題是空的".to_string());
+    }
+    let p = project(&reg, &project_id)?;
+    let all = agents::list_agents(&p.pool).await.map_err(|e| e.to_string())?;
+    let agent = crate::tasks::workflow::pick_ask_agent(&p.pool, &all)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "還沒有 Agent 可以回答".to_string())?;
+    let task_id = crate::tasks::workflow::create_ask_card(&p.pool, &p.path, &agent, &question)
+        .await
+        .map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    scheduler.poke();
+    Ok(AskStarted { task_id, agent_name: agent.name })
+}
+
 /// 處理暫停中的 Agent：`retry` 或 `skip`。
 ///
 /// - `retry`：把失敗的那張卡原地排回這個 Agent 佇列的最前面。worktree 原樣

@@ -6,7 +6,7 @@ import type { AgentRow } from "../../ipc/agents";
 import type { TaskWithAttachments } from "../../ipc/tasks";
 
 vi.mock("../../ipc/ai", () => ({ invokeAiComplete: vi.fn() }));
-vi.mock("../../ipc/agents", () => ({ assignAgent: vi.fn(), createAgent: vi.fn(), getReferences: vi.fn() }));
+vi.mock("../../ipc/agents", () => ({ askAgent: vi.fn(), assignAgent: vi.fn(), createAgent: vi.fn(), getReferences: vi.fn() }));
 vi.mock("../../ipc/tasks", () => ({ createTask: vi.fn(), getProjectBrief: vi.fn(), setProjectBrief: vi.fn() }));
 vi.mock("../../ipc/provider", () => ({ listProviders: vi.fn() }));
 vi.mock("../ModelPickerButton", () => ({ ModelPickerButton: () => null }));
@@ -35,12 +35,13 @@ const ai = (route: string, other = "") =>
   vi.fn().mockImplementation(async (_m, _s, streamId: string) => (streamId === "input-route" ? route : other));
 
 const attach = vi.fn().mockResolvedValue(undefined);
-const view = (d: StartDeps, onDispatched = vi.fn(), agents = [agent("c1")], tasks: TaskWithAttachments[] = []) =>
-  render(
-    <LocaleProvider>
-      <CommandBar projectId="p" repo="/repo" agents={agents} tasks={tasks} onDispatched={onDispatched} deps={d} attach={attach} />
-    </LocaleProvider>,
-  );
+const ask = vi.fn().mockResolvedValue({ task_id: "ask-1", agent_name: "c1" });
+const bar = (d: StartDeps, onDispatched = vi.fn(), agents = [agent("c1")], tasks: TaskWithAttachments[] = []) => (
+  <LocaleProvider>
+    <CommandBar projectId="p" repo="/repo" agents={agents} tasks={tasks} onDispatched={onDispatched} deps={d} attach={attach} ask={ask} />
+  </LocaleProvider>
+);
+const view = (d: StartDeps, onDispatched = vi.fn(), agents = [agent("c1")], tasks: TaskWithAttachments[] = []) => render(bar(d, onDispatched, agents, tasks));
 
 const png = (name = "image.png") => new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" });
 const paste = (files: File[]) => fireEvent.paste(screen.getByTestId("ac-cmd-input"), { clipboardData: { files } });
@@ -73,16 +74,41 @@ describe("CommandBar", () => {
     expect(onDispatched).toHaveBeenCalledWith(expect.objectContaining({ kind: "fast", taskId: "task-1" }));
   });
 
-  it("確認前可以改類型：改成問問題就不建卡，直接顯示回答", async () => {
-    const d = deps(ai('{"kind":"fast","reason":"x"}', "計時器已完成。"));
-    view(d);
+  it("確認前可以改類型：改成問問題就交給 Agent 讀程式庫，卡片完成後才顯示它寫的答案", async () => {
+    const d = deps(ai('{"kind":"fast","reason":"x"}'));
+    const onDispatched = vi.fn();
+    const view1 = view(d, onDispatched);
     type("計時器做完了嗎？");
     await screen.findByTestId("ac-cmd-plan");
     fireEvent.click(screen.getByTestId("ac-cmd-kind-question"));
     fireEvent.click(screen.getByTestId("ac-cmd-confirm"));
-    expect((await screen.findByTestId("ac-cmd-answer")).textContent).toContain("計時器已完成。");
+    expect((await screen.findByTestId("ac-cmd-asking")).textContent).toContain("c1");
+    expect(ask).toHaveBeenCalledWith("p", "計時器做完了嗎？");
     expect(d.createTask).not.toHaveBeenCalled();
     expect(d.assignAgent).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("ac-cmd-answer")).toBeNull(); // 還沒完成：不能先用別的東西回答
+
+    const running = { id: "ask-1", status: "running", outcome: null, ai_summary: null, error_message: null } as unknown as TaskWithAttachments;
+    view1.rerender(bar(d, onDispatched, [agent("c1")], [running]));
+    expect(screen.getByTestId("ac-cmd-asking")).toBeTruthy(); // 還在跑：繼續等，不當成失敗
+    expect(screen.queryByTestId("ac-cmd-error")).toBeNull();
+
+    const card = { id: "ask-1", status: "done", outcome: "success", ai_summary: "  原始碼裡接的是 RSS。 ", error_message: null } as unknown as TaskWithAttachments;
+    view1.rerender(bar(d, onDispatched, [agent("c1")], [card]));
+    expect((await screen.findByTestId("ac-cmd-answer")).textContent).toContain("原始碼裡接的是 RSS。");
+  });
+
+  it("問答卡失敗：顯示原因，不會一直等", async () => {
+    const d = deps(ai('{"kind":"question","reason":""}'));
+    const onDispatched = vi.fn();
+    const v = view(d, onDispatched);
+    type("這是什麼？");
+    fireEvent.click(await screen.findByTestId("ac-cmd-confirm"));
+    await screen.findByTestId("ac-cmd-asking");
+    const card = { id: "ask-1", status: "done", outcome: "failed", ai_summary: null, error_message: "Agent 沒有產出 answer.md" } as unknown as TaskWithAttachments;
+    v.rerender(bar(d, onDispatched, [agent("c1")], [card]));
+    expect((await screen.findByTestId("ac-cmd-error")).textContent).toContain("answer.md");
+    expect(screen.queryByTestId("ac-cmd-asking")).toBeNull();
   });
 
   it("沒有 AI 時當成新需求並說明，仍然可以改類型", async () => {

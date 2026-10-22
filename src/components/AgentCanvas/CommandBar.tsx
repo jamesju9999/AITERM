@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { invokeAiComplete } from "../../ipc/ai";
-import { assignAgent, createAgent, getReferences, type AgentRow } from "../../ipc/agents";
+import { askAgent, assignAgent, createAgent, getReferences, type AgentRow } from "../../ipc/agents";
 import { listProviders } from "../../ipc/provider";
 import { addAttachment, createTask, getProjectBrief, setProjectBrief, type TaskWithAttachments } from "../../ipc/tasks";
 import { ModelPickerButton } from "../ModelPickerButton";
@@ -28,6 +28,8 @@ type Phase =
   | { kind: "routing" }
   | { kind: "plan"; decision: RouteDecision; usedDefault: boolean }
   | { kind: "working" }
+  /** 問題交給 Agent 了，等那張問答卡完成。 */
+  | { kind: "asking"; taskId: string; agentName: string }
   | { kind: "answer"; text: string };
 
 /**
@@ -42,6 +44,7 @@ export function CommandBar({
   onDispatched,
   deps = defaultDeps,
   attach = addAttachment,
+  ask = askAgent,
 }: {
   projectId: string;
   /** 專案記住的程式庫；null = 沒有（沒有就不能建卡）。 */
@@ -52,6 +55,7 @@ export function CommandBar({
   onDispatched: (r: DispatchResult) => void;
   deps?: StartDeps;
   attach?: AddAttachment;
+  ask?: NonNullable<Parameters<typeof dispatchInput>[3]["askAgent"]>;
 }) {
   const { t } = useLocale();
   const [text, setText] = useState("");
@@ -96,6 +100,18 @@ export function CommandBar({
   }, []);
 
   const busy = phase.kind === "routing" || phase.kind === "working";
+
+  // 等 Agent 回答：問答卡完成就顯示它寫的答案；失敗就說明原因。
+  const asked = phase.kind === "asking" ? tasks.find((x) => x.id === phase.taskId) : undefined;
+  useEffect(() => {
+    if (phase.kind !== "asking" || !asked || asked.status !== "done") return;
+    if (asked.outcome === "success" && asked.ai_summary?.trim()) {
+      setPhase({ kind: "answer", text: asked.ai_summary.trim() });
+    } else {
+      setError(`${t.ac_cmd_ask_failed}${asked.error_message ? `：${asked.error_message}` : ""}`);
+      setPhase({ kind: "idle" });
+    }
+  }, [phase, asked, t]);
   const kindLabel = (k: InputKind) => t[`ac_cmd_kind_${k}` as const];
   const kindTip = (k: InputKind) => t[`ac_cmd_kind_${k}_tip` as const];
 
@@ -143,11 +159,11 @@ export function CommandBar({
         kind,
         content,
         { projectId, repoDir: repo, agents, tasks, t, providerId: pid },
-        { ...deps, addAttachment: attach },
+        { ...deps, addAttachment: attach, askAgent: ask },
         images.map((i) => i.file),
       );
       if (r.kind === "question") {
-        setPhase({ kind: "answer", text: r.answer ?? "" });
+        setPhase({ kind: "asking", taskId: r.taskId ?? "", agentName: r.agentName ?? "" });
       } else {
         setPhase({ kind: "idle" });
         setNotice(r.fellBack ? t.ac_cmd_fell_back(r.agentName ?? "") : t.ac_cmd_done(kindLabel(r.kind), r.agentName ?? ""));
@@ -213,6 +229,14 @@ export function CommandBar({
               {t.ac_cmd_confirm}
             </button>
           </div>
+        </div>
+      )}
+      {phase.kind === "asking" && (
+        <div className="ac-cmd-answer" data-testid="ac-cmd-asking" role="status">
+          <p>{t.ac_cmd_asking(phase.agentName)}</p>
+          <button type="button" className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setPhase({ kind: "idle" })}>
+            {t.ac_cmd_close}
+          </button>
         </div>
       )}
       {phase.kind === "answer" && (
