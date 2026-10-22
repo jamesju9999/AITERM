@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DetailPanel } from "./DetailPanel";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import type { Architecture } from "./model";
+import type { ScanResult } from "../../ipc/architecture";
 
 const arch: Architecture = {
   layers: [{ id: "a", name: "前端" }, { id: "b", name: "後端" }],
@@ -49,5 +50,71 @@ describe("DetailPanel", () => {
     expect(screen.getByText("big/f11.ts")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /收合|Show less/ }));
     expect(screen.queryByText("big/f11.ts")).not.toBeInTheDocument();
+  });
+
+  const scan: ScanResult = {
+    root: "/p",
+    files: [
+      { path: "web/App.tsx", lang: "typescript", lines: 10 },
+      { path: "web/b.ts", lang: "typescript", lines: 10 },
+      { path: "srv/r.py", lang: "python", lines: 10 },
+      { path: "srv/s.py", lang: "python", lines: 10 },
+    ],
+    edges: [
+      { from: "web/App.tsx", to: "srv/r.py" }, { from: "web/b.ts", to: "srv/r.py" },
+      { from: "srv/s.py", to: "web/b.ts" }, { from: "web/App.tsx", to: "web/b.ts" },
+    ],
+    deps: ["react", "flask"], truncated: false, git_head: null,
+  };
+  const multi: Architecture = {
+    ...arch,
+    modules: [{ ...arch.modules[0], files: ["web/App.tsx", "web/b.ts"] }, { ...arch.modules[1], files: ["srv/r.py", "srv/s.py"] }],
+  };
+
+  it("互相引用的同種連線只顯示一筆（含 ↔），兩個方向的備註與佐證都在", () => {
+    const mutual: Architecture = {
+      ...multi,
+      edges: [
+        { from: "web", to: "srv", kind: "http", source: "ai", confidence: 0.8, evidence: { file: "web/api.ts", line: 5 }, note: "fetch" },
+        { from: "srv", to: "web", kind: "http", source: "ai", confidence: 0.6, evidence: { file: "srv/cb.py", line: 9 }, note: "webhook" },
+      ],
+    };
+    render(<LocaleProvider><DetailPanel arch={mutual} selected="web" onSelect={vi.fn()} scan={scan} /></LocaleProvider>);
+    expect(screen.getAllByRole("button", { name: "服務" })).toHaveLength(1);
+    expect(screen.getByText("↔")).toBeInTheDocument();
+    expect(screen.getByText("fetch")).toBeInTheDocument();
+    expect(screen.getByText("webhook")).toBeInTheDocument();
+    expect(screen.getByText(/srv\/cb\.py:9/)).toBeInTheDocument();
+  });
+
+  it("單向連線不顯示 ↔", () => {
+    setup("web");
+    expect(screen.queryByText("↔")).not.toBeInTheDocument();
+  });
+
+  it("顯示被外部引用／引用外部的條數", () => {
+    render(<LocaleProvider><DetailPanel arch={multi} selected="web" onSelect={vi.fn()} scan={scan} /></LocaleProvider>);
+    expect(screen.getByText(/被外部引用 1 條|Referenced by 1 external/)).toBeInTheDocument();
+    expect(screen.getByText(/引用外部 2 條|References 2 external/)).toBeInTheDocument();
+  });
+
+  it("多檔模組有「展開」鈕，單檔模組沒有", () => {
+    const onExpand = vi.fn();
+    const { unmount } = render(<LocaleProvider><DetailPanel arch={multi} selected="web" onSelect={vi.fn()} scan={scan} onExpand={onExpand} /></LocaleProvider>);
+    fireEvent.click(screen.getByRole("button", { name: /^(展開|Expand)$/ }));
+    expect(onExpand).toHaveBeenCalledWith("web");
+    unmount();
+    render(<LocaleProvider><DetailPanel arch={arch} selected="web" onSelect={vi.fn()} scan={scan} onExpand={onExpand} /></LocaleProvider>);
+    expect(screen.queryByRole("button", { name: /^(展開|Expand)$/ })).not.toBeInTheDocument();
+  });
+
+  it("未選取且有掃描結果時顯示概覽：語言、技術標籤、依賴、計數", () => {
+    render(<LocaleProvider><DetailPanel arch={multi} selected={null} onSelect={vi.fn()} scan={scan} /></LocaleProvider>);
+    expect(screen.getByText(/點選任一模組|Click a module/)).toBeInTheDocument();
+    expect(screen.getByText("typescript")).toBeInTheDocument();
+    expect(screen.getByText("python")).toBeInTheDocument();
+    expect(screen.getByText("React")).toBeInTheDocument();
+    expect(screen.getByText("flask")).toBeInTheDocument();
+    expect(screen.getByText(/2 個模組・1 條連線|2 modules, 1 edges/)).toBeInTheDocument();
   });
 });

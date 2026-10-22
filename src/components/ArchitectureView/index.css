@@ -112,3 +112,30 @@
 .arch-evidence { display: inline-block; margin-top: 5px; max-width: 100%; box-sizing: border-box; padding: 1px 7px; border-radius: 6px; background: var(--bg-primary); font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-muted); word-break: break-all; }
 .arch-files code { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-secondary); word-break: break-all; }
 .arch-files-toggle { margin-top: 8px; font-size: 12px; font-weight: 500; }
+
+/* 麵包屑、展開鈕、鑽取提示 */
+.arch-crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 6px 12px; font-size: 12.5px; background: var(--bg-secondary); border-bottom: 1px solid var(--border-color); }
+.arch-crumb-sep { color: var(--text-muted); }
+.arch-crumb { background: none; border: none; padding: 1px 6px; border-radius: 6px; cursor: pointer; font: inherit; color: var(--arch-hi); }
+.arch-crumb:hover { background: var(--arch-soft); }
+.arch-crumb-cur { padding: 1px 6px; font-weight: 600; color: var(--text-primary); }
+.arch-crumbs .arch-btn { margin-left: auto; }
+.arch-expand { margin-top: 8px; }
+
+/* 詳情：合併連線、外部引用 */
+.arch-ext { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 0 4px; font-size: 12px; color: var(--text-muted); }
+.arch-mutual { color: var(--arch-hi); font-weight: 700; }
+.arch-edge-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.arch-edge-line .arch-note { flex-basis: 100%; margin-top: 0; }
+.arch-dir { color: var(--text-muted); font-size: 12px; }
+
+/* 技術棧總覽（未選取模組時） */
+.arch-detail-hint { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; color: var(--text-muted); padding: 8px 0; }
+.arch-ov-title { margin: 4px 4px 0; }
+.arch-ov-counts { padding: 0 4px; font-size: 12px; color: var(--text-muted); }
+.arch-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.arch-bar-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.arch-bar-name { width: 84px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.arch-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--arch-soft); overflow: hidden; }
+.arch-bar > span { display: block; height: 100%; background: var(--arch-hi); }
+.arch-bar-n { width: 32px; flex: none; text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; }
