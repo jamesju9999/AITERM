@@ -40,6 +40,27 @@ describe("StartNotice", () => {
     expect(screen.queryByTestId("ac-req-notice-criteria")).toBeNull();
   });
 
+  it("有還沒派出去的需求時顯示「開始執行」，按了才呼叫；失敗顯示原因並可再按", async () => {
+    const pending = { taskId: "t1", stationId: "s1" };
+    const onStart = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(undefined);
+    render(
+      <LocaleProvider>
+        <StartNotice result={{ summary: "x", reasons: [], usedDefault: false, criteria: [], pending }} onClose={vi.fn()} onStart={onStart} />
+      </LocaleProvider>,
+    );
+    expect(onStart).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("ac-req-start-run"));
+    expect(await screen.findByText("boom")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("ac-req-start-run"));
+    await vi.waitFor(() => expect(onStart).toHaveBeenCalledTimes(2));
+    expect(onStart).toHaveBeenLastCalledWith(pending);
+  });
+
+  it("沒有待派的需求就沒有開始按鈕", () => {
+    view({ summary: "x", reasons: [], usedDefault: false, criteria: [] });
+    expect(screen.queryByTestId("ac-req-start-run")).toBeNull();
+  });
+
   it("× 會關閉", () => {
     const onClose = vi.fn();
     view({ summary: "x", reasons: [], usedDefault: false, criteria: [] }, onClose);

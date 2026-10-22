@@ -1447,7 +1447,16 @@ export function AgentCanvasView({
                 </div>
               </div>
             )}
-            {startNotice && agents.length > 0 && <StartNotice result={startNotice} onClose={() => setStartNotice(null)} />}
+            {startNotice && agents.length > 0 && <StartNotice
+                result={startNotice}
+                onClose={() => setStartNotice(null)}
+                onStart={async (p) => {
+                  if (!projectId) return;
+                  await assignAgent(projectId, p.taskId, p.stationId);
+                  setStartNotice(null);
+                  void refresh();
+                }}
+              />}
             <div className="ac-sizer" style={{ width: world.w * zoom, height: world.h * zoom }}>
               <div
                 className="ac-world"

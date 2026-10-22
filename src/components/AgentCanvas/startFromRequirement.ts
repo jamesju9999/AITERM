@@ -43,6 +43,11 @@ export interface StartArgs {
   providerId?: string;
   /** AI 用不了時的團隊；省略 = 內建「標準」。 */
   fallback?: TeamTemplate;
+  /**
+   * 建好團隊後要不要立刻把需求派出去。預設 true（維持原本的行為）；
+   * 需求框預設傳 false：使用者可能想先把資料庫、自訂技能掛到工程師身上，準備好再按「開始執行」。
+   */
+  autoStart?: boolean;
 }
 
 export interface StartResult {
@@ -53,6 +58,8 @@ export interface StartResult {
   usedDefault: boolean;
   /** 寫進卡片的「完成定義」；沒有 AI 或失敗時是空的。 */
   criteria: string[];
+  /** 還沒派出去的需求卡（沒有自動開始時才有）：按「開始執行」就派給 `stationId`。 */
+  pending?: { taskId: string; stationId: string };
 }
 
 /** 請 AI 把需求寫成完成定義。任何失敗都回空陣列：少了它只是少一道把關，不該擋下建卡。 */
@@ -152,6 +159,7 @@ export async function startFromRequirement(args: StartArgs, d: StartDeps): Promi
       label: null,
       isolate_worktree: null,
     });
+    if (args.autoStart === false) return { summary, reasons, usedDefault, criteria, pending: { taskId, stationId: station } };
     await d.assignAgent(projectId, taskId, station);
     return { summary, reasons, usedDefault, criteria };
   } catch (e) {

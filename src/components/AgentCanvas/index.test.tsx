@@ -822,7 +822,7 @@ describe("AgentCanvasView", () => {
     expect(await screen.findByRole("dialog", { name: "團隊範本" })).toBeTruthy();
   });
 
-  it("需求先行：空桌布打需求 → 建預設團隊、需求派給第一位工程師；有 Agent 時不出現", async () => {
+  it("需求先行：勾「不需要加技能」→ 建預設團隊、需求直接派給第一位工程師；有 Agent 時不出現", async () => {
     vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "saved" });
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listTasks).mockResolvedValue([]);
@@ -836,6 +836,7 @@ describe("AgentCanvasView", () => {
     const send = (await screen.findByTestId("ac-req-send")) as HTMLButtonElement;
     expect(send.disabled).toBe(true); // 還沒打需求
     fireEvent.change(screen.getByTestId("ac-req-input"), { target: { value: "做一個待辦清單\n要能勾選" } });
+    fireEvent.click(screen.getByTestId("ac-req-skip-skills"));
     await waitFor(() => expect(send.disabled).toBe(false)); // 程式庫檢查通過
     fireEvent.click(send);
     await waitFor(() => expect(assignAgent).toHaveBeenCalledWith("p1", "t-first", "ag1"));
@@ -847,6 +848,33 @@ describe("AgentCanvasView", () => {
     view();
     await screen.findByTestId("agent-a1");
     expect(screen.queryByTestId("ac-req")).toBeNull();
+  });
+
+  it("需求先行：預設建好團隊後先停下來，讓使用者掛技能，按「開始執行」才派工", async () => {
+    vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "saved" });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    let n = 0;
+    vi.mocked(createAgent).mockImplementation(async () => `ag${++n}`);
+    onTestFinished(() => void vi.mocked(createAgent).mockResolvedValue("new-agent"));
+    const { createTask } = await import("../../ipc/tasks");
+    vi.mocked(createTask).mockResolvedValueOnce("t-first");
+    view();
+    const send = (await screen.findByTestId("ac-req-send")) as HTMLButtonElement;
+    expect((screen.getByTestId("ac-req-skip-skills") as HTMLInputElement).checked).toBe(false); // 預設不自動開始
+    fireEvent.change(screen.getByTestId("ac-req-input"), { target: { value: "做一個待辦清單" } });
+    await waitFor(() => expect(send.disabled).toBe(false));
+    // 團隊建好之後桌布上就有 Agent 了：重新整理會讀到它們。
+    vi.mocked(listAgents).mockResolvedValue([agent({ id: "ag1" })]);
+    fireEvent.click(send);
+
+    const start = await screen.findByTestId("ac-req-start-run");
+    await waitFor(() => expect(createTask).toHaveBeenCalled());
+    expect(assignAgent, "還沒按開始，不能派工").not.toHaveBeenCalled();
+    expect(screen.getByTestId("ac-req-notice-pending").textContent).toMatch(/資料庫|Database/);
+    fireEvent.click(start);
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledWith("p1", "t-first", "ag1"));
+    await waitFor(() => expect(screen.queryByTestId("ac-req-notice")).toBeNull());
   });
 
   it("團隊建好之後常駐輸入框出現（空桌布時只有需求先行那一個）；快速路徑的模組帶「快速」標記", async () => {

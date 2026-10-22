@@ -48,6 +48,8 @@ export function RequirementStart({
   const [checkRev, setCheckRev] = useState(0);
   const [initing, setIniting] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** 勾了才會建好團隊就直接開始；沒勾（預設）停下來等使用者先掛技能、再按「開始執行」。 */
+  const [skipSkills, setSkipSkills] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [providerId, setProviderId] = useState<string | undefined>(undefined);
@@ -121,7 +123,7 @@ export function RequirementStart({
     setBusy(true);
     setError(null);
     try {
-      onStarted(await startFromRequirement({ projectId, requirement: text, repoDir: repo, t, providerId }, deps));
+      onStarted(await startFromRequirement({ projectId, requirement: text, repoDir: repo, t, providerId, autoStart: skipSkills }, deps));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       // 團隊已經建好：需求框會隨桌布不再空而消失，要告訴使用者接下來怎麼做。
@@ -192,6 +194,10 @@ export function RequirementStart({
       {repo && check && <RepoStatus repo={check} busy={initing} onFix={() => void fixRepo()} />}
       {providerId === undefined && <span className="task-field-hint">{t.ac_req_no_ai}</span>}
       {(error ?? refiner.error) && <p className="ac-bad-text">{error ?? refiner.error}</p>}
+      <label className="ac-req-skip" title={t.ac_req_skip_skills_tip}>
+        <input type="checkbox" data-testid="ac-req-skip-skills" checked={skipSkills} disabled={busy} onChange={(e) => setSkipSkills(e.target.checked)} />
+        <span>{t.ac_req_skip_skills}</span>
+      </label>
       <div className="ac-req-actions">
         <span className="ac-req-shortcut">{t.ac_req_shortcut}</span>
         <button

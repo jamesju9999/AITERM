@@ -125,6 +125,22 @@ describe("startFromRequirement", () => {
     expect(d2.complete).not.toHaveBeenCalled();
   });
 
+  it("autoStart false: creates the team and the card but does not assign it, and says what is pending", async () => {
+    const d = deps();
+    const r = await startFromRequirement({ ...base, requirement: "做計時器", autoStart: false }, d);
+    expect(d.createAgent).toHaveBeenCalled();
+    expect(d.createTask).toHaveBeenCalledTimes(1);
+    expect(d.assignAgent).not.toHaveBeenCalled();
+    expect(r.pending).toEqual({ taskId: "task-1", stationId: "a1" });
+  });
+
+  it("autoStart defaults to true: assigns right away and has nothing pending", async () => {
+    const d = deps();
+    const r = await startFromRequirement({ ...base, requirement: "做計時器" }, d);
+    expect(d.assignAgent).toHaveBeenCalledWith("p", "task-1", "a1");
+    expect(r.pending).toBeUndefined();
+  });
+
   it("marks the failure stage so the UI can say the team already exists", async () => {
     const d = deps({ createTask: vi.fn().mockRejectedValue(new Error("boom")) });
     await expect(startFromRequirement({ ...base, requirement: "x" }, d)).rejects.toMatchObject({ teamCreated: true });
