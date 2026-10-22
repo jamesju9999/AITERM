@@ -106,3 +106,17 @@ export function buildDrillGraph(scan: ScanResult, files: string[], maxNodes = 60
     hidden,
   };
 }
+
+/** 模組邊界的 import 條數（檔案層級）：inbound＝外部檔案引用本模組，outbound＝本模組引用外部。 */
+export function externalRefs(scan: ScanResult, files: string[]): { inbound: number; outbound: number } {
+  const own = new Set(files);
+  let inbound = 0;
+  let outbound = 0;
+  for (const e of scan.edges) {
+    const f = own.has(e.from);
+    const t = own.has(e.to);
+    if (t && !f) inbound++;
+    else if (f && !t) outbound++;
+  }
+  return { inbound, outbound };
+}

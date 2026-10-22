@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDrillGraph, drillKey, filesOfModule } from "./drill";
+import { buildDrillGraph, drillKey, externalRefs, filesOfModule } from "./drill";
 import type { Architecture } from "./model";
 import type { ScanResult } from "../../ipc/architecture";
 
@@ -145,5 +145,19 @@ describe("drillKey / filesOfModule / 舊存檔", () => {
       layers: [], modules: [], edges: [], meta: { scannedAt: "", gitHead: null, analyzed: true, dropped: 0 },
     })) as Architecture;
     expect(old.drills?.[drillKey(["a"])]).toBeUndefined();
+  });
+});
+
+describe("externalRefs", () => {
+  it("只算跨越模組邊界的 import：被外部引用與引用外部分開計，內部與無關的不算", () => {
+    const scan = scanOf(
+      ["m/a.ts", "m/b.ts", "x/c.ts", "y/d.ts"],
+      [["x/c.ts", "m/a.ts"], ["y/d.ts", "m/a.ts"], ["y/d.ts", "m/b.ts"], ["m/a.ts", "x/c.ts"], ["m/a.ts", "m/b.ts"], ["x/c.ts", "y/d.ts"]],
+    );
+    expect(externalRefs(scan, ["m/a.ts", "m/b.ts"])).toEqual({ inbound: 3, outbound: 1 });
+  });
+
+  it("沒有檔案時兩者皆為 0", () => {
+    expect(externalRefs(scanOf(["a.ts"], [["a.ts", "a.ts"]]), [])).toEqual({ inbound: 0, outbound: 0 });
   });
 });
