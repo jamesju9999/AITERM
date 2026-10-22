@@ -4,11 +4,15 @@ import { nanoid } from "nanoid";
 import { useLocale } from "../../contexts/LocaleContext";
 import { archLoad, archReadFiles, archSave, archScan, type ScanResult } from "../../ipc/architecture";
 import { abortAi, formatAiError, invokeAiComplete, type AiError } from "../../ipc/ai";
+import { listProviders, type ProviderInfo } from "../../ipc/provider";
+import { ModelPickerButton } from "../ModelPickerButton";
 import { ANALYZE_SYSTEM, buildAnalyzeMessage, mergeScanEdges, parseAnalysis, pickKeyFiles } from "./analyze";
 import { buildBaseGraph, type Architecture } from "./model";
 import { edgeMidpoint, edgePath, fitScale, layerColor, layoutGraph, NODE_H, NODE_W, traceChain } from "./layout";
 import { DetailPanel } from "./DetailPanel";
 import "./index.css";
+
+const PROVIDER_KEY = "aiterm_arch_provider";
 
 type Status = { kind: "idle" } | { kind: "busy"; msg: string } | { kind: "error"; msg: string } | { kind: "notice"; msg: string };
 
@@ -33,6 +37,8 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const [stale, setStale] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [analyzing, setAnalyzing] = useState(false);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [providerId, setProviderId] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [hoverEdge, setHoverEdge] = useState<number | null>(null);
   const [viewportW, setViewportW] = useState(0);
@@ -67,6 +73,25 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     if (typeof dir === "string") await load(dir);
   }, [load]);
 
+  // 可選的模型：上次記住的 → 預設供應商 → 清單第一個。記住的 id 若已被刪除要退回預設。
+  useEffect(() => {
+    let alive = true;
+    void listProviders().then((list) => {
+      if (!alive) return;
+      setProviders(list);
+      let remembered: string | null = null;
+      try { remembered = localStorage.getItem(PROVIDER_KEY); } catch { /* 沒有儲存空間就用預設 */ }
+      const fallback = list.find((p) => p.is_default)?.id ?? list[0]?.id ?? "";
+      setProviderId(remembered && list.some((p) => p.id === remembered) ? remembered : fallback);
+    }).catch(() => { /* 取不到清單就維持預設供應商 */ });
+    return () => { alive = false; };
+  }, []);
+
+  const changeProvider = useCallback((id: string) => {
+    setProviderId(id);
+    try { localStorage.setItem(PROVIDER_KEY, id); } catch { /* 記不住不影響使用 */ }
+  }, []);
+
   const analyze = useCallback(async () => {
     if (!root || !scan) return;
     const run = ++runRef.current;
@@ -82,6 +107,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
         [{ role: "user", content: buildAnalyzeMessage(scan, base, files) }],
         ANALYZE_SYSTEM,
         streamId,
+        providerId || undefined,
       );
       if (run !== runRef.current) return; // 已取消
       const parsed = reply.content ? parseAnalysis(reply.content, scan) : null;
@@ -103,7 +129,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     } finally {
       if (run === runRef.current) setAnalyzing(false);
     }
-  }, [root, scan, t]);
+  }, [root, scan, t, providerId]);
 
   const cancelAnalyze = useCallback(() => {
     runRef.current++;
@@ -147,6 +173,9 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
           <button type="button" className="arch-btn" onClick={pick} disabled={analyzing}>{t.arch_pick_folder}</button>
           <span className="arch-root" title={root}>{root}</span>
           <button type="button" className="arch-btn" onClick={() => load(root)} disabled={analyzing}>{t.arch_rescan}</button>
+          {scan && providers.length > 0 && (
+            <ModelPickerButton providers={providers} selectedId={providerId} onChange={changeProvider} disabled={analyzing} />
+          )}
           {scan && !analyzing && (
             <button type="button" className="arch-btn arch-btn-primary" onClick={analyze} disabled={status.kind === "busy"}>{t.arch_analyze}</button>
           )}

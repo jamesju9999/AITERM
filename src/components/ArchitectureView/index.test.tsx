@@ -24,7 +24,24 @@ vi.mock("../../ipc/ai", async (orig) => ({
   abortAi: (...a: unknown[]) => abortAi(...a),
 }));
 
+const listProviders = vi.fn();
+vi.mock("../../ipc/provider", () => ({ listProviders: (...a: unknown[]) => listProviders(...a) }));
+
+// 真正的選擇器會去查配額（Tauri invoke）；這裡只要一個能選的控制項。
+vi.mock("../ModelPickerButton", () => ({
+  ModelPickerButton: (p: { providers: { id: string; display_name: string }[]; selectedId: string; onChange: (id: string) => void }) => (
+    <select aria-label="model" value={p.selectedId} onChange={(e) => p.onChange(e.target.value)}>
+      {p.providers.map((x) => <option key={x.id} value={x.id}>{x.display_name}</option>)}
+    </select>
+  ),
+}));
+
 import { ArchitectureView } from "./index";
+
+const PROVIDERS = [
+  { id: "local", display_name: "Local", is_default: true },
+  { id: "cloud", display_name: "Cloud", is_default: false },
+];
 
 const SCAN = {
   root: "/p",
@@ -40,6 +57,8 @@ const SCAN = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
+  listProviders.mockResolvedValue(PROVIDERS);
   open.mockResolvedValue("/p");
   archLoad.mockResolvedValue(null);
   archScan.mockResolvedValue(SCAN);
@@ -145,5 +164,33 @@ describe("ArchitectureView", () => {
     expect(screen.queryByRole("button", { name: /^(取消|Cancel)$/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /web/ })).toBeInTheDocument();
     expect(archSave).not.toHaveBeenCalled();
+  });
+
+  it("模型選擇器：預設選預設供應商，分析時把選的供應商 id 傳給 AI，並記住選擇", async () => {
+    invokeAiComplete.mockResolvedValue({ content: "{}", tool_calls: [], tool_calling_unsupported: false });
+    const { unmount } = renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    await screen.findByRole("button", { name: /web/ });
+    const picker = await screen.findByRole("combobox", { name: "model" });
+    expect((picker as HTMLSelectElement).value).toBe("local");
+    fireEvent.change(picker, { target: { value: "cloud" } });
+    fireEvent.click(screen.getByRole("button", { name: /AI 分析|Analyze with AI/ }));
+    await waitFor(() => expect(invokeAiComplete).toHaveBeenCalledTimes(1));
+    expect(invokeAiComplete.mock.calls[0][3]).toBe("cloud");
+    unmount();
+
+    // 重開後記得上次的選擇
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    const again = await screen.findByRole("combobox", { name: "model" });
+    await waitFor(() => expect((again as HTMLSelectElement).value).toBe("cloud"));
+  });
+
+  it("記住的供應商已被刪除時退回預設", async () => {
+    localStorage.setItem("aiterm_arch_provider", "gone");
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    const picker = await screen.findByRole("combobox", { name: "model" });
+    await waitFor(() => expect((picker as HTMLSelectElement).value).toBe("local"));
   });
 });
