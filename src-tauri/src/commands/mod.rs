@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod api_docs;
+pub mod architecture;
 pub mod appimage;
 pub mod bridge;
 pub mod openai_server;

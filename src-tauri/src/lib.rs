@@ -41,6 +41,7 @@ use commands::{
         api_docs_auth_status, api_docs_detect, api_docs_extract,
         api_docs_fetch_tree, api_docs_login, api_docs_logout,
     },
+    architecture::{arch_load, arch_read_files, arch_save, arch_scan},
     appimage::{appimage_integrate, appimage_integration_state, appimage_remove_integration},
     ai::{agent_chat, ai_abort, ai_chat, ai_chat_ctx, ai_complete, ai_query, AiAbortRegistry},
     bridge::{bridge_apply, bridge_set_config, bridge_status},
@@ -763,6 +764,10 @@ pub fn run() {
             api_docs_login,
             api_docs_logout,
             api_docs_auth_status,
+            arch_scan,
+            arch_load,
+            arch_save,
+            arch_read_files,
             // Task board
             task_board_get_config,
             task_board_set_config,
