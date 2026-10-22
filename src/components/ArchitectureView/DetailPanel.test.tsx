@@ -232,7 +232,7 @@ describe("DetailPanel", () => {
 
   describe("檔案預覽入口", () => {
     const renderWith = (a: Architecture, selected: string, onOpenFile = vi.fn()) => {
-      render(<LocaleProvider><DetailPanel arch={a} selected={selected} onSelect={vi.fn()} root="/p" onOpenFile={onOpenFile} /></LocaleProvider>);
+      render(<LocaleProvider><DetailPanel arch={a} selected={selected} onSelect={vi.fn()} onOpenFile={onOpenFile} /></LocaleProvider>);
       return onOpenFile;
     };
 
