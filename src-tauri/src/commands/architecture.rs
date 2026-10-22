@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::architecture::{scanner, store, types::ScanResult};
 
 /// 檔案數上限；超過時 `truncated = true`。
-const MAX_FILES: usize = 3000;
+const MAX_FILES: usize = 20000;
 /// 每個關鍵檔案送給 AI 的上限（位元組）。
 const MAX_FILE_BYTES: usize = 6000;
 

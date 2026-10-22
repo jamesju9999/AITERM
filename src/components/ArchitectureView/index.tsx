@@ -62,7 +62,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
         setArch(buildBaseGraph(s));
         setStale(false);
       }
-      setStatus(s.truncated ? { kind: "notice", msg: t.arch_truncated } : { kind: "idle" });
+      setStatus(s.truncated ? { kind: "notice", msg: t.arch_truncated_n.replace("{n}", String(s.files.length)) } : { kind: "idle" });
     } catch (e) {
       setStatus({ kind: "error", msg: t.arch_error.replace("{msg}", errText(e)) });
     }

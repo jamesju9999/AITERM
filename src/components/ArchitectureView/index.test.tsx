@@ -97,6 +97,13 @@ describe("ArchitectureView", () => {
     await waitFor(() => expect(archSave).toHaveBeenCalledTimes(1));
   });
 
+  it("掃描被截斷時提示實際掃描的檔案數", async () => {
+    archScan.mockResolvedValue({ ...SCAN, truncated: true });
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    expect(await screen.findByText(/只掃描了前 2 個檔案|only the first 2 files/)).toBeInTheDocument();
+  });
+
   it("AI 未設定時保留掃描圖並提示", async () => {
     invokeAiComplete.mockRejectedValue({ kind: "not_configured" });
     renderView();
