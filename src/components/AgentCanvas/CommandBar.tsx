@@ -4,10 +4,10 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { invokeAiComplete } from "../../ipc/ai";
 import { assignAgent, createAgent, getReferences, type AgentRow } from "../../ipc/agents";
 import { listProviders } from "../../ipc/provider";
-import { createTask, getProjectBrief, setProjectBrief, type TaskWithAttachments } from "../../ipc/tasks";
+import { addAttachment, createTask, getProjectBrief, setProjectBrief, type TaskWithAttachments } from "../../ipc/tasks";
 import { ModelPickerButton } from "../ModelPickerButton";
 import type { ProviderInfo } from "../../ipc/provider";
-import { dispatchInput, INPUT_KINDS, routeInput, type DispatchResult, type InputKind, type RouteDecision } from "./routeInput";
+import { dispatchInput, INPUT_KINDS, routeInput, type AddAttachment, type DispatchResult, type InputKind, type RouteDecision } from "./routeInput";
 import type { StartDeps } from "./startFromRequirement";
 
 /** 跟專案簡介、需求先行共用模型偏好。 */
@@ -41,6 +41,7 @@ export function CommandBar({
   tasks,
   onDispatched,
   deps = defaultDeps,
+  attach = addAttachment,
 }: {
   projectId: string;
   /** 專案記住的程式庫；null = 沒有（沒有就不能建卡）。 */
@@ -50,6 +51,7 @@ export function CommandBar({
   /** 建好卡（或回答完）之後：外面要重新整理、顯示結果。 */
   onDispatched: (r: DispatchResult) => void;
   deps?: StartDeps;
+  attach?: AddAttachment;
 }) {
   const { t } = useLocale();
   const [text, setText] = useState("");
@@ -58,6 +60,20 @@ export function CommandBar({
   const [notice, setNotice] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [providerId, setProviderId] = useState<string | undefined>(undefined);
+  /** 附的圖：可有可無。 */
+  const [images, setImages] = useState<{ file: File; url: string | null }[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const shot = useRef(0);
+  const imagesRef = useRef(images);
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
+  useEffect(
+    () => () => {
+      for (const i of imagesRef.current) if (i.url) URL.revokeObjectURL(i.url);
+    },
+    [],
+  );
   /** 供應商清單載入完成時的預設選擇：剛打開就送出時，要等它而不是誤判成「沒有 AI」。 */
   const defaultProvider = useRef<Promise<string | undefined>>(Promise.resolve(undefined));
 
@@ -83,13 +99,37 @@ export function CommandBar({
   const kindLabel = (k: InputKind) => t[`ac_cmd_kind_${k}` as const];
   const kindTip = (k: InputKind) => t[`ac_cmd_kind_${k}_tip` as const];
 
+  const addFiles = (files: FileList | File[] | null | undefined) => {
+    const list = Array.from(files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (list.length === 0) return false;
+    setImages((cur) => [
+      ...cur,
+      ...list.map((f) => {
+        // 貼上的截圖都叫 image.png：重新命名，附件才不會撞名。
+        shot.current += 1;
+        const name = /^image\.\w+$/i.test(f.name) || !f.name ? `screenshot-${shot.current}.${f.type.split("/")[1] || "png"}` : f.name;
+        const file = name === f.name ? f : new File([f], name, { type: f.type });
+        return { file, url: typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : null };
+      }),
+    ]);
+    return true;
+  };
+
+  const clearImages = () => {
+    for (const i of imagesRef.current) if (i.url) URL.revokeObjectURL(i.url);
+    setImages([]);
+  };
+
+  /** 只貼圖沒打字也能送：圖就是需求，卡片標題與分類用一句固定的話。 */
+  const content = text.trim() || (images.length > 0 ? t.ac_cmd_image_only : "");
+
   const analyze = async () => {
-    if (!text.trim() || busy) return;
+    if (!content || busy) return;
     setError(null);
     setNotice(null);
     setPhase({ kind: "routing" });
     const pid = providerId ?? (await defaultProvider.current);
-    const { decision, usedDefault } = await routeInput(deps, projectId, text, pid);
+    const { decision, usedDefault } = await routeInput(deps, projectId, content, pid);
     setPhase({ kind: "plan", decision: usedDefault && !pid ? { ...decision, reason: t.ac_cmd_no_ai_reason } : decision, usedDefault });
   };
 
@@ -99,7 +139,13 @@ export function CommandBar({
     setError(null);
     try {
       const pid = providerId ?? (await defaultProvider.current);
-      const r = await dispatchInput(kind, text, { projectId, repoDir: repo, agents, tasks, t, providerId: pid }, deps);
+      const r = await dispatchInput(
+        kind,
+        content,
+        { projectId, repoDir: repo, agents, tasks, t, providerId: pid },
+        { ...deps, addAttachment: attach },
+        images.map((i) => i.file),
+      );
       if (r.kind === "question") {
         setPhase({ kind: "answer", text: r.answer ?? "" });
       } else {
@@ -107,6 +153,7 @@ export function CommandBar({
         setNotice(r.fellBack ? t.ac_cmd_fell_back(r.agentName ?? "") : t.ac_cmd_done(kindLabel(r.kind), r.agentName ?? ""));
       }
       setText("");
+      clearImages();
       onDispatched(r);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -115,7 +162,18 @@ export function CommandBar({
   };
 
   return (
-    <div className="ac-cmd" data-testid="ac-cmd">
+    <div
+      className="ac-cmd"
+      data-testid="ac-cmd"
+      onPaste={(e) => {
+        if (addFiles(e.clipboardData?.files)) e.preventDefault();
+      }}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault();
+        addFiles(e.dataTransfer?.files);
+      }}
+    >
       {phase.kind === "plan" && (
         <div className="ac-cmd-plan" data-testid="ac-cmd-plan" role="group" aria-label={t.ac_cmd_plan_title}>
           <b className="ac-cmd-plan-title">{t.ac_cmd_plan_title}</b>
@@ -136,6 +194,11 @@ export function CommandBar({
           </div>
           {phase.decision.reason && <p className="ac-cmd-reason">{phase.decision.reason}</p>}
           <p className="ac-cmd-tip">{kindTip(phase.decision.kind)}</p>
+          {phase.decision.kind === "question" && images.length > 0 && (
+            <p className="ac-bad-text ac-cmd-note" data-testid="ac-cmd-question-no-image">
+              {t.ac_cmd_question_no_image}
+            </p>
+          )}
           <div className="ac-cmd-actions">
             <button type="button" className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setPhase({ kind: "idle" })}>
               {t.ac_cmd_cancel}
@@ -144,7 +207,7 @@ export function CommandBar({
               type="button"
               className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
               data-testid="ac-cmd-confirm"
-              disabled={!repo}
+              disabled={!repo || (phase.decision.kind === "question" && images.length > 0)}
               onClick={() => void execute(phase.decision.kind)}
             >
               {t.ac_cmd_confirm}
@@ -171,7 +234,49 @@ export function CommandBar({
           {error}
         </p>
       )}
+      {images.length > 0 && (
+        <div className="ac-cmd-shots" data-testid="ac-cmd-shots">
+          {images.map((img, i) => (
+            <span key={`${img.file.name}-${i}`} className="ac-bug-shot" title={img.file.name}>
+              {img.url ? <img src={img.url} alt={img.file.name} /> : <span>{img.file.name}</span>}
+              <button
+                type="button"
+                aria-label={t.ac_cmd_remove_shot(img.file.name)}
+                disabled={busy}
+                onClick={() => {
+                  if (img.url) URL.revokeObjectURL(img.url);
+                  setImages((cur) => cur.filter((_, j) => j !== i));
+                }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="ac-cmd-row">
+        <button
+          type="button"
+          className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+          data-testid="ac-cmd-attach"
+          title={t.ac_cmd_attach_tip}
+          disabled={busy}
+          onClick={() => fileRef.current?.click()}
+        >
+          {t.ac_cmd_attach}
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          data-testid="ac-cmd-file"
+          onChange={(e) => {
+            addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
         <textarea
           className="ac-cmd-input"
           data-testid="ac-cmd-input"
@@ -193,7 +298,7 @@ export function CommandBar({
           type="button"
           className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
           data-testid="ac-cmd-send"
-          disabled={busy || !text.trim() || phase.kind === "plan"}
+          disabled={busy || !content || phase.kind === "plan"}
           onClick={() => void analyze()}
         >
           {phase.kind === "routing" ? t.ac_cmd_routing : phase.kind === "working" ? t.ac_cmd_working : "↵"}

@@ -34,12 +34,16 @@ function deps(complete: StartDeps["complete"]): StartDeps {
 const ai = (route: string, other = "") =>
   vi.fn().mockImplementation(async (_m, _s, streamId: string) => (streamId === "input-route" ? route : other));
 
+const attach = vi.fn().mockResolvedValue(undefined);
 const view = (d: StartDeps, onDispatched = vi.fn(), agents = [agent("c1")], tasks: TaskWithAttachments[] = []) =>
   render(
     <LocaleProvider>
-      <CommandBar projectId="p" repo="/repo" agents={agents} tasks={tasks} onDispatched={onDispatched} deps={d} />
+      <CommandBar projectId="p" repo="/repo" agents={agents} tasks={tasks} onDispatched={onDispatched} deps={d} attach={attach} />
     </LocaleProvider>,
   );
+
+const png = (name = "image.png") => new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" });
+const paste = (files: File[]) => fireEvent.paste(screen.getByTestId("ac-cmd-input"), { clipboardData: { files } });
 
 const type = (text: string) => {
   const input = screen.getByTestId("ac-cmd-input");
@@ -48,6 +52,7 @@ const type = (text: string) => {
 };
 
 beforeEach(() => {
+  attach.mockClear();
   vi.mocked(listProviders).mockResolvedValue([{ id: "pv", name: "P", provider_type: "openai", model: "m", is_default: true } as never]);
 });
 
@@ -122,5 +127,72 @@ describe("CommandBar", () => {
     fireEvent.click(screen.getByTestId("ac-cmd-confirm"));
     expect((await screen.findByTestId("ac-cmd-error")).textContent).toContain("boom");
     expect((screen.getByTestId("ac-cmd-input") as HTMLTextAreaElement).value).toBe("按開始沒反應");
+  });
+
+  it("貼上截圖會出現縮圖，可以移除；不貼圖照樣能送", async () => {
+    const d = deps(ai('{"kind":"bug","reason":""}'));
+    view(d);
+    paste([png(), png()]);
+    const shots = await screen.findByTestId("ac-cmd-shots");
+    expect(shots.querySelectorAll(".ac-bug-shot")).toHaveLength(2);
+    // 貼上的截圖都叫 image.png：要改名，附件才不會撞名。
+    const names = [...shots.querySelectorAll(".ac-bug-shot")].map((n) => n.getAttribute("title"));
+    expect(new Set(names).size).toBe(2);
+    fireEvent.click(screen.getAllByRole("button", { name: /移除|Remove/ })[0]);
+    expect(shots.querySelectorAll(".ac-bug-shot")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: /移除|Remove/ }));
+    expect(screen.queryByTestId("ac-cmd-shots")).toBeNull();
+
+    type("按開始沒反應");
+    await screen.findByTestId("ac-cmd-plan");
+    fireEvent.click(screen.getByTestId("ac-cmd-confirm"));
+    await waitFor(() => expect(d.assignAgent).toHaveBeenCalled());
+    expect(attach).not.toHaveBeenCalled();
+    expect(vi.mocked(d.createTask).mock.calls[0][1].body).toContain("不必找截圖");
+  });
+
+  it("附圖：圖片存成卡片附件，在派工之前；內文要求先看截圖，建完圖就清掉", async () => {
+    const d = deps(ai('{"kind":"bug","reason":""}'));
+    const order: string[] = [];
+    attach.mockImplementation(async () => void order.push("attach"));
+    vi.mocked(d.assignAgent).mockImplementation(async () => void order.push("assign"));
+    view(d);
+    paste([png()]);
+    type("版面跑掉了");
+    await screen.findByTestId("ac-cmd-plan");
+    fireEvent.click(screen.getByTestId("ac-cmd-confirm"));
+    await waitFor(() => expect(d.assignAgent).toHaveBeenCalled());
+    expect(order).toEqual(["attach", "assign"]);
+    expect(attach).toHaveBeenCalledWith("p", "task-1", expect.stringMatching(/^screenshot-\d+\.png$/), expect.any(Uint8Array));
+    expect(vi.mocked(d.createTask).mock.calls[0][1].body).toContain("附件的截圖");
+    await waitFor(() => expect(screen.queryByTestId("ac-cmd-shots")).toBeNull());
+  });
+
+  it("只貼圖、沒打字也能送（圖就是需求）", async () => {
+    const d = deps(ai('{"kind":"requirement","reason":""}'));
+    view(d);
+    const send = screen.getByTestId("ac-cmd-send") as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    paste([png()]);
+    await waitFor(() => expect(send.disabled).toBe(false));
+    fireEvent.click(send);
+    await screen.findByTestId("ac-cmd-plan");
+    fireEvent.click(screen.getByTestId("ac-cmd-confirm"));
+    await waitFor(() => expect(d.createTask).toHaveBeenCalled());
+    expect(vi.mocked(d.createTask).mock.calls[0][1].title).toMatch(/請看附圖|See the attached image/);
+    expect(attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("問問題不看圖：有附圖時不能確認，並說明要改類型或移除圖片", async () => {
+    const d = deps(ai('{"kind":"question","reason":""}', "答案"));
+    view(d);
+    paste([png()]);
+    type("這是什麼？");
+    await screen.findByTestId("ac-cmd-plan");
+    expect(screen.getByTestId("ac-cmd-question-no-image")).toBeTruthy();
+    expect((screen.getByTestId("ac-cmd-confirm") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId("ac-cmd-kind-bug"));
+    expect((screen.getByTestId("ac-cmd-confirm") as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId("ac-cmd-question-no-image")).toBeNull();
   });
 });

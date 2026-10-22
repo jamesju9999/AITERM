@@ -122,6 +122,17 @@ export interface DispatchResult {
 
 export class NoStationError extends Error {}
 
+/** 卡片附件（截圖）。由外面注入，測試不必 mock Tauri。 */
+export type AddAttachment = (projectId: string, taskId: string, name: string, bytes: Uint8Array) => Promise<unknown>;
+type DispatchDeps = Pick<StartDeps, "createTask" | "assignAgent" | "complete" | "getBrief"> & { addAttachment?: AddAttachment };
+
+async function attachImages(d: DispatchDeps, projectId: string, taskId: string, images: File[]) {
+  for (const file of images) {
+    const bytes = new Uint8Array(await (file.arrayBuffer ? file.arrayBuffer() : new Response(file).arrayBuffer()));
+    await d.addAttachment?.(projectId, taskId, file.name, bytes);
+  }
+}
+
 const newCard = (d: Pick<StartDeps, "createTask">, env: DispatchEnv, title: string, body: string) =>
   d.createTask(env.projectId, {
     title,
@@ -140,7 +151,9 @@ export async function dispatchInput(
   kind: InputKind,
   text: string,
   env: DispatchEnv,
-  d: Pick<StartDeps, "createTask" | "assignAgent" | "complete" | "getBrief">,
+  d: DispatchDeps,
+  /** 使用者附的圖（可以沒有）：問問題以外都附到卡片上。 */
+  images: File[] = [],
 ): Promise<DispatchResult> {
   const { projectId, agents, tasks, t } = env;
   const nameOf = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
@@ -155,22 +168,26 @@ export async function dispatchInput(
   if (kind === "fast" || kind === "bug") {
     const assignee = pickAssignee(agents, tasks, null);
     if (assignee) {
-      const { title, body } = bugCard(text, kind === "bug" ? t.ac_bug_instructions_noshot : "", null);
+      const shots = images.length > 0;
+      const instructions = kind === "bug" ? (shots ? t.ac_bug_instructions : t.ac_bug_instructions_noshot) : shots ? t.ac_cmd_image_note : "";
+      const { title, body } = bugCard(text, instructions, null);
       const taskId = await newCard(d, env, title, body);
+      await attachImages(d, projectId, taskId, images);
       await d.assignAgent(projectId, taskId, assignee.id, kind === "fast");
       return { kind, taskId, agentName: nameOf(assignee.id) };
     }
     // 只有規格站（或沒有工程師）：小修改沒地方走快速路徑，退回完整流程。
-    const result = await dispatchInput("requirement", text, env, d);
+    const result = await dispatchInput("requirement", text, env, d, images);
     return { ...result, fellBack: true };
   }
 
   const station = pickFirstStation(agents);
   if (!station) throw new NoStationError(t.ac_cmd_no_coder);
-  const { title, body } = bugCard(text, "", null);
+  const { title, body } = bugCard(text, images.length > 0 ? t.ac_cmd_image_note : "", null);
   const brief = ((await d.getBrief(projectId).catch(() => null)) ?? "").trim();
   const criteria = await draftDoneCriteria(d, text, brief, env.providerId);
   const taskId = await newCard(d, env, title, withDoneCriteria(body, criteria));
+  await attachImages(d, projectId, taskId, images);
   await d.assignAgent(projectId, taskId, station);
   return { kind: "requirement", taskId, agentName: nameOf(station) };
 }
