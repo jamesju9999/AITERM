@@ -26,6 +26,8 @@ export interface Architecture {
   modules: Module[];
   edges: Edge[];
   meta: { scannedAt: string; gitHead: string | null; analyzed: boolean; dropped: number };
+  /** 各鑽取層的 AI 細分結果，鍵是 drillKey(模組路徑)；舊存檔沒有這個欄位。 */
+  drills?: Record<string, Architecture>;
 }
 
 export const BASE_LAYERS: Layer[] = [

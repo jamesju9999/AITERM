@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  layoutGraph, edgePath, edgeMidpoint, fitScale, layerColor, traceChain,
+  layoutGraph, spreadLabels, clampZoom, zoomAt, centerOffset, edgePath, edgeMidpoint, fitScale, layerColor, traceChain,
   NODE_W, NODE_H, COL_GAP, ROW_GAP, PAD, LANE_PAD, LANE_W, HEADER_H, EDGE_BULGE, MIN_SCALE, LAYER_PALETTE,
 } from "./layout";
 import type { Architecture } from "./model";
@@ -121,5 +121,73 @@ describe("traceChain", () => {
     expect([...chain.modules].sort()).toEqual(["m1", "m2", "m3"]);
     expect(chain.edges).toHaveLength(2);
     expect([...traceChain(arch, "m1").modules].sort()).toEqual(["m1", "m3"]);
+  });
+});
+
+describe("spreadLabels", () => {
+  it("三個幾乎同一點的標籤沿 y 錯開至少 minDist，順序與 id 不變", () => {
+    const out = spreadLabels([
+      { id: "a", x: 100, y: 50 },
+      { id: "b", x: 101, y: 51 },
+      { id: "c", x: 100, y: 50.5 },
+    ], 20);
+    expect(out.map((p) => p.id)).toEqual(["a", "b", "c"]);
+    const ys = [...out].sort((p, q) => p.y - q.y).map((p) => p.y);
+    expect(ys[1] - ys[0]).toBeGreaterThanOrEqual(20);
+    expect(ys[2] - ys[1]).toBeGreaterThanOrEqual(20);
+    // 最上面那個不動（只往下推）
+    expect(Math.min(...ys)).toBe(50);
+  });
+
+  it("相同位置時依輸入順序由上往下排（穩定）", () => {
+    const out = spreadLabels([{ id: "a", x: 0, y: 0 }, { id: "b", x: 0, y: 0 }, { id: "c", x: 0, y: 0 }], 10);
+    expect(out.map((p) => p.y)).toEqual([0, 10, 20]);
+  });
+
+  it("彼此夠遠的標籤原封不動（含 x 差很遠但 y 相同者）", () => {
+    const pts = [{ id: "a", x: 0, y: 0 }, { id: "b", x: 1000, y: 0 }, { id: "c", x: 0, y: 100 }];
+    expect(spreadLabels(pts, 20)).toEqual(pts);
+  });
+
+  it("不改動輸入陣列", () => {
+    const pts = [{ id: "a", x: 0, y: 0 }, { id: "b", x: 0, y: 0 }];
+    spreadLabels(pts, 10);
+    expect(pts[1].y).toBe(0);
+  });
+});
+
+describe("clampZoom", () => {
+  it("限制在 0.3–2.5", () => {
+    expect(clampZoom(0.1)).toBe(0.3);
+    expect(clampZoom(9)).toBe(2.5);
+    expect(clampZoom(1.2)).toBe(1.2);
+  });
+});
+
+describe("zoomAt", () => {
+  it("以游標為中心縮放：游標下的內容座標不變", () => {
+    const v = { scale: 1, tx: 10, ty: 20 };
+    const r = zoomAt(v, 2, 110, 220);
+    expect(r.scale).toBe(2);
+    // 內容座標 (110-10)/1 = 100 → 縮放後仍在 110
+    expect(110 - r.tx).toBeCloseTo(100 * r.scale);
+    expect(220 - r.ty).toBeCloseTo(200 * r.scale);
+  });
+
+  it("縮放結果被夾在範圍內，且夾住後游標下內容座標仍不變", () => {
+    const r = zoomAt({ scale: 2, tx: 0, ty: 0 }, 10, 50, 80);
+    expect(r.scale).toBe(2.5);
+    expect(50 - r.tx).toBeCloseTo((50 / 2) * 2.5);
+    expect(80 - r.ty).toBeCloseTo((80 / 2) * 2.5);
+    const lo = zoomAt({ scale: 0.4, tx: 5, ty: 5 }, 0.1, 0, 0);
+    expect(lo.scale).toBe(0.3);
+  });
+});
+
+describe("centerOffset", () => {
+  it("內容矮於視窗時回傳垂直置中的位移，否則 0", () => {
+    expect(centerOffset(200, 500)).toBe(150);
+    expect(centerOffset(500, 500)).toBe(0);
+    expect(centerOffset(800, 500)).toBe(0);
   });
 });

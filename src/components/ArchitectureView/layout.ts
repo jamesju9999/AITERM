@@ -114,3 +114,47 @@ export function traceChain(arch: Architecture, start: string): { modules: Set<st
   walk("up");
   return { modules, edges: [...edges] };
 }
+
+export interface LabelPt { id: string; x: number; y: number }
+
+/**
+ * 重疊的連線標籤沿 y 往下錯開到至少 minDist。
+ * 取捨：標籤寬約高的 3 倍，所以只有 |dx| < 3*minDist 才算會互相遮住；
+ * 依 (y, 輸入順序) 由上往下處理，最上面的不動；回傳順序與輸入一致。
+ */
+export function spreadLabels(points: LabelPt[], minDist: number): LabelPt[] {
+  const order = points.map((_, i) => i).sort((a, b) => points[a].y - points[b].y || a - b);
+  const placed: LabelPt[] = [];
+  const out: LabelPt[] = new Array(points.length);
+  for (const i of order) {
+    const p = points[i];
+    let y = p.y;
+    for (const q of placed) {
+      if (Math.abs(q.x - p.x) < minDist * 3 && y - q.y < minDist) y = q.y + minDist;
+    }
+    const np = { ...p, y };
+    placed.push(np);
+    out[i] = np;
+  }
+  return out;
+}
+
+export const MIN_ZOOM = 0.3;
+export const MAX_ZOOM = 2.5;
+export interface View { scale: number; tx: number; ty: number }
+
+export function clampZoom(z: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+}
+
+/** 以 (cx,cy)（視窗座標）為中心縮放；變換為 translate(tx,ty) scale(s)，游標下的內容點保持不動。 */
+export function zoomAt(view: View, factor: number, cx: number, cy: number): View {
+  const scale = clampZoom(view.scale * factor);
+  const k = scale / view.scale;
+  return { scale, tx: cx - (cx - view.tx) * k, ty: cy - (cy - view.ty) * k };
+}
+
+/** 內容矮於視窗時的垂直置中位移；否則 0。 */
+export function centerOffset(contentH: number, viewportH: number): number {
+  return Math.max(0, (viewportH - contentH) / 2);
+}
