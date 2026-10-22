@@ -152,6 +152,9 @@
   color: var(--text-muted);
   pointer-events: none;
   font-size: 14px;
+  /* 後面的 .ac-sizer 也是定位元素、而且鋪滿桌布：沒有 z-index 的話它會蓋在需求卡上面吞掉所有點擊。
+     外層不接滑鼠，所以拖曳角色放到桌布上不受影響。 */
+  z-index: 2;
 }
 .ac-canvas-empty-body { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 /* 外層不接滑鼠（拖曳角色要能放到桌布上），只有這顆按鈕要能點。 */
