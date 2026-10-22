@@ -90,6 +90,25 @@ describe("DetailPanel", () => {
     expect(edgeList.getByText(/srv\/cb\.py:9/)).toBeInTheDocument();
   });
 
+  it("互相引用但兩邊都沒有備註／佐證（掃描連線）：不出現孤零零的 → ←；有備註的那一邊才有方向箭頭", () => {
+    const bare: Architecture = {
+      ...multi,
+      edges: [
+        { from: "web", to: "srv", kind: "import", source: "scan", confidence: 1 },
+        { from: "srv", to: "web", kind: "import", source: "scan", confidence: 1 },
+      ],
+    };
+    const { unmount } = render(<LocaleProvider><DetailPanel arch={bare} selected="web" onSelect={vi.fn()} scan={scan} /></LocaleProvider>);
+    expect(screen.getByText("↔")).toBeInTheDocument();
+    expect(document.querySelectorAll(".arch-dir")).toHaveLength(0);
+    expect(document.querySelectorAll(".arch-edge-line")).toHaveLength(0);
+    unmount();
+    const half: Architecture = { ...bare, edges: [bare.edges[0], { ...bare.edges[1], note: "回呼" }] };
+    render(<LocaleProvider><DetailPanel arch={half} selected="web" onSelect={vi.fn()} scan={scan} /></LocaleProvider>);
+    const dirs = [...document.querySelectorAll(".arch-dir")].map((d) => d.textContent);
+    expect(dirs).toEqual(["←"]);
+  });
+
   it("單向連線不顯示 ↔", () => {
     setup("web");
     expect(screen.queryByText("↔")).not.toBeInTheDocument();

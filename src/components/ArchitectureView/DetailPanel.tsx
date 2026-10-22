@@ -161,9 +161,9 @@ export function DetailPanel({ arch, selected, onSelect, scan, onExpand, activePa
                     <button type="button" className="arch-link" onClick={() => onSelect(g.other)}>{nameOf(g.other)}</button>
                     <span className={`arch-kind arch-kind-${g.edges[0].source}`}>{g.kind}</span>
                   </div>
-                  {g.edges.map((e, i) => (
+                  {g.edges.map((e, i) => (e.note || e.evidence || e.source === "ai") && (
                     <div key={i} className="arch-edge-line">
-                      {g.mutual && <span className="arch-dir">{e.from === mod.id ? "→" : "←"}</span>}
+                      {g.mutual && (e.note || e.evidence) && <span className="arch-dir">{e.from === mod.id ? "→" : "←"}</span>}
                       {e.source === "ai" && (
                         <span className="arch-conf" title={t.arch_confidence}>
                           <span className="arch-conf-bar"><span style={{ width: `${Math.round(e.confidence * 100)}%` }} /></span>
