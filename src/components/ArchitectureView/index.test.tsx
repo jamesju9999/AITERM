@@ -282,6 +282,8 @@ describe("ArchitectureView 鑽取", () => {
     fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
     fireEvent.doubleClick(await screen.findByRole("button", { name: "big/m" }));
     expect(await screen.findByText(/另有 1 個節點未顯示|1 more nodes not shown/)).toBeInTheDocument();
+    // 提示要說明可以怎麼做
+    expect(screen.getByText(/AI 細分此模組.*更小的模組|refine this module with AI.*smaller module/)).toBeInTheDocument();
   });
 
   it("舊存檔沒有 drills 欄位也能載入並鑽取", async () => {
