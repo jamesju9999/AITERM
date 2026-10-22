@@ -617,6 +617,13 @@
 .ac-cmd-input { flex: 1; min-width: 0; resize: none; max-height: 120px; padding: 5px 8px; border: none; outline: none; background: transparent; color: var(--text-primary); font: inherit; font-size: 13px; line-height: 1.5; field-sizing: content; }
 .ac-cmd-plan, .ac-cmd-answer { padding: 10px 12px; border-radius: 10px; background: var(--bg-secondary); border: 1px solid var(--ac-edge); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); font-size: 12.5px; color: var(--text-secondary); max-height: 40vh; overflow: auto; }
 .ac-cmd-answer p { margin: 4px 0 8px; white-space: pre-wrap; line-height: 1.55; }
+/* 長回答：標題列（含關閉）固定在上面，只有內容捲動。 */
+.ac-cmd-answer--long { display: flex; flex-direction: column; padding: 0; overflow: hidden; max-height: min(60vh, 520px); }
+.ac-cmd-answer-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--ac-edge); color: var(--text-primary); flex: none; }
+.ac-cmd-answer-body { padding: 8px 12px 12px; overflow: auto; line-height: 1.55; user-select: text; }
+.ac-cmd-answer-body p { margin: 4px 0 8px; white-space: normal; }
+.ac-cmd-answer-body :is(h1, h2, h3) { font-size: 13px; margin: 10px 0 4px; color: var(--text-primary); }
+.ac-cmd-answer-body pre { overflow-x: auto; }
 .ac-cmd-plan-title { display: block; margin-bottom: 6px; color: var(--text-primary); }
 .ac-cmd-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
 .ac-cmd-kind { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--ac-edge); background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; }

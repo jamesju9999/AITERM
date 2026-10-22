@@ -5,6 +5,7 @@ import { invokeAiComplete } from "../../ipc/ai";
 import { askAgent, assignAgent, createAgent, getReferences, type AgentRow } from "../../ipc/agents";
 import { listProviders } from "../../ipc/provider";
 import { addAttachment, createTask, getProjectBrief, setProjectBrief, type TaskWithAttachments } from "../../ipc/tasks";
+import { MarkdownText } from "../../lib/markdown";
 import { ModelPickerButton } from "../ModelPickerButton";
 import type { ProviderInfo } from "../../ipc/provider";
 import { dispatchInput, INPUT_KINDS, routeInput, type AddAttachment, type DispatchResult, type InputKind, type RouteDecision } from "./routeInput";
@@ -240,12 +241,16 @@ export function CommandBar({
         </div>
       )}
       {phase.kind === "answer" && (
-        <div className="ac-cmd-answer" data-testid="ac-cmd-answer" role="status">
-          <b>{t.ac_cmd_answer_title}</b>
-          <p>{phase.text}</p>
-          <button type="button" className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setPhase({ kind: "idle" })}>
-            {t.ac_cmd_close}
-          </button>
+        <div className="ac-cmd-answer ac-cmd-answer--long" data-testid="ac-cmd-answer" role="status">
+          <div className="ac-cmd-answer-head">
+            <b>{t.ac_cmd_answer_title}</b>
+            <button type="button" className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setPhase({ kind: "idle" })}>
+              {t.ac_cmd_close}
+            </button>
+          </div>
+          <div className="ac-cmd-answer-body">
+            <MarkdownText text={phase.text} />
+          </div>
         </div>
       )}
       {notice && phase.kind === "idle" && (
