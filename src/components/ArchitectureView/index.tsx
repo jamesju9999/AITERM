@@ -219,11 +219,13 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                       className={`arch-node ${selected === m.id ? "arch-node-sel" : ""} ${dim ? "arch-node-dim" : ""}`}
                       style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H, ["--lc" as string]: layerColor(m.layer, layerIndex(m.layer)) }}
                       onClick={() => setSelected(m.id)}>
-                      <span className="arch-node-name">{m.name}</span>
+                      <span className="arch-node-head">
+                        <span className="arch-node-name">{m.name}</span>
+                        <span className="arch-node-files">{t.arch_files_count.replace("{n}", String(m.files.length))}</span>
+                      </span>
                       {m.summary && <span className="arch-node-sum">{m.summary}</span>}
                       <span className="arch-node-foot">
                         {m.tech.slice(0, 2).map((x) => <span key={x} className="arch-chip arch-chip-sm">{x}</span>)}
-                        <span className="arch-node-files">{t.arch_files_count.replace("{n}", String(m.files.length))}</span>
                       </span>
                     </button>
                   );
