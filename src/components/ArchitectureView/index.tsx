@@ -9,7 +9,7 @@ import { ModelPickerButton } from "../ModelPickerButton";
 import { ANALYZE_SYSTEM, buildAnalyzeMessage, mergeScanEdges, parseAnalysis, pickKeyFiles } from "./analyze";
 import { buildBaseGraph, type Architecture, type Edge } from "./model";
 import { buildDrillGraph, drillKey } from "./drill";
-import { centerOffset, edgeLength, edgeMidpoint, edgePath, fitScale, isCompact, layerColor, layoutGraph, neighborhood, spreadLabels, zoomAt, type Layout, type View } from "./layout";
+import { edgeLength, edgeMidpoint, edgePath, initialView, isCompact, layerColor, layoutGraph, neighborhood, spreadLabels, trueFitView, zoomAt, type Layout, type View } from "./layout";
 import { DetailPanel } from "./DetailPanel";
 import "./index.css";
 
@@ -261,10 +261,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const denseGraph = (view?.edges.length ?? 0) > DENSE_EDGES;
 
   const fit: View = layout
-    ? (() => {
-        const s = fitScale(layout.width, layout.height, viewport.w, viewport.h);
-        return { scale: s, tx: centerOffset(layout.width * s, viewport.w), ty: centerOffset(layout.height * s, viewport.h) };
-      })()
+    ? initialView(layout.width, layout.height, viewport.w, viewport.h)
     : { scale: 1, tx: 0, ty: 0 };
   const cur: View = manual && manual.layout === layout ? manual.view : fit;
   const activePath = pathPick && pathPick.view === view && pathPick.selected === selected ? pathPick.path : null;
@@ -281,7 +278,9 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     if (!view || !selected) return;
     setPathPick((cur0) => (cur0 && cur0.view === view && cur0.selected === selected && samePath(cur0.path, p) ? null : { path: p, view, selected }));
   }, [view, selected]);
-  const fitView = useCallback(() => setManual(null), []);
+  const fitView = useCallback(() => {
+    if (layout) setManual({ layout, view: trueFitView(layout.width, layout.height, viewport.w, viewport.h) });
+  }, [layout, viewport]);
   useEffect(() => { viewRef.current = cur; layoutRef.current = layout; });
   useEffect(() => () => dragCleanupRef.current?.(), []);
 

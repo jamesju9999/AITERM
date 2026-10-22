@@ -37,7 +37,7 @@ vi.mock("../ModelPickerButton", () => ({
 }));
 
 import { ArchitectureView } from "./index";
-import { fitScale, layoutGraph, PAD, LANE_W, COL_GAP, HEADER_H, NODE_H_COMPACT, ROW_GAP, LANE_PAD, centerOffset } from "./layout";
+import { fitScale, layoutGraph, PAD, LANE_W, COL_GAP, HEADER_H, NODE_H_COMPACT, ROW_GAP, LANE_PAD, centerOffset, READABLE_SCALE, MIN_ZOOM, initialView, trueFitView } from "./layout";
 import type { Architecture } from "./model";
 
 const PROVIDERS = [
@@ -502,15 +502,15 @@ describe("ArchitectureView 資料流與縮放平移", () => {
     expect(onEdges()).toHaveLength(1);
   });
 
-  it("初次載入適合視窗並垂直置中；Ctrl+滾輪縮放，一般滾輪不縮放；適合視窗鈕還原", async () => {
+  it("初次載入用自動視圖（不低於易讀下限）並垂直置中；Ctrl+滾輪縮放，一般滾輪不縮放；適合視窗鈕做真適合", async () => {
     await open_();
-    const s0 = fitScale(LAYOUT_W, LAYOUT_H, VIEW_W, VIEW_H);
-    expect(s0).toBeLessThan(1);
+    const iv = initialView(LAYOUT_W, LAYOUT_H, VIEW_W, VIEW_H);
+    expect(fitScale(LAYOUT_W, LAYOUT_H, VIEW_W, VIEW_H)).toBeLessThan(READABLE_SCALE);
+    expect(iv.scale).toBe(READABLE_SCALE);
     const v0 = xf();
-    expect(v0.s).toBeCloseTo(s0);
-    expect(v0.tx).toBeCloseTo(centerOffset(LAYOUT_W * s0, VIEW_W));
-    expect(v0.ty).toBeCloseTo(centerOffset(LAYOUT_H * s0, VIEW_H));
-    expect(v0.ty).toBeGreaterThan(0);
+    expect(v0.s).toBeCloseTo(iv.scale);
+    expect(v0.tx).toBeCloseTo(iv.tx);
+    expect(v0.ty).toBeCloseTo(iv.ty);
 
     fireEvent.wheel(canvas(), { deltaY: -100 });
     expect(xf()).toEqual(v0);
@@ -523,7 +523,10 @@ describe("ArchitectureView 資料流與縮放平移", () => {
 
     fireEvent.wheel(canvas(), { deltaY: -100, ctrlKey: true });
     fireEvent.click(screen.getByRole("button", { name: /適合視窗|Fit to window/ }));
-    expect(xf()).toEqual(v0);
+    const tf = trueFitView(LAYOUT_W, LAYOUT_H, VIEW_W, VIEW_H);
+    expect(xf().s).toBeCloseTo(tf.scale);
+    expect(xf().s).toBeLessThan(READABLE_SCALE);
+    expect(xf().ty).toBeCloseTo(tf.ty);
   });
 
   it("背景拖曳會平移；按在卡片上不平移，且仍可點選", async () => {
@@ -646,15 +649,86 @@ describe("ArchitectureView 稠密圖易讀性", () => {
     expect(nodeOf("Fhub").querySelector(".arch-node-sum")).not.toBeNull();
   });
 
-  it("初次適合視窗同時考慮寬高：縮放後內容完全放進可視區", async () => {
+  it("適合視窗鈕同時考慮寬高：縮放後內容完全放進可視區；初次自動視圖不低於易讀下限", async () => {
     await open_();
     const l = layoutGraph(DENSE);
+    const fit = fitScale(l.width, l.height, VIEW_W, VIEW_H);
+    expect(fit).toBeLessThan(READABLE_SCALE); // fixture 要夠大，這個斷言才有鑑別力
+    const parse = () => {
+      const m = /translate\(([-\d.e]+)px, ?([-\d.e]+)px\) scale\(([-\d.e]+)\)/.exec((document.querySelector(".arch-stage") as HTMLElement).style.transform)!;
+      return { tx: +m[1], ty: +m[2], s: +m[3] };
+    };
+    expect(parse().s).toBe(READABLE_SCALE);
+    fireEvent.click(screen.getByRole("button", { name: /適合視窗|Fit to window/ }));
+    const v = parse();
+    expect(v.s).toBeCloseTo(fit);
+    expect(l.height * v.s).toBeLessThanOrEqual(VIEW_H + 0.5);
+    expect(l.width * v.s).toBeLessThanOrEqual(VIEW_W + 0.5);
+    expect(v.tx).toBeGreaterThanOrEqual(0);
+    expect(v.ty).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("ArchitectureView 很寬的圖（鑽取 11 欄）", () => {
+  const VIEW_W = 1100;
+  const VIEW_H = 300;
+  const LAYER_IDS = Array.from({ length: 11 }, (_, i) => `d${i}`);
+  // 第 2 欄 29 張（3 個子欄），其餘每欄數張：寬約 3676，真適合 ≈ 0.299，剛好低於舊的 MIN_ZOOM 0.3。
+  const mods = Array.from({ length: 60 }, (_, i) => ({
+    id: `n${i}`, layer: i < 29 ? "d1" : LAYER_IDS[[0, 2, 3, 4, 5, 6, 7, 8, 9, 10][i % 10]], name: `N${i}`, files: [`n${i}.ts`], tech: [], summary: "", dataflow: "",
+  }));
+  const WIDE: Architecture = {
+    layers: LAYER_IDS.map((id, i) => ({ id, name: `第 ${i + 1} 層` })), modules: mods, edges: [],
+    meta: { scannedAt: "", gitHead: "h1", analyzed: false, dropped: 0 },
+  };
+  let origRO: typeof ResizeObserver | undefined;
+  beforeEach(() => {
+    origRO = globalThis.ResizeObserver;
+    class RO {
+      cb: (e: { contentRect: { width: number; height: number } }[]) => void;
+      constructor(cb: (e: { contentRect: { width: number; height: number } }[]) => void) { this.cb = cb; }
+      observe() { this.cb([{ contentRect: { width: VIEW_W, height: VIEW_H } }]); }
+      disconnect() {}
+      unobserve() {}
+    }
+    globalThis.ResizeObserver = RO as unknown as typeof ResizeObserver;
+    archLoad.mockResolvedValue(JSON.stringify(WIDE));
+    archScan.mockResolvedValue({ ...SCAN, files: mods.map((m) => ({ path: `${m.id}.ts`, lang: "typescript", lines: 1 })) });
+  });
+  afterEach(() => { globalThis.ResizeObserver = origRO as typeof ResizeObserver; });
+
+  const xf = () => {
     const m = /translate\(([-\d.e]+)px, ?([-\d.e]+)px\) scale\(([-\d.e]+)\)/.exec((document.querySelector(".arch-stage") as HTMLElement).style.transform)!;
-    const s = +m[3];
-    expect(s).toBeCloseTo(fitScale(l.width, l.height, VIEW_W, VIEW_H));
-    expect(l.height * s).toBeLessThanOrEqual(VIEW_H + 0.5);
-    expect(l.width * s).toBeLessThanOrEqual(VIEW_W + 0.5);
-    expect(+m[1]).toBeGreaterThanOrEqual(0);
-    expect(+m[2]).toBeGreaterThanOrEqual(0);
+    return { tx: +m[1], ty: +m[2], s: +m[3] };
+  };
+  const open_ = async () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    await screen.findByRole("button", { name: "N0" });
+  };
+
+  it("fixture 的真適合比例確實落在舊 MIN_ZOOM 0.3 以下、新 MIN_ZOOM 以上", () => {
+    const l = layoutGraph(WIDE);
+    const t = Math.min(VIEW_W / l.width, VIEW_H / l.height);
+    expect(t).toBeLessThan(0.3);
+    expect(t).toBeGreaterThan(MIN_ZOOM);
+  });
+
+  it("適合視窗鈕：真適合，內容整個放進可視區（最後一欄不被切掉）並置中", async () => {
+    await open_();
+    fireEvent.click(screen.getByRole("button", { name: /適合視窗|Fit to window/ }));
+    const l = layoutGraph(WIDE);
+    const v = xf();
+    expect(v.s).toBeCloseTo(fitScale(l.width, l.height, VIEW_W, VIEW_H));
+    expect(l.width * v.s + v.tx).toBeLessThanOrEqual(VIEW_W + 0.5);
+    expect(l.height * v.s + v.ty).toBeLessThanOrEqual(VIEW_H + 0.5);
+  });
+
+  it("自動初始視圖不低於 READABLE_SCALE，內容比視窗大時靠左上（不置中）", async () => {
+    await open_();
+    const v = xf();
+    expect(v.s).toBe(READABLE_SCALE);
+    expect(v.tx).toBe(0);
+    expect(v.ty).toBe(0);
   });
 });

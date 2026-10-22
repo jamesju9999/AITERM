@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  layoutGraph, spreadLabels, clampZoom, zoomAt, centerOffset, edgePath, edgeMidpoint, edgeLength, fitScale, layerColor, neighborhood, isCompact,
+  layoutGraph, spreadLabels, clampZoom, zoomAt, centerOffset, edgePath, edgeMidpoint, edgeLength, fitScale, initialView, trueFitView, READABLE_SCALE, layerColor, neighborhood, isCompact,
   NODE_W, NODE_H, NODE_H_COMPACT, MAX_ROWS_PER_COL, SUBCOL_GAP, COL_GAP, ROW_GAP, PAD, LANE_PAD, LANE_W, HEADER_H, EDGE_BULGE, MIN_ZOOM, LAYER_PALETTE,
   type Rect,
 } from "./layout";
@@ -42,6 +42,43 @@ describe("layoutGraph", () => {
   });
 });
 
+describe("initialView / trueFitView", () => {
+  it("READABLE_SCALE 介於 MIN_ZOOM 與 1 之間", () => {
+    expect(READABLE_SCALE).toBeGreaterThan(MIN_ZOOM);
+    expect(READABLE_SCALE).toBeLessThan(1);
+  });
+  it("真適合比易讀下限大時，自動視圖就是適合視窗並置中", () => {
+    const v = initialView(1000, 300, 800, 600);
+    expect(v.scale).toBeCloseTo(0.8);
+    expect(v.tx).toBeCloseTo(centerOffset(1000 * 0.8, 800));
+    expect(v.ty).toBeCloseTo(centerOffset(300 * 0.8, 600));
+    expect(v.ty).toBeGreaterThan(0);
+  });
+  it("真適合小於易讀下限：縮放卡在 READABLE_SCALE，內容比視窗高／寬時靠左上、不置中", () => {
+    const w = 4000, h = 2000;
+    expect(fitScale(w, h, 800, 600)).toBeLessThan(READABLE_SCALE);
+    const v = initialView(w, h, 800, 600);
+    expect(v).toEqual({ scale: READABLE_SCALE, tx: 0, ty: 0 });
+  });
+  it("卡在下限但某一軸放得下時，該軸仍置中", () => {
+    const v = initialView(4000, 300, 800, 600); // 高 300*0.55=165 < 600
+    expect(v.scale).toBe(READABLE_SCALE);
+    expect(v.tx).toBe(0);
+    expect(v.ty).toBeCloseTo(centerOffset(300 * READABLE_SCALE, 600));
+    expect(v.ty).toBeGreaterThan(0);
+  });
+  it("量不到視窗時為 1", () => {
+    expect(initialView(4000, 2000, 0, 0).scale).toBe(1);
+  });
+  it("trueFitView 可低於易讀下限（到 MIN_ZOOM），並置中", () => {
+    const v = trueFitView(4000, 300, 800, 600);
+    expect(v.scale).toBeCloseTo(0.2);
+    expect(v.scale).toBeLessThan(READABLE_SCALE);
+    expect(v.tx).toBeCloseTo(0);
+    expect(v.ty).toBeCloseTo(centerOffset(300 * 0.2, 600));
+  });
+});
+
 describe("fitScale", () => {
   it("寬高都放得下時不縮放", () => {
     expect(fitScale(800, 500, 1000, 600)).toBe(1);
@@ -56,7 +93,7 @@ describe("fitScale", () => {
   it("寬高都超出時取較小者；不低於 MIN_ZOOM", () => {
     expect(fitScale(1000, 2000, 800, 1000)).toBeCloseTo(0.5);
     expect(fitScale(1000, 6000, 800, 600)).toBe(MIN_ZOOM);
-    expect(MIN_ZOOM).toBe(0.3);
+    expect(MIN_ZOOM).toBe(0.2);
   });
   it("量不到尺寸時回傳 1", () => {
     expect(fitScale(1000, 500, 0, 600)).toBe(1);
@@ -274,8 +311,8 @@ describe("spreadLabels", () => {
 });
 
 describe("clampZoom", () => {
-  it("限制在 0.3–2.5", () => {
-    expect(clampZoom(0.1)).toBe(0.3);
+  it("限制在 MIN_ZOOM–MAX_ZOOM", () => {
+    expect(clampZoom(0.01)).toBe(MIN_ZOOM);
     expect(clampZoom(9)).toBe(2.5);
     expect(clampZoom(1.2)).toBe(1.2);
   });
@@ -297,7 +334,7 @@ describe("zoomAt", () => {
     expect(50 - r.tx).toBeCloseTo((50 / 2) * 2.5);
     expect(80 - r.ty).toBeCloseTo((80 / 2) * 2.5);
     const lo = zoomAt({ scale: 0.4, tx: 5, ty: 5 }, 0.1, 0, 0);
-    expect(lo.scale).toBe(0.3);
+    expect(lo.scale).toBe(MIN_ZOOM);
   });
 });
 

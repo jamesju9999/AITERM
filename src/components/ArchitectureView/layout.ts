@@ -84,6 +84,22 @@ export function fitScale(contentW: number, contentH: number, viewW: number, view
   return Math.min(1, Math.max(MIN_ZOOM, Math.min(viewW / contentW, viewH / contentH)));
 }
 
+/** 真適合：整個內容縮進視窗（可低到 MIN_ZOOM）並置中。「適合視窗」鈕用。 */
+export function trueFitView(contentW: number, contentH: number, viewW: number, viewH: number): View {
+  const scale = fitScale(contentW, contentH, viewW, viewH);
+  return { scale, tx: centerOffset(contentW * scale, viewW), ty: centerOffset(contentH * scale, viewH) };
+}
+
+/**
+ * 自動（初次載入、換層級）視圖：真適合若小於 READABLE_SCALE 就停在 READABLE_SCALE，字才讀得出來；
+ * 放不下的那一軸靠左上對齊（centerOffset 對溢出回 0），其餘靠使用者平移。
+ */
+export function initialView(contentW: number, contentH: number, viewW: number, viewH: number): View {
+  const fit = fitScale(contentW, contentH, viewW, viewH);
+  const scale = fit < READABLE_SCALE ? READABLE_SCALE : fit;
+  return { scale, tx: centerOffset(contentW * scale, viewW), ty: centerOffset(contentH * scale, viewH) };
+}
+
 const FIXED_LAYER_COLORS: Record<string, string> = {
   frontend: "#38bdf8",
   transport: "#a78bfa",
@@ -169,7 +185,9 @@ export function spreadLabels(points: LabelPt[], minDist: number): LabelPt[] {
   return out;
 }
 
-export const MIN_ZOOM = 0.3;
+export const MIN_ZOOM = 0.2;
+/** 自動視圖的易讀下限：真適合比這小就停在這個比例，其餘靠平移。 */
+export const READABLE_SCALE = 0.55;
 export const MAX_ZOOM = 2.5;
 export interface View { scale: number; tx: number; ty: number }
 
