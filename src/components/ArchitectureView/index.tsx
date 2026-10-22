@@ -14,6 +14,7 @@ import { DetailPanel } from "./DetailPanel";
 import "./index.css";
 
 const PROVIDER_KEY = "aiterm_arch_provider";
+const ROOT_KEY = "aiterm_arch_root";
 
 /** 鑽取路徑上的一層：模組 id、它的檔案、顯示名稱（麵包屑用）。 */
 interface DrillLevel { id: string; files: string[]; name: string }
@@ -93,7 +94,8 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const layoutRef = useRef<Layout | null>(null);
   const dragCleanupRef = useRef<(() => void) | null>(null);
 
-  const load = useCallback(async (dir: string) => {
+  /** 載入成功回 true。restoring＝自動還原上次的資料夾：失敗（多半是資料夾不見了）就靜靜回到空狀態。 */
+  const load = useCallback(async (dir: string, restoring = false): Promise<boolean> => {
     setRoot(dir);
     setSelected(null);
     setDrillPath([]);
@@ -111,14 +113,37 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
         setStale(false);
       }
       setStatus(s.truncated ? { kind: "notice", msg: t.arch_truncated_n.replace("{n}", String(s.files.length)) } : { kind: "idle" });
+      return true;
     } catch (e) {
-      setStatus({ kind: "error", msg: t.arch_error.replace("{msg}", errText(e)) });
+      if (restoring) {
+        try { localStorage.removeItem(ROOT_KEY); } catch { /* 清不掉也只是下次再試一次 */ }
+        setRoot(null);
+        setScan(null);
+        setArch(null);
+        setStatus({ kind: "idle" });
+      } else {
+        setStatus({ kind: "error", msg: t.arch_error.replace("{msg}", errText(e)) });
+      }
+      return false;
     }
   }, [t]);
 
   const pick = useCallback(async () => {
     const dir = await open({ directory: true, multiple: false });
-    if (typeof dir === "string") await load(dir);
+    if (typeof dir !== "string") return;
+    if (await load(dir)) {
+      try { localStorage.setItem(ROOT_KEY, dir); } catch { /* 記不住不影響使用 */ }
+    }
+  }, [load]);
+
+  // 掛載時自動載入上次的資料夾（只做一次，StrictMode 的重複掛載也不重掃）。
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(ROOT_KEY); } catch { /* 讀不到就當沒有 */ }
+    if (saved) void load(saved, true);
   }, [load]);
 
   // 可選的模型：上次記住的 → 預設供應商 → 清單第一個。記住的 id 若已被刪除要退回預設。

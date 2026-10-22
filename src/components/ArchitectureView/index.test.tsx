@@ -732,3 +732,58 @@ describe("ArchitectureView 很寬的圖（鑽取 11 欄）", () => {
     expect(v.ty).toBe(0);
   });
 });
+
+describe("ArchitectureView 記住上次的專案資料夾", () => {
+  const KEY = "aiterm_arch_root";
+  const pickBtn = () => screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ });
+
+  it("掛載時若記著資料夾，自動載入（掃描該路徑），不需要再選", async () => {
+    localStorage.setItem(KEY, "/saved");
+    renderView();
+    await waitFor(() => expect(archScan).toHaveBeenCalledWith("/saved"));
+    expect(archLoad).toHaveBeenCalledWith("/saved");
+    expect(await screen.findByTitle("/saved")).toBeInTheDocument();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("沒有記著的資料夾時不掃描，顯示空狀態", () => {
+    renderView();
+    expect(archScan).not.toHaveBeenCalled();
+    expect(pickBtn()).toBeInTheDocument();
+  });
+
+  it("選好資料夾並載入成功後存下路徑", async () => {
+    open.mockResolvedValue("/chosen");
+    renderView();
+    fireEvent.click(pickBtn());
+    await waitFor(() => expect(archScan).toHaveBeenCalledWith("/chosen"));
+    await waitFor(() => expect(localStorage.getItem(KEY)).toBe("/chosen"));
+  });
+
+  it("手動選的資料夾掃描失敗時不存路徑，維持錯誤訊息", async () => {
+    open.mockResolvedValue("/bad");
+    archScan.mockRejectedValue("boom");
+    renderView();
+    fireEvent.click(pickBtn());
+    await screen.findByText(/boom/);
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("記著的資料夾已不存在（掃描失敗）：清掉記錄、顯示空狀態按鈕、沒有錯誤橫幅", async () => {
+    localStorage.setItem(KEY, "/gone");
+    archScan.mockRejectedValue("no such dir");
+    renderView();
+    await waitFor(() => expect(archScan).toHaveBeenCalledWith("/gone"));
+    await waitFor(() => expect(localStorage.getItem(KEY)).toBeNull());
+    expect(await screen.findByRole("button", { name: /選擇專案資料夾|Choose project folder/ })).toBeInTheDocument();
+    expect(document.querySelector(".arch-status-error")).toBeNull();
+    expect(screen.queryByText(/no such dir/)).not.toBeInTheDocument();
+  });
+
+  it("localStorage 丟例外也不會壞", async () => {
+    const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
+    renderView();
+    expect(pickBtn()).toBeInTheDocument();
+    spy.mockRestore();
+  });
+});
