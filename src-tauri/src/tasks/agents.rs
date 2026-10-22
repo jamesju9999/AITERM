@@ -313,6 +313,17 @@ pub async fn assign_task(
     task_id: &str,
     agent_id: Option<&str>,
 ) -> Result<(), sqlx::Error> {
+    assign_task_with(pool, task_id, agent_id, false).await
+}
+
+/// 同 `assign_task`；`fast` 為真時這張卡走小修改快速路徑（做完跳過審查）。
+/// 規格站不能走快速路徑：規格一定要審。
+pub async fn assign_task_with(
+    pool: &SqlitePool,
+    task_id: &str,
+    agent_id: Option<&str>,
+    fast: bool,
+) -> Result<(), sqlx::Error> {
     let status: Option<String> = sqlx::query_scalar("SELECT status FROM tasks WHERE id = ?")
         .bind(task_id)
         .fetch_optional(pool)
@@ -327,15 +338,19 @@ pub async fn assign_task(
             if agent.kind != "coder" {
                 return Err(sqlx::Error::Protocol("模組只能指派給工程師".into()));
             }
+            if fast && agent.produces_spec {
+                return Err(sqlx::Error::Protocol("規格站不能走快速路徑".into()));
+            }
             let order = max_order(pool, STATUS_QUEUED).await? + 1.0;
             sqlx::query(
-                "UPDATE tasks SET agent_id = ?, project_dir = ?, status = ?, sort_order = ?, is_spec = ? WHERE id = ?",
+                "UPDATE tasks SET agent_id = ?, project_dir = ?, status = ?, sort_order = ?, is_spec = ?, fast = ? WHERE id = ?",
             )
             .bind(aid)
             .bind(&agent.project_dir)
             .bind(STATUS_QUEUED)
             .bind(order)
             .bind(agent.produces_spec)
+            .bind(fast)
             .bind(task_id)
             .execute(pool)
             .await?;

@@ -323,7 +323,14 @@ pub fn agent_prompt(prefix: &str, prompt: &str, interactive: bool, can_ask: bool
 /// 平行的 Agent 才有全貌）→ 卡片內容 → 自主說明。
 pub async fn agent_card_prompt(pool: &sqlx::SqlitePool, task: &TaskRow, prefix: &str, prompt: &str, can_ask: bool) -> String {
     let context = crate::tasks::context::project_context(pool, task).await;
-    agent_prompt(prefix, &format!("{context}{prompt}"), task.interactive, can_ask)
+    // 規格卡：附上實際掃出來的程式庫現況，規格才不會憑簡介宣稱路徑是空的。
+    let snapshot = if task.is_spec && task.card_kind == crate::tasks::workflow::KIND_WORK {
+        let dir = std::path::PathBuf::from(&task.project_dir);
+        tokio::task::spawn_blocking(move || crate::tasks::repo_snapshot::snapshot(&dir)).await.unwrap_or_default()
+    } else {
+        String::new()
+    };
+    agent_prompt(prefix, &format!("{context}{snapshot}{prompt}"), task.interactive, can_ask)
 }
 
 /// Agent 的 worktree：已經有就沿用，沒有就在 `<專案>/agents/<id>/worktree`
@@ -633,7 +640,8 @@ pub(crate) async fn finalize_verify_card(
                 } else {
                     Vec::new()
                 };
-                let verdict = crate::tasks::workflow::verify_verdict(&report, &uncovered);
+                let unproven = crate::tasks::workflow::unproven_items(&report);
+                let verdict = crate::tasks::workflow::verify_verdict(&report, &uncovered, &unproven);
                 match crate::tasks::workflow::set_verdict(pool, task_id, &verdict).await {
                     Ok(()) => monitor::TaskOutcome::Success,
                     Err(e) => monitor::TaskOutcome::Failed(format!("寫入驗收結果失敗：{e}")),
@@ -1971,7 +1979,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
-            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None, provides: None,
+            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None, provides: None, fast: false,
         }
     }
 
@@ -2153,7 +2161,7 @@ mod tests {
             module_override: false,
             is_spec: false,
             from_spec: None,
-            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None, provides: None,
+            quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None, provides: None, fast: false,
         }
     }
 
@@ -3469,6 +3477,25 @@ mod agent_dispatch_tests {
         let lone = store::create_task(&empty, "x", "做 x", &dir, true, false).await.unwrap();
         let lone = store::get_task(&empty, &lone).await.unwrap().unwrap();
         assert_eq!(agent_card_prompt(&empty, &lone, "", "做 x", false).await, format!("做 x\n\n{AUTONOMY_NOTE}"));
+    }
+
+    #[tokio::test]
+    async fn only_spec_cards_get_the_repo_snapshot() {
+        let pool = mem_pool().await;
+        let repo = tempfile::tempdir().unwrap();
+        StdCommand::new("git").args(["init", "-q", "-b", "main"]).current_dir(repo.path()).status().unwrap();
+        fs::create_dir_all(repo.path().join("HTBTW_Web/.git")).unwrap();
+        let dir = repo.path().to_string_lossy().into_owned();
+        let id = store::create_task(&pool, "規格", "寫規格", &dir, true, false).await.unwrap();
+        let mut card = store::get_task(&pool, &id).await.unwrap().unwrap();
+
+        let plain = agent_card_prompt(&pool, &card, "", "寫規格", false).await;
+        assert!(!plain.contains("程式庫現況"), "一般模組不附現況：{plain}");
+
+        card.is_spec = true;
+        let spec = agent_card_prompt(&pool, &card, "", "寫規格", false).await;
+        assert!(spec.contains("## 程式庫現況") && spec.contains("HTBTW_Web/（獨立 git 專案"), "{spec}");
+        assert!(spec.find("程式庫現況").unwrap() < spec.find("寫規格").unwrap(), "現況要在卡片內容之前");
     }
 
     async fn coder(pool: &sqlx::SqlitePool, repo: &std::path::Path, name: &str) -> agents::AgentRow {

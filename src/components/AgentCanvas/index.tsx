@@ -107,6 +107,7 @@ import { projectSummary, type ProjectSummary } from "./projectSummary";
 import { sumUsage } from "./tokenUsage";
 import { TokenBudgetChip } from "./TokenBudgetChip";
 import { ProjectBriefDialog } from "./ProjectBriefDialog";
+import { CommandBar } from "./CommandBar";
 import { RequirementStart } from "./RequirementStart";
 import { StartNotice } from "./StartNotice";
 import type { StartResult } from "./startFromRequirement";
@@ -257,10 +258,7 @@ export function AgentCanvasView({
   // 檔案系統的事不會推送過來，所以在技能清單（或儲存後的畫面）變動時重查一次。
   const allSkillPathsKey = agents.flatMap((a) => parseSkillPaths(a.custom_skills)).join("\n");
   useEffect(() => {
-    if (!allSkillPathsKey) {
-      setLostSkills([]);
-      return;
-    }
+    if (!allSkillPathsKey) return;
     let alive = true;
     missingSkills(allSkillPathsKey.split("\n"))
       .then((m) => alive && setLostSkills(m))
@@ -1558,6 +1556,15 @@ export function AgentCanvasView({
               </div>
             </div>
           </section>
+          {agents.length > 0 && projectId && (
+            <CommandBar
+              projectId={projectId}
+              repo={(projRepoOf?.projectId === projectId ? projRepoOf.path : null) ?? agents[0]?.project_dir ?? null}
+              agents={agents}
+              tasks={tasks}
+              onDispatched={() => void refresh()}
+            />
+          )}
           {agents.length > 0 && (
             <div className="ac-zoom" role="toolbar">
               <button className="ac-iconbtn" title={t.ac_zoom_out} aria-label={t.ac_zoom_out} onClick={() => zoomAround(zoom / 1.2)}>

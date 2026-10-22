@@ -78,6 +78,8 @@ export interface TaskRow {
   module_override: boolean;
   /** 模組卡：這是一份規格（審查通過後交給協調者拆解派工）。 */
   is_spec: boolean;
+  /** 小修改快速路徑：做完跳過審查。 */
+  fast?: boolean;
   /** 實作卡：由哪一份規格模組拆出來的。 */
   from_spec: string | null;
   /** 派出去的 claude 撞到用量上限、正在等額度（unix 秒）；換帳號或過一陣子會自動續跑。 */

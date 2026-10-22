@@ -102,6 +102,29 @@ describe("startFromRequirement", () => {
     expect(d.assignAgent).toHaveBeenCalledWith("p", "task-1", await specId.value);
   });
 
+  it("writes the AI's definition of done into the card body and returns it", async () => {
+    const complete = vi.fn().mockImplementation(async (_m, _s, streamId: string) =>
+      streamId === "done-criteria" ? '{"criteria":["按開始會倒數","重新整理後紀錄還在"]}' : "not json",
+    );
+    const d = deps({ complete });
+    const r = await startFromRequirement({ ...base, requirement: "做計時器" }, d);
+    expect(r.criteria).toEqual(["按開始會倒數", "重新整理後紀錄還在"]);
+    const body = vi.mocked(d.createTask).mock.calls[0][1].body;
+    expect(body).toContain("## 完成定義");
+    expect(body).toContain("- 重新整理後紀錄還在");
+  });
+
+  it("still creates the card without a definition of done when the AI call fails or there is no AI", async () => {
+    const d = deps();
+    const r = await startFromRequirement({ ...base, requirement: "做計時器" }, d);
+    expect(r.criteria).toEqual([]);
+    expect(vi.mocked(d.createTask).mock.calls[0][1].body).not.toContain("完成定義");
+    const d2 = deps();
+    const r2 = await startFromRequirement({ ...base, providerId: undefined, requirement: "做計時器" }, d2);
+    expect(r2.criteria).toEqual([]);
+    expect(d2.complete).not.toHaveBeenCalled();
+  });
+
   it("marks the failure stage so the UI can say the team already exists", async () => {
     const d = deps({ createTask: vi.fn().mockRejectedValue(new Error("boom")) });
     await expect(startFromRequirement({ ...base, requirement: "x" }, d)).rejects.toMatchObject({ teamCreated: true });

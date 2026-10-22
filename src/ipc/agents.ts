@@ -93,8 +93,9 @@ export const abortAgentMerge = (projectId: string, id: string): Promise<void> =>
   invoke("agents_abort_merge", { projectId, id });
 
 /** `agentId` 為 null 時取消指派（卡片退回計畫中）。 */
-export const assignAgent = (projectId: string, taskId: string, agentId: string | null): Promise<void> =>
-  invoke("tasks_assign_agent", { projectId, taskId, agentId });
+/** `fast`：小修改快速路徑（做完跳過審查；改動太大會自動補走審查）。規格站不能用。 */
+export const assignAgent = (projectId: string, taskId: string, agentId: string | null, fast?: boolean): Promise<void> =>
+  invoke("tasks_assign_agent", { projectId, taskId, agentId, fast: fast ?? false });
 
 /** 手動放行卡住的模組（審查不通過超過上限，或審查卡本身失敗）。 */
 export const overrideModule = (projectId: string, taskId: string): Promise<void> =>

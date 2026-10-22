@@ -25,6 +25,16 @@ export function StartNotice({ result, onClose }: { result: StartResult; onClose:
             {open ? t.ac_req_reasons_hide : t.ac_req_reasons_show} {open ? "▴" : "▾"}
           </button>
         )}
+        {result.criteria.length > 0 && (
+          <div className="ac-req-notice-criteria" data-testid="ac-req-notice-criteria">
+            <b>{t.ac_req_criteria_title}</b>
+            <ul>
+              {result.criteria.map((c) => (
+                <li key={c}>{c}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {hasReasons && open && (
           <dl className="ac-req-notice-list" data-testid="ac-req-notice-reasons">
             {result.reasons.map((r) => (

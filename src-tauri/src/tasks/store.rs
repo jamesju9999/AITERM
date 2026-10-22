@@ -118,6 +118,9 @@ pub struct TaskRow {
     /// 模組卡：審核通過時審核者寫的交件摘要（對外提供了什麼）。見 `workflow::set_verdict`。
     #[sqlx(default)]
     pub provides: Option<String>,
+    /// 模組卡：小修改快速路徑，做完跳過審查直接算通過（改動太大會自動關掉，見 `workflow::FAST_MAX_FILES`）。
+    #[sqlx(default)]
+    pub fast: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

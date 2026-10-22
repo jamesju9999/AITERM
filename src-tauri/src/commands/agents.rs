@@ -197,12 +197,13 @@ pub async fn tasks_assign_agent(
     project_id: String,
     task_id: String,
     agent_id: Option<String>,
+    fast: Option<bool>,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
     scheduler: State<'_, SchedulerHandle>,
 ) -> Result<(), String> {
     let p = project(&reg, &project_id)?;
-    agents::assign_task(&p.pool, &task_id, agent_id.as_deref())
+    agents::assign_task_with(&p.pool, &task_id, agent_id.as_deref(), fast.unwrap_or(false))
         .await
         .map_err(|e| e.to_string())?;
     emit_updated(&app);

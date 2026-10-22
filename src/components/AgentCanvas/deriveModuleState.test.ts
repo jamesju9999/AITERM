@@ -53,6 +53,15 @@ describe("deriveModuleState", () => {
     expect(deriveModuleState(mod(), chain, true)).toBe("fix_queued");
   });
 
+  it("快速路徑的模組：有審查者也是做完就通過；修正卡做完也一樣（與後端同規則）", () => {
+    const m = mod({ fast: true });
+    expect(deriveModuleState(m, [], true)).toBe("passed");
+    expect(deriveModuleState(m, [fix("M", { id: "F", status: "queued", outcome: null })], true)).toBe("fix_queued");
+    expect(deriveModuleState(m, [fix("M", { id: "F" })], true)).toBe("passed");
+    // 同樣的模組沒有 fast 就要等審查，證明是旗標造成的差別。
+    expect(deriveModuleState(mod(), [fix("M", { id: "F" })], true)).toBe("awaiting_review");
+  });
+
   it("沒有任何審查的完成模組算通過", () => {
     expect(deriveModuleState(mod(), [], true)).toBe("passed");
   });

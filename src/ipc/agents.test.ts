@@ -56,8 +56,10 @@ describe("ipc/agents", () => {
 
   it("assignAgent uses camelCase top-level params and allows null to unassign", async () => {
     await assignAgent("p1", "t1", "a1");
-    expect(invoke).toHaveBeenCalledWith("tasks_assign_agent", { projectId: "p1", taskId: "t1", agentId: "a1" });
+    expect(invoke).toHaveBeenCalledWith("tasks_assign_agent", { projectId: "p1", taskId: "t1", agentId: "a1", fast: false });
     await assignAgent("p1", "t1", null);
-    expect(invoke).toHaveBeenLastCalledWith("tasks_assign_agent", { projectId: "p1", taskId: "t1", agentId: null });
+    expect(invoke).toHaveBeenLastCalledWith("tasks_assign_agent", { projectId: "p1", taskId: "t1", agentId: null, fast: false });
+    await assignAgent("p1", "t1", "a1", true);
+    expect(invoke).toHaveBeenLastCalledWith("tasks_assign_agent", { projectId: "p1", taskId: "t1", agentId: "a1", fast: true });
   });
 });

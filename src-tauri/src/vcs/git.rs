@@ -389,6 +389,12 @@ impl GitClient {
         Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
     }
 
+    /// `git diff --name-only <from> <to>` 的檔案數（含刪除）：判斷一次改動有多大。
+    pub async fn changed_file_count(&self, from: &str, to: &str) -> Result<usize, String> {
+        let out = self.git(&["diff".to_string(), "--name-only".to_string(), from.to_string(), to.to_string()]).await?;
+        Ok(out.lines().filter(|l| !l.trim().is_empty()).count())
+    }
+
     /// `git show <sha>:<path>`——某個版本裡某個檔案的內容。
     pub async fn show_file(&self, sha: &str, path: &str) -> Result<String, String> {
         self.git(&["show".to_string(), format!("{sha}:{path}")]).await

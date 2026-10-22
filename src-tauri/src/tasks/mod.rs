@@ -29,6 +29,7 @@ pub mod sql_guard;
 pub mod db_skill;
 pub mod references;
 pub mod custom_skills;
+pub mod repo_snapshot;
 pub mod formations;
 
 use std::path::{Path, PathBuf};
@@ -228,6 +229,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE tasks ADD COLUMN model TEXT",
         // 模組卡：審核通過時審核者寫的「這個模組對外提供了什麼」，團隊分工裡給其他工程師看。
         "ALTER TABLE tasks ADD COLUMN provides TEXT",
+        // 小修改快速路徑：做完跳過審查。見 docs/superpowers/specs/2026-10-22-agent-canvas-finish-the-job-design.md。
+        "ALTER TABLE tasks ADD COLUMN fast INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = sqlx::query(ddl).execute(pool).await;
     }

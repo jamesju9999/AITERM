@@ -17,6 +17,9 @@ use crate::tasks::store::{self, TaskRow, STATUS_DONE, STATUS_PLANNING, STATUS_QU
 /// 同一個模組最多退回幾輪。第 `MAX_FIX_ROUNDS + 1` 次不通過就停下來等人。
 pub const MAX_FIX_ROUNDS: usize = 2;
 
+/// 快速路徑的模組改動超過這麼多個檔案，就不算小修改：關掉 `fast`，補走審查。
+pub const FAST_MAX_FILES: usize = 5;
+
 pub const KIND_WORK: &str = "work";
 pub const KIND_REVIEW: &str = "review";
 pub const KIND_FIX: &str = "fix";
@@ -109,6 +112,8 @@ fn walk<'a>(module: &'a TaskRow, chain: &'a [TaskRow]) -> (Vec<&'a TaskRow>, usi
 /// 模組目前的狀態。`has_reviewer`：專案現在有沒有 Reviewer——修正卡做完但還
 /// 沒有審查卡時，有 Reviewer 代表審查卡馬上就會建立（等待審查），沒有就算通過。
 pub fn module_state(module: &TaskRow, chain: &[TaskRow], has_reviewer: bool) -> ModuleState {
+    // 快速路徑：跟沒有審查者一樣，做完就算通過。
+    let has_reviewer = has_reviewer && !module.fast;
     let (path, fails) = walk(module, chain);
     let tip = *path.last().expect("path always holds the module");
     let is_work = tip.card_kind != KIND_REVIEW;
@@ -748,6 +753,13 @@ fn find_kind<'a>(all: &'a [AgentRow], kind: &str) -> Option<&'a AgentRow> {
     all.iter().find(|a| a.kind == kind)
 }
 
+/// 這張卡的改動（`start_sha..end_sha`）是不是超過快速路徑的上限。查不到就當作沒超過。
+async fn fast_too_big(card: &TaskRow) -> bool {
+    let (Some(from), Some(to)) = (card.start_sha.as_deref(), card.end_sha.as_deref()) else { return false };
+    let git = crate::vcs::git::GitClient::new(card.project_dir.clone(), None);
+    git.changed_file_count(from, to).await.is_ok_and(|n| n > FAST_MAX_FILES)
+}
+
 /// 一張 Agent 卡片結案（`finish_task` 之後）時呼叫：建立後續卡片。
 /// `<專案>/tasks/<verify_id>/verify.json`——驗收者寫判定的位置。
 pub fn verify_json_path(project_path: &Path, verify_id: &str) -> std::path::PathBuf {
@@ -819,16 +831,30 @@ pub async fn uncovered_modules(pool: &SqlitePool, report: &VerifyReport) -> Resu
         .collect())
 }
 
+/// 標成 `pass` 卻沒附任何證據（截圖、指令輸出）的條件。沒有證據就無從分辨是真的驗過，還是只讀了程式碼就說通過；
+/// `manual`（明講沒驗並寫了原因）與 `fail`（有重現步驟）不要求證據。
+pub fn unproven_items(report: &VerifyReport) -> Vec<String> {
+    report
+        .items
+        .iter()
+        .filter(|i| i.status == "pass" && i.evidence.iter().all(|e| e.trim().is_empty()))
+        .map(|i| i.criterion.clone())
+        .collect()
+}
+
 /// 驗收卡最後的判定。報告說 `pass` 但有模組根本沒被驗到（實機：12 個模組只驗了 1 個文件模組就「通過」），
 /// 不能當成通過——改成 `attention`（需要使用者處理：重跑驗收，或看過報告後自己放行）。
 /// 已經是 `fail` 的照原本的退回流程走；`reasons` 只放沒通過的條件。
-pub fn verify_verdict(report: &VerifyReport, uncovered: &[String]) -> ReviewVerdict {
-    if report.verdict == "pass" && !uncovered.is_empty() {
-        return ReviewVerdict {
-            verdict: "attention".into(),
-            reasons: vec![format!("驗收報告沒有涵蓋這些模組（{} 個）：{}", uncovered.len(), uncovered.join("、"))],
-            provides: None,
-        };
+pub fn verify_verdict(report: &VerifyReport, uncovered: &[String], unproven: &[String]) -> ReviewVerdict {
+    if report.verdict == "pass" && (!uncovered.is_empty() || !unproven.is_empty()) {
+        let mut reasons = Vec::new();
+        if !uncovered.is_empty() {
+            reasons.push(format!("驗收報告沒有涵蓋這些模組（{} 個）：{}", uncovered.len(), uncovered.join("、")));
+        }
+        if !unproven.is_empty() {
+            reasons.push(format!("這些條件標成通過卻沒有附證據（{} 條）：{}", unproven.len(), unproven.join("、")));
+        }
+        return ReviewVerdict { verdict: "attention".into(), reasons, provides: None };
     }
     ReviewVerdict {
         verdict: report.verdict.clone(),
@@ -888,7 +914,9 @@ pub fn verify_body(modules: &[&TaskRow], spec_text: &str, json_path: &Path, evid
          任何一條 fail，verdict 就是 fail。manual 不算失敗，但一定要寫原因。\
          evidence 裡的檔案路徑寫成相對於 {dir} 的路徑。\n\
          \n上面清單裡的每個模組都至少要有一條 items（通過的也要寫，用 module_id 標明是哪個模組）；\
-         實在驗不了的模組也要寫一條 status 為 manual 的並說明原因。漏掉任何一個模組，這次驗收會被判成「需處理」，不會算通過。\n",
+         實在驗不了的模組也要寫一條 status 為 manual 的並說明原因。漏掉任何一個模組，這次驗收會被判成「需處理」，不會算通過。\n\
+         \n每一條 status 為 pass 的都必須附證據（evidence）：截圖路徑，或實際跑過的指令與輸出摘要、回應內容。\
+         沒有證據的 pass 視為沒驗，同樣會被判成「需處理」並要求重驗；只讀程式碼不算驗過。\n",
         evidence = evidence.display(),
         install = crate::tasks::ask::BROWSER_INSTALL,
         json = json_path.display(),
@@ -1017,7 +1045,17 @@ pub async fn after_card_finished(
                         .await?;
                 }
             }
-            if let (Some(module), Some(reviewer)) = (module, find_kind(&all_agents, "reviewer")) {
+            // 快速路徑的模組跳過審查；但改動超過上限就不是小修改，補走正常審查。
+            let module = match module {
+                Some(m) if m.fast && fast_too_big(&task).await => {
+                    sqlx::query("UPDATE tasks SET fast = 0 WHERE id = ?").bind(&m.id).execute(pool).await?;
+                    Some(TaskRow { fast: false, ..m })
+                }
+                other => other,
+            };
+            if let (Some(module), Some(reviewer)) =
+                (module.filter(|m| !m.fast), find_kind(&all_agents, "reviewer"))
+            {
                 // 上一輪的審查意見只在「審查退回」後才有；驗收退回的修正卡接在通過的
                 // 審查後面，那張的意見不是這次要修的東西（要修的寫在修正卡內文）。
                 let previous = match task.review_of.as_deref() {
@@ -1065,7 +1103,7 @@ pub async fn after_card_finished(
         KIND_MERGE if success => match find_kind(&all_agents, "verifier") {
             // 有驗收者：驗收通過才更新程式庫（見 on_verify_passed）。
             Some(verifier) => {
-                create_verify_card(pool, project_path, &task, verifier).await?;
+                create_verify_card(pool, project_path, &task, verifier, &[]).await?;
             }
             None => {
                 let verdict = fast_forward_repo(&task.project_dir, project_path, task.end_sha.as_deref()).await;
@@ -1077,6 +1115,9 @@ pub async fn after_card_finished(
         }
         KIND_VERIFY if success && task.verdict.as_deref() == Some("fail") => {
             events.extend(on_verify_failed(pool, project_path, &task).await?);
+        }
+        KIND_VERIFY if success && task.verdict.as_deref() == Some("attention") => {
+            events.extend(on_verify_incomplete(pool, project_path, &task).await?);
         }
         KIND_REVIEW if success && task.verdict.as_deref() == Some("fail") => {
             let Some(mid) = task.module_id.as_deref() else { return Ok(events) };
@@ -1133,7 +1174,13 @@ fn coder_modules<'a>(all_agents: &[AgentRow], tasks: &'a [TaskRow]) -> Vec<&'a T
 }
 
 /// 合併成功後替驗收者建一張驗收卡；受驗版本 = 合併結果。
-async fn create_verify_card(pool: &SqlitePool, project_path: &Path, merge: &TaskRow, verifier: &AgentRow) -> Result<String, sqlx::Error> {
+async fn create_verify_card(
+    pool: &SqlitePool,
+    project_path: &Path,
+    merge: &TaskRow,
+    verifier: &AgentRow,
+    gaps: &[String],
+) -> Result<String, sqlx::Error> {
     let all_agents = agents::list_agents(pool).await?;
     let tasks = store::list_tasks(pool).await?;
     let modules = coder_modules(&all_agents, &tasks);
@@ -1158,8 +1205,19 @@ async fn create_verify_card(pool: &SqlitePool, project_path: &Path, merge: &Task
         },
     )
     .await?;
-    let body = verify_body(&modules, &spec, &verify_json_path(project_path, &id), &evidence_dir(project_path, &id));
-    sqlx::query("UPDATE tasks SET body = ? WHERE id = ?").bind(&body).bind(&id).execute(pool).await?;
+    let mut body = verify_body(&modules, &spec, &verify_json_path(project_path, &id), &evidence_dir(project_path, &id));
+    if !gaps.is_empty() {
+        body.push_str("\n上一次驗收沒有做完，這次請補齊（其他已驗過的也要重新寫進報告）：\n");
+        for g in gaps {
+            body.push_str(&format!("- {g}\n"));
+        }
+    }
+    sqlx::query("UPDATE tasks SET title = ?, body = ? WHERE id = ?")
+        .bind(if gaps.is_empty() { "驗收：合併結果" } else { "驗收：補驗上次的缺漏" })
+        .bind(&body)
+        .bind(&id)
+        .execute(pool)
+        .await?;
     Ok(id)
 }
 
@@ -1183,6 +1241,29 @@ async fn verify_fail_streak(pool: &SqlitePool) -> Result<usize, sqlx::Error> {
     .fetch_all(pool)
     .await?;
     Ok(verdicts.iter().take_while(|v| v.as_deref() != Some("pass")).count())
+}
+
+/// 驗收報告說通過、但有漏掉的模組或沒有證據的條件（判成 `attention`）：自動再建一張驗收卡，
+/// 內文帶上一次的缺漏請驗收者補齊。連續沒通過超過輪數上限就停下來交給使用者。
+async fn on_verify_incomplete(pool: &SqlitePool, project_path: &Path, verify: &TaskRow) -> Result<Vec<WorkflowEvent>, sqlx::Error> {
+    let streak = verify_fail_streak(pool).await?;
+    let attention = WorkflowEvent::VerifyAttention { verify_id: verify.id.clone(), unowned: 0 };
+    if streak > MAX_FIX_ROUNDS {
+        return Ok(vec![attention]);
+    }
+    let all_agents = agents::list_agents(pool).await?;
+    let verifier = find_kind(&all_agents, "verifier").filter(|v| v.paused_task_id.is_none());
+    let merge = match verify.review_of.as_deref() {
+        Some(id) => store::get_task(pool, id).await?,
+        None => None,
+    };
+    match (verifier, merge) {
+        (Some(verifier), Some(merge)) => {
+            create_verify_card(pool, project_path, &merge, verifier, &reasons_list(verify)).await?;
+            Ok(vec![])
+        }
+        _ => Ok(vec![attention]),
+    }
 }
 
 /// 驗收沒通過：依模組開修正卡給原工程師。全部都找不到模組的項目是整合問題（合併後才出現的），
@@ -2742,6 +2823,11 @@ pub(crate) mod tests {
         }
     }
 
+    /// 有附證據的 pass 條目。
+    fn proven(module: &str) -> VerifyItem {
+        VerifyItem { evidence: vec!["evidence/a.png".into()], ..item_for(Some(module), "pass") }
+    }
+
     fn report_of(verdict: &str, items: Vec<VerifyItem>) -> VerifyReport {
         VerifyReport { verdict: verdict.into(), project_type: None, items, notes: None }
     }
@@ -2750,19 +2836,161 @@ pub(crate) mod tests {
     #[test]
     fn a_passing_report_that_skips_modules_needs_attention() {
         let report = report_of("pass", vec![item_for(Some("m1"), "pass"), item_for(None, "pass")]);
-        let v = verify_verdict(&report, &["B 後端".to_string(), "C 前端".to_string()]);
+        let v = verify_verdict(&report, &["B 後端".to_string(), "C 前端".to_string()], &[]);
         assert_eq!(v.verdict, "attention", "漏了模組就不能算通過");
         assert!(v.reasons.iter().any(|r| r.contains("B 後端") && r.contains("C 前端")), "{:?}", v.reasons);
     }
 
     #[test]
     fn full_coverage_keeps_the_verdict_and_failures_stay_failures() {
-        let pass = verify_verdict(&report_of("pass", vec![item_for(Some("m1"), "pass")]), &[]);
+        let pass = verify_verdict(&report_of("pass", vec![proven("m1")]), &[], &[]);
         assert_eq!((pass.verdict.as_str(), pass.reasons.len()), ("pass", 0));
         // 已經有 fail 項：照原本的退回流程走，不改成 attention，也不因漏模組多一條理由。
-        let fail = verify_verdict(&report_of("fail", vec![item_for(Some("m1"), "fail")]), &["B 後端".to_string()]);
+        let fail = verify_verdict(&report_of("fail", vec![item_for(Some("m1"), "fail")]), &["B 後端".to_string()], &[]);
         assert_eq!(fail.verdict, "fail");
         assert_eq!(fail.reasons, vec!["c".to_string()]);
+    }
+
+    /// 快速路徑：指派時帶 fast 的模組，做完不建審查卡、直接算通過。
+    async fn fast_module(pool: &SqlitePool, coder: &str, repo: &str, files: usize) -> String {
+        let id = store::create_task(pool, "改按鈕顏色", "按鈕改紅色", repo, true, false).await.unwrap();
+        agents::assign_task_with(pool, &id, Some(coder), true).await.unwrap();
+        store::dispatch_for_test(pool, &id, "tab").await;
+        let dir = Path::new(repo);
+        let start = head(dir);
+        for i in 0..files {
+            std::fs::write(dir.join(format!("f{i}.txt")), "x").unwrap();
+        }
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", "change"]);
+        store::set_start_sha(pool, &id, &start).await.unwrap();
+        store::set_end_sha(pool, &id, &head(dir)).await.unwrap();
+        store::finish_task(pool, &id, "success", None, None).await.unwrap();
+        id
+    }
+
+    async fn coder_in(pool: &SqlitePool, repo: &str) -> String {
+        agents::create_agent(
+            pool,
+            &agents::NewAgent { kind: "coder", name: "C", role: "r", prompt_prefix: "", project_dir: repo, canvas_x: 0.0, canvas_y: 0.0 },
+        )
+        .await
+        .unwrap()
+    }
+
+    fn init_repo() -> tempfile::TempDir {
+        let repo = tempfile::tempdir().unwrap();
+        git(repo.path(), &["init", "-q", "-b", "main"]);
+        git(repo.path(), &["config", "user.email", "t@t"]);
+        git(repo.path(), &["config", "user.name", "t"]);
+        git(repo.path(), &["commit", "-q", "--allow-empty", "-m", "init"]);
+        repo
+    }
+
+    #[tokio::test]
+    async fn a_small_fast_module_skips_review_and_counts_as_passed() {
+        let pool = mem_pool().await;
+        let repo = init_repo();
+        let dir = repo.path().to_string_lossy().into_owned();
+        let coder = coder_in(&pool, &dir).await;
+        agent(&pool, "reviewer", "R").await;
+        let m = fast_module(&pool, &coder, &dir, FAST_MAX_FILES).await;
+        after_card_finished(&pool, Path::new("/p"), &m).await.unwrap();
+
+        let tasks = all(&pool).await;
+        assert!(of_kind(&tasks, KIND_REVIEW).is_empty(), "快速模組不建審查卡");
+        let module = tasks.iter().find(|t| t.id == m).unwrap();
+        assert!(module.fast);
+        assert_eq!(module_state(module, &[], true), ModuleState::Passed, "有審查者也算通過");
+    }
+
+    #[tokio::test]
+    async fn a_fast_module_that_changes_too_much_falls_back_to_review() {
+        let pool = mem_pool().await;
+        let repo = init_repo();
+        let dir = repo.path().to_string_lossy().into_owned();
+        let coder = coder_in(&pool, &dir).await;
+        agent(&pool, "reviewer", "R").await;
+        let m = fast_module(&pool, &coder, &dir, FAST_MAX_FILES + 1).await;
+        after_card_finished(&pool, Path::new("/p"), &m).await.unwrap();
+
+        let tasks = all(&pool).await;
+        assert_eq!(of_kind(&tasks, KIND_REVIEW).len(), 1, "改太多：補走審查");
+        assert!(!tasks.iter().find(|t| t.id == m).unwrap().fast, "快速旗標關掉");
+    }
+
+    #[tokio::test]
+    async fn the_spec_station_cannot_take_the_fast_path() {
+        let pool = mem_pool().await;
+        let writer = spec_writer(&pool).await;
+        let id = store::create_task(&pool, "x", "y", "/repo", true, false).await.unwrap();
+        assert!(agents::assign_task_with(&pool, &id, Some(&writer), true).await.is_err());
+        assert!(agents::assign_task_with(&pool, &id, Some(&writer), false).await.is_ok(), "一般指派不受影響");
+    }
+
+    #[test]
+    fn a_pass_without_evidence_is_unproven_but_manual_and_fail_are_not() {
+        let blank = VerifyItem { evidence: vec!["  ".into()], ..item_for(Some("m1"), "pass") };
+        let items = vec![
+            VerifyItem { criterion: "沒證據".into(), ..item_for(Some("m1"), "pass") },
+            VerifyItem { criterion: "證據是空白".into(), ..blank },
+            VerifyItem { criterion: "有截圖".into(), ..proven("m1") },
+            VerifyItem { criterion: "手動".into(), ..item_for(Some("m1"), "manual") },
+            VerifyItem { criterion: "失敗".into(), ..item_for(Some("m1"), "fail") },
+        ];
+        let report = report_of("pass", items);
+        assert_eq!(unproven_items(&report), vec!["沒證據".to_string(), "證據是空白".to_string()]);
+    }
+
+    #[test]
+    fn a_passing_report_with_unproven_items_needs_attention_and_says_which() {
+        let report = report_of("pass", vec![VerifyItem { criterion: "按開始會倒數".into(), ..item_for(Some("m1"), "pass") }]);
+        let v = verify_verdict(&report, &[], &unproven_items(&report));
+        assert_eq!(v.verdict, "attention");
+        assert!(v.reasons.iter().any(|r| r.contains("按開始會倒數") && r.contains("沒有附證據")), "{:?}", v.reasons);
+        // 漏模組與缺證據同時存在：兩條理由都要有。
+        let both = verify_verdict(&report, &["B 後端".to_string()], &unproven_items(&report));
+        assert_eq!(both.reasons.len(), 2, "{:?}", both.reasons);
+    }
+
+    #[tokio::test]
+    async fn an_incomplete_verification_queues_a_re_verify_with_the_gaps_until_the_round_limit() {
+        let pool = mem_pool().await;
+        let project = tempfile::tempdir().unwrap();
+        let (_c1, _c2, _m1, _m2, verify) = verified_round(&pool, project.path()).await;
+        let mut current = verify;
+        for round in 1..=MAX_FIX_ROUNDS {
+            finish_verify(&pool, project.path(), &current, r#"{"verdict":"pass","items":[{"criterion":"a","status":"pass"}]}"#).await;
+            set_verdict(
+                &pool,
+                &current,
+                &ReviewVerdict { verdict: "attention".into(), reasons: vec![format!("缺漏 {round}")], provides: None },
+            )
+            .await
+            .unwrap();
+            let events = after_card_finished(&pool, project.path(), &current).await.unwrap();
+            assert!(events.is_empty(), "第 {round} 輪還在自動補驗，不打擾使用者：{events:?}");
+            let tasks = all(&pool).await;
+            let verifies = of_kind(&tasks, KIND_VERIFY);
+            let next = verifies.iter().find(|v| v.status == "queued").expect("應該建了新的驗收卡");
+            assert!(next.body.contains(&format!("缺漏 {round}")) && next.body.contains("補齊"), "{}", next.body);
+            assert_eq!(next.review_of, verifies[0].review_of, "同一個合併結果");
+            current = next.id.clone();
+        }
+        // 超過上限：不再建卡，通知使用者。
+        finish_verify(&pool, project.path(), &current, r#"{"verdict":"pass","items":[{"criterion":"a","status":"pass"}]}"#).await;
+        set_verdict(&pool, &current, &ReviewVerdict { verdict: "attention".into(), reasons: vec!["還是缺".into()], provides: None }).await.unwrap();
+        let before = of_kind(&all(&pool).await, KIND_VERIFY).len();
+        let events = after_card_finished(&pool, project.path(), &current).await.unwrap();
+        assert_eq!(events, vec![WorkflowEvent::VerifyAttention { verify_id: current.clone(), unowned: 0 }]);
+        assert_eq!(of_kind(&all(&pool).await, KIND_VERIFY).len(), before, "超過輪數不再建卡");
+    }
+
+    #[test]
+    fn the_verify_prompt_requires_evidence_for_every_pass() {
+        let m = TaskRow { title: "計時器".into(), body: "按開始倒數".into(), ..test_row("m1") };
+        let body = verify_body(&[&m], "", Path::new("/j"), Path::new("/e"));
+        assert!(body.contains("pass 的都必須附證據") && body.contains("只讀程式碼不算驗過"), "{body}");
     }
 
     #[tokio::test]
@@ -2873,7 +3101,7 @@ pub(crate) mod tests {
             use_bridge: false, bridge_tiers: None, label: None, worktree_path: None, worktree_branch: None,
             isolate_worktree: None, agent_id: None, start_sha: None, end_sha: None, card_kind: "work".into(),
             module_id: None, review_of: None, verdict: None, review_reasons: None, module_override: false,
-            is_spec: false, from_spec: None, quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None, provides: None,
+            is_spec: false, from_spec: None, quota_wait_at: None, depends_on: None, assigned_from: None, assigned_at: None, premerged: None, reply_wait_at: None, resume_session: false, cli: None, model: None, provides: None, fast: false,
         }
     }
 }

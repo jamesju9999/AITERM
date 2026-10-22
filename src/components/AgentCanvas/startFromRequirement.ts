@@ -1,6 +1,7 @@
 import type { AgentKind, NewAgentArgs, Reference } from "../../ipc/agents";
 import type { Translations } from "../../lib/i18n";
 import { bugCard } from "./bugReport";
+import { buildDoneMessage, buildDoneSystem, parseDoneCriteria, withDoneCriteria } from "./doneCriteria";
 import { buildRecommendMessage, buildRecommendSystem, parseRecommendation } from "./teamRecommend";
 import { builtinTemplates, toCreate, type TeamTemplate } from "./teamTemplates";
 
@@ -30,7 +31,7 @@ export interface StartDeps {
       isolate_worktree: boolean | null;
     },
   ) => Promise<string>;
-  assignAgent: (projectId: string, taskId: string, agentId: string) => Promise<void>;
+  assignAgent: (projectId: string, taskId: string, agentId: string, fast?: boolean) => Promise<void>;
 }
 
 export interface StartArgs {
@@ -50,6 +51,24 @@ export interface StartResult {
   reasons: { label: string; reason: string }[];
   /** AI 沒能推薦，用了預設團隊。 */
   usedDefault: boolean;
+  /** 寫進卡片的「完成定義」；沒有 AI 或失敗時是空的。 */
+  criteria: string[];
+}
+
+/** 請 AI 把需求寫成完成定義。任何失敗都回空陣列：少了它只是少一道把關，不該擋下建卡。 */
+export async function draftDoneCriteria(
+  d: Pick<StartDeps, "complete">,
+  requirement: string,
+  brief: string,
+  providerId: string | undefined,
+): Promise<string[]> {
+  if (!providerId) return [];
+  try {
+    const reply = await d.complete([{ role: "user", content: buildDoneMessage(requirement, brief) }], buildDoneSystem(), "done-criteria", providerId);
+    return parseDoneCriteria(reply);
+  } catch {
+    return [];
+  }
 }
 
 /** 失敗時告訴畫面：團隊是不是已經建好了（建好了就不能再讓人重送一次）。 */
@@ -121,9 +140,10 @@ export async function startFromRequirement(args: StartArgs, d: StartDeps): Promi
     const station = pickFirstStation(created);
     if (!station) throw new Error("no coder");
     const { title, body } = bugCard(requirement, "", null);
+    const criteria = await draftDoneCriteria(d, requirement, brief, args.providerId);
     const taskId = await d.createTask(projectId, {
       title,
-      body,
+      body: withDoneCriteria(body, criteria),
       project_dir: repoDir,
       parallel_ok: true,
       interactive: false,
@@ -133,8 +153,8 @@ export async function startFromRequirement(args: StartArgs, d: StartDeps): Promi
       isolate_worktree: null,
     });
     await d.assignAgent(projectId, taskId, station);
+    return { summary, reasons, usedDefault, criteria };
   } catch (e) {
     throw new StartError(msg(e), true);
   }
-  return { summary, reasons, usedDefault };
 }

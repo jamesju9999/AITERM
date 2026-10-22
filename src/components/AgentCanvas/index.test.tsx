@@ -849,6 +849,27 @@ describe("AgentCanvasView", () => {
     expect(screen.queryByTestId("ac-req")).toBeNull();
   });
 
+  it("團隊建好之後常駐輸入框出現（空桌布時只有需求先行那一個）；快速路徑的模組帶「快速」標記", async () => {
+    vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "saved" });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    const { unmount } = view();
+    await screen.findByTestId("ac-req");
+    expect(screen.queryByTestId("ac-cmd")).toBeNull();
+    unmount();
+
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "F", title: "改按鈕顏色", agent_id: "a1", status: "done", outcome: "success", fast: true }),
+      card({ id: "N", title: "做統計頁", agent_id: "a1", status: "done", outcome: "success" }),
+    ]);
+    view();
+    expect(await screen.findByTestId("ac-cmd")).toBeTruthy();
+    expect(screen.queryByTestId("ac-req")).toBeNull();
+    expect(await screen.findByTestId("chip-fast-F")).toBeTruthy();
+    expect(screen.queryByTestId("chip-fast-N")).toBeNull();
+  });
+
   it("需求先行：AI 潤飾會改寫輸入框，可以還原", async () => {
     const { listProviders } = await import("../../ipc/provider");
     const { invokeAiChat } = await import("../../ipc/ai");

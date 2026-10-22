@@ -67,7 +67,9 @@ function walk(module: TaskRow, chain: TaskRow[]): { tip: TaskRow; fails: number 
   return { tip, fails };
 }
 
-export function deriveModuleState(module: TaskRow, all: TaskRow[], hasReviewer: boolean): ModuleState {
+export function deriveModuleState(module: TaskRow, all: TaskRow[], hasReviewerInProject: boolean): ModuleState {
+  // 快速路徑：跟沒有審查者一樣，做完就算通過（與後端相同）。
+  const hasReviewer = hasReviewerInProject && !module.fast;
   const chain = all.filter((c) => c.module_id === module.id);
   const { tip, fails } = walk(module, chain);
   const isWork = tip.card_kind !== "review";

@@ -532,6 +532,11 @@ export function AgentNode({
                   }
                 >
                   {icon} {m.title}
+                  {m.fast && (
+                    <span className="ac-chip-fast" data-testid={`chip-fast-${m.id}`} title={t.ac_cmd_fast_badge_tip}>
+                      {t.ac_cmd_fast_badge}
+                    </span>
+                  )}
                 </span>
               );
             })}
