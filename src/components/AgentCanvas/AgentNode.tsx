@@ -99,7 +99,7 @@ export function AgentNode({
   dbSkill?: { mode: string; label: string; activity: { kind: "pending" | "running" | "recent"; sql: string } | null } | null;
   onDbSkill?: () => void;
   /** 自訂技能：名稱，與剛讀過的那個技能（亮起來用）。沒有是 null。 */
-  customSkills?: { names: string[]; active: string | null } | null;
+  customSkills?: { names: string[]; missing: string[]; active: string | null } | null;
   onCustomSkills?: () => void;
   status: AgentStatus;
   nowSecs: number;
@@ -452,9 +452,9 @@ export function AgentNode({
       {customSkills && (
         <button
           type="button"
-          className={`ac-skill-row ac-skill-row--custom${customSkills.active ? " ac-skill-row--active" : ""}`}
+          className={`ac-skill-row ac-skill-row--custom${customSkills.active ? " ac-skill-row--active" : ""}${customSkills.missing.length > 0 ? " ac-skill-row--lost" : ""}`}
           data-testid="agent-custom-skills"
-          title={`${t.ac_cs_chip_tip}\n${customSkills.names.join("\n")}`}
+          title={`${t.ac_cs_chip_tip}\n${customSkills.names.join("\n")}${customSkills.missing.length > 0 ? `\n${t.ac_cs_missing_chip(customSkills.missing)}` : ""}`}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={onCustomSkills}
         >
@@ -462,6 +462,7 @@ export function AgentNode({
             <RoleIcon name="doc" size={13} />
             <span className="ac-skill-row-label">{customSkills.names.join("、")}</span>
           </span>
+          {customSkills.missing.length > 0 && <span className="ac-db-sql ac-skill-lost">{t.ac_cs_missing_chip(customSkills.missing)}</span>}
           {customSkills.active && <span className="ac-db-sql">{t.ac_cs_in_use(customSkills.active)}</span>}
         </button>
       )}

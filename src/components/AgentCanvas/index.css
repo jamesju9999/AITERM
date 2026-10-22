@@ -722,6 +722,8 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-skill-row:hover { background: rgba(56, 189, 248, 0.1); }
 .ac-skill-row-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ac-skill-row-mode { flex: none; padding: 0 6px; border-radius: 8px; background: rgba(56, 189, 248, 0.18); color: #7dd3fc; font-size: 11px; line-height: 16px; }
+.ac-skill-lost { color: var(--aiterm-danger, #e5484d); word-break: break-all; }
+.ac-skill-row--lost { border-color: var(--aiterm-danger, #e5484d); }
 .ac-skill-row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ac-skill-row--active { color: #e0f2fe; background: rgba(56, 189, 248, 0.16); box-shadow: inset 3px 0 0 #38bdf8; animation: ac-db-pulse 1.2s ease-in-out infinite; }
 .ac-db-sql { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: #7dd3fc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

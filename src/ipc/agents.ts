@@ -243,6 +243,8 @@ export const listReferenceReads = (projectId: string): Promise<ReferenceReadRow[
 export const listSkills = (repoDir: string): Promise<SkillInfo[]> => invoke("agents_list_skills", { repoDir });
 /** 使用者選的資料夾裡的技能：它本身、它底下，或它的 .claude/skills（macOS 選不到隱藏的 .claude）。 */
 export const readSkill = (path: string): Promise<SkillInfo[]> => invoke("agents_read_skill", { path });
+/** 這些已存的技能路徑裡，已經讀不到 SKILL.md 的（資料夾搬走或刪了）。 */
+export const missingSkills = (paths: string[]): Promise<string[]> => invoke("agents_missing_skills", { paths });
 export const setCustomSkills = (projectId: string, agentId: string, paths: string[]): Promise<void> =>
   invoke("agents_set_custom_skills", { projectId, agentId, paths });
 export const listSkillUses = (projectId: string): Promise<SkillUseRow[]> => invoke("agents_skill_uses", { projectId });

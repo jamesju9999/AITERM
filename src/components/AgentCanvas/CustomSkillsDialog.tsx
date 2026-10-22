@@ -2,7 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import { listSkills, readSkill, type SkillInfo } from "../../ipc/agents";
+import { listSkills, missingSkills, readSkill, type SkillInfo } from "../../ipc/agents";
 import { RoleIcon } from "./RoleIcon";
 
 /** 選這位 Agent 的自訂技能：程式庫的、自己的，或從任何含 SKILL.md 的資料夾加入。 */
@@ -27,6 +27,8 @@ export function CustomSkillsDialog({
   const [error, setError] = useState<string | null>(null);
   /** 從資料夾加入後的回饋：加了幾個、或都已經在清單裡。 */
   const [notice, setNotice] = useState<string | null>(null);
+  /** 已存但讀不到的路徑：不能勾選，儲存時會被移除，所以明講出來。 */
+  const [lost, setLost] = useState<string[]>([]);
 
   // 依內容而不是陣列本身決定要不要重新載入：呼叫端每次畫面更新都會傳一個新陣列，
   // 拿陣列當相依會在協作頁每次重新整理時重跑，把剛從資料夾加入的技能洗掉（實機踩到：存成空的）。
@@ -35,6 +37,8 @@ export function CustomSkillsDialog({
     let alive = true;
     const installed = currentKey ? currentKey.split("\n") : [];
     (async () => {
+      const gone = installed.length > 0 ? await missingSkills(installed).catch(() => [] as string[]) : [];
+      if (alive) setLost(gone);
       const found = await listSkills(repoDir).catch(() => [] as SkillInfo[]);
       // 已裝但不在兩個預設位置的（從資料夾加入的），也要列出來。
       const extra = await Promise.all(
@@ -129,6 +133,17 @@ export function CustomSkillsDialog({
             );
           })}
         </div>
+        {lost.length > 0 && (
+          <div data-testid="custom-skills-lost">
+            <div className="ac-db-section">{t.ac_cs_missing_title}</div>
+            {lost.map((p) => (
+              <div key={p} className="ac-db-meta ac-skill-lost" title={p}>
+                {p}
+              </div>
+            ))}
+            <p className="task-field-hint">{t.ac_cs_missing_hint}</p>
+          </div>
+        )}
         <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm ac-refs-add" onClick={() => void addFolder()}>
           ＋ {t.ac_cs_add_folder}
         </button>

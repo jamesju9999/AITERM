@@ -28,6 +28,7 @@ import {
   projectRepo,
   deleteAllAgents,
   listSkillUses,
+  missingSkills,
   listReferenceReads,
   setCustomSkills,
   setProjectRepo,
@@ -248,9 +249,26 @@ export function AgentCanvasView({
   /** 模組庫裡正在確認要不要刪除的模組。 */
   const [deletingModule, setDeletingModule] = useState<string | null>(null);
   /** 自訂技能的使用記錄；記著是哪個專案的。 */
+  /** 已存但讀不到 SKILL.md 的技能路徑（資料夾搬走或刪了）。 */
+  const [lostSkills, setLostSkills] = useState<string[]>([]);
   const [skillUsesOf, setSkillUsesOf] = useState<{ projectId: string; rows: SkillUseRow[] } | null>(null);
   /** 讀了參考資料的記錄（讀取中的線、活動記錄）。 */
   const [refReadsOf, setRefReadsOf] = useState<{ projectId: string; rows: ReferenceReadRow[] } | null>(null);
+  // 檔案系統的事不會推送過來，所以在技能清單（或儲存後的畫面）變動時重查一次。
+  const allSkillPathsKey = agents.flatMap((a) => parseSkillPaths(a.custom_skills)).join("\n");
+  useEffect(() => {
+    if (!allSkillPathsKey) {
+      setLostSkills([]);
+      return;
+    }
+    let alive = true;
+    missingSkills(allSkillPathsKey.split("\n"))
+      .then((m) => alive && setLostSkills(m))
+      .catch(() => alive && setLostSkills([]));
+    return () => {
+      alive = false;
+    };
+  }, [allSkillPathsKey]);
   const refReads = useMemo(() => (refReadsOf?.projectId === projectId ? refReadsOf.rows : []), [refReadsOf, projectId]);
   /** 團隊編制（見 FormationMenu）。 */
   const [formsOf, setFormsOf] = useState<{ projectId: string; state: FormationsState } | null>(null);
@@ -1483,7 +1501,8 @@ export function AgentCanvasView({
                         const used = (skillUsesOf?.projectId === projectId ? skillUsesOf.rows : [])
                           .filter((u) => u.agent_id === a.id && nowSecs - u.at <= SKILL_LINGER_SECS)
                           .sort((x, y) => y.at - x.at)[0];
-                        return { names, active: used?.skill ?? null };
+                        const missing = paths.filter((p) => lostSkills.includes(p)).map((p) => p.split(/[\\/]/).filter(Boolean).pop() ?? p);
+                        return { names, missing, active: used?.skill ?? null };
                       })()}
                       onCustomSkills={() => setCustomSkillsFor(a)}
                       missingTool={

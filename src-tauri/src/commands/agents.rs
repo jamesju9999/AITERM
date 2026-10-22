@@ -504,6 +504,12 @@ pub fn agents_read_skill(path: String) -> Result<Vec<crate::tasks::custom_skills
     Ok(found)
 }
 
+/// 這些已存的技能路徑裡，哪些已經讀不到 SKILL.md（資料夾搬走或刪了）。
+#[tauri::command]
+pub fn agents_missing_skills(paths: Vec<String>) -> Vec<String> {
+    crate::tasks::custom_skills::missing(&paths)
+}
+
 /// 設定 Agent 的自訂技能（技能資料夾路徑，整份取代）。下一張派出去的卡才生效。
 #[tauri::command]
 pub async fn agents_set_custom_skills(

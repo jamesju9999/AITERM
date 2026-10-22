@@ -112,6 +112,11 @@ pub fn load(paths: &[String]) -> Vec<SkillInfo> {
     paths.iter().filter_map(|p| read_skill(Path::new(p), "agent")).collect()
 }
 
+/// 已存的技能路徑裡，讀不到 SKILL.md 的（資料夾被搬走、改名或刪了）。
+pub fn missing(paths: &[String]) -> Vec<String> {
+    paths.iter().filter(|p| !Path::new(p).join(SKILL_FILE).is_file()).cloned().collect()
+}
+
 /// 附在卡片提示後面的一段：只有清單，需要時才讀全文。
 pub fn prompt_note(skills: &[SkillInfo]) -> String {
     if skills.is_empty() {
@@ -192,6 +197,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(SKILL_FILE), front).unwrap();
         dir
+    }
+
+    #[test]
+    fn missing_lists_only_paths_without_a_skill_file() {
+        let root = tempfile::tempdir().unwrap();
+        let ok = make_skill(root.path(), "htbtw-db", "---\nname: htbtw-db\n---\n");
+        let moved = root.path().join("old-place").join("htbtw-egl");
+        let paths = vec![ok.to_string_lossy().into_owned(), moved.to_string_lossy().into_owned()];
+        assert_eq!(missing(&paths), vec![moved.to_string_lossy().into_owned()]);
     }
 
     #[test]

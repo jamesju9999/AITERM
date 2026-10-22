@@ -56,6 +56,7 @@ vi.mock("../../ipc/agents", () => ({
   setReferences: vi.fn(),
   listSkills: vi.fn(),
   readSkill: vi.fn(),
+  missingSkills: vi.fn(),
   setCustomSkills: vi.fn().mockResolvedValue(undefined),
   listSkillUses: vi.fn(),
   listReferenceReads: vi.fn(),
@@ -126,6 +127,7 @@ import {
   setReferences,
   listSkills,
   readSkill,
+  missingSkills,
   setCustomSkills,
   listSkillUses,
   listReferenceReads,
@@ -234,6 +236,7 @@ beforeEach(() => {
     { name: "htbtw-egl", description: "讀寫 MS950 檔案", path: "/repo/htbtw/.claude/skills/htbtw-egl", source: "repo" },
     { name: "karpathy-guidelines", description: "寫程式的紀律", path: "/Users/me/.claude/skills/karpathy-guidelines", source: "user" },
   ]);
+  vi.mocked(missingSkills).mockResolvedValue([]);
   vi.mocked(listSkillUses).mockResolvedValue([]);
   vi.mocked(listReferenceReads).mockResolvedValue([]);
   vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "agents" });
@@ -480,6 +483,21 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(row.className).toContain("ac-skill-row--active"));
     expect(row.textContent).toMatch(/使用中/);
     expect(screen.getByText(/使用技能 htbtw-egl/)).toBeTruthy();
+  });
+
+  it("自訂技能：資料夾搬走後，卡片標「找不到」，對話框列出失效路徑（不是什麼都沒有）", async () => {
+    const gone = "/Users/me/Downloads/old/.claude/skills/htbtw-db";
+    vi.mocked(listAgents).mockResolvedValue([agent({ custom_skills: JSON.stringify([gone]) })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(missingSkills).mockResolvedValue([gone]);
+    vi.mocked(readSkill).mockRejectedValue("找不到");
+    view();
+    const row = await within(await screen.findByTestId("agent-a1")).findByTestId("agent-custom-skills");
+    await waitFor(() => expect(row.className).toContain("ac-skill-row--lost"));
+    expect(row.textContent).toContain("找不到：htbtw-db");
+    fireEvent.click(row);
+    const lost = await within(await screen.findByTestId("custom-skills-dialog")).findByTestId("custom-skills-lost");
+    expect(lost.textContent).toContain(gone);
   });
 
   it("點技能標籤可以移除技能", async () => {
