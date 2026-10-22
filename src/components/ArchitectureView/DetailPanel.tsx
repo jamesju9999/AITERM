@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { ScanResult } from "../../ipc/architecture";
 import { externalRefs } from "./drill";
-import { groupEdges, type GroupedEdge } from "./flow";
+import { flowPaths, groupEdges, type GroupedEdge } from "./flow";
 import { layerColor } from "./layout";
-import type { Architecture } from "./model";
+import type { Architecture, Edge } from "./model";
 import { buildOverview } from "./overview";
 
 interface Props {
@@ -15,17 +15,25 @@ interface Props {
   scan?: ScanResult | null;
   /** 往下鑽。單一檔案的節點不會顯示展開鈕。 */
   onExpand?: (id: string) => void;
+  /** 目前在畫布上高亮的資料流路徑；點同一條卡片由上層切換取消。 */
+  activePath?: Edge[] | null;
+  onPickPath?: (path: Edge[]) => void;
+}
+
+function samePath(a: Edge[] | null | undefined, b: Edge[]): boolean {
+  return !!a && a.length === b.length && a.every((e, i) => e === b[i]);
 }
 
 const FILES_COLLAPSED = 8;
 
-export function DetailPanel({ arch, selected, onSelect, scan, onExpand }: Props) {
+export function DetailPanel({ arch, selected, onSelect, scan, onExpand, activePath, onPickPath }: Props) {
   const { t } = useLocale();
   // 記下「哪個模組展開了」，切換模組時自然回到收合，不必靠 effect 重設。
   const [expandedFor, setExpandedFor] = useState<string | null>(null);
   const showAll = expandedFor !== null && expandedFor === selected;
 
   const mod = arch.modules.find((m) => m.id === selected);
+  const paths = useMemo(() => (mod ? flowPaths(arch, mod.id) : null), [arch, mod]);
   if (!mod) {
     const ov = scan ? buildOverview(scan, arch) : null;
     const maxLang = Math.max(1, ...(ov?.languages.map((l) => l.count) ?? []));
@@ -79,6 +87,30 @@ export function DetailPanel({ arch, selected, onSelect, scan, onExpand }: Props)
   const layerIdx = arch.layers.findIndex((l) => l.id === mod.layer);
   const layerName = arch.layers[layerIdx]?.name ?? mod.layer;
   const color = layerColor(mod.layer, Math.max(0, layerIdx));
+  const pathCards = (list: Edge[][], dir: "up" | "down") => (
+    <ul className="arch-edge-list">
+      {list.map((p, i) => (
+        <li key={`${dir}-${i}`}>
+          <button type="button" data-flow={dir} aria-pressed={samePath(activePath, p)}
+            className={`arch-path arch-path-${dir} ${samePath(activePath, p) ? "arch-path-on" : ""}`}
+            onClick={() => onPickPath?.(p)}>
+            {p.map((e, j) => (
+              <span key={j} className="arch-path-step">
+                <span className="arch-path-hop">
+                  <span className="arch-path-mod">{nameOf(e.from)}</span>
+                  <span className={`arch-kind arch-kind-${e.source}`}>{e.kind}</span>
+                  <span className="arch-path-arrow" aria-hidden="true">→</span>
+                  <span className="arch-path-mod">{nameOf(e.to)}</span>
+                </span>
+                {e.note && <span className="arch-note">{e.note}</span>}
+                {e.evidence && <code className="arch-evidence">{e.evidence.file}:{e.evidence.line}</code>}
+              </span>
+            ))}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
   const files = showAll ? mod.files : mod.files.slice(0, FILES_COLLAPSED);
 
   return (
@@ -132,6 +164,13 @@ export function DetailPanel({ arch, selected, onSelect, scan, onExpand }: Props)
             </ul>
           </section>
         ),
+      )}
+      {paths && (paths.up.length > 0 || paths.down.length > 0) && (
+        <section className="arch-card"><h4>{t.arch_flow_title}</h4>
+          <p className="arch-flow-hint">{t.arch_flow_hint}</p>
+          {paths.up.length > 0 && <><h5 className="arch-flow-sub">{t.arch_flow_up}</h5>{pathCards(paths.up, "up")}</>}
+          {paths.down.length > 0 && <><h5 className="arch-flow-sub">{t.arch_flow_down}</h5>{pathCards(paths.down, "down")}</>}
+        </section>
       )}
       <section className="arch-card"><h4>{t.arch_detail_files} ({mod.files.length})</h4>
         <ul className="arch-files">{files.map((f) => <li key={f}><code>{f}</code></li>)}</ul>

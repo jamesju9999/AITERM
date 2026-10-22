@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DetailPanel } from "./DetailPanel";
 import { LocaleProvider } from "../../contexts/LocaleContext";
@@ -30,7 +30,9 @@ describe("DetailPanel", () => {
     const onSelect = setup("web");
     expect(screen.getByText("React")).toBeInTheDocument();
     expect(screen.getByText("呼叫 /api")).toBeInTheDocument();
-    expect(screen.getByText(/web\/api\.ts:5/)).toBeInTheDocument();
+    // 同一條連線也會出現在資料流路徑卡裡，這裡只看「連線」區（第一個清單）
+    const edgeList = within(document.querySelector(".arch-edge-list") as HTMLElement);
+    expect(edgeList.getByText(/web\/api\.ts:5/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "服務" }));
     expect(onSelect).toHaveBeenCalledWith("srv");
   });
@@ -82,9 +84,10 @@ describe("DetailPanel", () => {
     render(<LocaleProvider><DetailPanel arch={mutual} selected="web" onSelect={vi.fn()} scan={scan} /></LocaleProvider>);
     expect(screen.getAllByRole("button", { name: "服務" })).toHaveLength(1);
     expect(screen.getByText("↔")).toBeInTheDocument();
-    expect(screen.getByText("fetch")).toBeInTheDocument();
-    expect(screen.getByText("webhook")).toBeInTheDocument();
-    expect(screen.getByText(/srv\/cb\.py:9/)).toBeInTheDocument();
+    const edgeList = within(document.querySelector(".arch-edge-list") as HTMLElement);
+    expect(edgeList.getByText("fetch")).toBeInTheDocument();
+    expect(edgeList.getByText("webhook")).toBeInTheDocument();
+    expect(edgeList.getByText(/srv\/cb\.py:9/)).toBeInTheDocument();
   });
 
   it("單向連線不顯示 ↔", () => {
@@ -116,5 +119,53 @@ describe("DetailPanel", () => {
     expect(screen.getByText("React")).toBeInTheDocument();
     expect(screen.getByText("flask")).toBeInTheDocument();
     expect(screen.getByText(/2 個模組・1 條連線|2 modules, 1 edges/)).toBeInTheDocument();
+  });
+
+  describe("資料流路徑", () => {
+    const flowArch: Architecture = {
+      layers: [{ id: "a", name: "前端" }],
+      modules: ["a", "b", "c", "d"].map((id) => ({ id, layer: "a", name: `M${id}`, files: [`${id}/x.ts`], tech: [], summary: "", dataflow: "" })),
+      edges: [
+        { from: "a", to: "b", kind: "import", source: "scan", confidence: 1 },
+        { from: "b", to: "c", kind: "ipc", source: "ai", confidence: 0.9, note: "呼叫指令", evidence: { file: "b/x.ts", line: 7 } },
+        { from: "b", to: "d", kind: "http", source: "scan", confidence: 1 },
+      ],
+      meta: { scannedAt: "", gitHead: null, analyzed: true, dropped: 0 },
+    };
+    const renderFlow = (activePath: Architecture["edges"] | null, onPickPath = vi.fn()) => {
+      const r = render(<LocaleProvider><DetailPanel arch={flowArch} selected="b" onSelect={vi.fn()} activePath={activePath} onPickPath={onPickPath} /></LocaleProvider>);
+      return { ...r, onPickPath };
+    };
+
+    it("列出上游與下游路徑，每步顯示 模組—kind→模組、備註與 file:line", () => {
+      const { container } = renderFlow(null);
+      expect(container.querySelectorAll('[data-flow="up"]')).toHaveLength(1);
+      const down = container.querySelectorAll('[data-flow="down"]');
+      expect(down).toHaveLength(2);
+      const ipc = [...down].find((el) => el.textContent?.includes("ipc"))!;
+      expect(ipc.textContent).toContain("Mb");
+      expect(ipc.textContent).toContain("Mc");
+      expect(ipc.textContent).toContain("呼叫指令");
+      expect(ipc.textContent).toContain("b/x.ts:7");
+      // 掃描連線只有 kind，沒有佐證
+      const http = [...down].find((el) => el.textContent?.includes("http"))!;
+      expect(http.textContent).not.toContain(":");
+    });
+
+    it("點路徑卡呼叫 onPickPath(該路徑)；activePath 對應的卡 aria-pressed", () => {
+      const { container, onPickPath } = renderFlow(flowArch.edges.slice(2, 3));
+      const down = [...container.querySelectorAll('[data-flow="down"]')];
+      const ipc = down.find((el) => el.textContent?.includes("ipc"))!;
+      const http = down.find((el) => el.textContent?.includes("http"))!;
+      expect(http.getAttribute("aria-pressed")).toBe("true");
+      expect(ipc.getAttribute("aria-pressed")).toBe("false");
+      fireEvent.click(ipc);
+      expect(onPickPath).toHaveBeenCalledWith([flowArch.edges[1]]);
+    });
+
+    it("沒有任何路徑時不顯示資料流路徑區", () => {
+      render(<LocaleProvider><DetailPanel arch={arch} selected="srv" onSelect={vi.fn()} /></LocaleProvider>);
+      expect(document.querySelector("[data-flow='down']")).toBeNull();
+    });
   });
 });

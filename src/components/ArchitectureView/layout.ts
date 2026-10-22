@@ -1,7 +1,7 @@
 import type { Architecture, Edge } from "./model";
 
 export const NODE_W = 200;
-export const NODE_H = 92;
+export const NODE_H = 112;
 /** 泳道與泳道之間的間隙（同欄連線的凸出弧線就走這裡）。 */
 export const COL_GAP = 64;
 export const ROW_GAP = 14;
@@ -9,7 +9,7 @@ export const PAD = 24;
 /** 泳道內側留白（卡片與泳道邊框的距離）。 */
 export const LANE_PAD = 14;
 /** 泳道標題列高度（含與第一張卡片之間的空隙）。 */
-export const HEADER_H = 44;
+export const HEADER_H = 54;
 export const LANE_W = NODE_W + LANE_PAD * 2;
 /** 同欄連線向右凸出的距離。 */
 export const EDGE_BULGE = 56;
@@ -90,6 +90,13 @@ export function edgePath(from: Pt, to: Pt): string {
 export function edgeMidpoint(from: Pt, to: Pt): Pt {
   const [a, b, c, d] = edgeGeom(from, to);
   return { x: (a.x + 3 * b.x + 3 * c.x + d.x) / 8, y: (a.y + 3 * b.y + 3 * c.y + d.y) / 8 };
+}
+
+/** 曲線長度的近似（控制點折線長度與弦長的平均），光點動畫時長用。 */
+export function edgeLength(from: Pt, to: Pt): number {
+  const pts = edgeGeom(from, to);
+  const d = (p: Pt, q: Pt) => Math.hypot(q.x - p.x, q.y - p.y);
+  return (d(pts[0], pts[1]) + d(pts[1], pts[2]) + d(pts[2], pts[3]) + d(pts[0], pts[3])) / 2;
 }
 
 /** 從某模組出發，往上游與下游各走到底，回傳整條呼叫鏈上的模組與連線。 */

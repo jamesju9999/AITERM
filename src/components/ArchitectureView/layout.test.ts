@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  layoutGraph, spreadLabels, clampZoom, zoomAt, centerOffset, edgePath, edgeMidpoint, fitScale, layerColor, traceChain,
+  layoutGraph, spreadLabels, clampZoom, zoomAt, centerOffset, edgePath, edgeMidpoint, edgeLength, fitScale, layerColor, traceChain,
   NODE_W, NODE_H, COL_GAP, ROW_GAP, PAD, LANE_PAD, LANE_W, HEADER_H, EDGE_BULGE, MIN_SCALE, LAYER_PALETTE,
 } from "./layout";
 import type { Architecture } from "./model";
@@ -112,6 +112,22 @@ describe("edgeMidpoint", () => {
     const m = edgeMidpoint(A, B);
     expect(m.x).toBeCloseTo(A.x + NODE_W + 0.75 * EDGE_BULGE);
     expect(m.y).toBeCloseTo((A.y + B.y + NODE_H) / 2);
+  });
+});
+
+describe("edgeLength", () => {
+  it("不同欄：至少是兩端點直線距離，且隨距離增加", () => {
+    const A = { x: 100, y: 100 };
+    const near = { x: 100 + LANE_W + COL_GAP, y: 100 };
+    const far = { x: 100 + 2 * (LANE_W + COL_GAP), y: 100 };
+    const straight = (b: { x: number }) => b.x - (A.x + NODE_W);
+    expect(edgeLength(A, near)).toBeGreaterThanOrEqual(straight(near));
+    expect(edgeLength(A, far)).toBeGreaterThan(edgeLength(A, near));
+  });
+  it("同欄：含向右凸出的來回，長度大於 2 倍凸出量", () => {
+    const A = { x: 100, y: 100 };
+    const B = { x: 100, y: 100 + NODE_H + ROW_GAP };
+    expect(edgeLength(A, B)).toBeGreaterThan(2 * EDGE_BULGE);
   });
 });
 
