@@ -37,7 +37,8 @@ vi.mock("../ModelPickerButton", () => ({
 }));
 
 import { ArchitectureView } from "./index";
-import { fitScale, PAD, LANE_W, COL_GAP, HEADER_H, NODE_H, ROW_GAP, LANE_PAD, centerOffset } from "./layout";
+import { fitScale, layoutGraph, PAD, LANE_W, COL_GAP, HEADER_H, NODE_H_COMPACT, ROW_GAP, LANE_PAD, centerOffset } from "./layout";
+import type { Architecture } from "./model";
 
 const PROVIDERS = [
   { id: "local", display_name: "Local", is_default: true },
@@ -386,7 +387,7 @@ describe("ArchitectureView 資料流與縮放平移", () => {
     meta: { scannedAt: "", gitHead: "h1", analyzed: true, dropped: 0 },
   };
   const LAYOUT_W = PAD * 2 + 3 * LANE_W + 2 * COL_GAP;
-  const LAYOUT_H = PAD * 2 + HEADER_H + 2 * NODE_H + ROW_GAP + LANE_PAD;
+  const LAYOUT_H = PAD * 2 + HEADER_H + 2 * NODE_H_COMPACT + ROW_GAP + LANE_PAD;
 
   let origRO: typeof ResizeObserver | undefined;
   let origMM: typeof window.matchMedia | undefined;
@@ -427,25 +428,26 @@ describe("ArchitectureView 資料流與縮放平移", () => {
   };
   const onEdges = () => document.querySelectorAll('.arch-edge[data-on="true"]');
   const cards = (dir: string) => [...document.querySelectorAll(`[data-flow="${dir}"]`)] as HTMLElement[];
-  const card = (dir: string, kind: string) => cards(dir).find((el) => el.textContent?.includes(kind))!;
+  // 收合的路徑卡只顯示起點與終點名稱；用終點名稱找卡。
+  const card = (dir: string, end: string) => cards(dir).find((el) => el.textContent?.includes(end))!;
 
   it("點資料流路徑卡只高亮該路徑的連線與模組，再點一次還原", async () => {
     await open_();
     fireEvent.click(nodeOf("Mb"));
     await screen.findByRole("heading", { name: "Mb" });
-    expect(onEdges()).toHaveLength(3); // 沒選路徑：整條呼叫鏈
-    fireEvent.click(card("down", "ipc"));
+    expect(onEdges()).toHaveLength(3); // 沒選路徑：與 Mb 直接相連的三條
+    fireEvent.click(card("down", "Mc"));
     expect(onEdges()).toHaveLength(1);
-    expect(card("down", "ipc").getAttribute("aria-pressed")).toBe("true");
+    expect(card("down", "Mc").getAttribute("aria-pressed")).toBe("true");
     expect(nodeOf("Mc")).not.toHaveClass("arch-node-dim");
     expect(nodeOf("Md")).toHaveClass("arch-node-dim");
     expect(nodeOf("Ma")).toHaveClass("arch-node-dim");
     // 換另一條共用起點的路徑：高亮跟著換
-    fireEvent.click(card("down", "http"));
+    fireEvent.click(card("down", "Md"));
     expect(onEdges()).toHaveLength(1);
     expect(nodeOf("Md")).not.toHaveClass("arch-node-dim");
     expect(nodeOf("Mc")).toHaveClass("arch-node-dim");
-    fireEvent.click(card("down", "http"));
+    fireEvent.click(card("down", "Md"));
     expect(onEdges()).toHaveLength(3);
     expect(nodeOf("Mc")).not.toHaveClass("arch-node-dim");
   });
@@ -454,13 +456,13 @@ describe("ArchitectureView 資料流與縮放平移", () => {
     await open_();
     fireEvent.click(nodeOf("Mb"));
     await screen.findByRole("heading", { name: "Mb" });
-    fireEvent.click(card("down", "ipc"));
+    fireEvent.click(card("down", "Mc"));
     expect(onEdges()).toHaveLength(1);
     fireEvent.click(nodeOf("Mb")); // 同一個模組重選也不應殘留
     fireEvent.click(nodeOf("Ma"));
     await screen.findByRole("heading", { name: "Ma" });
     expect(document.querySelector("[aria-pressed='true']")).toBeNull();
-    expect(onEdges()).toHaveLength(3);
+    expect(onEdges()).toHaveLength(1); // Ma 只有 a→b 一條
   });
 
   it("高亮連線上有光點（animateMotion）；prefers-reduced-motion 時沒有", async () => {
@@ -468,7 +470,7 @@ describe("ArchitectureView 資料流與縮放平移", () => {
     await open_();
     fireEvent.click(nodeOf("Mb"));
     await screen.findByRole("heading", { name: "Mb" });
-    fireEvent.click(card("down", "ipc"));
+    fireEvent.click(card("down", "Mc"));
     expect(document.querySelectorAll("animateMotion")).toHaveLength(0);
   });
 
@@ -477,7 +479,7 @@ describe("ArchitectureView 資料流與縮放平移", () => {
     await open_();
     fireEvent.click(nodeOf("Mb"));
     await screen.findByRole("heading", { name: "Mb" });
-    fireEvent.click(card("down", "ipc"));
+    fireEvent.click(card("down", "Mc"));
     const ms = [...document.querySelectorAll("animateMotion")];
     expect(ms).toHaveLength(2);
     for (const m of ms) {
@@ -494,17 +496,17 @@ describe("ArchitectureView 資料流與縮放平移", () => {
     await open_();
     fireEvent.click(nodeOf("Mb"));
     await screen.findByRole("heading", { name: "Mb" });
-    fireEvent.click(card("down", "ipc"));
+    fireEvent.click(card("down", "Mc"));
     expect(onEdges()).toHaveLength(1);
   });
 
   it("初次載入適合視窗並垂直置中；Ctrl+滾輪縮放，一般滾輪不縮放；適合視窗鈕還原", async () => {
     await open_();
-    const s0 = fitScale(LAYOUT_W, VIEW_W);
+    const s0 = fitScale(LAYOUT_W, LAYOUT_H, VIEW_W, VIEW_H);
     expect(s0).toBeLessThan(1);
     const v0 = xf();
     expect(v0.s).toBeCloseTo(s0);
-    expect(v0.tx).toBe(0);
+    expect(v0.tx).toBeCloseTo(centerOffset(LAYOUT_W * s0, VIEW_W));
     expect(v0.ty).toBeCloseTo(centerOffset(LAYOUT_H * s0, VIEW_H));
     expect(v0.ty).toBeGreaterThan(0);
 
@@ -546,5 +548,111 @@ describe("ArchitectureView 資料流與縮放平移", () => {
     await open_();
     expect(nodeOf("Mb")).toHaveAttribute("title", "Mb");
     expect(document.querySelector(".arch-lane-name")).toHaveAttribute("title", "一");
+  });
+});
+
+describe("ArchitectureView 稠密圖易讀性", () => {
+  const VIEW_W = 700;
+  const VIEW_H = 400;
+  const full = (id: string, layer: string) => ({ id, layer, name: `F${id}`, files: [`${id}.ts`], tech: ["React"], summary: "有摘要", dataflow: "" });
+  const file = (id: string, layer: string) => ({ id, layer, name: `F${id}`, files: [`${id}.ts`], tech: [], summary: "", dataflow: "" });
+  const mods = [
+    ...Array.from({ length: 30 }, (_, i) => file(`m${i}`, "l1")),
+    full("hub", "l2"), ...Array.from({ length: 8 }, (_, i) => file(`n${i}`, "l2")),
+    file("x1", "l3"), file("x2", "l3"), file("x3", "l3"),
+  ];
+  const e = (from: string, to: string) => ({ from, to, kind: "import", source: "scan", confidence: 1 });
+  const edges = [
+    ...Array.from({ length: 12 }, (_, i) => e(`m${i}`, "hub")), // hub 的 12 個上游
+    e("hub", "x1"), e("x1", "x2"), e("x2", "x3"),               // 下游鏈：x2、x3 離 hub 2、3 步
+    ...Array.from({ length: 17 }, (_, i) => e(`m${i + 13}`, `m${i + 12}`)),
+    ...Array.from({ length: 8 }, (_, i) => e(`n${i}`, `m${i + 20}`)),
+    ...Array.from({ length: 8 }, (_, i) => e(`n${i}`, `x${(i % 3) + 1}`)),
+  ];
+  const DENSE: Architecture = {
+    layers: [{ id: "l1", name: "一" }, { id: "l2", name: "二" }, { id: "l3", name: "三" }],
+    modules: mods, edges: edges as Architecture["edges"],
+    meta: { scannedAt: "", gitHead: "h1", analyzed: false, dropped: 0 },
+  };
+
+  let origRO: typeof ResizeObserver | undefined;
+  beforeEach(() => {
+    origRO = globalThis.ResizeObserver;
+    class RO {
+      cb: (e: { contentRect: { width: number; height: number } }[]) => void;
+      constructor(cb: (e: { contentRect: { width: number; height: number } }[]) => void) { this.cb = cb; }
+      observe() { this.cb([{ contentRect: { width: VIEW_W, height: VIEW_H } }]); }
+      disconnect() {}
+      unobserve() {}
+    }
+    globalThis.ResizeObserver = RO as unknown as typeof ResizeObserver;
+    archLoad.mockResolvedValue(JSON.stringify(DENSE));
+    archScan.mockResolvedValue({ ...SCAN, files: mods.map((m) => ({ path: `${m.id}.ts`, lang: "typescript", lines: 1 })) });
+  });
+  afterEach(() => { globalThis.ResizeObserver = origRO as typeof ResizeObserver; });
+
+  const open_ = async () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    await screen.findByRole("button", { name: "Fhub" });
+  };
+  const nodeOf = (name: string) => document.querySelector(`.arch-node[aria-label="${name}"]`) as HTMLElement;
+  const onEdges = () => document.querySelectorAll('.arch-edge[data-on="true"]');
+  const pills = () => document.querySelectorAll(".arch-edge-pill");
+
+  it("邊數 > 40 且沒選取時，連線是安靜的底圖（arch-edge-quiet）", async () => {
+    expect(DENSE.edges.length).toBeGreaterThan(40);
+    await open_();
+    expect(document.querySelectorAll(".arch-edge-quiet")).toHaveLength(DENSE.edges.length);
+    expect(onEdges()).toHaveLength(0);
+    expect(pills()).toHaveLength(0);
+  });
+
+  it("選取 hub 只高亮碰到它的 13 條連線與直接鄰居，不展開整條鏈；其餘連線壓低", async () => {
+    await open_();
+    fireEvent.click(nodeOf("Fhub"));
+    await screen.findByRole("heading", { name: "Fhub" });
+    expect(onEdges()).toHaveLength(13); // 12 上游 + hub→x1；x1→x2、x2→x3 不算
+    expect(document.querySelectorAll(".arch-edge-dim")).toHaveLength(DENSE.edges.length - 13);
+    expect(document.querySelectorAll(".arch-edge-quiet")).toHaveLength(0);
+    expect(pills()).toHaveLength(13);
+    expect(nodeOf("Fm3")).not.toHaveClass("arch-node-dim");
+    expect(nodeOf("Fx1")).not.toHaveClass("arch-node-dim");
+    expect(nodeOf("Fx2")).toHaveClass("arch-node-dim"); // 兩步以外
+    expect(nodeOf("Fx3")).toHaveClass("arch-node-dim");
+    expect(nodeOf("Fm20")).toHaveClass("arch-node-dim");
+  });
+
+  it("滑過節點時一跳強調（不選取）；移開還原", async () => {
+    await open_();
+    fireEvent.mouseEnter(nodeOf("Fm13")); // m13→m12 與 m14→m13
+    expect(onEdges()).toHaveLength(2);
+    expect(nodeOf("Fm12")).not.toHaveClass("arch-node-dim");
+    expect(nodeOf("Fm0")).toHaveClass("arch-node-dim");
+    expect(screen.queryByRole("heading", { name: "Fm13" })).not.toBeInTheDocument();
+    fireEvent.mouseLeave(nodeOf("Fm13"));
+    expect(onEdges()).toHaveLength(0);
+    expect(document.querySelectorAll(".arch-edge-quiet")).toHaveLength(DENSE.edges.length);
+  });
+
+  it("沒有摘要與技術標籤的檔案節點是精簡卡，完整卡維持原樣", async () => {
+    await open_();
+    expect(nodeOf("Fm3")).toHaveClass("arch-node-compact");
+    expect(nodeOf("Fm3").style.height).toBe(`${NODE_H_COMPACT}px`);
+    expect(nodeOf("Fm3").querySelector(".arch-node-sum")).toBeNull();
+    expect(nodeOf("Fhub")).not.toHaveClass("arch-node-compact");
+    expect(nodeOf("Fhub").querySelector(".arch-node-sum")).not.toBeNull();
+  });
+
+  it("初次適合視窗同時考慮寬高：縮放後內容完全放進可視區", async () => {
+    await open_();
+    const l = layoutGraph(DENSE);
+    const m = /translate\(([-\d.e]+)px, ?([-\d.e]+)px\) scale\(([-\d.e]+)\)/.exec((document.querySelector(".arch-stage") as HTMLElement).style.transform)!;
+    const s = +m[3];
+    expect(s).toBeCloseTo(fitScale(l.width, l.height, VIEW_W, VIEW_H));
+    expect(l.height * s).toBeLessThanOrEqual(VIEW_H + 0.5);
+    expect(l.width * s).toBeLessThanOrEqual(VIEW_W + 0.5);
+    expect(+m[1]).toBeGreaterThanOrEqual(0);
+    expect(+m[2]).toBeGreaterThanOrEqual(0);
   });
 });

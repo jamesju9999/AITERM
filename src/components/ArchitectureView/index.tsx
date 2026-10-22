@@ -9,7 +9,7 @@ import { ModelPickerButton } from "../ModelPickerButton";
 import { ANALYZE_SYSTEM, buildAnalyzeMessage, mergeScanEdges, parseAnalysis, pickKeyFiles } from "./analyze";
 import { buildBaseGraph, type Architecture, type Edge } from "./model";
 import { buildDrillGraph, drillKey } from "./drill";
-import { centerOffset, edgeLength, edgeMidpoint, edgePath, fitScale, layerColor, layoutGraph, NODE_H, NODE_W, spreadLabels, traceChain, zoomAt, type Layout, type View } from "./layout";
+import { centerOffset, edgeLength, edgeMidpoint, edgePath, fitScale, isCompact, layerColor, layoutGraph, neighborhood, spreadLabels, zoomAt, type Layout, type View } from "./layout";
 import { DetailPanel } from "./DetailPanel";
 import "./index.css";
 
@@ -47,6 +47,8 @@ function samePath(a: Edge[] | null, b: Edge[]): boolean {
 /** 標籤互相錯開的最小垂直距離（標籤高約 18px）。 */
 const LABEL_GAP = 20;
 const DOTS_PER_EDGE = 2;
+/** 連線多於這個數就當作稠密圖：沒有焦點時連線畫成安靜的底圖。 */
+const DENSE_EDGES = 40;
 
 type Status = { kind: "idle" } | { kind: "busy"; msg: string } | { kind: "error"; msg: string } | { kind: "notice"; msg: string };
 
@@ -76,6 +78,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const [providerId, setProviderId] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [hoverEdge, setHoverEdge] = useState<number | null>(null);
+  const [hoverNode, setHoverNode] = useState<string | null>(null);
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   // 使用者手動縮放／平移的結果；綁定產生它的 layout，換圖（鑽取、重新分析）就自動回到適合視窗。
   const [manual, setManual] = useState<{ layout: Layout; view: View } | null>(null);
@@ -252,10 +255,16 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   }, [view]);
 
   const layout = useMemo(() => (view ? layoutGraph(view) : null), [view]);
-  const chain = useMemo(() => (view && selected ? traceChain(view, selected) : null), [view, selected]);
+  // 焦點：選取的模組；沒選時滑過的模組（只預覽，不選取）。只強調一跳，整條鏈要靠資料流路徑。
+  const focusId = selected ?? hoverNode;
+  const near = useMemo(() => (view && focusId ? neighborhood(view, focusId) : null), [view, focusId]);
+  const denseGraph = (view?.edges.length ?? 0) > DENSE_EDGES;
 
   const fit: View = layout
-    ? (() => { const s = fitScale(layout.width, viewport.w); return { scale: s, tx: 0, ty: centerOffset(layout.height * s, viewport.h) }; })()
+    ? (() => {
+        const s = fitScale(layout.width, layout.height, viewport.w, viewport.h);
+        return { scale: s, tx: centerOffset(layout.width * s, viewport.w), ty: centerOffset(layout.height * s, viewport.h) };
+      })()
     : { scale: 1, tx: 0, ty: 0 };
   const cur: View = manual && manual.layout === layout ? manual.view : fit;
   const activePath = pathPick && pathPick.view === view && pathPick.selected === selected ? pathPick.path : null;
@@ -265,8 +274,8 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       for (const e of activePath) { modules.add(e.from); modules.add(e.to); }
       return { edges: new Set<Edge>(activePath), modules };
     }
-    return chain ? { edges: new Set<Edge>(chain.edges), modules: chain.modules } : null;
-  }, [activePath, chain]);
+    return near ? { edges: new Set<Edge>(near.edges), modules: near.modules } : null;
+  }, [activePath, near]);
   const reduced = prefersReducedMotion();
   const pickPath = useCallback((p: Edge[]) => {
     if (!view || !selected) return;
@@ -409,11 +418,12 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                     const on = hl ? hl.edges.has(e) : false;
                     const d = edgePath(a, b);
                     const dur = Math.min(4, Math.max(1, edgeLength(a, b) / 160));
+                    const quiet = !hl && denseGraph;
                     return (
                       <g key={i} onMouseEnter={() => setHoverEdge(i)} onMouseLeave={() => setHoverEdge(null)}>
                         {on && <path d={d} fill="none" className="arch-edge-glow" filter="url(#arch-glow)" />}
                         <path d={d} fill="none" markerEnd={`url(#${on ? "arch-arrow-on" : "arch-arrow"})`} data-on={on ? "true" : "false"}
-                          className={`arch-edge ${e.source === "ai" ? "arch-edge-ai" : ""} ${on ? "arch-edge-on" : ""} ${hl && !on ? "arch-edge-dim" : ""}`}>
+                          className={`arch-edge ${e.source === "ai" ? "arch-edge-ai" : ""} ${on ? "arch-edge-on" : ""} ${hl && !on ? "arch-edge-dim" : ""} ${quiet ? "arch-edge-quiet" : ""}`}>
                           <title>{e.note ?? e.kind}</title>
                         </path>
                         <path d={d} fill="none" className="arch-edge-hit" />
@@ -430,19 +440,23 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                   const p = layout.nodes[m.id];
                   if (!p) return null;
                   const dim = hl && !hl.modules.has(m.id);
+                  const compact = isCompact(m);
                   return (
                     <button key={m.id} type="button" title={m.name} aria-label={m.name}
-                      className={`arch-node ${selected === m.id ? "arch-node-sel" : ""} ${dim ? "arch-node-dim" : ""}`}
-                      style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H, ["--lc" as string]: layerColor(m.layer, layerIndex(m.layer)) }}
-                      onClick={() => setSelected(m.id)} onDoubleClick={() => enter(m.id)}>
+                      className={`arch-node ${compact ? "arch-node-compact" : ""} ${selected === m.id ? "arch-node-sel" : ""} ${dim ? "arch-node-dim" : ""}`}
+                      style={{ left: p.x, top: p.y, width: p.w, height: p.h, ["--lc" as string]: layerColor(m.layer, layerIndex(m.layer)) }}
+                      onClick={() => setSelected(m.id)} onDoubleClick={() => enter(m.id)}
+                      onMouseEnter={() => setHoverNode(m.id)} onMouseLeave={() => setHoverNode((h) => (h === m.id ? null : h))}>
                       <span className="arch-node-head">
                         <span className="arch-node-name">{m.name}</span>
                         <span className="arch-node-files">{t.arch_files_count.replace("{n}", String(m.files.length))}</span>
                       </span>
-                      {m.summary && <span className="arch-node-sum">{m.summary}</span>}
-                      <span className="arch-node-foot">
-                        {m.tech.slice(0, 2).map((x) => <span key={x} className="arch-chip arch-chip-sm">{x}</span>)}
-                      </span>
+                      {!compact && m.summary && <span className="arch-node-sum">{m.summary}</span>}
+                      {!compact && (
+                        <span className="arch-node-foot">
+                          {m.tech.slice(0, 2).map((x) => <span key={x} className="arch-chip arch-chip-sm">{x}</span>)}
+                        </span>
+                      )}
                     </button>
                   );
                 })}

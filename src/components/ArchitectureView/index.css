@@ -63,7 +63,9 @@
 .arch-edge { stroke: var(--arch-edge); stroke-width: 2; opacity: 0.9; transition: opacity 0.15s; }
 .arch-edge-ai { stroke-dasharray: 6 4; }
 .arch-edge-on { stroke: var(--arch-hi); stroke-width: 3; opacity: 1; }
-.arch-edge-dim { opacity: 0.15; }
+.arch-edge-dim { opacity: 0.06; stroke-width: 1; }
+/* 稠密圖且沒有焦點：連線退成安靜的底圖，滑過／選取節點才亮 */
+.arch-edge-quiet { opacity: 0.25; stroke-width: 1; }
 .arch-edge-glow { stroke: var(--arch-hi); stroke-width: 7; opacity: 0.45; }
 .arch-edge-hit { stroke: transparent; stroke-width: 14; pointer-events: stroke; }
 .arch-arrow { fill: var(--arch-edge); }
@@ -75,13 +77,17 @@
 .arch-node { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; align-items: stretch; gap: 3px; text-align: left; padding: 10px 12px 8px; overflow: hidden; border: 1px solid var(--border-color); border-top: 3px solid var(--lc); border-radius: 10px; background: var(--bg-tertiary); color: var(--text-primary); cursor: pointer; font: inherit; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); transition: opacity 0.15s, border-color 0.15s, box-shadow 0.15s; }
 .arch-node:hover { border-color: var(--lc); }
 .arch-node-sel { border-color: var(--arch-hi); border-top-color: var(--arch-hi); box-shadow: 0 0 0 1px var(--arch-hi), 0 0 16px color-mix(in srgb, var(--arch-hi) 55%, transparent); }
-.arch-node-dim { opacity: 0.3; }
+.arch-node-dim { opacity: 0.45; }
 .arch-node-head { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
 .arch-node-head .arch-node-name { flex: 1; min-width: 0; }
 .arch-node-name { font-weight: 700; font-size: 13.5px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .arch-node-sum { flex: 1; min-height: 0; font-size: 11.5px; line-height: 1.35; color: var(--text-secondary, var(--text-muted)); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .arch-node-foot { display: flex; align-items: center; gap: 4px; margin-top: auto; min-width: 0; }
 .arch-node-files { flex: none; font-size: 10.5px; color: var(--text-muted); padding: 0 6px; border-radius: 6px; background: var(--arch-soft); line-height: 16px; }
+/* 精簡卡：一行名稱＋檔案數，沒有摘要與標籤 */
+.arch-node-compact { justify-content: center; padding: 4px 10px; gap: 0; }
+.arch-node-compact .arch-node-head { align-items: center; }
+.arch-node-compact .arch-node-name { font-size: 12.5px; line-height: 1.3; display: block; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
 .arch-chip-sm { font-size: 10.5px; padding: 0 6px; line-height: 16px; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 空狀態（仿 .ac-req） */
