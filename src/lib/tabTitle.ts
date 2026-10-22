@@ -15,6 +15,7 @@ const DEFAULT_TITLE_KEY: Partial<Record<Tab["type"], keyof Translations>> = {
   "knowledge-base": "knowledge_base_tab",
   mail: "mail_tab",
   "agent-canvas": "agent_canvas_tab",
+  architecture: "arch_tab",
 };
 
 /**

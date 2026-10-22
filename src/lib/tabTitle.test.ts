@@ -9,6 +9,7 @@ describe("displayTabTitle", () => {
   it("英文時建立的預設標題，中文介面顯示中文", () => {
     expect(displayTabTitle({ type: "terminal", title: "Terminal" }, zh)).toBe("終端機");
     expect(displayTabTitle({ type: "agent-canvas", title: "Agent Canvas" }, zh)).toBe("Agent 協作");
+    expect(displayTabTitle({ type: "architecture", title: "Architecture" }, zh)).toBe("架構導覽");
   });
 
   it("中文時建立的預設標題，英文介面顯示英文", () => {

@@ -69,3 +69,20 @@ describe("agent-canvas tab type coverage", () => {
     expect(terminalAppSrc).toMatch(/tab\.type === "agent-canvas" \? \(\s*<AgentCanvasView/);
   });
 });
+
+describe("architecture tab type coverage", () => {
+  it("is a member of the TabType union", () => {
+    expect(tabBarSrc).toMatch(/export type TabType =[^;]*"architecture"/s);
+  });
+
+  it("has an icon in the tab bar", () => {
+    const iconFn = tabBarSrc.slice(tabBarSrc.indexOf("function getTabIcon"));
+    expect(iconFn).toContain('case "architecture"');
+  });
+
+  it("gets a title and a render branch", () => {
+    expect(terminalAppSrc).toContain("t.arch_tab");
+    expect(terminalAppSrc).toContain('tab.type === "architecture"');
+    expect(terminalAppSrc).toContain("ArchitectureView");
+  });
+});

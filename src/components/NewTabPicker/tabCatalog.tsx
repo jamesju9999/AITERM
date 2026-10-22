@@ -3,7 +3,7 @@ import type { Tab, TabType } from "../TabBar";
 import {
   TerminalIcon, DatabaseIcon, PaintbrushIcon, LinkIcon, BranchIcon,
   FileTextIcon, BookOpenIcon, RefreshIcon, CodeIcon, LibraryIcon, MailIcon, RobotIcon, EyeIcon,
-  WorkflowIcon,
+  WorkflowIcon, LayersIcon,
 } from "../Icons";
 
 /** 建立分頁時要一併傳給 onSelect/onOpenTab 的選項。NewTabPicker、HomeView、
@@ -87,6 +87,7 @@ const TAB_CATALOG_META: readonly TabCatalogMeta[] = [
   { id: "mail",           type: "mail",           icon: <MailIcon size={18} />,      labelKey: "mail_tab",           descKey: "new_mail_desc",           color: "#f87171", hidden: true },
   { id: "remote-terminal", type: "remote-terminal", icon: <EyeIcon size={18} />,      labelKey: "remote_terminal_tab", descKey: "new_remote_terminal_desc", color: "#2dd4bf" },
   { id: "agent-canvas",   type: "agent-canvas",   icon: <WorkflowIcon size={18} />,  labelKey: "agent_canvas_tab",   descKey: "new_agent_canvas_desc",   color: "#e879f9" },
+  { id: "architecture",   type: "architecture",   icon: <LayersIcon size={18} />,    labelKey: "arch_tab",           descKey: "new_arch_desc",           color: "#34d399" },
   // Claude Code 不是獨立的 TabType，而是「終端機分頁 + claudeBridge 選項」，
   // 且需要橋接 server 正在跑才能用（見 requiresBridge）。放在陣列最後，
   // 跟它在新增分頁選單裡的位置一致。顏色刻意跟 vcs 的橙拉開，用 Anthropic 的

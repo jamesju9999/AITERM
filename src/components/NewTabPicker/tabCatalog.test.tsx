@@ -12,7 +12,7 @@ const t = translations["zh-TW"];
 const ALL_TYPES = [
   "terminal", "database", "design", "cross-db", "vcs", "doc-converter",
   "api-docs", "loop-studio", "code-assistant", "knowledge-base", "mail",
-  "remote-terminal", "agent-canvas",
+  "remote-terminal", "agent-canvas", "architecture",
 ] as const satisfies readonly TabType[];
 
 // 少列一種 TabType 時，這行會是型別錯誤（tsc -b 會擋）
