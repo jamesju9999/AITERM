@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
 const open = vi.fn();
@@ -37,6 +37,7 @@ vi.mock("../ModelPickerButton", () => ({
 }));
 
 import { ArchitectureView } from "./index";
+import { fitScale, PAD, LANE_W, COL_GAP, HEADER_H, NODE_H, ROW_GAP, LANE_PAD, centerOffset } from "./layout";
 
 const PROVIDERS = [
   { id: "local", display_name: "Local", is_default: true },
@@ -366,5 +367,184 @@ describe("ArchitectureView 鑽取", () => {
     await waitFor(() => expect(archSave).toHaveBeenCalledTimes(1));
     const saved = JSON.parse(archSave.mock.calls[0][1]);
     expect(Object.keys(saved.drills)).toEqual(["web/core"]);
+  });
+});
+
+describe("ArchitectureView 資料流與縮放平移", () => {
+  const VIEW_W = 300;
+  const VIEW_H = 2000;
+  const mod = (id: string, layer: string) => ({ id, layer, name: `M${id}`, files: [`${id}/x.ts`], tech: [], summary: "", dataflow: "" });
+  // b 是起點；b→c 與 b→d 兩條不同的下游路徑共用起點，a→b 是上游。
+  const CACHED = {
+    layers: [{ id: "l1", name: "一" }, { id: "l2", name: "二" }, { id: "l3", name: "三" }],
+    modules: [mod("a", "l1"), mod("b", "l2"), mod("c", "l3"), mod("d", "l3")],
+    edges: [
+      { from: "a", to: "b", kind: "import", source: "scan", confidence: 1 },
+      { from: "b", to: "c", kind: "ipc", source: "ai", confidence: 0.9, note: "n1", evidence: { file: "b/x.ts", line: 3 } },
+      { from: "b", to: "d", kind: "http", source: "ai", confidence: 0.9, note: "n2", evidence: { file: "b/x.ts", line: 9 } },
+    ],
+    meta: { scannedAt: "", gitHead: "h1", analyzed: true, dropped: 0 },
+  };
+  const LAYOUT_W = PAD * 2 + 3 * LANE_W + 2 * COL_GAP;
+  const LAYOUT_H = PAD * 2 + HEADER_H + 2 * NODE_H + ROW_GAP + LANE_PAD;
+
+  let origRO: typeof ResizeObserver | undefined;
+  let origMM: typeof window.matchMedia | undefined;
+  beforeEach(() => {
+    origRO = globalThis.ResizeObserver;
+    origMM = window.matchMedia;
+    class RO {
+      cb: (e: { contentRect: { width: number; height: number } }[]) => void;
+      constructor(cb: (e: { contentRect: { width: number; height: number } }[]) => void) { this.cb = cb; }
+      observe() { this.cb([{ contentRect: { width: VIEW_W, height: VIEW_H } }]); }
+      disconnect() {}
+      unobserve() {}
+    }
+    globalThis.ResizeObserver = RO as unknown as typeof ResizeObserver;
+    archLoad.mockResolvedValue(JSON.stringify(CACHED));
+    archScan.mockResolvedValue({ ...SCAN, files: CACHED.modules.map((m) => ({ path: `${m.id}/x.ts`, lang: "typescript", lines: 1 })) });
+  });
+  afterEach(() => {
+    globalThis.ResizeObserver = origRO as typeof ResizeObserver;
+    window.matchMedia = origMM as typeof window.matchMedia;
+  });
+
+  const setReduced = (reduced: boolean) => {
+    window.matchMedia = ((q: string) => ({ matches: reduced && q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false })) as unknown as typeof window.matchMedia;
+  };
+  const open_ = async () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    await screen.findByRole("button", { name: "Mb" });
+  };
+  const nodeOf = (name: string) => document.querySelector(`.arch-node[aria-label="${name}"]`) as HTMLElement;
+  const stage = () => document.querySelector(".arch-stage") as HTMLElement;
+  const canvas = () => document.querySelector(".arch-canvas") as HTMLElement;
+  const xf = () => {
+    const m = /translate\(([-\d.e]+)px, ?([-\d.e]+)px\) scale\(([-\d.e]+)\)/.exec(stage().style.transform);
+    if (!m) throw new Error(`no transform: ${stage().style.transform}`);
+    return { tx: +m[1], ty: +m[2], s: +m[3] };
+  };
+  const onEdges = () => document.querySelectorAll('.arch-edge[data-on="true"]');
+  const cards = (dir: string) => [...document.querySelectorAll(`[data-flow="${dir}"]`)] as HTMLElement[];
+  const card = (dir: string, kind: string) => cards(dir).find((el) => el.textContent?.includes(kind))!;
+
+  it("點資料流路徑卡只高亮該路徑的連線與模組，再點一次還原", async () => {
+    await open_();
+    fireEvent.click(nodeOf("Mb"));
+    await screen.findByRole("heading", { name: "Mb" });
+    expect(onEdges()).toHaveLength(3); // 沒選路徑：整條呼叫鏈
+    fireEvent.click(card("down", "ipc"));
+    expect(onEdges()).toHaveLength(1);
+    expect(card("down", "ipc").getAttribute("aria-pressed")).toBe("true");
+    expect(nodeOf("Mc")).not.toHaveClass("arch-node-dim");
+    expect(nodeOf("Md")).toHaveClass("arch-node-dim");
+    expect(nodeOf("Ma")).toHaveClass("arch-node-dim");
+    // 換另一條共用起點的路徑：高亮跟著換
+    fireEvent.click(card("down", "http"));
+    expect(onEdges()).toHaveLength(1);
+    expect(nodeOf("Md")).not.toHaveClass("arch-node-dim");
+    expect(nodeOf("Mc")).toHaveClass("arch-node-dim");
+    fireEvent.click(card("down", "http"));
+    expect(onEdges()).toHaveLength(3);
+    expect(nodeOf("Mc")).not.toHaveClass("arch-node-dim");
+  });
+
+  it("換選取模組時清除已選路徑", async () => {
+    await open_();
+    fireEvent.click(nodeOf("Mb"));
+    await screen.findByRole("heading", { name: "Mb" });
+    fireEvent.click(card("down", "ipc"));
+    expect(onEdges()).toHaveLength(1);
+    fireEvent.click(nodeOf("Mb")); // 同一個模組重選也不應殘留
+    fireEvent.click(nodeOf("Ma"));
+    await screen.findByRole("heading", { name: "Ma" });
+    expect(document.querySelector("[aria-pressed='true']")).toBeNull();
+    expect(onEdges()).toHaveLength(3);
+  });
+
+  it("高亮連線上有光點（animateMotion）；prefers-reduced-motion 時沒有", async () => {
+    setReduced(true);
+    await open_();
+    fireEvent.click(nodeOf("Mb"));
+    await screen.findByRole("heading", { name: "Mb" });
+    fireEvent.click(card("down", "ipc"));
+    expect(document.querySelectorAll("animateMotion")).toHaveLength(0);
+  });
+
+  it("沒有 reduced-motion 時每條高亮連線 2 個光點，時長 1–4 秒", async () => {
+    setReduced(false);
+    await open_();
+    fireEvent.click(nodeOf("Mb"));
+    await screen.findByRole("heading", { name: "Mb" });
+    fireEvent.click(card("down", "ipc"));
+    const ms = [...document.querySelectorAll("animateMotion")];
+    expect(ms).toHaveLength(2);
+    for (const m of ms) {
+      const dur = parseFloat(m.getAttribute("dur") ?? "");
+      expect(dur).toBeGreaterThanOrEqual(1);
+      expect(dur).toBeLessThanOrEqual(4);
+    }
+    expect(ms[0].getAttribute("begin")).not.toBe(ms[1].getAttribute("begin"));
+  });
+
+  it("matchMedia 不存在時（jsdom 預設）也不會壞", async () => {
+    // @ts-expect-error 模擬沒有 matchMedia
+    window.matchMedia = undefined;
+    await open_();
+    fireEvent.click(nodeOf("Mb"));
+    await screen.findByRole("heading", { name: "Mb" });
+    fireEvent.click(card("down", "ipc"));
+    expect(onEdges()).toHaveLength(1);
+  });
+
+  it("初次載入適合視窗並垂直置中；Ctrl+滾輪縮放，一般滾輪不縮放；適合視窗鈕還原", async () => {
+    await open_();
+    const s0 = fitScale(LAYOUT_W, VIEW_W);
+    expect(s0).toBeLessThan(1);
+    const v0 = xf();
+    expect(v0.s).toBeCloseTo(s0);
+    expect(v0.tx).toBe(0);
+    expect(v0.ty).toBeCloseTo(centerOffset(LAYOUT_H * s0, VIEW_H));
+    expect(v0.ty).toBeGreaterThan(0);
+
+    fireEvent.wheel(canvas(), { deltaY: -100 });
+    expect(xf()).toEqual(v0);
+
+    fireEvent.wheel(canvas(), { deltaY: -100, ctrlKey: true, clientX: 100, clientY: 100 });
+    const v1 = xf();
+    expect(v1.s).toBeGreaterThan(v0.s);
+    fireEvent.wheel(canvas(), { deltaY: 100, metaKey: true, clientX: 100, clientY: 100 });
+    expect(xf().s).toBeLessThan(v1.s);
+
+    fireEvent.wheel(canvas(), { deltaY: -100, ctrlKey: true });
+    fireEvent.click(screen.getByRole("button", { name: /適合視窗|Fit to window/ }));
+    expect(xf()).toEqual(v0);
+  });
+
+  it("背景拖曳會平移；按在卡片上不平移，且仍可點選", async () => {
+    await open_();
+    const v0 = xf();
+    fireEvent.mouseDown(canvas(), { button: 0, clientX: 50, clientY: 50 });
+    fireEvent.mouseMove(window, { clientX: 90, clientY: 80 });
+    fireEvent.mouseUp(window);
+    const v1 = xf();
+    expect(v1.tx).toBeCloseTo(v0.tx + 40);
+    expect(v1.ty).toBeCloseTo(v0.ty + 30);
+    expect(v1.s).toBeCloseTo(v0.s);
+
+    const node = nodeOf("Mb");
+    fireEvent.mouseDown(node, { button: 0, clientX: 50, clientY: 50 });
+    fireEvent.mouseMove(window, { clientX: 200, clientY: 200 });
+    fireEvent.mouseUp(window);
+    expect(xf()).toEqual(v1);
+    fireEvent.click(node);
+    expect(await screen.findByRole("heading", { name: "Mb" })).toBeInTheDocument();
+  });
+
+  it("名稱與層標題有完整名稱的 title", async () => {
+    await open_();
+    expect(nodeOf("Mb")).toHaveAttribute("title", "Mb");
+    expect(document.querySelector(".arch-lane-name")).toHaveAttribute("title", "一");
   });
 });

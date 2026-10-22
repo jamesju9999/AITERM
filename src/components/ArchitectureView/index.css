@@ -34,8 +34,10 @@
 
 /* 畫布：點狀格線底，內部捲動；詳情面板是固定寬度的兄弟，不會蓋住畫布 */
 .arch-body { display: flex; flex: 1; min-height: 0; }
+.arch-canvas-wrap { flex: 1; min-width: 0; position: relative; display: flex; }
+.arch-fit { position: absolute; top: 10px; right: 14px; z-index: 5; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
 .arch-canvas {
-  flex: 1; min-width: 0; position: relative; overflow: auto;
+  flex: 1; min-width: 0; position: relative; overflow: auto; cursor: grab;
   background-image: radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
   background-size: 22px 22px;
   scrollbar-width: thin; scrollbar-color: transparent transparent;
@@ -45,15 +47,16 @@
 .arch-canvas::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
 .arch-canvas:hover::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.16); }
 .arch-canvas::-webkit-scrollbar-corner { background: transparent; }
+.arch-panning { cursor: grabbing; user-select: none; }
 .arch-stage-wrap { position: relative; }
 .arch-stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 
 /* 泳道 */
 .arch-lane { position: absolute; box-sizing: border-box; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--lc) 28%, var(--border-color)); background: color-mix(in srgb, var(--lc) 6%, transparent); }
-.arch-lane-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px 0; }
+.arch-lane-head { display: flex; align-items: flex-start; gap: 8px; padding: 12px 14px 0; }
 .arch-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--lc); box-shadow: 0 0 6px color-mix(in srgb, var(--lc) 70%, transparent); flex: none; }
-.arch-lane-name { font-weight: 600; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.arch-lane-count { margin-left: auto; min-width: 20px; padding: 0 7px; text-align: center; border-radius: 999px; font-size: 11px; line-height: 18px; color: var(--text-secondary); background: color-mix(in srgb, var(--lc) 18%, var(--bg-tertiary)); }
+.arch-lane-name { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; line-height: 1.25; color: var(--text-primary); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.arch-lane-count { flex: none; margin-left: auto; min-width: 20px; padding: 0 7px; text-align: center; border-radius: 999px; font-size: 11px; line-height: 18px; color: var(--text-secondary); background: color-mix(in srgb, var(--lc) 18%, var(--bg-tertiary)); }
 
 /* 連線（在卡片底下） */
 .arch-edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
@@ -65,16 +68,17 @@
 .arch-edge-hit { stroke: transparent; stroke-width: 14; pointer-events: stroke; }
 .arch-arrow { fill: var(--arch-edge); }
 .arch-arrow-on { fill: var(--arch-hi); }
-.arch-edge-pill { position: absolute; transform: translate(-50%, -50%); pointer-events: none; padding: 1px 8px; border-radius: 999px; font-size: 11px; line-height: 16px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--arch-hi); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4); }
+.arch-flow-dot { fill: var(--arch-hi); filter: drop-shadow(0 0 3px var(--arch-hi)); pointer-events: none; }
+.arch-edge-pill { position: absolute; z-index: 3; transform: translate(-50%, -50%); pointer-events: none; padding: 1px 8px; border-radius: 999px; font-size: 11px; line-height: 16px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--arch-hi); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4); }
 
 /* 模組卡片 */
 .arch-node { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; align-items: stretch; gap: 3px; text-align: left; padding: 10px 12px 8px; overflow: hidden; border: 1px solid var(--border-color); border-top: 3px solid var(--lc); border-radius: 10px; background: var(--bg-tertiary); color: var(--text-primary); cursor: pointer; font: inherit; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); transition: opacity 0.15s, border-color 0.15s, box-shadow 0.15s; }
 .arch-node:hover { border-color: var(--lc); }
 .arch-node-sel { border-color: var(--arch-hi); border-top-color: var(--arch-hi); box-shadow: 0 0 0 1px var(--arch-hi), 0 0 16px color-mix(in srgb, var(--arch-hi) 55%, transparent); }
 .arch-node-dim { opacity: 0.3; }
-.arch-node-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.arch-node-head { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
 .arch-node-head .arch-node-name { flex: 1; min-width: 0; }
-.arch-node-name { font-weight: 700; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arch-node-name { font-weight: 700; font-size: 13.5px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .arch-node-sum { flex: 1; min-height: 0; font-size: 11.5px; line-height: 1.35; color: var(--text-secondary, var(--text-muted)); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .arch-node-foot { display: flex; align-items: center; gap: 4px; margin-top: auto; min-width: 0; }
 .arch-node-files { flex: none; font-size: 10.5px; color: var(--text-muted); padding: 0 6px; border-radius: 6px; background: var(--arch-soft); line-height: 16px; }
@@ -139,3 +143,14 @@
 .arch-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--arch-soft); overflow: hidden; }
 .arch-bar > span { display: block; height: 100%; background: var(--arch-hi); }
 .arch-bar-n { width: 32px; flex: none; text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* 資料流路徑卡 */
+.arch-flow-hint { margin: 0 0 6px !important; font-size: 11.5px; color: var(--text-muted) !important; }
+.arch-flow-sub { margin: 8px 0 4px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.arch-path { display: flex; flex-direction: column; gap: 6px; width: 100%; box-sizing: border-box; text-align: left; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary); cursor: pointer; font: inherit; font-size: 12.5px; }
+.arch-path:hover { border-color: var(--arch-hi); }
+.arch-path-on { border-color: var(--arch-hi); box-shadow: 0 0 0 1px var(--arch-hi); background: color-mix(in srgb, var(--arch-hi) 10%, var(--bg-secondary)); }
+.arch-path-step { display: flex; flex-direction: column; gap: 3px; }
+.arch-path-hop { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.arch-path-mod { font-weight: 600; }
+.arch-path-arrow { color: var(--text-muted); }

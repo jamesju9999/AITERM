@@ -7,9 +7,9 @@ import { abortAi, formatAiError, invokeAiComplete, type AiError } from "../../ip
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { ModelPickerButton } from "../ModelPickerButton";
 import { ANALYZE_SYSTEM, buildAnalyzeMessage, mergeScanEdges, parseAnalysis, pickKeyFiles } from "./analyze";
-import { buildBaseGraph, type Architecture } from "./model";
+import { buildBaseGraph, type Architecture, type Edge } from "./model";
 import { buildDrillGraph, drillKey } from "./drill";
-import { edgeMidpoint, edgePath, fitScale, layerColor, layoutGraph, NODE_H, NODE_W, traceChain } from "./layout";
+import { centerOffset, edgeLength, edgeMidpoint, edgePath, fitScale, layerColor, layoutGraph, NODE_H, NODE_W, spreadLabels, traceChain, zoomAt, type Layout, type View } from "./layout";
 import { DetailPanel } from "./DetailPanel";
 import "./index.css";
 
@@ -34,6 +34,19 @@ function pruneDrills(drills: Architecture["drills"], moduleIds: Set<string>): Ar
   const kept = Object.fromEntries(Object.entries(drills).filter(([k]) => moduleIds.has(k.split("\u0000")[0])));
   return Object.keys(kept).length > 0 ? kept : undefined;
 }
+
+/** 使用者要求減少動態時不渲染光點。jsdom 等環境沒有 matchMedia，查不到就當作沒開。 */
+function prefersReducedMotion(): boolean {
+  try { return !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches; } catch { return false; }
+}
+
+function samePath(a: Edge[] | null, b: Edge[]): boolean {
+  return !!a && a.length === b.length && a.every((e, i) => e === b[i]);
+}
+
+/** 標籤互相錯開的最小垂直距離（標籤高約 18px）。 */
+const LABEL_GAP = 20;
+const DOTS_PER_EDGE = 2;
 
 type Status = { kind: "idle" } | { kind: "busy"; msg: string } | { kind: "error"; msg: string } | { kind: "notice"; msg: string };
 
@@ -63,11 +76,19 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const [providerId, setProviderId] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [hoverEdge, setHoverEdge] = useState<number | null>(null);
-  const [viewportW, setViewportW] = useState(0);
+  const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  // 使用者手動縮放／平移的結果；綁定產生它的 layout，換圖（鑽取、重新分析）就自動回到適合視窗。
+  const [manual, setManual] = useState<{ layout: Layout; view: View } | null>(null);
+  // 目前選的資料流路徑；綁定當時的圖與選取，換選取或換層級就自動失效。
+  const [pathPick, setPathPick] = useState<{ path: Edge[]; view: Architecture; selected: string } | null>(null);
+  const [panning, setPanning] = useState(false);
   const streamIdRef = useRef<string | null>(null);
   const runRef = useRef(0);
   const canvasRef = useRef<HTMLDivElement>(null);
   const archRef = useRef<Architecture | null>(null);
+  const viewRef = useRef<View>({ scale: 1, tx: 0, ty: 0 });
+  const layoutRef = useRef<Layout | null>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
 
   const load = useCallback(async (dir: string) => {
     setRoot(dir);
@@ -198,7 +219,10 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   useEffect(() => {
     const el = canvasRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((entries) => setViewportW(entries[0]?.contentRect.width ?? 0));
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      setViewport({ w: r?.width ?? 0, h: r?.height ?? 0 });
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, [arch]);
@@ -230,7 +254,70 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const layout = useMemo(() => (view ? layoutGraph(view) : null), [view]);
   const chain = useMemo(() => (view && selected ? traceChain(view, selected) : null), [view, selected]);
 
-  const scale = layout ? fitScale(layout.width, viewportW) : 1;
+  const fit: View = layout
+    ? (() => { const s = fitScale(layout.width, viewport.w); return { scale: s, tx: 0, ty: centerOffset(layout.height * s, viewport.h) }; })()
+    : { scale: 1, tx: 0, ty: 0 };
+  const cur: View = manual && manual.layout === layout ? manual.view : fit;
+  const activePath = pathPick && pathPick.view === view && pathPick.selected === selected ? pathPick.path : null;
+  const hl = useMemo(() => {
+    if (activePath) {
+      const modules = new Set<string>();
+      for (const e of activePath) { modules.add(e.from); modules.add(e.to); }
+      return { edges: new Set<Edge>(activePath), modules };
+    }
+    return chain ? { edges: new Set<Edge>(chain.edges), modules: chain.modules } : null;
+  }, [activePath, chain]);
+  const reduced = prefersReducedMotion();
+  const pickPath = useCallback((p: Edge[]) => {
+    if (!view || !selected) return;
+    setPathPick((cur0) => (cur0 && cur0.view === view && cur0.selected === selected && samePath(cur0.path, p) ? null : { path: p, view, selected }));
+  }, [view, selected]);
+  const fitView = useCallback(() => setManual(null), []);
+  useEffect(() => { viewRef.current = cur; layoutRef.current = layout; });
+  useEffect(() => () => dragCleanupRef.current?.(), []);
+
+  // Ctrl/⌘＋滾輪以游標為中心縮放；一般滾輪維持捲動。要 preventDefault 就必須是非 passive 的原生監聽。
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      const layoutNow = layoutRef.current;
+      if (!layoutNow) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const factor = Math.exp(-e.deltaY * 0.0015);
+      setManual({ layout: layoutNow, view: zoomAt(viewRef.current, factor, e.clientX - r.left + el.scrollLeft, e.clientY - r.top + el.scrollTop) });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const startPan = (e: React.MouseEvent) => {
+    if (e.button !== 0 || !layoutRef.current) return;
+    if ((e.target as Element).closest(".arch-node, .arch-fit, .arch-empty")) return;
+    const layoutNow = layoutRef.current;
+    const start = { x: e.clientX, y: e.clientY, view: viewRef.current };
+    const move = (m: MouseEvent) => setManual({ layout: layoutNow, view: { ...start.view, tx: start.view.tx + m.clientX - start.x, ty: start.view.ty + m.clientY - start.y } });
+    const stop = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", stop); dragCleanupRef.current = null; setPanning(false); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", stop);
+    dragCleanupRef.current = stop;
+    setPanning(true);
+  };
+
+  const labelPts = useMemo(() => {
+    if (!view || !layout) return [];
+    const pts: { id: string; x: number; y: number }[] = [];
+    view.edges.forEach((e, i) => {
+      const a = layout.nodes[e.from];
+      const b = layout.nodes[e.to];
+      if (!a || !b || !(hl?.edges.has(e) || hoverEdge === i)) return;
+      const m = edgeMidpoint(a, b);
+      pts.push({ id: String(i), x: m.x, y: m.y });
+    });
+    return spreadLabels(pts, LABEL_GAP);
+  }, [view, layout, hl, hoverEdge]);
   const layerIndex = (id: string) => Math.max(0, view?.layers.findIndex((l) => l.id === id) ?? 0);
   const mmss = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
   const pickIcon = (
@@ -285,7 +372,8 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       {status.kind !== "idle" && <div className={`arch-status arch-status-${status.kind}`}>{status.msg}</div>}
       {stale && <div className="arch-status arch-status-notice">{t.arch_stale}</div>}
       <div className="arch-body">
-        <div className="arch-canvas" ref={canvasRef}>
+        <div className="arch-canvas-wrap">
+        <div className={`arch-canvas ${panning ? "arch-panning" : ""}`} ref={canvasRef} onMouseDown={startPan}>
           {!root && (
             <div className="arch-empty">
               <div className="arch-empty-card">
@@ -297,13 +385,13 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
             </div>
           )}
           {view && layout && (
-            <div className="arch-stage-wrap" style={{ width: layout.width * scale, height: layout.height * scale }}>
-              <div className="arch-stage" style={{ width: layout.width, height: layout.height, transform: scale < 1 ? `scale(${scale})` : undefined }}>
+            <div className="arch-stage-wrap" style={{ width: layout.width * cur.scale + Math.max(0, cur.tx), height: layout.height * cur.scale + Math.max(0, cur.ty) }}>
+              <div className="arch-stage" style={{ width: layout.width, height: layout.height, transform: `translate(${cur.tx}px, ${cur.ty}px) scale(${cur.scale})` }}>
                 {layout.columns.map((c, i) => (
                   <div key={c.layerId} className="arch-lane" style={{ left: c.x, top: c.y, width: c.w, height: c.h, ["--lc" as string]: layerColor(c.layerId, i) }}>
                     <div className="arch-lane-head">
                       <i className="arch-dot" />
-                      <span className="arch-lane-name">{c.name}</span>
+                      <span className="arch-lane-name" title={c.name}>{c.name}</span>
                       <span className="arch-lane-count">{c.count}</span>
                     </div>
                   </div>
@@ -318,16 +406,22 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                     const a = layout.nodes[e.from];
                     const b = layout.nodes[e.to];
                     if (!a || !b) return null;
-                    const on = chain ? chain.edges.includes(e) : false;
+                    const on = hl ? hl.edges.has(e) : false;
                     const d = edgePath(a, b);
+                    const dur = Math.min(4, Math.max(1, edgeLength(a, b) / 160));
                     return (
                       <g key={i} onMouseEnter={() => setHoverEdge(i)} onMouseLeave={() => setHoverEdge(null)}>
                         {on && <path d={d} fill="none" className="arch-edge-glow" filter="url(#arch-glow)" />}
-                        <path d={d} fill="none" markerEnd={`url(#${on ? "arch-arrow-on" : "arch-arrow"})`}
-                          className={`arch-edge ${e.source === "ai" ? "arch-edge-ai" : ""} ${on ? "arch-edge-on" : ""} ${chain && !on ? "arch-edge-dim" : ""}`}>
+                        <path d={d} fill="none" markerEnd={`url(#${on ? "arch-arrow-on" : "arch-arrow"})`} data-on={on ? "true" : "false"}
+                          className={`arch-edge ${e.source === "ai" ? "arch-edge-ai" : ""} ${on ? "arch-edge-on" : ""} ${hl && !on ? "arch-edge-dim" : ""}`}>
                           <title>{e.note ?? e.kind}</title>
                         </path>
                         <path d={d} fill="none" className="arch-edge-hit" />
+                        {on && !reduced && Array.from({ length: DOTS_PER_EDGE }, (_, k) => (
+                          <circle key={k} r="3.5" className="arch-flow-dot">
+                            <animateMotion path={d} dur={`${dur.toFixed(2)}s`} begin={k === 0 ? "0s" : `-${((dur * k) / DOTS_PER_EDGE).toFixed(2)}s`} repeatCount="indefinite" />
+                          </circle>
+                        ))}
                       </g>
                     );
                   })}
@@ -335,9 +429,9 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                 {view.modules.map((m) => {
                   const p = layout.nodes[m.id];
                   if (!p) return null;
-                  const dim = chain && !chain.modules.has(m.id);
+                  const dim = hl && !hl.modules.has(m.id);
                   return (
-                    <button key={m.id} type="button" title={m.id} aria-label={m.name}
+                    <button key={m.id} type="button" title={m.name} aria-label={m.name}
                       className={`arch-node ${selected === m.id ? "arch-node-sel" : ""} ${dim ? "arch-node-dim" : ""}`}
                       style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H, ["--lc" as string]: layerColor(m.layer, layerIndex(m.layer)) }}
                       onClick={() => setSelected(m.id)} onDoubleClick={() => enter(m.id)}>
@@ -352,19 +446,16 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                     </button>
                   );
                 })}
-                {view.edges.map((e, i) => {
-                  const a = layout.nodes[e.from];
-                  const b = layout.nodes[e.to];
-                  if (!a || !b) return null;
-                  if (!(chain?.edges.includes(e) || hoverEdge === i)) return null;
-                  const m = edgeMidpoint(a, b);
-                  return <span key={`pill-${i}`} className="arch-edge-pill" style={{ left: m.x, top: m.y }}>{e.kind}</span>;
-                })}
+                {labelPts.map((l) => (
+                  <span key={`pill-${l.id}`} className="arch-edge-pill" style={{ left: l.x, top: l.y }}>{view.edges[Number(l.id)].kind}</span>
+                ))}
               </div>
             </div>
           )}
         </div>
-        {view && <DetailPanel arch={view} selected={selected} onSelect={setSelected} scan={scan} onExpand={enter} />}
+        {view && layout && <button type="button" className="arch-btn arch-fit" onClick={fitView}>{t.arch_fit}</button>}
+        </div>
+        {view && <DetailPanel arch={view} selected={selected} onSelect={setSelected} scan={scan} onExpand={enter} activePath={activePath} onPickPath={pickPath} />}
       </div>
     </div>
   );
