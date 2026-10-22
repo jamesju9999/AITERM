@@ -23,6 +23,7 @@ tauri-build = { version = "2.5.6", features = [] }
 [dependencies]
 aiterm-core = { path = "crates/aiterm-core" }
 serde_json = { version = "1.0", features = ["preserve_order"] }
+ignore = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.10.3", features = ["tray-icon"] }

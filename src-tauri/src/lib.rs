@@ -7,6 +7,7 @@ pub mod chatgpt_web;
 pub mod code_assistant;
 pub mod computer;
 pub mod api_docs;
+pub mod architecture;
 pub mod commands;
 pub mod config;
 pub mod db;
