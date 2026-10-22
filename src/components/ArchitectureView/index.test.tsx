@@ -37,7 +37,7 @@ vi.mock("../ModelPickerButton", () => ({
 }));
 
 import { ArchitectureView } from "./index";
-import { fitScale, layoutGraph, PAD, LANE_W, COL_GAP, HEADER_H, NODE_H_COMPACT, ROW_GAP, LANE_PAD, centerOffset, READABLE_SCALE, MIN_ZOOM, initialView, trueFitView } from "./layout";
+import { fitScale, layoutGraph, PAD, LANE_W, COL_GAP, HEADER_H, NODE_H_COMPACT, ROW_GAP, LANE_PAD, READABLE_SCALE, MIN_ZOOM, initialView, trueFitView } from "./layout";
 import type { Architecture } from "./model";
 
 const PROVIDERS = [

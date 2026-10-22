@@ -1,7 +1,10 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+// Vitest 會把 .css 的 ?raw／?inline 匯入換成空字串，所以只好讀檔；tsconfig.app 的 types 沒有 node，故忽略型別。
+// @ts-expect-error node:fs 沒有型別宣告
+import { readFileSync } from "node:fs";
 
-const css = readFileSync("src/components/ArchitectureView/index.css", "utf8");
+const css: string = readFileSync("src/components/ArchitectureView/index.css", "utf8");
+
 const rule = (sel: string) => {
   const m = new RegExp(`(?:^|\\n)${sel.replace(/[.]/g, "\\.")}\\s*\\{([^}]*)\\}`).exec(css);
   expect(m, `找不到 ${sel}`).not.toBeNull();
