@@ -30,6 +30,21 @@ pub fn arch_save(root: String, json: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn arch_qa_load(root: String) -> Result<Option<String>, String> {
+    store::load_qa(&PathBuf::from(root))
+}
+
+#[tauri::command]
+pub fn arch_qa_save(root: String, json: String) -> Result<(), String> {
+    store::save_qa(&PathBuf::from(root), &json)
+}
+
+#[tauri::command]
+pub fn arch_export_text(path: String, content: String) -> Result<(), String> {
+    store::export_text(&PathBuf::from(path), &content)
+}
+
+#[tauri::command]
 pub async fn arch_read_files(root: String, paths: Vec<String>) -> Result<Vec<(String, String)>, String> {
     tauri::async_runtime::spawn_blocking(move || store::read_files(&PathBuf::from(root), &paths, MAX_FILE_BYTES))
         .await

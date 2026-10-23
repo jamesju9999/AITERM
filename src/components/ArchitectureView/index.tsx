@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { nanoid } from "nanoid";
 import { useLocale } from "../../contexts/LocaleContext";
-import { archLoad, archReadFiles, archSave, archScan, type ScanResult } from "../../ipc/architecture";
+import { archExportText, archLoad, archQaLoad, archQaSave, archReadFiles, archSave, archScan, type ScanResult } from "../../ipc/architecture";
 import { abortAi, formatAiError, invokeAiComplete, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { ModelPickerButton } from "../ModelPickerButton";
@@ -18,6 +18,7 @@ import { QaPanel, type QaMessage, type QaStage } from "./QaPanel";
 import { TourBar } from "./TourBar";
 import { ANSWER_SYSTEM, SELECT_SYSTEM, buildAnswerMessage, buildSelectMessage, parseAnswer, parseSelect, type Tour } from "./qa";
 import { clampStep, tourEdges } from "./tour";
+import { parseStoredQa, qaToMarkdown, serializeQa } from "./qaStore";
 import "./index.css";
 
 const PROVIDER_KEY = "aiterm_arch_provider";
@@ -106,6 +107,10 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const [qaElapsed, setQaElapsed] = useState(0);
   const [tour, setTour] = useState<{ tour: Tour; index: number; playing: boolean } | null>(null);
   const qaRunRef = useRef(0);
+  /** 問答記錄已從哪個資料夾讀回；與目前 root 相同才會存檔，避免讀回之前就用空陣列蓋掉舊記錄。 */
+  const qaLoadedRef = useRef<string | null>(null);
+  /** 最後一次讀回或寫出的內容；沒變就不寫檔（開啟資料夾不該憑空產生空記錄檔）。 */
+  const qaSavedRef = useRef("");
   const qaStreamRef = useRef<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const archRef = useRef<Architecture | null>(null);
@@ -120,6 +125,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     setDrillPath([]);
     setTour(null);
     setQaMessages([]);
+    qaLoadedRef.current = null;
     qaRunRef.current++;
     setQaBusy(false);
     setStatus({ kind: "busy", msg: t.arch_scanning });
@@ -135,6 +141,13 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
         setArch(buildBaseGraph(s));
         setStale(false);
       }
+      try {
+        const stored = await archQaLoad(dir);
+        const restored = stored ? parseStoredQa(stored) : [];
+        setQaMessages(restored);
+        qaSavedRef.current = serializeQa(restored);
+        qaLoadedRef.current = dir;
+      } catch { /* 讀不到記錄就當作沒有；qaLoadedRef 維持 null，這次不會寫檔 */ }
       setStatus(s.truncated ? { kind: "notice", msg: t.arch_truncated_n.replace("{n}", String(s.files.length)) } : { kind: "idle" });
       return true;
     } catch (e) {
@@ -320,15 +333,55 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     return () => clearInterval(timer);
   }, [qaBusy]);
 
+  useEffect(() => {
+    if (!root || qaBusy || qaLoadedRef.current !== root) return;
+    const json = serializeQa(qaMessages);
+    if (json === qaSavedRef.current) return;
+    qaSavedRef.current = json;
+    archQaSave(root, json).catch(() => { /* 存不下來不影響問答本身 */ });
+  }, [root, qaBusy, qaMessages]);
+
+  const exportQa = useCallback(async () => {
+    if (!root) return;
+    const name = root.split(/[\\/]/).filter(Boolean).pop() ?? "project";
+    const d = new Date();
+    const p2 = (n: number) => String(n).padStart(2, "0");
+    try {
+      const path = await save({
+        defaultPath: `${name}-${t.arch_qa_md_title}-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}.md`,
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (!path) return;
+      const names = new Map((arch?.modules ?? []).map((m) => [m.id, m.name]));
+      const md = qaToMarkdown(qaMessages, name, d, {
+        title: t.arch_qa_md_title, exportedAt: t.arch_qa_md_exported_at, question: t.arch_qa_md_question,
+        tour: t.arch_qa_md_tour, diagram: t.arch_qa_md_diagram, truncated: t.arch_qa_md_truncated,
+      }, (id) => names.get(id) ?? id);
+      await archExportText(path, md);
+      setStatus({ kind: "notice", msg: t.arch_qa_exported.replace("{path}", path) });
+    } catch (e) {
+      setStatus({ kind: "error", msg: t.arch_qa_export_failed.replace("{msg}", errText(e)) });
+    }
+  }, [root, arch, qaMessages, t]);
+
+  const clearQa = useCallback(() => {
+    setQaMessages([]);
+    setTour(null);
+  }, []);
+
   const playTour = useCallback((messageId: string) => {
     const msg = qaMessages.find((m) => m.id === messageId);
     if (!msg || msg.role !== "ai" || !msg.qa.tour) return;
+    // 記錄是舊的：重新分析後模組可能不見了，只播放現在還存在的步驟。
+    const alive = new Set((archRef.current?.modules ?? []).map((m) => m.id));
+    const steps = msg.qa.tour.steps.filter((s) => alive.has(s.module));
+    if (steps.length === 0) return;
     // 導覽在根層播放：離開鑽取、清掉選取與資料流路徑。
     setDrillPath([]);
     setSelected(null);
     setHoverEdge(null);
     setPathPick(null);
-    setTour({ tour: msg.qa.tour, index: 0, playing: !prefersReducedMotion() });
+    setTour({ tour: { ...msg.qa.tour, steps }, index: 0, playing: !prefersReducedMotion() });
   }, [qaMessages]);
   const endTour = useCallback(() => setTour(null), []);
   const setTourIndex = useCallback((i: number) => setTour((c) => (c ? { ...c, index: clampStep(c.tour.steps, i) } : c)), []);
@@ -657,7 +710,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
         )}
       </div>
       {qaOpen && scan && arch && (
-        <QaPanel messages={qaMessages} busy={qaBusy} stage={qaStage} elapsed={qaElapsed} onSend={ask} onCancel={cancelAsk} onPlayTour={playTour} />
+        <QaPanel messages={qaMessages} busy={qaBusy} stage={qaStage} elapsed={qaElapsed} onSend={ask} onCancel={cancelAsk} onPlayTour={playTour} onExport={exportQa} onClear={clearQa} />
       )}
     </div>
   );

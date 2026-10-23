@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
 const open = vi.fn();
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...a: unknown[]) => open(...a) }));
+const save = vi.fn();
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...a: unknown[]) => open(...a), save: (...a: unknown[]) => save(...a) }));
 
 const archScan = vi.fn();
 const archLoad = vi.fn();
@@ -11,6 +12,9 @@ const archSave = vi.fn();
 const archReadFiles = vi.fn();
 const archReadFile = vi.fn();
 const archOpenPath = vi.fn();
+const archQaLoad = vi.fn();
+const archQaSave = vi.fn();
+const archExportText = vi.fn();
 vi.mock("../../ipc/architecture", () => ({
   archScan: (...a: unknown[]) => archScan(...a),
   archLoad: (...a: unknown[]) => archLoad(...a),
@@ -18,6 +22,9 @@ vi.mock("../../ipc/architecture", () => ({
   archReadFiles: (...a: unknown[]) => archReadFiles(...a),
   archReadFile: (...a: unknown[]) => archReadFile(...a),
   archOpenPath: (...a: unknown[]) => archOpenPath(...a),
+  archQaLoad: (...a: unknown[]) => archQaLoad(...a),
+  archQaSave: (...a: unknown[]) => archQaSave(...a),
+  archExportText: (...a: unknown[]) => archExportText(...a),
 }));
 
 const invokeAiComplete = vi.fn();
@@ -74,6 +81,9 @@ beforeEach(() => {
   archReadFiles.mockResolvedValue([]);
   archReadFile.mockResolvedValue({ content: "const a = 1;\nexport default a;\n", truncated: false, total_bytes: 30 });
   archOpenPath.mockResolvedValue(undefined);
+  archQaLoad.mockResolvedValue(null);
+  archQaSave.mockResolvedValue(undefined);
+  archExportText.mockResolvedValue(undefined);
   abortAi.mockResolvedValue(undefined);
 });
 
@@ -1014,6 +1024,64 @@ describe("ArchitectureView 架構問答與流程導覽", () => {
     expect(order(archReadFiles, 0)).toBeLessThan(order(invokeAiComplete, 1));
     expect(screen.getByTestId("mermaid").textContent).toContain("A-->B");
     expect(await playBtn()).toHaveTextContent(/3/);
+  });
+
+  it("問答記錄：回答完存到專案；重新開啟同一個資料夾會讀回來（不含錯誤泡泡）", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS));
+    await openQa();
+    expect(archQaSave).not.toHaveBeenCalled(); // 讀回之前、沒有訊息時不寫檔
+    await send();
+    expect(await screen.findByText("重點")).toBeInTheDocument();
+    await waitFor(() => expect(archQaSave).toHaveBeenCalled());
+    const [root, json] = archQaSave.mock.calls.at(-1)!;
+    expect(root).toBe("/p");
+    const saved = JSON.parse(json as string);
+    expect(saved.messages.map((m: { role: string }) => m.role)).toEqual(["user", "ai"]);
+  });
+
+  it("開啟資料夾時讀回先前的問答，舊記錄裡已不存在的模組不會被導覽播放", async () => {
+    archQaLoad.mockResolvedValue(JSON.stringify({ v: 1, messages: [
+      { id: "u", role: "user", text: "舊問題" },
+      { id: "a", role: "ai", qa: { answer: "舊答案", diagram: "", dropped: 0, truncated: false, tour: { title: "舊導覽", steps: [{ module: "gone", caption: "不存在" }, { module: "a", caption: "還在" }] } } },
+    ] }));
+    await openQa();
+    expect(await screen.findByText("舊問題")).toBeInTheDocument();
+    expect(screen.getByText("舊答案")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /在流程圖上播放|Play on the diagram/ }));
+    await act(async () => {});
+    expect(screen.getByText(/第 1\/1 步|Step 1\/1/)).toBeInTheDocument();
+  });
+
+  it("匯出 Markdown：選了路徑才寫檔，內容含問題與答案；取消對話框不寫", async () => {
+    archQaLoad.mockResolvedValue(JSON.stringify({ v: 1, messages: [
+      { id: "u", role: "user", text: "怎麼登入" },
+      { id: "a", role: "ai", qa: { answer: "走 /api/login", diagram: "flowchart LR\n A-->B", dropped: 0, truncated: false, tour: null } },
+    ] }));
+    await openQa();
+    await screen.findByText("怎麼登入");
+    save.mockResolvedValueOnce(null);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /匯出 Markdown|Export Markdown/ })); });
+    expect(archExportText).not.toHaveBeenCalled();
+    save.mockResolvedValueOnce("/out/p-q.md");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /匯出 Markdown|Export Markdown/ })); });
+    expect(archExportText).toHaveBeenCalledTimes(1);
+    const [path, md] = archExportText.mock.calls[0];
+    expect(path).toBe("/out/p-q.md");
+    expect(md).toContain("怎麼登入");
+    expect(md).toContain("走 /api/login");
+    expect(md).toContain("```mermaid");
+    expect(save.mock.calls[1][0].defaultPath).toMatch(/^p-.*\.md$/);
+  });
+
+  it("清除記錄要按兩次：第一次只進入確認狀態，第二次才清空並存成空記錄", async () => {
+    archQaLoad.mockResolvedValue(JSON.stringify({ v: 1, messages: [{ id: "u", role: "user", text: "要被清掉" }] }));
+    await openQa();
+    await screen.findByText("要被清掉");
+    fireEvent.click(screen.getByRole("button", { name: /^(清除記錄|Clear history)$/ }));
+    expect(screen.getByText("要被清掉")).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /再按一次確認清除|Click again to clear/ })); });
+    expect(screen.queryByText("要被清掉")).toBeNull();
+    await waitFor(() => expect(JSON.parse(archQaSave.mock.calls.at(-1)![1] as string).messages).toEqual([]));
   });
 
   it("挑檔沒有任何有效檔案時仍會繼續回答，且不讀檔", async () => {

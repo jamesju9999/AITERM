@@ -6,9 +6,9 @@ vi.mock("../MermaidBlock", () => ({ MermaidBlock: ({ chart }: { chart: string })
 
 import { QaPanel, type QaMessage } from "./QaPanel";
 
-const base = { busy: false, stage: "select" as const, elapsed: 0, onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onOpenFile: vi.fn() };
+const base = { busy: false, stage: "select" as const, elapsed: 0, onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onExport: vi.fn(), onClear: vi.fn(), onOpenFile: vi.fn() };
 const mount = async (over: Partial<Parameters<typeof QaPanel>[0]> = {}) => {
-  const props = { ...base, messages: [] as QaMessage[], onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), ...over };
+  const props = { ...base, messages: [] as QaMessage[], onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onExport: vi.fn(), onClear: vi.fn(), ...over };
   const r = render(<LocaleProvider><QaPanel {...props} /></LocaleProvider>);
   await act(async () => {});
   return { ...r, props };
@@ -154,5 +154,32 @@ describe("QaPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /顯示原始回應|Show raw response/ }));
     expect(screen.getByTestId("qa-raw").textContent).toHaveLength(4000);
     expect(screen.queryByText(/已截斷|truncated/)).toBeNull();
+  });
+
+  it("沒有訊息時不顯示匯出／清除；有訊息才顯示，按匯出呼叫 onExport", async () => {
+    const empty = await mount();
+    expect(screen.queryByRole("button", { name: /匯出 Markdown|Export Markdown/ })).toBeNull();
+    empty.unmount();
+    const { props } = await mount({ messages: [{ id: "u", role: "user", text: "q" }] });
+    fireEvent.click(screen.getByRole("button", { name: /匯出 Markdown|Export Markdown/ }));
+    expect(props.onExport).toHaveBeenCalledTimes(1);
+  });
+
+  it("清除要按兩次；3 秒內沒按第二次就回到原狀；回答中不能清除", async () => {
+    vi.useFakeTimers();
+    try {
+      const { props, rerender } = await mount({ messages: [{ id: "u", role: "user", text: "q" }] });
+      fireEvent.click(screen.getByRole("button", { name: /^(清除記錄|Clear history)$/ }));
+      expect(props.onClear).not.toHaveBeenCalled();
+      act(() => { vi.advanceTimersByTime(3100); });
+      expect(screen.getByRole("button", { name: /^(清除記錄|Clear history)$/ })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /^(清除記錄|Clear history)$/ }));
+      fireEvent.click(screen.getByRole("button", { name: /再按一次確認清除|Click again to clear/ }));
+      expect(props.onClear).toHaveBeenCalledTimes(1);
+      rerender(<LocaleProvider><QaPanel {...props} busy messages={[{ id: "u", role: "user", text: "q" }]} /></LocaleProvider>);
+      expect(screen.getByRole("button", { name: /^(清除記錄|Clear history)$/ })).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

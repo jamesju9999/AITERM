@@ -20,3 +20,6 @@ export const archReadFiles = (root: string, paths: string[]) =>
 export interface FilePreview { content: string; truncated: boolean; total_bytes: number }
 export const archReadFile = (root: string, path: string) => invoke<FilePreview>("arch_read_file", { root, path });
 export const archOpenPath = (root: string, path: string) => invoke<void>("arch_open_path", { root, path });
+export const archQaLoad = (root: string) => invoke<string | null>("arch_qa_load", { root });
+export const archQaSave = (root: string, json: string) => invoke<void>("arch_qa_save", { root, json });
+export const archExportText = (path: string, content: string) => invoke<void>("arch_export_text", { path, content });

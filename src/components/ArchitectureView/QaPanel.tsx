@@ -42,14 +42,24 @@ interface Props {
   onSend: (question: string) => void;
   onCancel: () => void;
   onPlayTour: (messageId: string) => void;
+  onExport: () => void;
+  onClear: () => void;
 }
 
 /** 畫布下方的問答抽屜；純展示，所有 AI 流程由父層驅動。 */
-export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPlayTour }: Props) {
+export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPlayTour, onExport, onClear }: Props) {
   const { t } = useLocale();
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const ime = useRef(createImeEnterGuard());
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  // 清除會刪掉存在專案裡的記錄：第一下只進入確認狀態，3 秒內再按一次才清；不用 window.confirm（Tauri 裡不可靠）。
+  useEffect(() => {
+    if (!confirmClear) return;
+    const id = setTimeout(() => setConfirmClear(false), 3000);
+    return () => clearTimeout(id);
+  }, [confirmClear]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -67,6 +77,15 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
 
   return (
     <section className="arch-qa" aria-label={t.arch_qa_title}>
+      {messages.length > 0 && (
+        <div className="arch-qa-bar">
+          <button type="button" className="arch-btn arch-btn-small" onClick={onExport}>{t.arch_qa_export}</button>
+          <button type="button" className={`arch-btn arch-btn-small ${confirmClear ? "arch-btn-danger" : ""}`} disabled={busy}
+            onClick={() => { if (confirmClear) { setConfirmClear(false); onClear(); } else setConfirmClear(true); }}>
+            {confirmClear ? t.arch_qa_clear_confirm : t.arch_qa_clear}
+          </button>
+        </div>
+      )}
       <div className="arch-qa-list" ref={listRef}>
         {messages.length === 0 && (
           <div className="arch-qa-hint">

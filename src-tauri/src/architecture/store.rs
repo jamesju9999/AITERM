@@ -4,18 +4,49 @@ fn file_path(root: &Path) -> PathBuf {
     root.join(".aiterm").join("architecture.json")
 }
 
-pub fn load(root: &Path) -> Result<Option<String>, String> {
-    match std::fs::read_to_string(file_path(root)) {
+fn qa_path(root: &Path) -> PathBuf {
+    root.join(".aiterm").join("architecture-qa.json")
+}
+
+fn read_opt(p: &Path) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(p) {
         Ok(s) => Ok(Some(s)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
     }
 }
 
-pub fn save(root: &Path, json: &str) -> Result<(), String> {
-    let p = file_path(root);
+fn write_creating_dir(p: &Path, content: &str) -> Result<(), String> {
     std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::write(p, json).map_err(|e| e.to_string())
+    std::fs::write(p, content).map_err(|e| e.to_string())
+}
+
+pub fn load(root: &Path) -> Result<Option<String>, String> {
+    read_opt(&file_path(root))
+}
+
+pub fn save(root: &Path, json: &str) -> Result<(), String> {
+    write_creating_dir(&file_path(root), json)
+}
+
+/// 問答記錄（與 architecture.json 分開存，重新分析架構不會洗掉對話）。
+pub fn load_qa(root: &Path) -> Result<Option<String>, String> {
+    read_opt(&qa_path(root))
+}
+
+pub fn save_qa(root: &Path, json: &str) -> Result<(), String> {
+    write_creating_dir(&qa_path(root), json)
+}
+
+/// 把文字寫到使用者在「另存新檔」對話框選的路徑（匯出用）。路徑必須是絕對路徑且上層資料夾已存在。
+pub fn export_text(path: &Path, content: &str) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("export path must be absolute".into());
+    }
+    match path.parent() {
+        Some(dir) if dir.is_dir() => std::fs::write(path, content).map_err(|e| e.to_string()),
+        _ => Err("export folder does not exist".into()),
+    }
 }
 
 /// 不呼叫 git 行程（Windows 會閃黑窗）；直接讀 .git/HEAD。
@@ -106,6 +137,28 @@ mod tests {
         save(dir.path(), "{\"a\":1}").unwrap();
         assert_eq!(load(dir.path()).unwrap().as_deref(), Some("{\"a\":1}"));
         assert!(dir.path().join(".aiterm/architecture.json").is_file());
+    }
+
+    #[test]
+    fn qa_is_stored_separately_from_the_architecture() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(load_qa(dir.path()).unwrap(), None);
+        save_qa(dir.path(), "[1]").unwrap();
+        save(dir.path(), "{}").unwrap();
+        assert_eq!(load_qa(dir.path()).unwrap().as_deref(), Some("[1]"));
+        assert_eq!(load(dir.path()).unwrap().as_deref(), Some("{}"));
+        assert!(dir.path().join(".aiterm/architecture-qa.json").is_file());
+    }
+
+    #[test]
+    fn export_text_writes_utf8_and_refuses_bad_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("答.md");
+        export_text(&out, "# 標題\n").unwrap();
+        assert_eq!(fs::read_to_string(&out).unwrap(), "# 標題\n");
+        assert!(export_text(Path::new("relative.md"), "x").is_err());
+        assert!(export_text(&dir.path().join("nope").join("a.md"), "x").is_err());
+        assert!(!dir.path().join("nope").exists());
     }
 
     #[test]

@@ -218,7 +218,8 @@ button.arch-evidence:hover { color: var(--arch-hi); }
 .arch-qa-diagram summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
 .arch-qa-muted { margin-top: 6px; font-size: 12px; color: var(--text-muted); }
 .arch-qa-busy { align-self: flex-start; margin: 0 14px 6px; }
-.arch-qa-input { display: flex; gap: 8px; padding: 8px 14px 10px; border-top: 1px solid var(--border-color); align-items: flex-end; }
+.arch-qa-input { display: flex; gap: 8px; padding: 8px 14px 10px; border-top: 1px solid var(--border-color); align-items: stretch; }
+.arch-qa-input .arch-btn { min-width: 76px; font-size: 13px; }
 .arch-qa-input textarea { flex: 1; resize: none; font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); }
 .arch-qa-input textarea:focus { outline: none; border-color: var(--arch-hi); }
 
@@ -268,3 +269,6 @@ button.arch-evidence:hover { color: var(--arch-hi); }
 .arch-pv-text .hljs-meta, .arch-pv-text .hljs-tag, .arch-pv-text .hljs-link { color: var(--hl-meta); }
 .arch-pv-text .hljs-strong { font-weight: 700; }
 .arch-pv-text .hljs-emphasis { font-style: italic; }
+
+.arch-qa-bar { display: flex; justify-content: flex-end; gap: 6px; padding: 6px 14px 0; }
+.arch-btn-danger { border-color: var(--arch-err); color: var(--arch-err); }
