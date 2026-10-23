@@ -88,3 +88,17 @@
 - **指令**：`arch_read_file(root, path) -> FilePreview { content, truncated, total_bytes }`、`arch_open_path(root, path)`（`resolve_in_root` 通過後才呼叫 `open::that`，跨平台）。兩者皆在 `spawn_blocking` 執行。
 - **跨平台**：UI 一律用 `/`；後端用 `Path` 元件處理，Windows 的 `\` 與磁碟機前綴由 `resolve_in_root` 擋下或正規化。
 - **其他**：`.arch-node` 加 `user-select: none`（雙擊不再反白卡片文字）；預覽內文維持可選取。
+
+## F. 架構問答與流程導覽（2026-10-23）
+
+使用者在架構導覽裡直接問架構問題（例如「使用者登入的流程怎麼跑？」），AI 回答文字，並同時提供兩種視覺化：**畫布逐步導覽**與**Mermaid 流程／時序圖**。
+
+- **入口**：工具列「問答」鈕開啟畫布下方的抽屜（高約 320px，可關閉）；對話歷史只存在於本次分頁，不寫入磁碟。使用與「AI 分析」同一個模型選擇器、已等時間與取消。
+- **兩段式提問**（使用者選定「先挑相關檔案再讀」）：
+  1. **挑檔**：送「架構摘要（模組 id、名稱、摘要、層、連線與佐證）＋問題」給 AI，要求只回 JSON `{modules:[id], files:[path]}`；以目前的架構與掃描結果驗證（未知模組、不在掃描內的檔案丟掉，檔案最多 8 個）。
+  2. **回答**：用 `arch_read_files` 讀那些檔案，再送「架構摘要＋檔案內容＋問題」，要求只回 JSON：
+     `{answer: markdown, walkthrough: {title, steps:[{module, caption, evidence?:{file,line}}]}, diagram: mermaid 原始碼}`。
+- **驗證（防幻覺）**：`answer` 必須是非空字串；每個導覽步驟的 `module` 必須存在於目前根層架構，否則整步丟掉；`evidence` 的檔案不在掃描內或行號超出範圍時只丟掉 evidence、保留該步；`diagram` 只當文字交給 Mermaid 元件渲染，渲染失敗時顯示原始碼區塊。畫面顯示被丟棄的步驟數。
+- **回覆呈現**：`answer` 用 Markdown 顯示；回覆下方有「▶ 在流程圖上播放」（有導覽時）與渲染後的 Mermaid 圖（有 diagram 時，沿用既有 `MermaidBlock`）。
+- **畫布導覽播放器**：播放時回到根層；畫布只高亮目前這一步的模組，以及它與下一步模組之間（若存在）的連線，其餘變暗，連線上有光點；畫布底部中央有字幕列：「第 i/n 步：說明」＋ ⏮ ▶/⏸ ⏭ ✕，自動播放每步 3 秒，最後一步停住；字幕列的佐證 `file:line` 可點開檔案預覽並標出該行。導覽中點選別的模組不會中斷導覽（只是詳情面板改看那個模組）；按 ✕ 或 Esc 結束。`prefers-reduced-motion` 時不自動播放、不顯示光點。
+- **純邏輯（`qa.ts`／`tour.ts`，TDD）**：`buildSelectMessage`、`parseSelect`、`buildAnswerMessage`、`parseAnswer`、`tourEdges`（把步驟轉成要高亮的連線）、`stepBounds`。
