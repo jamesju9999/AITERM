@@ -68,7 +68,7 @@ pub fn scan(root: &Path, max_files: usize) -> Result<ScanResult, String> {
     })
 }
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::types::ScanEdge;
 
@@ -136,8 +136,45 @@ fn resolve_rs(from: &str, name: &str, all: &HashSet<&str>) -> Option<String> {
     None
 }
 
+/// Java／Kotlin 的 import 是全名（`tw.app.infra.UserMapper`），不是相對路徑，專案可能有多個 source root
+/// （`backend/app/src/main/java/…`），所以把每個 .java／.kt 檔「路徑的所有尾段」都登記起來，之後用 `tw/app/infra/UserMapper.java` 查。
+/// 同尾段有多個檔案時取排序第一個（files 已排序），這種全名重複在同一專案裡本來就罕見。
+fn jvm_suffix_index(files: &[ScanFile]) -> HashMap<String, &str> {
+    let mut idx: HashMap<String, &str> = HashMap::new();
+    for f in files.iter().filter(|f| f.lang == "java" || f.lang == "kotlin") {
+        let segs: Vec<&str> = f.path.split('/').collect();
+        for i in 0..segs.len() {
+            idx.entry(segs[i..].join("/")).or_insert(f.path.as_str());
+        }
+    }
+    idx
+}
+
+/// 解析一行 `import a.b.C;`、`import static a.b.C.m;`、Kotlin 的 `import a.b.C as D`。
+/// 萬用字元（`a.b.*`）不指向單一檔案，略過；內部類別與靜態成員靠逐段往上退到有檔案的那一層。
+fn resolve_jvm(line: &str, idx: &HashMap<String, &str>) -> Option<String> {
+    let rest = line.strip_prefix("import ")?;
+    let rest = rest.strip_prefix("static ").unwrap_or(rest);
+    let name = rest.split(|c: char| c == ';' || c.is_whitespace()).next()?;
+    if name.is_empty() || name.ends_with('*') {
+        return None;
+    }
+    let mut segs: Vec<&str> = name.split('.').collect();
+    while segs.len() >= 2 {
+        let base = segs.join("/");
+        for ext in ["java", "kt"] {
+            if let Some(p) = idx.get(&format!("{base}.{ext}")) {
+                return Some((*p).to_string());
+            }
+        }
+        segs.pop();
+    }
+    None
+}
+
 fn resolve_edges(root: &Path, files: &[ScanFile]) -> Vec<ScanEdge> {
     let all: HashSet<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    let jvm = jvm_suffix_index(files);
     let mut edges = Vec::new();
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for f in files {
@@ -164,6 +201,7 @@ fn resolve_edges(root: &Path, files: &[ScanFile]) -> Vec<ScanEdge> {
                     } else { None };
                     name.and_then(|n| resolve_rs(&f.path, n.trim_end_matches(';'), &all))
                 }
+                "java" | "kotlin" => resolve_jvm(t, &jvm),
                 _ => None,
             };
             if let Some(to) = target {
@@ -278,6 +316,25 @@ mod tests {
         got.sort();
         got.dedup();
         assert_eq!(got, vec![("app/main.py", "app/db.py"), ("src/main.rs", "src/store.rs")]);
+    }
+
+    #[test]
+    fn resolves_java_and_kotlin_imports_across_source_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        write(r, "app/src/main/java/tw/x/app/UserService.java", "package tw.x.app;\nimport tw.x.infra.UserMapper;\nimport tw.x.infra.UserMapper.Key;\nimport static tw.x.domain.Util.fmt;\nimport tw.x.domain.*;\nimport java.util.List;\n");
+        write(r, "infra/src/main/java/tw/x/infra/UserMapper.java", "package tw.x.infra;\npublic interface UserMapper { class Key {} }\n");
+        write(r, "domain/src/main/java/tw/x/domain/Util.java", "package tw.x.domain;\n");
+        write(r, "k/src/main/kotlin/tw/x/k/Main.kt", "import tw.x.domain.Util as U\nimport tw.x.infra.UserMapper\n");
+        let res = scan(r, 100).unwrap();
+        let mut got: Vec<_> = res.edges.iter().map(|e| (e.from.as_str(), e.to.as_str())).collect();
+        got.sort();
+        assert_eq!(got, vec![
+            ("app/src/main/java/tw/x/app/UserService.java", "domain/src/main/java/tw/x/domain/Util.java"),
+            ("app/src/main/java/tw/x/app/UserService.java", "infra/src/main/java/tw/x/infra/UserMapper.java"),
+            ("k/src/main/kotlin/tw/x/k/Main.kt", "domain/src/main/java/tw/x/domain/Util.java"),
+            ("k/src/main/kotlin/tw/x/k/Main.kt", "infra/src/main/java/tw/x/infra/UserMapper.java"),
+        ]);
     }
 
     #[test]
