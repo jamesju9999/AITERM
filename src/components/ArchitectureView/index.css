@@ -242,3 +242,29 @@ button.arch-evidence:hover { color: var(--arch-hi); }
 .arch-side-toggle:hover { color: var(--text-primary); border-color: var(--arch-hi); }
 .arch-side-toggle-open { position: absolute; left: -10px; top: 50%; transform: translateY(-50%); z-index: 6; opacity: 0; transition: opacity 0.12s; }
 .arch-side:hover .arch-side-toggle-open, .arch-side-toggle-open:focus-visible { opacity: 1; }
+
+/* 檔案預覽的語法上色：只用 class（highlight.js 輸出），顏色在這裡依深淺色主題定義 */
+.arch-preview {
+  --hl-keyword: #c678dd; --hl-string: #98c379; --hl-number: #d19a66; --hl-comment: #7f8798;
+  --hl-title: #61afef; --hl-type: #e5c07b; --hl-attr: #d19a66; --hl-meta: #56b6c2;
+}
+:root[data-theme="light"] .arch-preview {
+  --hl-keyword: #a626a4; --hl-string: #50a14f; --hl-number: #986801; --hl-comment: #8a8f9a;
+  --hl-title: #4078f2; --hl-type: #b76b01; --hl-attr: #986801; --hl-meta: #0184bc;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .arch-preview {
+    --hl-keyword: #a626a4; --hl-string: #50a14f; --hl-number: #986801; --hl-comment: #8a8f9a;
+    --hl-title: #4078f2; --hl-type: #b76b01; --hl-attr: #986801; --hl-meta: #0184bc;
+  }
+}
+.arch-pv-text .hljs-keyword, .arch-pv-text .hljs-doctag, .arch-pv-text .hljs-selector-tag, .arch-pv-text .hljs-literal, .arch-pv-text .hljs-built_in { color: var(--hl-keyword); }
+.arch-pv-text .hljs-string, .arch-pv-text .hljs-regexp, .arch-pv-text .hljs-template-variable, .arch-pv-text .hljs-addition { color: var(--hl-string); }
+.arch-pv-text .hljs-number, .arch-pv-text .hljs-symbol, .arch-pv-text .hljs-bullet, .arch-pv-text .hljs-variable, .arch-pv-text .hljs-params { color: var(--hl-number); }
+.arch-pv-text .hljs-comment, .arch-pv-text .hljs-quote, .arch-pv-text .hljs-deletion { color: var(--hl-comment); font-style: italic; }
+.arch-pv-text .hljs-title, .arch-pv-text .hljs-section, .arch-pv-text .hljs-selector-id, .arch-pv-text .hljs-selector-class { color: var(--hl-title); }
+.arch-pv-text .hljs-type, .arch-pv-text .hljs-class .hljs-title, .arch-pv-text .hljs-title.class_ { color: var(--hl-type); }
+.arch-pv-text .hljs-attr, .arch-pv-text .hljs-attribute, .arch-pv-text .hljs-name { color: var(--hl-attr); }
+.arch-pv-text .hljs-meta, .arch-pv-text .hljs-tag, .arch-pv-text .hljs-link { color: var(--hl-meta); }
+.arch-pv-text .hljs-strong { font-weight: 700; }
+.arch-pv-text .hljs-emphasis { font-style: italic; }

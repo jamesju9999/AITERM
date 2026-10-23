@@ -116,3 +116,18 @@ describe("FilePreview", () => {
     expect(archReadFile).toHaveBeenLastCalledWith("/proj", "b.ts");
   });
 });
+
+describe("語法上色", () => {
+  it("認得的副檔名會把關鍵字包成 hljs span，文字內容不變", async () => {
+    archReadFile.mockResolvedValue({ content: "public class A {}\n", truncated: false, total_bytes: 18 });
+    const { container } = render(<LocaleProvider><FilePreview root="/r" path="A.java" onClose={() => {}} /></LocaleProvider>);
+    await waitFor(() => expect(container.querySelector(".hljs-keyword")?.textContent).toBe("public"));
+    expect(container.querySelector('[data-line="1"]')?.textContent).toContain("public class A {}");
+  });
+  it("不認得的檔案維持純文字、沒有 hljs span", async () => {
+    archReadFile.mockResolvedValue({ content: "public class A {}\n", truncated: false, total_bytes: 18 });
+    const { container } = render(<LocaleProvider><FilePreview root="/r" path="NOTES" onClose={() => {}} /></LocaleProvider>);
+    await waitFor(() => expect(container.querySelector('[data-line="1"]')).not.toBeNull());
+    expect(container.querySelector(".hljs-keyword")).toBeNull();
+  });
+});

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
@@ -94,13 +94,13 @@ describe("ArchitectureView", () => {
     fireEvent.click(await screen.findByRole("button", { name: /web/ }));
     fireEvent.click(await screen.findByRole("button", { name: /^(預覽檔案|Preview file)$/ }));
     const dlg = await screen.findByRole("dialog");
-    expect(await within(dlg).findByText("export default a;")).toBeInTheDocument();
+    await waitFor(() => expect(dlg.querySelector("[data-line=\"2\"]")?.textContent).toContain("export default a;"));
     expect(archReadFile).toHaveBeenLastCalledWith("/p", "web/App.tsx");
 
     archReadFile.mockResolvedValue({ content: "import flask", truncated: false, total_bytes: 12 });
     fireEvent.click(screen.getByRole("button", { name: /server/ }));
     fireEvent.click(await screen.findByRole("button", { name: /^(預覽檔案|Preview file)$/ }));
-    expect(await screen.findByText("import flask")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("dialog").querySelector("[data-line=\"1\"]")?.textContent).toContain("import flask"));
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(archReadFile).toHaveBeenLastCalledWith("/p", "server/routes.py");
 

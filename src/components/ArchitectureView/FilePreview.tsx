@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
+import { highlightLines } from "./highlight";
 import { archOpenPath, archReadFile, type FilePreview as Preview } from "../../ipc/architecture";
 
 const MAX_LINES = 3000;
@@ -55,28 +56,36 @@ export function FilePreview({ root, path, line, onClose }: Props) {
   };
   const open = () => { archOpenPath(root, path).catch((e) => setState({ key, kind: "error", msg: errMsg(e) })); };
 
+  const shown = useMemo(() => {
+    if (cur?.kind !== "ok") return null;
+    const lines = cur.data.content.split(/\r?\n/);
+    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    const head = lines.slice(0, MAX_LINES);
+    return { lines, head, html: highlightLines(head.join("\n"), path) };
+  }, [cur, path]);
+
   let body;
   if (!cur) {
     body = <div className="arch-pv-note">{t.arch_pv_loading}</div>;
   } else if (cur.kind === "error") {
     body = <div className="arch-pv-note arch-pv-error" role="alert">{cur.msg}</div>;
-  } else {
-    const lines = cur.data.content.split(/\r?\n/);
-    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-    const shown = lines.slice(0, MAX_LINES);
+  } else if (shown) {
+    const { lines, head, html } = shown;
     const kb = Math.round(new TextEncoder().encode(cur.data.content).length / 1024);
     body = (
       <>
         {cur.data.truncated && <div className="arch-pv-note">{t.arch_pv_truncated.replace("{n}", String(kb))}</div>}
         <div className="arch-pv-code">
-          {shown.map((text, i) => {
+          {head.map((text, i) => {
             const n = i + 1;
             const hit = n === line;
             return (
               <div key={n} data-line={n} ref={hit ? hitRef : undefined} aria-current={hit ? "true" : undefined}
                 className={`arch-pv-row ${hit ? "arch-pv-hit" : ""}`}>
                 <span className="arch-pv-no" aria-hidden="true">{n}</span>
-                <span className="arch-pv-text">{text || "​"}</span>
+                {html?.[i] !== undefined
+                  ? <span className="arch-pv-text" dangerouslySetInnerHTML={{ __html: html[i] || "​" }} />
+                  : <span className="arch-pv-text">{text || "​"}</span>}
               </div>
             );
           })}
