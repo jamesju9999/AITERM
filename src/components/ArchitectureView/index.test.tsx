@@ -1046,6 +1046,24 @@ describe("ArchitectureView 架構問答與流程導覽", () => {
     expect(document.querySelector("animateMotion")!.getAttribute("keyPoints")).toBeNull();
   });
 
+  it("連續兩步在同一個模組：沒有連線可畫，改畫迴圈箭頭與「模組內部」標籤，目前模組有光圈", async () => {
+    window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply([{ module: "b", caption: "分派" }, { module: "b", caption: "執行" }, { module: "c", caption: "寫入" }]));
+    await openQa();
+    await send();
+    await startTour();
+    expect(onEdges()).toHaveLength(0);
+    expect(screen.getByTestId("tour-loop")).toBeInTheDocument();
+    expect(document.querySelector(".arch-loop-pill")?.textContent).toMatch(/模組內部|Inside this module/);
+    expect(node("Mb")).toHaveClass("arch-node-tour");
+    expect(node("Mc")).not.toHaveClass("arch-node-tour");
+    fireEvent.click(screen.getByRole("button", { name: /^(下一步|Next)/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^(下一步|Next)/ }));
+    await act(async () => {});
+    expect(screen.queryByTestId("tour-loop")).toBeNull(); // 最後一步沒有下一步
+    expect(node("Mc")).toHaveClass("arch-node-tour");
+  });
+
   it("導覽字幕列顯示證據那一行的程式碼（取自讀進來的檔案，不是 AI 寫的）", async () => {
     archReadFiles.mockResolvedValue([["a/x.ts", "  return ResponseEntity.ok(body);\nother"]]);
     invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply([

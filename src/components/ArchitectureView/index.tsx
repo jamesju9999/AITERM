@@ -462,15 +462,22 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       // 兩步之間沒有直接連線時，沿途經過的模組也一起亮，才看得出資料走過哪幾層。
       const route = tourRoute(arch, steps, tour.index);
       for (const m of route.modules) modules.add(m);
-      return { edges: new Set<Edge>(route.edges), modules, reversed: route.reversed };
+      // 連續兩步在同一個模組裡（例如分派器→流程服務）沒有連線可畫：改在卡片旁畫一圈迴圈箭頭，並標出這一步在模組內從哪個檔案到哪個檔案。
+      const cur = steps[tour.index];
+      const nxt = steps[tour.index + 1];
+      const base = (f?: string) => f?.split(/[\\/]/).pop();
+      const a = base(cur?.evidence?.file);
+      const b = base(nxt?.evidence?.file);
+      const loop = cur && nxt && cur.module === nxt.module ? { module: cur.module, label: a && b && a !== b ? `${a} → ${b}` : t.arch_tour_inside } : null;
+      return { edges: new Set<Edge>(route.edges), modules, reversed: route.reversed, loop, current: cur?.module };
     }
     if (activePath) {
       const modules = new Set<string>();
       for (const e of activePath) { modules.add(e.from); modules.add(e.to); }
-      return { edges: new Set<Edge>(activePath), modules, reversed: undefined };
+      return { edges: new Set<Edge>(activePath), modules, reversed: undefined, loop: null, current: undefined };
     }
-    return near ? { edges: new Set<Edge>(near.edges), modules: near.modules, reversed: undefined } : null;
-  }, [tour, arch, view, activePath, near]);
+    return near ? { edges: new Set<Edge>(near.edges), modules: near.modules, reversed: undefined, loop: null, current: undefined } : null;
+  }, [tour, arch, view, activePath, near, t]);
   const reduced = prefersReducedMotion();
   const pickPath = useCallback((p: Edge[]) => {
     if (!view || !selected) return;
@@ -728,6 +735,21 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                       </g>
                     );
                   })}
+                  {hl?.loop && layout.nodes[hl.loop.module] && (() => {
+                    const n = layout.nodes[hl.loop.module];
+                    const x = n.x + n.w;
+                    const d = `M ${x} ${n.y + n.h * 0.3} C ${x + 46} ${n.y + n.h * 0.05}, ${x + 46} ${n.y + n.h * 0.95}, ${x} ${n.y + n.h * 0.7}`;
+                    return (
+                      <g data-testid="tour-loop">
+                        <path d={d} fill="none" markerEnd="url(#arch-arrow-on)" className="arch-edge arch-edge-on" />
+                        {!reduced && Array.from({ length: DOTS_PER_EDGE }, (_, k) => (
+                          <circle key={k} r="3.5" className="arch-flow-dot">
+                            <animateMotion path={d} dur="1.6s" begin={k === 0 ? "0s" : "-0.8s"} repeatCount="indefinite" />
+                          </circle>
+                        ))}
+                      </g>
+                    );
+                  })()}
                 </svg>
                 {view.modules.map((m) => {
                   const p = layout.nodes[m.id];
@@ -736,7 +758,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                   const compact = isCompact(m);
                   return (
                     <button key={m.id} type="button" title={m.name} aria-label={m.name} data-mid={m.id}
-                      className={`arch-node ${compact ? "arch-node-compact" : ""} ${selected === m.id ? "arch-node-sel" : ""} ${dim ? "arch-node-dim" : ""}`}
+                      className={`arch-node ${compact ? "arch-node-compact" : ""} ${selected === m.id ? "arch-node-sel" : ""} ${hl?.current === m.id ? "arch-node-tour" : ""} ${dim ? "arch-node-dim" : ""}`}
                       style={{ left: p.x, top: p.y, width: p.w, height: p.h, ["--lc" as string]: layerColor(m.layer, layerIndex(m.layer)) }}
                       onClick={() => { setSelected(m.id); side.expand(); }} onDoubleClick={() => enter(m.id)}
                       onMouseEnter={() => setHoverNode(m.id)} onMouseLeave={() => setHoverNode((h) => (h === m.id ? null : h))}>
@@ -753,6 +775,9 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                     </button>
                   );
                 })}
+                {hl?.loop && layout.nodes[hl.loop.module] && (
+                  <span className="arch-edge-pill arch-loop-pill" style={{ left: layout.nodes[hl.loop.module].x + layout.nodes[hl.loop.module].w / 2, top: layout.nodes[hl.loop.module].y + layout.nodes[hl.loop.module].h + 18, maxWidth: layout.nodes[hl.loop.module].w }} title={hl.loop.label}>{hl.loop.label}</span>
+                )}
                 {labelPts.map((l) => (
                   <span key={`pill-${l.id}`} className="arch-edge-pill" style={{ left: l.x, top: l.y }}>{view.edges[Number(l.id)].kind}{l.count > 1 ? ` ×${l.count}` : ""}</span>
                 ))}
