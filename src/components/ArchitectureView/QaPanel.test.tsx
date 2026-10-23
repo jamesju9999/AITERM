@@ -85,4 +85,32 @@ describe("QaPanel", () => {
     await mount({ messages: [{ id: "e1", role: "error", text: "AI 回應不是有效的格式" }] });
     expect(within(screen.getByRole("alert")).getByText("AI 回應不是有效的格式")).toBeInTheDocument();
   });
+
+  it("錯誤泡泡有 raw 才出現「顯示原始回應」，點開可見原文，再點收起", async () => {
+    const { rerender, props } = await mount({ messages: [{ id: "e0", role: "error", text: "沒有 raw" }] });
+    expect(screen.queryByRole("button", { name: /顯示原始回應|Show raw response/ })).toBeNull();
+    rerender(<LocaleProvider><QaPanel {...props} messages={[{ id: "e1", role: "error", text: "格式錯", raw: '{"answer": ' }]} /></LocaleProvider>);
+    await act(async () => {});
+    expect(screen.queryByTestId("qa-raw")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /顯示原始回應|Show raw response/ }));
+    expect(screen.getByTestId("qa-raw").textContent).toBe('{"answer": ');
+    expect(screen.queryByText(/已截斷|truncated/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /隱藏原始回應|Hide raw response/ }));
+    expect(screen.queryByTestId("qa-raw")).toBeNull();
+  });
+
+  it("原始回應超過 4000 字只顯示前 4000 字並註明已截斷", async () => {
+    const raw = "a".repeat(4000) + "TAIL";
+    await mount({ messages: [{ id: "e1", role: "error", text: "格式錯", raw }] });
+    fireEvent.click(screen.getByRole("button", { name: /顯示原始回應|Show raw response/ }));
+    expect(screen.getByTestId("qa-raw").textContent).toBe("a".repeat(4000));
+    expect(screen.getByText(/已截斷|truncated/)).toBeInTheDocument();
+  });
+
+  it("剛好 4000 字不算截斷", async () => {
+    await mount({ messages: [{ id: "e1", role: "error", text: "格式錯", raw: "b".repeat(4000) }] });
+    fireEvent.click(screen.getByRole("button", { name: /顯示原始回應|Show raw response/ }));
+    expect(screen.getByTestId("qa-raw").textContent).toHaveLength(4000);
+    expect(screen.queryByText(/已截斷|truncated/)).toBeNull();
+  });
 });

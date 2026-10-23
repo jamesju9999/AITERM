@@ -7,7 +7,29 @@ import type { QaAnswer } from "./qa";
 export type QaMessage =
   | { id: string; role: "user"; text: string }
   | { id: string; role: "ai"; qa: QaAnswer }
-  | { id: string; role: "error"; text: string };
+  | { id: string; role: "error"; text: string; raw?: string };
+
+const RAW_MAX = 4000;
+
+/** 錯誤泡泡裡可展開的 AI 原始回應，方便使用者貼回來除錯。 */
+function RawReply({ raw }: { raw: string }) {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  const cut = raw.length > RAW_MAX;
+  return (
+    <>
+      <button type="button" className="arch-btn arch-btn-small arch-qa-raw-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        {open ? t.arch_qa_raw_hide : t.arch_qa_raw_show}
+      </button>
+      {open && (
+        <>
+          <pre className="arch-qa-raw" data-testid="qa-raw">{cut ? raw.slice(0, RAW_MAX) : raw}</pre>
+          {cut && <div className="arch-qa-raw-note">{t.arch_qa_raw_truncated.replace("{n}", String(raw.length)).replace("{max}", String(RAW_MAX))}</div>}
+        </>
+      )}
+    </>
+  );
+}
 
 export type QaStage = "select" | "answer";
 
@@ -54,7 +76,12 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
         )}
         {messages.map((m) => {
           if (m.role === "user") return <div key={m.id} className="arch-qa-msg arch-qa-user">{m.text}</div>;
-          if (m.role === "error") return <div key={m.id} className="arch-qa-msg arch-qa-err" role="alert">{m.text}</div>;
+          if (m.role === "error") return (
+            <div key={m.id} className="arch-qa-msg arch-qa-err" role="alert">
+              {m.text}
+              {m.raw !== undefined && <RawReply raw={m.raw} />}
+            </div>
+          );
           const { qa } = m;
           return (
             <div key={m.id} className="arch-qa-msg arch-qa-ai">

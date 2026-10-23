@@ -286,8 +286,14 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       qaStreamRef.current = id2;
       const r2 = await invokeAiComplete([{ role: "user", content: buildAnswerMessage(arch, question, files) }], ANSWER_SYSTEM, id2, providerId || undefined);
       if (run !== qaRunRef.current) return;
-      const qa = r2.content ? parseAnswer(r2.content, arch, scan) : null;
-      setQaMessages((m) => [...m, qa ? { id: nanoid(), role: "ai", qa } : { id: nanoid(), role: "error", text: t.arch_qa_bad_format }]);
+      if (!r2.content) {
+        // 供應商沒給文字（例如只回了工具呼叫）：和「格式不對」分開講，也沒有原文可看。
+        setQaMessages((m) => [...m, { id: nanoid(), role: "error", text: t.arch_qa_no_text }]);
+      } else {
+        const content = r2.content;
+        const qa = parseAnswer(content, arch, scan);
+        setQaMessages((m) => [...m, qa ? { id: nanoid(), role: "ai", qa } : { id: nanoid(), role: "error", text: t.arch_qa_bad_format, raw: content }]);
+      }
     } catch (e) {
       if (run !== qaRunRef.current) return;
       const err = e as AiError;

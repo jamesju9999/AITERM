@@ -1147,11 +1147,33 @@ describe("ArchitectureView 架構問答與流程導覽", () => {
     expect(await playBtn()).toHaveTextContent(/2/);
   });
 
-  it("AI 回應格式不對時顯示錯誤泡泡", async () => {
-    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce({ content: "not json", tool_calls: [], tool_calling_unsupported: false });
+  it("AI 回應是修不了的壞 JSON：顯示錯誤泡泡，並可展開原始回應", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce({ content: '{"answer": ', tool_calls: [], tool_calling_unsupported: false });
     await openQa();
     await send();
     expect(await screen.findByRole("alert")).toHaveTextContent(/AI 回應不是有效的格式|not in a valid format/);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: /顯示原始回應|Show raw response/ }));
+    expect(screen.getByTestId("qa-raw").textContent).toBe('{"answer": ');
+  });
+
+  it("AI 回應是沒有 JSON 的純 Markdown：當一般答案顯示，沒有錯誤也沒有播放鈕", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce({ content: "## 登入流程\n先呼叫 **API**。", tool_calls: [], tool_calling_unsupported: false });
+    await openQa();
+    await send();
+    expect(await screen.findByText("API")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: /在流程圖上播放|Play on the diagram/ })).toBeNull();
+  });
+
+  it("第二段沒有文字（只回工具呼叫）：顯示專屬訊息，不是格式錯誤，也沒有原始回應", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce({ content: null, tool_calls: [{ id: "t", name: "x", arguments: "{}" }], tool_calling_unsupported: false });
+    await openQa();
+    await send();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/沒有回傳文字|returned no text/);
+    expect(alert).not.toHaveTextContent(/不是有效的格式|not in a valid format/);
+    expect(screen.queryByRole("button", { name: /顯示原始回應|Show raw response/ })).toBeNull();
   });
 
   it("AI 未設定時顯示提示", async () => {

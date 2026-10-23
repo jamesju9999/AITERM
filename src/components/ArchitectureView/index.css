@@ -210,6 +210,9 @@ button.arch-evidence:hover { color: var(--arch-hi); }
 .arch-qa-user { align-self: flex-end; background: color-mix(in srgb, var(--arch-hi) 18%, var(--bg-tertiary)); white-space: pre-wrap; }
 .arch-qa-ai { align-self: flex-start; background: var(--bg-primary); border: 1px solid var(--border-color); }
 .arch-qa-err { align-self: flex-start; color: var(--arch-err); border: 1px solid var(--arch-err); background: var(--bg-primary); }
+.arch-qa-raw-toggle { display: block; margin-top: 6px; }
+.arch-qa-raw { margin: 6px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all; user-select: text; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-primary); }
+.arch-qa-raw-note { margin-top: 4px; font-size: 11px; opacity: 0.8; }
 .arch-qa-play { margin: 6px 0; }
 .arch-qa-diagram { margin-top: 6px; }
 .arch-qa-diagram summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
