@@ -368,12 +368,13 @@ describe("三區排版（主流程／共用底座／支援週邊）", () => {
     expect(l.columns[0].h).toBe(mainH);
     expect(l.columns[1].h).toBe(mainH);
   });
-  it("共用底座在主流程正下方、橫跨主流程全寬，卡片橫排；支援週邊在最下面", () => {
+  it("共用底座在主流程正下方，寬度只夠卡片橫排（不超過主流程全寬）；支援週邊在最下面", () => {
     const l = layoutGraph(zoned);
     const mainBottom = PAD + l.columns[0].h;
     const dom = l.columns[2];
     expect(dom.x).toBe(PAD);
-    expect(dom.w).toBe(l.columns[1].x + l.columns[1].w - PAD);
+    expect(dom.w).toBe(LANE_PAD * 2 + 2 * NODE_W + SUBCOL_GAP);
+    expect(dom.w).toBeLessThanOrEqual(l.columns[1].x + l.columns[1].w - PAD);
     expect(dom.y).toBe(mainBottom + ZONE_GAP + ZONE_CAPTION_H);
     expect(l.zones[0].y).toBe(mainBottom + ZONE_GAP);
     expect(l.nodes.d1.y).toBe(dom.y + BAND_HEADER_H);
@@ -403,5 +404,22 @@ describe("三區排版（主流程／共用底座／支援週邊）", () => {
     expect(up.startsWith(`M ${l.nodes.d1.x + NODE_W / 2} ${l.nodes.d1.y} `)).toBe(true);
     const side = edgePath(l.nodes.f1, l.nodes.b1);
     expect(side.startsWith(`M ${l.nodes.f1.x + NODE_W} `)).toBe(true);
+  });
+});
+
+describe("共用底座寬度", () => {
+  const mod = (id: string): Module => ({ id, layer: "dom", name: id, files: [], tech: [], summary: "", dataflow: "" });
+  const mk = (n: number): Architecture => ({
+    layers: [{ id: "fe", name: "前端" }, { id: "dom", name: "領域模型" }],
+    modules: [{ ...mod("f"), layer: "fe" }, ...Array.from({ length: n }, (_, i) => mod(`d${i}`))],
+    edges: [], meta: { scannedAt: "", gitHead: null, analyzed: true, dropped: 0 },
+  });
+  it("一張卡時最窄只有一條泳道寬", () => {
+    expect(layoutGraph(mk(1)).columns[1].w).toBe(LANE_W);
+  });
+  it("卡片多到放不進主流程寬度時換行，寬度不超過主流程全寬", () => {
+    const l = layoutGraph(mk(5));
+    expect(l.columns[1].w).toBe(l.width - PAD * 2);
+    expect(l.nodes.d4.y).toBeGreaterThan(l.nodes.d0.y);
   });
 });

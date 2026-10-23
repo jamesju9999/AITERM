@@ -54,7 +54,7 @@ function chunkColumns<T>(items: T[]): T[][] {
 }
 
 /**
- * 三區排版：主流程各層由左到右排成一排；共用底座（領域模型等）是主流程下方橫跨全寬的帶狀區；
+ * 三區排版：主流程各層由左到右排成一排；共用底座（領域模型等）是主流程下方的帶狀區（寬度隨卡片數，最寬到主流程全寬）；
  * 支援週邊（建置、測試、報表…）在最下方另排一列。沒有共用／支援層時與單排完全相同。
  * columns 仍依 arch.layers 的順序，顏色與索引不受分區影響。
  */
@@ -102,13 +102,16 @@ export function layoutGraph(arch: Architecture): Layout {
   if (main.length > 0) cursor += placeRow(main, cursor, "main");
 
   if (shared.length > 0) {
-    const bandW = Math.max(LANE_W, contentInnerW);
+    const fullW = Math.max(LANE_W, contentInnerW);
+    // 帶狀區寬度只夠放自己的卡片排成一列（放不下才換行、最寬到主流程全寬），免得一張卡孤零零躺在整條空帶子裡。
+    const bandWOf = (n: number) => Math.min(fullW, Math.max(LANE_W, LANE_PAD * 2 + n * NODE_W + (n - 1) * SUBCOL_GAP));
     cursor += ZONE_GAP;
-    zones.push({ role: "shared", x: PAD, y: cursor, w: bandW });
+    zones.push({ role: "shared", x: PAD, y: cursor, w: Math.max(...shared.map((i) => bandWOf(subcols[i].flat().length))) });
     cursor += ZONE_CAPTION_H;
-    const perRow = Math.max(1, Math.floor((bandW - LANE_PAD * 2 + SUBCOL_GAP) / (NODE_W + SUBCOL_GAP)));
     for (const i of shared) {
       const mods = subcols[i].flat();
+      const bandW = bandWOf(mods.length);
+      const perRow = Math.max(1, Math.floor((bandW - LANE_PAD * 2 + SUBCOL_GAP) / (NODE_W + SUBCOL_GAP)));
       const rows: Module[][] = [];
       for (let k = 0; k < mods.length; k += perRow) rows.push(mods.slice(k, k + perRow));
       let y = cursor + BAND_HEADER_H;

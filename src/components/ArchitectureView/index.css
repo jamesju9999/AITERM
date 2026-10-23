@@ -80,7 +80,7 @@
 .arch-edge { stroke: var(--arch-edge); stroke-width: 2; opacity: 0.9; transition: opacity 0.15s; }
 .arch-edge-ai { stroke-dasharray: 6 4; }
 .arch-edge-on { stroke: var(--arch-hi); stroke-width: 3; opacity: 1; }
-.arch-edge-dim { opacity: 0.45; stroke-width: 1.5; }
+.arch-edge-dim { opacity: 0.3; stroke-width: 1.5; }
 /* 稠密圖且沒有焦點：連線退成安靜的底圖，滑過／選取節點才亮 */
 .arch-edge-quiet { opacity: 0.35; stroke-width: 1; }
 .arch-edge-glow { stroke: var(--arch-hi); stroke-width: 7; opacity: 0.45; }
