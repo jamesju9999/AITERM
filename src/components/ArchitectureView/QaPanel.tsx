@@ -44,13 +44,15 @@ interface Props {
   onPlayTour: (messageId: string) => void;
   onExport: () => void;
   onClear: () => void;
+  onDelete: (questionId: string) => void;
 }
 
 /** 畫布下方的問答抽屜；純展示，所有 AI 流程由父層驅動。 */
-export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPlayTour, onExport, onClear }: Props) {
+export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPlayTour, onExport, onClear, onDelete }: Props) {
   const { t } = useLocale();
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const ime = useRef(createImeEnterGuard());
   const [confirmClear, setConfirmClear] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
@@ -110,7 +112,8 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
           {[...questions].reverse().map((q) => (
             <li key={q.id}>
               <button type="button" className="arch-qa-hist-q" title={q.text} onClick={() => jumpTo(q.id)}>{q.text}</button>
-              <button type="button" className="arch-btn arch-btn-small" onClick={() => { setText(q.text); setHistOpen(false); }}>{t.arch_qa_reask}</button>
+              <button type="button" className="arch-btn arch-btn-small" onClick={() => { setText(q.text); setHistOpen(false); inputRef.current?.focus(); }}>{t.arch_qa_reask}</button>
+              <button type="button" className="arch-btn arch-btn-small" disabled={busy} aria-label={t.arch_qa_delete_one.replace("{q}", q.text)} title={t.arch_qa_delete_one.replace("{q}", q.text)} onClick={() => onDelete(q.id)}>✕</button>
             </li>
           ))}
         </ul>
@@ -163,6 +166,7 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
       )}
       <div className="arch-qa-input">
         <textarea
+          ref={inputRef}
           value={text}
           rows={2}
           placeholder={t.arch_qa_placeholder}

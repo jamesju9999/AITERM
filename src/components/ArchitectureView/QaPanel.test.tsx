@@ -7,9 +7,9 @@ vi.mock("../MermaidBlock", () => ({ MermaidBlock: ({ chart }: { chart: string })
 
 import { QaPanel, type QaMessage } from "./QaPanel";
 
-const base = { busy: false, stage: "select" as const, elapsed: 0, onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onExport: vi.fn(), onClear: vi.fn(), onOpenFile: vi.fn() };
+const base = { busy: false, stage: "select" as const, elapsed: 0, onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onExport: vi.fn(), onClear: vi.fn(), onDelete: vi.fn(), onOpenFile: vi.fn() };
 const mount = async (over: Partial<Parameters<typeof QaPanel>[0]> = {}) => {
-  const props = { ...base, messages: [] as QaMessage[], onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onExport: vi.fn(), onClear: vi.fn(), ...over };
+  const props = { ...base, messages: [] as QaMessage[], onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onExport: vi.fn(), onClear: vi.fn(), onDelete: vi.fn(), ...over };
   const r = render(<LocaleProvider><QaPanel {...props} /></LocaleProvider>);
   await act(async () => {});
   return { ...r, props };
@@ -212,7 +212,7 @@ describe("QaPanel", () => {
       onTestFinished(() => { HTMLElement.prototype.scrollIntoView = orig; });
       await mount({ messages: msgs });
       fireEvent.click(histBtn());
-      fireEvent.click(screen.getByRole("button", { name: /第一題登入/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^第一題登入$/ }));
       expect(scroll).toHaveBeenCalledTimes(1);
       expect((scroll.mock.contexts[0] as HTMLElement).getAttribute("data-mid")).toBe("u1");
       expect(screen.queryByRole("list", { name: /^(歷史|History)/ })).toBeNull();
@@ -225,6 +225,27 @@ describe("QaPanel", () => {
       expect((input() as HTMLTextAreaElement).value).toBe("第二題資料庫");
       expect(props.onSend).not.toHaveBeenCalled();
       expect(screen.queryByRole("list", { name: /^(歷史|History)/ })).toBeNull();
+    });
+
+    it("「再問一次」後輸入框取得焦點", async () => {
+      await mount({ messages: msgs });
+      fireEvent.click(histBtn());
+      fireEvent.click(screen.getAllByRole("button", { name: /^(再問一次|Ask again)/ })[1]);
+      expect((input() as HTMLTextAreaElement).value).toBe("第一題登入");
+      expect(document.activeElement).toBe(input());
+    });
+
+    it("✕ 刪除單題：呼叫 onDelete 帶該題 id；送出中不能刪", async () => {
+      const { props } = await mount({ messages: msgs });
+      fireEvent.click(histBtn());
+      fireEvent.click(screen.getAllByRole("button", { name: /^(刪除這題|Delete this question)/ })[1]);
+      expect(props.onDelete).toHaveBeenCalledWith("u1");
+    });
+
+    it("送出中刪除鈕停用", async () => {
+      await mount({ messages: msgs, busy: true });
+      fireEvent.click(histBtn());
+      for (const b of screen.getAllByRole("button", { name: /^(刪除這題|Delete this question)/ })) expect(b).toBeDisabled();
     });
 
     it("Esc 收起清單", async () => {

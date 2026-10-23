@@ -1127,6 +1127,22 @@ describe("ArchitectureView 架構問答與流程導覽", () => {
     await waitFor(() => expect(JSON.parse(archQaSave.mock.calls.at(-1)![1] as string).messages).toEqual([]));
   });
 
+  it("歷史清單刪單題：連同該題的回答一起刪，其他題保留並存檔", async () => {
+    archQaLoad.mockResolvedValue(JSON.stringify({ v: 1, messages: [
+      { id: "u1", role: "user", text: "第一題" },
+      { id: "a1", role: "ai", qa: { answer: "答一", diagram: "", dropped: 0, truncated: false, tour: null } },
+      { id: "u2", role: "user", text: "第二題" },
+      { id: "a2", role: "ai", qa: { answer: "答二", diagram: "", dropped: 0, truncated: false, tour: null } },
+    ] }));
+    await openQa();
+    await screen.findByText("答二");
+    fireEvent.click(screen.getByRole("button", { name: /^(歷史|History)/ }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^(刪除這題|Delete this question).*第一題/ })); });
+    expect(screen.queryByText("答一")).toBeNull();
+    expect(screen.getByText("答二")).toBeInTheDocument();
+    await waitFor(() => expect(JSON.parse(archQaSave.mock.calls.at(-1)![1] as string).messages.map((m: { id: string }) => m.id)).toEqual(["u2", "a2"]));
+  });
+
   it("挑檔沒有任何有效檔案時仍會繼續回答，且不讀檔", async () => {
     invokeAiComplete.mockResolvedValueOnce({ ...SELECT_REPLY, content: JSON.stringify({ modules: [], files: ["nope.ts"] }) }).mockResolvedValueOnce(answerReply([]));
     await openQa();

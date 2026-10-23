@@ -372,6 +372,17 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     setTour(null);
   }, []);
 
+  // 刪一題：連同它後面的回答（到下一個提問之前）一起刪。
+  const deleteQuestion = useCallback((questionId: string) => {
+    setQaMessages((ms) => {
+      const from = ms.findIndex((m) => m.id === questionId && m.role === "user");
+      if (from < 0) return ms;
+      let to = from + 1;
+      while (to < ms.length && ms[to].role !== "user") to++;
+      return [...ms.slice(0, from), ...ms.slice(to)];
+    });
+  }, []);
+
   const playTour = useCallback((messageId: string) => {
     const msg = qaMessages.find((m) => m.id === messageId);
     if (!msg || msg.role !== "ai" || !msg.qa.tour) return;
@@ -715,7 +726,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
         )}
       </div>
       {qaOpen && scan && arch && (
-        <QaPanel messages={qaMessages} busy={qaBusy} stage={qaStage} elapsed={qaElapsed} onSend={ask} onCancel={cancelAsk} onPlayTour={playTour} onExport={exportQa} onClear={clearQa} />
+        <QaPanel messages={qaMessages} busy={qaBusy} stage={qaStage} elapsed={qaElapsed} onSend={ask} onCancel={cancelAsk} onPlayTour={playTour} onExport={exportQa} onClear={clearQa} onDelete={deleteQuestion} />
       )}
     </div>
   );
