@@ -1064,6 +1064,21 @@ describe("ArchitectureView 架構問答與流程導覽", () => {
     expect(node("Mc")).toHaveClass("arch-node-tour");
   });
 
+  it("兩步的模組在圖上沒有任何連線：畫一條只在這一步出現的「導覽推論」虛線，下一步就消失", async () => {
+    window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+    archLoad.mockResolvedValue(JSON.stringify({ ...QA_ARCH, edges: [QA_ARCH.edges[0]] })); // c 沒有任何連線
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply([{ module: "b", caption: "查詢" }, { module: "c", caption: "回填" }]));
+    await openQa();
+    await send();
+    await startTour();
+    expect(onEdges()).toHaveLength(0); // 圖上真的連線一條都沒亮，只有推論那條
+    expect(screen.getByTestId("tour-gap")).toBeInTheDocument();
+    expect(screen.getByTestId("tour-gap-pill").textContent).toMatch(/導覽推論|Inferred by tour/);
+    fireEvent.click(screen.getByRole("button", { name: /^(下一步|Next)/ }));
+    await act(async () => {});
+    expect(screen.queryByTestId("tour-gap")).toBeNull();
+  });
+
   it("真的問兩題（同一句）再刪 #1：只刪第一題與它的回答，第二題留著並存檔", async () => {
     invokeAiComplete
       .mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS, { answer: "第一次回答" }))

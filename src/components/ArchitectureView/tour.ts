@@ -11,6 +11,8 @@ export interface TourRoute {
   reversed: Set<Edge>;
   /** 路上經過的模組（含起訖）；沒有路時為空。 */
   modules: string[];
+  /** 兩步的模組在圖上完全不相通（例如 AI 分析沒給任何連線）時，起訖模組；畫面改畫一條「導覽推論」的臨時虛線，這一步才看得出流向。 */
+  gap?: { from: string; to: string };
 }
 
 const NO_ROUTE: TourRoute = { edges: [], reversed: new Set(), modules: [] };
@@ -36,7 +38,7 @@ export function tourRoute(view: Architecture, steps: TourStep[], index: number):
       queue.push(v);
     }
   }
-  if (!prev.has(next.module)) return NO_ROUTE;
+  if (!prev.has(next.module)) return { ...NO_ROUTE, gap: { from: cur.module, to: next.module } };
   const modules: string[] = [];
   for (let m = next.module; m !== ""; m = prev.get(m)!) modules.unshift(m);
   const edges: Edge[] = [];

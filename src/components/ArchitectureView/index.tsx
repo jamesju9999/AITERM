@@ -478,14 +478,14 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       const a = base(cur?.evidence?.file);
       const b = base(nxt?.evidence?.file);
       const loop = cur && nxt && cur.module === nxt.module ? { module: cur.module, label: a && b && a !== b ? `${a} → ${b}` : t.arch_tour_inside } : null;
-      return { edges: new Set<Edge>(route.edges), modules, reversed: route.reversed, loop, current: cur?.module };
+      return { edges: new Set<Edge>(route.edges), modules, reversed: route.reversed, loop, current: cur?.module, gap: route.gap ?? null };
     }
     if (activePath) {
       const modules = new Set<string>();
       for (const e of activePath) { modules.add(e.from); modules.add(e.to); }
-      return { edges: new Set<Edge>(activePath), modules, reversed: undefined, loop: null, current: undefined };
+      return { edges: new Set<Edge>(activePath), modules, reversed: undefined, loop: null, current: undefined, gap: null };
     }
-    return near ? { edges: new Set<Edge>(near.edges), modules: near.modules, reversed: undefined, loop: null, current: undefined } : null;
+    return near ? { edges: new Set<Edge>(near.edges), modules: near.modules, reversed: undefined, loop: null, current: undefined, gap: null } : null;
   }, [tour, arch, view, activePath, near, t]);
   const reduced = prefersReducedMotion();
   const pickPath = useCallback((p: Edge[]) => {
@@ -747,6 +747,23 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                       </g>
                     );
                   })}
+                  {hl?.gap && layout.nodes[hl.gap.from] && layout.nodes[hl.gap.to] && (() => {
+                    // 圖上沒有這兩個模組之間的連線：畫一條只在這一步出現的虛線，標明是導覽推論。
+                    const a = layout.nodes[hl.gap.from];
+                    const b = layout.nodes[hl.gap.to];
+                    const d = edgePath(a, b);
+                    const dur = Math.min(4, Math.max(1, edgeLength(a, b) / 160));
+                    return (
+                      <g data-testid="tour-gap">
+                        <path d={d} fill="none" markerEnd="url(#arch-arrow-on)" className="arch-edge arch-edge-on arch-edge-ai" />
+                        {!reduced && Array.from({ length: DOTS_PER_EDGE }, (_, k) => (
+                          <circle key={k} r="3.5" className="arch-flow-dot">
+                            <animateMotion path={d} dur={`${dur.toFixed(2)}s`} begin={k === 0 ? "0s" : `-${((dur * k) / DOTS_PER_EDGE).toFixed(2)}s`} repeatCount="indefinite" />
+                          </circle>
+                        ))}
+                      </g>
+                    );
+                  })()}
                   {hl?.loop && layout.nodes[hl.loop.module] && (() => {
                     const n = layout.nodes[hl.loop.module];
                     const x = n.x + n.w;
@@ -790,6 +807,10 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                 {hl?.loop && layout.nodes[hl.loop.module] && (
                   <span className="arch-edge-pill arch-loop-pill" style={{ left: layout.nodes[hl.loop.module].x + layout.nodes[hl.loop.module].w / 2, top: layout.nodes[hl.loop.module].y + layout.nodes[hl.loop.module].h + 18, maxWidth: layout.nodes[hl.loop.module].w }} title={hl.loop.label}>{hl.loop.label}</span>
                 )}
+                {hl?.gap && layout.nodes[hl.gap.from] && layout.nodes[hl.gap.to] && (() => {
+                  const m = edgeMidpoint(layout.nodes[hl.gap.from], layout.nodes[hl.gap.to]);
+                  return <span className="arch-edge-pill" data-testid="tour-gap-pill" style={{ left: m.x, top: m.y }}>{t.arch_tour_gap}</span>;
+                })()}
                 {labelPts.map((l) => (
                   <span key={`pill-${l.id}`} className="arch-edge-pill" style={{ left: l.x, top: l.y }}>{view.edges[Number(l.id)].kind}{l.count > 1 ? ` ×${l.count}` : ""}</span>
                 ))}

@@ -24,6 +24,7 @@ describe("tourEdges", () => {
   it("兩個模組在圖上不相通時回空陣列", () => {
     expect(tourEdges(view, steps("a", "z"), 0)).toEqual([]);
     expect(tourRoute(view, steps("a", "z"), 0).modules).toEqual([]);
+    expect(tourRoute(view, steps("a", "z"), 0).gap).toEqual({ from: "a", to: "z" });
   });
   it("連續兩步同一模組回空陣列", () => {
     expect(tourEdges(view, steps("a", "a"), 0)).toEqual([]);
@@ -42,6 +43,12 @@ describe("tourEdges", () => {
 });
 
 describe("tourRoute", () => {
+  it("有路（直接或間接）、同模組、最後一步時都沒有 gap", () => {
+    expect(tourRoute(view, steps("a", "b"), 0).gap).toBeUndefined();
+    expect(tourRoute(view, steps("c", "d"), 0).gap).toBeUndefined();
+    expect(tourRoute(view, steps("a", "a"), 0).gap).toBeUndefined();
+    expect(tourRoute(view, steps("a", "b"), 1).gap).toBeUndefined();
+  });
   it("modules 含起訖與沿途模組，直接連線就只有兩個", () => {
     expect(tourRoute(view, steps("a", "b"), 0).modules).toEqual(["a", "b"]);
     expect(tourRoute(view, steps("c", "d"), 0).modules).toEqual(["c", "b", "a", "d"]);
