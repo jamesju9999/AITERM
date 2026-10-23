@@ -120,7 +120,7 @@ impl AiProvider for AnthropicClient {
         // 串流。原本沒帶 stream，帶工具的對話因此整段一次跳出來。
         let body = serde_json::json!({
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": DEFAULT_MAX_TOKENS,
             "system": build_system_field(&system_text, self.is_oauth),
             "messages": messages,
             "tools": tool_defs,

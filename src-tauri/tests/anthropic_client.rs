@@ -809,3 +809,34 @@ async fn oauth_other_400_is_not_swallowed() {
 
     assert!(!matches!(err, AiError::ToolCallingUnsupported { .. }), "不相干的 400 不該被當成不支援工具");
 }
+
+/// 代理工具迴圈的串流請求原本寫死 max_tokens 4096，長答案或大型 tool_use 輸入會被截斷。
+/// 與一次性補全共用 DEFAULT_MAX_TOKENS（8192）。比對請求本文：不符的請求會回 404，client 就會出錯。
+#[tokio::test]
+async fn generate_with_tools_requests_the_default_max_tokens_8192() {
+    use wiremock::matchers::body_partial_json;
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_partial_json(serde_json::json!({ "max_tokens": 8192 })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::with_base_url("k".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(32);
+    client.generate_with_tools(tool_req(), vec![], tx).await.expect("請求本文要帶 max_tokens 8192");
+}
