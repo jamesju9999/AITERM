@@ -193,9 +193,9 @@ describe("QaPanel", () => {
     ];
     const histBtn = () => screen.getByRole("button", { name: /^(歷史|History)/ });
 
-    it("沒有訊息時沒有歷史鈕；展開後列出所有問題，最新的在最上面", async () => {
+    it("沒有訊息時歷史鈕仍看得到但不能按（顯示 0）；展開後列出所有問題，最新的在最上面", async () => {
       const empty = await mount();
-      expect(screen.queryByRole("button", { name: /^(歷史|History)/ })).toBeNull();
+      expect(screen.getByRole("button", { name: /^(歷史（0）|History \(0\))/ })).toBeDisabled();
       empty.unmount();
       await mount({ messages: msgs });
       expect(screen.queryByRole("list", { name: /^(歷史|History)/ })).toBeNull();

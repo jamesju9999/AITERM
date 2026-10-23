@@ -91,18 +91,20 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
 
   return (
     <section className="arch-qa" aria-label={t.arch_qa_title}>
-      {messages.length > 0 && (
-        <div className="arch-qa-bar">
-          <button type="button" className="arch-btn arch-btn-small" aria-expanded={histOpen} onClick={() => setHistOpen((o) => !o)}>
-            {t.arch_qa_history.replace("{n}", String(questions.length))}
-          </button>
-          <button type="button" className="arch-btn arch-btn-small" onClick={onExport}>{t.arch_qa_export}</button>
-          <button type="button" className={`arch-btn arch-btn-small ${confirmClear ? "arch-btn-danger" : ""}`} disabled={busy}
-            onClick={() => { if (confirmClear) { setConfirmClear(false); onClear(); } else setConfirmClear(true); }}>
-            {confirmClear ? t.arch_qa_clear_confirm : t.arch_qa_clear}
-          </button>
-        </div>
-      )}
+      <div className="arch-qa-bar">
+        <button type="button" className="arch-btn arch-btn-small" aria-expanded={histOpen} disabled={questions.length === 0} onClick={() => setHistOpen((o) => !o)}>
+          {t.arch_qa_history.replace("{n}", String(questions.length))}
+        </button>
+        {messages.length > 0 && (
+          <>
+            <button type="button" className="arch-btn arch-btn-small" onClick={onExport}>{t.arch_qa_export}</button>
+            <button type="button" className={`arch-btn arch-btn-small ${confirmClear ? "arch-btn-danger" : ""}`} disabled={busy}
+              onClick={() => { if (confirmClear) { setConfirmClear(false); onClear(); } else setConfirmClear(true); }}>
+              {confirmClear ? t.arch_qa_clear_confirm : t.arch_qa_clear}
+            </button>
+          </>
+        )}
+      </div>
       {histOpen && questions.length > 0 && (
         <ul className="arch-qa-hist" aria-label={t.arch_qa_history.replace("{n}", String(questions.length))}>
           {[...questions].reverse().map((q) => (
