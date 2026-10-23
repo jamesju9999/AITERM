@@ -5,7 +5,7 @@
   --arch-soft: rgba(128, 128, 128, 0.2);
   --arch-warn: #d97706;
   --arch-err: var(--ac-fail, #ef4444);
-  --arch-edge: #3a3f4b;
+  --arch-edge: color-mix(in srgb, var(--text-muted, #8b93a1) 70%, var(--bg-primary));
   display: flex; flex-direction: column; height: 100%; min-height: 0;
   background: var(--bg-primary); color: var(--text-primary);
 }
@@ -70,6 +70,10 @@
 .arch-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--lc); box-shadow: 0 0 6px color-mix(in srgb, var(--lc) 70%, transparent); flex: none; }
 .arch-lane-name { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; line-height: 1.25; color: var(--text-primary); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .arch-lane-count { flex: none; margin-left: auto; min-width: 20px; padding: 0 7px; text-align: center; border-radius: 999px; font-size: 11px; line-height: 18px; color: var(--text-secondary); background: color-mix(in srgb, var(--lc) 18%, var(--bg-tertiary)); }
+
+/* 共用底座／支援週邊：區域小標題，帶狀泳道用虛線邊框與主流程區分 */
+.arch-zone-cap { position: absolute; box-sizing: border-box; padding: 0 4px; font-size: 12px; line-height: 22px; color: var(--text-muted); letter-spacing: 0.02em; }
+.arch-lane-shared, .arch-lane-support { border-style: dashed; }
 
 /* 連線（在卡片底下） */
 .arch-edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; }

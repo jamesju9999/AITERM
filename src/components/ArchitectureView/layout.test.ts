@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   layoutGraph, spreadLabels, clampZoom, zoomAt, centerOffset, edgePath, edgeMidpoint, edgeLength, fitScale, initialView, trueFitView, READABLE_SCALE, layerColor, neighborhood, isCompact,
-  NODE_W, NODE_H, NODE_H_COMPACT, MAX_ROWS_PER_COL, SUBCOL_GAP, COL_GAP, ROW_GAP, PAD, LANE_PAD, LANE_W, HEADER_H, EDGE_BULGE, MIN_ZOOM, LAYER_PALETTE,
+  NODE_W, NODE_H, BAND_HEADER_H, ZONE_GAP, ZONE_CAPTION_H, NODE_H_COMPACT, MAX_ROWS_PER_COL, SUBCOL_GAP, COL_GAP, ROW_GAP, PAD, LANE_PAD, LANE_W, HEADER_H, EDGE_BULGE, MIN_ZOOM, LAYER_PALETTE,
   type Rect,
 } from "./layout";
 import type { Architecture, Edge, Module } from "./model";
@@ -343,5 +343,65 @@ describe("centerOffset", () => {
     expect(centerOffset(200, 500)).toBe(150);
     expect(centerOffset(500, 500)).toBe(0);
     expect(centerOffset(800, 500)).toBe(0);
+  });
+});
+
+describe("三區排版（主流程／共用底座／支援週邊）", () => {
+  const mod = (id: string, layer: string): Module => ({ id, layer, name: id, files: [], tech: [], summary: "", dataflow: "" });
+  const zoned: Architecture = {
+    layers: [
+      { id: "fe", name: "前端" }, { id: "be", name: "後端" },
+      { id: "dom", name: "領域模型" }, { id: "bld", name: "建置工具" },
+    ],
+    modules: [mod("f1", "fe"), mod("b1", "be"), mod("b2", "be"), mod("d1", "dom"), mod("d2", "dom"), mod("t1", "bld"), mod("t2", "bld"), mod("t3", "bld")],
+    edges: [],
+    meta: { scannedAt: "", gitHead: null, analyzed: true, dropped: 0 },
+  };
+  it("columns 仍依 layers 順序；角色與區域標題都帶出來", () => {
+    const l = layoutGraph(zoned);
+    expect(l.columns.map((c) => [c.layerId, c.role])).toEqual([["fe", "main"], ["be", "main"], ["dom", "shared"], ["bld", "support"]]);
+    expect(l.zones.map((z) => z.role)).toEqual(["shared", "support"]);
+  });
+  it("主流程泳道高度只看主流程自己的卡片，不被週邊那條拉高", () => {
+    const l = layoutGraph(zoned);
+    const mainH = HEADER_H + 2 * NODE_H_COMPACT + ROW_GAP + LANE_PAD;
+    expect(l.columns[0].h).toBe(mainH);
+    expect(l.columns[1].h).toBe(mainH);
+  });
+  it("共用底座在主流程正下方、橫跨主流程全寬，卡片橫排；支援週邊在最下面", () => {
+    const l = layoutGraph(zoned);
+    const mainBottom = PAD + l.columns[0].h;
+    const dom = l.columns[2];
+    expect(dom.x).toBe(PAD);
+    expect(dom.w).toBe(l.columns[1].x + l.columns[1].w - PAD);
+    expect(dom.y).toBe(mainBottom + ZONE_GAP + ZONE_CAPTION_H);
+    expect(l.zones[0].y).toBe(mainBottom + ZONE_GAP);
+    expect(l.nodes.d1.y).toBe(dom.y + BAND_HEADER_H);
+    expect(l.nodes.d2.y).toBe(l.nodes.d1.y);
+    expect(l.nodes.d2.x).toBe(l.nodes.d1.x + NODE_W + SUBCOL_GAP);
+    expect(l.nodes.d1.zone).toBe("shared");
+    const bld = l.columns[3];
+    expect(bld.y).toBeGreaterThan(dom.y + dom.h);
+    expect(l.nodes.t1.zone).toBe("support");
+    expect(l.nodes.f1.zone).toBeUndefined();
+    expect(l.height).toBe(bld.y + bld.h + PAD);
+  });
+  it("沒有共用／支援層時與單排相同：zones 為空", () => {
+    expect(layoutGraph(arch).zones).toEqual([]);
+  });
+  it("一層主流程都沒有時全部當主流程，畫面不會只剩週邊", () => {
+    const l = layoutGraph({ ...zoned, layers: [{ id: "dom", name: "領域模型" }, { id: "bld", name: "建置工具" }], modules: zoned.modules.filter((m) => m.layer === "dom" || m.layer === "bld") });
+    expect(l.columns.every((c) => c.role === "main")).toBe(true);
+    expect(l.zones).toEqual([]);
+  });
+  it("跨區連線從下緣出、上緣入（垂直走線）；同區仍是側邊到側邊", () => {
+    const l = layoutGraph(zoned);
+    const down = edgePath(l.nodes.b1, l.nodes.d1);
+    expect(down.startsWith(`M ${l.nodes.b1.x + NODE_W / 2} ${l.nodes.b1.y + l.nodes.b1.h} `)).toBe(true);
+    expect(down.endsWith(`${l.nodes.d1.x + NODE_W / 2} ${l.nodes.d1.y}`)).toBe(true);
+    const up = edgePath(l.nodes.d1, l.nodes.f1);
+    expect(up.startsWith(`M ${l.nodes.d1.x + NODE_W / 2} ${l.nodes.d1.y} `)).toBe(true);
+    const side = edgePath(l.nodes.f1, l.nodes.b1);
+    expect(side.startsWith(`M ${l.nodes.f1.x + NODE_W} `)).toBe(true);
   });
 });

@@ -2,7 +2,9 @@ import type { ScanResult } from "../../ipc/architecture";
 
 export type EdgeKind = "import" | "ipc" | "http" | "sql";
 
-export interface Layer { id: string; name: string }
+/** main：請求主流程的各層；shared：被多層共用的底座（領域模型等）；support：不在執行期流程上的週邊（建置、測試、報表…）。 */
+export type LayerRole = "main" | "shared" | "support";
+export interface Layer { id: string; name: string; role?: LayerRole }
 export interface Module {
   id: string;
   layer: string;
@@ -37,6 +39,18 @@ export const BASE_LAYERS: Layer[] = [
   { id: "data", name: "資料存取" },
   { id: "other", name: "其他" },
 ];
+
+const SHARED_RE = /領域|共用|共通|實體|模型|domain|shared|common|entity|model/i;
+const SUPPORT_RE = /建置|驗證|測試|工具|腳本|部署|文件|報表|週邊|支援|其他|build|tool|test|script|deploy|docs?|report|misc|other/i;
+
+/** 分層的角色：AI 有標就照標；舊存檔與掃描預設圖沒有，就靠 id／名稱關鍵字猜。猜不到的一律算主流程。 */
+export function layerRole(layer: Layer): LayerRole {
+  if (layer.role) return layer.role;
+  const text = `${layer.id} ${layer.name}`;
+  if (SHARED_RE.test(text)) return "shared";
+  if (SUPPORT_RE.test(text)) return "support";
+  return "main";
+}
 
 export function moduleIdOf(path: string): string {
   const segs = path.split("/");

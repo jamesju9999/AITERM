@@ -704,13 +704,16 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
             <div className="arch-stage-wrap" style={{ width: layout.width * cur.scale + Math.max(0, cur.tx), height: layout.height * cur.scale + Math.max(0, cur.ty) }}>
               <div className="arch-stage" style={{ width: layout.width, height: layout.height, transform: `translate(${cur.tx}px, ${cur.ty}px) scale(${cur.scale})` }}>
                 {layout.columns.map((c, i) => (
-                  <div key={c.layerId} className="arch-lane" style={{ left: c.x, top: c.y, width: c.w, height: c.h, ["--lc" as string]: layerColor(c.layerId, i) }}>
+                  <div key={c.layerId} className={`arch-lane arch-lane-${c.role}`} style={{ left: c.x, top: c.y, width: c.w, height: c.h, ["--lc" as string]: layerColor(c.layerId, i) }}>
                     <div className="arch-lane-head">
                       <i className="arch-dot" />
                       <span className="arch-lane-name" title={c.name}>{c.name}</span>
                       <span className="arch-lane-count">{c.count}</span>
                     </div>
                   </div>
+                ))}
+                {layout.zones.map((z) => (
+                  <div key={z.role} className="arch-zone-cap" style={{ left: z.x, top: z.y, width: z.w }}>{z.role === "shared" ? t.arch_zone_shared : t.arch_zone_support}</div>
                 ))}
                 <svg width={layout.width} height={layout.height} className="arch-edges">
                   <defs>

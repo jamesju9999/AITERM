@@ -1,14 +1,15 @@
 import { stripFence } from "../TaskBoard/refinePrompts";
 import type { ScanResult } from "../../ipc/architecture";
-import type { Architecture, Edge, EdgeKind, Module } from "./model";
+import type { Architecture, Edge, EdgeKind, Layer, Module } from "./model";
 
 export const ANALYZE_SYSTEM = [
   "你是軟體架構分析師。根據專案的檔案概況、依賴清單與關鍵檔案內容，把專案切成「前端 → 傳輸（IPC／API）→ 後端 → 資料存取」等層，並找出跨層呼叫。",
   "只輸出一個 JSON 物件，不要程式碼區塊、不要說明。格式：",
-  '{"layers":[{"id":"frontend","name":"前端"}],',
+  '{"layers":[{"id":"frontend","name":"前端","role":"main|shared|support"}],',
   ' "modules":[{"id":"短英文id","layer":"layers 裡的 id","name":"顯示名稱","files":["檔案路徑或以 / 結尾的目錄"],"tech":["技術或框架"],"summary":"一句話用途","dataflow":"資料如何進出，2-3 句"}],',
   ' "edges":[{"from":"模組id","to":"模組id","kind":"ipc|http|sql|import","confidence":0.0到1.0,"evidence":{"file":"檔案路徑","line":行號},"note":"這條連線在做什麼"}]}',
   "規則：",
+  "- layer.role：main＝請求主流程上的層（前端、傳輸、後端、資料存取）；shared＝被多層共用的底座（領域模型、共用工具）；support＝不在執行期請求流程上的週邊（建置、測試、報表轉譯、腳本）。",
   "- files 只能使用我提供的檔案路徑或其目錄，不可虛構。",
   "- 每條 edge 必須附 evidence（真實檔案與行號）；沒有把握就不要寫。",
   "- confidence 反映你對這條連線的把握。",
@@ -41,7 +42,7 @@ export function buildAnalyzeMessage(scan: ScanResult, base: Architecture, files:
 }
 
 interface RawAnalysis {
-  layers?: { id?: unknown; name?: unknown }[];
+  layers?: { id?: unknown; name?: unknown; role?: unknown }[];
   modules?: Record<string, unknown>[];
   edges?: Record<string, unknown>[];
 }
@@ -59,7 +60,7 @@ export function parseAnalysis(reply: string, scan: ScanResult): Architecture | n
   const lineCount = new Map(scan.files.map((f) => [f.path, f.lines]));
   const layers = (raw.layers ?? [])
     .filter((l) => typeof l.id === "string" && typeof l.name === "string")
-    .map((l) => ({ id: l.id as string, name: l.name as string }));
+    .map((l): Layer => ({ id: l.id as string, name: l.name as string, ...(l.role === "main" || l.role === "shared" || l.role === "support" ? { role: l.role } : {}) }));
   const layerIds = new Set(layers.map((l) => l.id));
 
   const modules: Module[] = [];

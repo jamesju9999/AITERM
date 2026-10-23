@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildBaseGraph, guessLayer, moduleIdOf } from "./model";
+import { buildBaseGraph, guessLayer, layerRole, moduleIdOf } from "./model";
 import type { ScanResult } from "../../ipc/architecture";
 
 const scan = (files: string[], edges: [string, string][] = []): ScanResult => ({
@@ -38,5 +38,20 @@ describe("buildBaseGraph", () => {
     expect(g.edges).toHaveLength(1);
     expect(g.edges[0]).toMatchObject({ from: "src/components", to: "src/ipc", kind: "import", source: "scan" });
     expect(g.modules.find((m) => m.id === "src/components")!.files).toHaveLength(2);
+  });
+});
+
+describe("layerRole", () => {
+  it("AI 標的 role 優先，不管名稱", () => {
+    expect(layerRole({ id: "x", name: "領域模型", role: "main" })).toBe("main");
+  });
+  it("沒標時靠名稱猜：領域模型→共用，建置／報表／其他→週邊，其餘→主流程", () => {
+    expect(layerRole({ id: "domain", name: "領域模型" })).toBe("shared");
+    expect(layerRole({ id: "build", name: "建置與驗證工具" })).toBe("support");
+    expect(layerRole({ id: "report", name: "報表產出" })).toBe("support");
+    expect(layerRole({ id: "other", name: "其他" })).toBe("support");
+    for (const [id, name] of [["frontend", "前端"], ["transport", "傳輸 / API"], ["backend", "後端應用服務"], ["data", "資料存取"]]) {
+      expect(layerRole({ id, name })).toBe("main");
+    }
   });
 });

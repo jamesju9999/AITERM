@@ -106,3 +106,11 @@ describe("mergeScanEdges", () => {
     expect(merged.edges.filter((e) => e.kind === "http")).toHaveLength(1);
   });
 });
+
+describe("parseAnalysis layer.role", () => {
+  it("合法的 role 保留，非法值丟掉", () => {
+    const withRole = { ...good, layers: [{ id: "frontend", name: "前端", role: "main" }, { id: "backend", name: "後端", role: "bogus" }] };
+    const a = parseAnalysis(JSON.stringify(withRole), scan)!;
+    expect(a.layers).toEqual([{ id: "frontend", name: "前端", role: "main" }, { id: "backend", name: "後端" }]);
+  });
+});

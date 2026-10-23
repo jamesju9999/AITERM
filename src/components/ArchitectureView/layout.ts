@@ -1,4 +1,4 @@
-import type { Architecture, Edge, Module } from "./model";
+import { layerRole, type Architecture, type Edge, type LayerRole, type Module } from "./model";
 
 export const NODE_W = 200;
 export const NODE_H = 112;
@@ -17,15 +17,25 @@ export const LANE_PAD = 14;
 /** 泳道標題列高度（含與第一張卡片之間的空隙）。 */
 export const HEADER_H = 54;
 export const LANE_W = NODE_W + LANE_PAD * 2;
+/** 橫向的共用底座標題列高度（比直向泳道矮，因為卡片是橫排）。 */
+export const BAND_HEADER_H = 40;
+/** 主流程、共用底座、支援週邊三區之間的垂直間隙（跨區連線走這裡）。 */
+export const ZONE_GAP = 56;
+/** 共用底座／支援週邊的區域小標題高度。 */
+export const ZONE_CAPTION_H = 22;
 /** 同欄連線向右凸出的距離。 */
 export const EDGE_BULGE = 56;
 
 export interface Pt { x: number; y: number }
-export interface Rect { x: number; y: number; w: number; h: number }
-export interface Lane { layerId: string; name: string; x: number; y: number; w: number; h: number; count: number }
+/** zone 只有不在主流程區的卡片才有；沒標＝主流程。跨區的連線改走垂直方向。 */
+export interface Rect { x: number; y: number; w: number; h: number; zone?: LayerRole }
+export interface Lane { layerId: string; name: string; role: LayerRole; x: number; y: number; w: number; h: number; count: number }
+/** 區域小標題的位置：只有共用底座與支援週邊會有。 */
+export interface Zone { role: "shared" | "support"; x: number; y: number; w: number }
 export interface Layout {
   nodes: Record<string, Rect>;
   columns: Lane[];
+  zones: Zone[];
   width: number;
   height: number;
 }
@@ -43,35 +53,90 @@ function chunkColumns<T>(items: T[]): T[][] {
   return Array.from({ length: k }, (_, i) => items.slice(i * per, (i + 1) * per)).filter((c) => c.length > 0);
 }
 
+/**
+ * 三區排版：主流程各層由左到右排成一排；共用底座（領域模型等）是主流程下方橫跨全寬的帶狀區；
+ * 支援週邊（建置、測試、報表…）在最下方另排一列。沒有共用／支援層時與單排完全相同。
+ * columns 仍依 arch.layers 的順序，顏色與索引不受分區影響。
+ */
 export function layoutGraph(arch: Architecture): Layout {
   const nodes: Record<string, Rect> = {};
   const heightOf = (m: Module) => (isCompact(m) ? NODE_H_COMPACT : NODE_H);
+  const rawRoles = arch.layers.map(layerRole);
+  // 一層主流程都沒有時全部當主流程，免得畫面只剩週邊。
+  const roles = rawRoles.includes("main") ? rawRoles : rawRoles.map((): LayerRole => "main");
   const subcols = arch.layers.map((l) => chunkColumns(arch.modules.filter((m) => m.layer === l.id)));
   const colH = (col: Module[]) => col.reduce((s, m) => s + heightOf(m), 0) + Math.max(0, col.length - 1) * ROW_GAP;
-  const innerH = Math.max(0, ...subcols.flat().map(colH));
-  const laneH = HEADER_H + innerH + LANE_PAD;
-  let x = PAD;
-  const columns: Lane[] = arch.layers.map((layer, i) => {
-    const cols = subcols[i];
-    const k = Math.max(1, cols.length);
-    const w = LANE_PAD * 2 + k * NODE_W + (k - 1) * SUBCOL_GAP;
-    cols.forEach((col, c) => {
-      let y = PAD + HEADER_H;
-      for (const m of col) {
-        const h = heightOf(m);
-        nodes[m.id] = { x: x + LANE_PAD + c * (NODE_W + SUBCOL_GAP), y, w: NODE_W, h };
-        y += h + ROW_GAP;
+  const laneW = (i: number) => { const k = Math.max(1, subcols[i].length); return LANE_PAD * 2 + k * NODE_W + (k - 1) * SUBCOL_GAP; };
+  const idxOf = (role: LayerRole) => arch.layers.map((_, i) => i).filter((i) => roles[i] === role);
+  const rowH = (idx: number[]) => HEADER_H + Math.max(0, ...idx.flatMap((i) => subcols[i].map(colH))) + LANE_PAD;
+  const rowW = (idx: number[]) => idx.reduce((s, i) => s + laneW(i), 0) + Math.max(0, idx.length - 1) * COL_GAP;
+
+  const main = idxOf("main");
+  const shared = idxOf("shared");
+  const support = idxOf("support");
+  const contentInnerW = Math.max(rowW(main), rowW(support));
+  const lanes: Lane[] = new Array(arch.layers.length);
+  const zones: Zone[] = [];
+
+  /** 直向泳道一排：每條泳道自己往下排卡片，整排等高。 */
+  const placeRow = (idx: number[], top: number, role: LayerRole): number => {
+    const h = rowH(idx);
+    let x = PAD;
+    for (const i of idx) {
+      const w = laneW(i);
+      subcols[i].forEach((col, c) => {
+        let y = top + HEADER_H;
+        for (const m of col) {
+          const mh = heightOf(m);
+          nodes[m.id] = { x: x + LANE_PAD + c * (NODE_W + SUBCOL_GAP), y, w: NODE_W, h: mh, ...(role === "main" ? {} : { zone: role }) };
+          y += mh + ROW_GAP;
+        }
+      });
+      lanes[i] = { layerId: arch.layers[i].id, name: arch.layers[i].name, role, x, y: top, w, h, count: subcols[i].reduce((s, c) => s + c.length, 0) };
+      x += w + COL_GAP;
+    }
+    return h;
+  };
+
+  let cursor = PAD;
+  if (main.length > 0) cursor += placeRow(main, cursor, "main");
+
+  if (shared.length > 0) {
+    const bandW = Math.max(LANE_W, contentInnerW);
+    cursor += ZONE_GAP;
+    zones.push({ role: "shared", x: PAD, y: cursor, w: bandW });
+    cursor += ZONE_CAPTION_H;
+    const perRow = Math.max(1, Math.floor((bandW - LANE_PAD * 2 + SUBCOL_GAP) / (NODE_W + SUBCOL_GAP)));
+    for (const i of shared) {
+      const mods = subcols[i].flat();
+      const rows: Module[][] = [];
+      for (let k = 0; k < mods.length; k += perRow) rows.push(mods.slice(k, k + perRow));
+      let y = cursor + BAND_HEADER_H;
+      for (const row of rows) {
+        const rh = Math.max(...row.map(heightOf));
+        row.forEach((m, c) => { nodes[m.id] = { x: PAD + LANE_PAD + c * (NODE_W + SUBCOL_GAP), y, w: NODE_W, h: heightOf(m), zone: "shared" }; });
+        y += rh + ROW_GAP;
       }
-    });
-    const lane: Lane = { layerId: layer.id, name: layer.name, x, y: PAD, w, h: laneH, count: cols.reduce((s, c) => s + c.length, 0) };
-    x += w + COL_GAP;
-    return lane;
-  });
+      const h = BAND_HEADER_H + Math.max(0, y - ROW_GAP - (cursor + BAND_HEADER_H)) + LANE_PAD;
+      lanes[i] = { layerId: arch.layers[i].id, name: arch.layers[i].name, role: "shared", x: PAD, y: cursor, w: bandW, h, count: mods.length };
+      cursor += h + ROW_GAP;
+    }
+    cursor -= ROW_GAP;
+  }
+
+  if (support.length > 0) {
+    cursor += ZONE_GAP;
+    zones.push({ role: "support", x: PAD, y: cursor, w: Math.max(LANE_W, contentInnerW) });
+    cursor += ZONE_CAPTION_H;
+    cursor += placeRow(support, cursor, "support");
+  }
+
   return {
     nodes,
-    columns,
-    width: Math.max(PAD * 2, x - COL_GAP + PAD),
-    height: PAD * 2 + laneH,
+    columns: lanes,
+    zones,
+    width: Math.max(PAD * 2, PAD * 2 + contentInnerW),
+    height: cursor + PAD,
   };
 }
 
@@ -115,6 +180,16 @@ export function layerColor(layerId: string, index: number): string {
 }
 
 function edgeGeom(from: Rect, to: Rect): [Pt, Pt, Pt, Pt] {
+  if ((from.zone ?? "main") !== (to.zone ?? "main")) {
+    // 跨區（主流程↔共用底座↔支援週邊）：區與區上下排列，從下緣出、上緣入。
+    const down = to.y >= from.y;
+    const x1 = from.x + from.w / 2;
+    const x2 = to.x + to.w / 2;
+    const y1 = down ? from.y + from.h : from.y;
+    const y2 = down ? to.y : to.y + to.h;
+    const dy = Math.max(40, Math.abs(y2 - y1) / 2) * (down ? 1 : -1);
+    return [{ x: x1, y: y1 }, { x: x1, y: y1 + dy }, { x: x2, y: y2 - dy }, { x: x2, y: y2 }];
+  }
   const y1 = from.y + from.h / 2;
   const y2 = to.y + to.h / 2;
   if (from.x === to.x) {
