@@ -1064,6 +1064,14 @@ describe("ArchitectureView 架構問答與流程導覽", () => {
     expect(node("Mc")).toHaveClass("arch-node-tour");
   });
 
+  it("載入舊存檔時用最新掃描補上缺的實線；存檔原有的連線保留，掃描也確認的不重複", async () => {
+    // 存檔：a→b（實線）、b→c（AI 的 ipc）；最新掃描：a→b（已有）、a→c（新）
+    archLoad.mockResolvedValue(JSON.stringify(QA_ARCH));
+    archScan.mockResolvedValue({ ...SCAN, files: QA_ARCH.modules.map((m) => ({ path: `${m.id}/x.ts`, lang: "typescript", lines: 10 })), edges: [{ from: "a/x.ts", to: "b/x.ts" }, { from: "a/x.ts", to: "c/x.ts" }] });
+    await openQa();
+    expect(document.querySelectorAll("path.arch-edge")).toHaveLength(3); // a→b 一條不重複、a→c 新補、b→c ipc 保留
+  });
+
   it("兩步的模組在圖上沒有任何連線：畫一條只在這一步出現的「導覽推論」虛線，下一步就消失", async () => {
     window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
     archLoad.mockResolvedValue(JSON.stringify({ ...QA_ARCH, edges: [QA_ARCH.edges[0]] })); // c 沒有任何連線

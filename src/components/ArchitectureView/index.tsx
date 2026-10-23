@@ -139,7 +139,10 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       setScan(s);
       const cached = await archLoad(dir);
       if (cached) {
-        const parsed = JSON.parse(cached) as Architecture;
+        const stored0 = JSON.parse(cached) as Architecture;
+        // 實線是掃描確認的事實：用最新掃描補上舊存檔沒有的連線（掃描器進步後舊存檔也會多出連線），存檔裡原有的連線一律保留。
+        const fresh = stored0.meta.analyzed ? new Set(mergeScanEdges({ ...stored0, edges: [] }, s).edges.map((e) => `${e.from}→${e.to}`)) : null;
+        const parsed = fresh ? mergeScanEdges({ ...stored0, edges: stored0.edges.filter((e) => !(e.source === "scan" && fresh.has(`${e.from}→${e.to}`))) }, s) : stored0;
         setArch(parsed);
         setStale(parsed.meta.gitHead !== s.git_head);
       } else {
