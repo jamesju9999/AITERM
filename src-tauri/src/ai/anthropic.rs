@@ -392,6 +392,12 @@ fn build_system_field(system_text: &str, is_oauth: bool) -> serde_json::Value {
     serde_json::Value::Array(blocks)
 }
 
+/// Anthropic API 強制要求 `max_tokens`，所以呼叫端沒指定時一定要補一個值。
+/// 原本補 1024，會把長的結構化回答（架構問答、建議、工作報告）攔腰截斷；
+/// 8192 涵蓋目前所有 Claude 模型（含 Haiku 3.5 的 8192 輸出上限），
+/// 而且沒用到就不花錢。明確指定的值（探測用的 Some(1) 等）仍然優先。
+const DEFAULT_MAX_TOKENS: u32 = 8192;
+
 fn build_request_body(
     model: &str,
     req: &GenerateRequest,
@@ -411,7 +417,7 @@ fn build_request_body(
             is_oauth,
         ),
         messages,
-        max_tokens: req.max_tokens.unwrap_or(1024),
+        max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         stream,
     }
 }
@@ -773,6 +779,19 @@ mod tests {
             mode: QueryMode::SingleCommand,
             max_tokens: Some(256),
         }
+    }
+
+    /// Anthropic 強制要 max_tokens；呼叫端沒指定（None）時用 DEFAULT_MAX_TOKENS，
+    /// 明確指定的值（探測 Some(1)、Some(256) 等）必須勝出。
+    #[test]
+    fn request_body_max_tokens_default_and_explicit() {
+        let mut req = sample_req();
+        req.max_tokens = None;
+        let json = serde_json::to_value(build_request_body("m", &req, false, false)).unwrap();
+        assert_eq!(json["max_tokens"], 8192);
+        req.max_tokens = Some(256);
+        let json = serde_json::to_value(build_request_body("m", &req, false, false)).unwrap();
+        assert_eq!(json["max_tokens"], 256);
     }
 
     /// OAuth auth must send `system` as a block array whose FIRST block is the
