@@ -278,3 +278,10 @@ button.arch-evidence:hover { color: var(--arch-hi); }
 .arch-qa-hist-q { flex: 1; min-width: 0; text-align: left; font: inherit; font-size: 13px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-primary); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .arch-qa-hist-q:hover { background: var(--bg-tertiary); }
 .arch-tour-code { flex-basis: 100%; display: block; padding: 3px 8px; border-radius: 6px; background: var(--bg-primary); border-left: 3px solid var(--arch-hi); font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 檔案預覽蓋住右側時，導覽字幕列只在預覽左邊的畫布範圍內置中。 */
+.arch-has-preview .arch-tour { left: calc((100% - min(60%, 760px)) / 2); max-width: calc(100% - min(60%, 760px) - 28px); }
+.arch-qa-hist-q { display: flex; align-items: flex-start; gap: 8px; white-space: normal; }
+.arch-qa-hist-n { flex-shrink: 0; color: var(--arch-hi); font-variant-numeric: tabular-nums; }
+.arch-qa-hist-t { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.arch-qa-hist-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.arch-qa-hist-a { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

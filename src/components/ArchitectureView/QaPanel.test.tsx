@@ -205,6 +205,22 @@ describe("QaPanel", () => {
       expect(items[1]).toContain("第一題登入");
     });
 
+    it("同一句問題問兩次時，清單用 #序號 和回答第一行區分", async () => {
+      const dup: QaMessage[] = [
+        { id: "u1", role: "user", text: "同一題" },
+        { id: "a1", role: "ai", qa: { answer: "## 第一次的標題\n內文", tour: null, diagram: "", dropped: 0, truncated: false } },
+        { id: "u2", role: "user", text: "同一題" },
+        { id: "a2", role: "ai", qa: { answer: "**第二次的標題**", tour: null, diagram: "", dropped: 0, truncated: false } },
+      ];
+      await mount({ messages: dup });
+      fireEvent.click(histBtn());
+      const items = within(screen.getByRole("list", { name: /^(歷史|History)/ })).getAllByRole("listitem").map((o) => o.textContent ?? "");
+      expect(items[0]).toContain("#2");
+      expect(items[0]).toContain("第二次的標題");
+      expect(items[1]).toContain("#1");
+      expect(items[1]).toContain("第一次的標題");
+    });
+
     it("點問題會捲到那一題並收起清單", async () => {
       const scroll = vi.fn();
       const orig = HTMLElement.prototype.scrollIntoView;
@@ -212,7 +228,7 @@ describe("QaPanel", () => {
       onTestFinished(() => { HTMLElement.prototype.scrollIntoView = orig; });
       await mount({ messages: msgs });
       fireEvent.click(histBtn());
-      fireEvent.click(screen.getByRole("button", { name: /^第一題登入$/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^#1\s*第一題登入/ }));
       expect(scroll).toHaveBeenCalledTimes(1);
       expect((scroll.mock.contexts[0] as HTMLElement).getAttribute("data-mid")).toBe("u1");
       expect(screen.queryByRole("list", { name: /^(歷史|History)/ })).toBeNull();

@@ -493,6 +493,35 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
 
   // 導覽換步時把目前模組的卡片捲進可視範圍（jsdom 沒有 scrollIntoView）。
   const tourModule = tour ? tour.tour.steps[tour.index]?.module : undefined;
+  // 檔案預覽蓋住畫布右側時，把導覽（或選取）的模組平移到預覽左邊的可見區。
+  const previewOpen = !!(root && preview && preview.root === root);
+  const focusModules = tour && hl ? hl.modules : selected ? new Set([selected]) : null;
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const lay = layoutRef.current;
+    if (!previewOpen || !canvas || !lay || !focusModules) return;
+    const pv = canvas.parentElement?.querySelector<HTMLElement>(".arch-preview")?.getBoundingClientRect();
+    if (!pv || pv.width === 0) return;
+    const cr = canvas.getBoundingClientRect();
+    let left = Infinity;
+    let right = -Infinity;
+    for (const n of Array.from(canvas.querySelectorAll<HTMLElement>("[data-mid]"))) {
+      if (!focusModules.has(n.dataset.mid ?? "")) continue;
+      const r = n.getBoundingClientRect();
+      left = Math.min(left, r.left);
+      right = Math.max(right, r.right);
+    }
+    if (!isFinite(left)) return;
+    const MARGIN = 16;
+    const overflow = right - (pv.left - MARGIN);
+    if (overflow <= 0) return;
+    // 最多往左推到最左邊的卡片貼齊可視區左緣，不把它推出畫面。
+    const delta = Math.min(overflow, Math.max(0, left - (cr.left + MARGIN)));
+    if (delta < 1) return;
+    setManual({ layout: lay, view: { ...viewRef.current, tx: viewRef.current.tx - delta } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- focusModules 每次渲染都是新 Set，只在換步／開預覽／換選取時重算。
+  }, [previewOpen, tourModule, selected]);
+
   useEffect(() => {
     if (!tourModule || !layout) return;
     const el = Array.from(canvasRef.current?.querySelectorAll<HTMLElement>("[data-mid]") ?? []).find((n) => n.dataset.mid === tourModule);
@@ -553,15 +582,21 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
 
   const labelPts = useMemo(() => {
     if (!view || !layout) return [];
-    const pts: { id: string; x: number; y: number }[] = [];
+    // 同一對模組、同一種連線（例如 9 條 import）合成一顆標籤，顯示條數。
+    const groups = new Map<string, { id: string; x: number; y: number; count: number }>();
     view.edges.forEach((e, i) => {
       const a = layout.nodes[e.from];
       const b = layout.nodes[e.to];
       if (!a || !b || !(hl?.edges.has(e) || hoverEdge === i)) return;
+      const key = `${e.from}>${e.to}>${e.kind}`;
+      const g = groups.get(key);
+      if (g) { g.count++; return; }
       const m = edgeMidpoint(a, b);
-      pts.push({ id: String(i), x: m.x, y: m.y });
+      groups.set(key, { id: String(i), x: m.x, y: m.y, count: 1 });
     });
-    return spreadLabels(pts, LABEL_GAP);
+    const list = [...groups.values()];
+    const counts = new Map(list.map((g) => [g.id, g.count]));
+    return spreadLabels(list, LABEL_GAP).map((p) => ({ ...p, count: counts.get(p.id) ?? 1 }));
   }, [view, layout, hl, hoverEdge]);
   const layerIndex = (id: string) => Math.max(0, view?.layers.findIndex((l) => l.id === id) ?? 0);
   const mmss = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
@@ -620,7 +655,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       {status.kind !== "idle" && <div className={`arch-status arch-status-${status.kind}`}>{status.msg}</div>}
       {stale && <div className="arch-status arch-status-notice">{t.arch_stale}</div>}
       <div className="arch-body">
-        <div className="arch-canvas-wrap">
+        <div className={`arch-canvas-wrap ${previewOpen ? "arch-has-preview" : ""}`}>
         <div className={`arch-canvas ${panning ? "arch-panning" : ""}`} ref={canvasRef} onMouseDown={startPan}>
           {!root && (
             <div className="arch-empty">
@@ -702,7 +737,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                   );
                 })}
                 {labelPts.map((l) => (
-                  <span key={`pill-${l.id}`} className="arch-edge-pill" style={{ left: l.x, top: l.y }}>{view.edges[Number(l.id)].kind}</span>
+                  <span key={`pill-${l.id}`} className="arch-edge-pill" style={{ left: l.x, top: l.y }}>{view.edges[Number(l.id)].kind}{l.count > 1 ? ` ×${l.count}` : ""}</span>
                 ))}
               </div>
             </div>

@@ -12,6 +12,14 @@ export type QaMessage =
 
 const RAW_MAX = 4000;
 
+/** 歷史清單用：問題後面那則回答的第一行文字（去掉 Markdown 記號），讓同一句問題的不同次回答分得出來。 */
+function answerSnippet(msgs: QaMessage[], questionId: string): string {
+  const next = msgs[msgs.findIndex((m) => m.id === questionId) + 1];
+  if (!next || next.role !== "ai") return "";
+  const line = next.qa.answer.split("\n").map((l) => l.replace(/^[#>*\-\s]+/, "").replace(/[*`]/g, "").trim()).find(Boolean) ?? "";
+  return line.length > 60 ? `${line.slice(0, 60)}…` : line;
+}
+
 /** 錯誤泡泡裡可展開的 AI 原始回應，方便使用者貼回來除錯。 */
 function RawReply({ raw }: { raw: string }) {
   const { t } = useLocale();
@@ -109,9 +117,15 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
       </div>
       {histOpen && questions.length > 0 && (
         <ul className="arch-qa-hist" aria-label={t.arch_qa_history.replace("{n}", String(questions.length))}>
-          {[...questions].reverse().map((q) => (
+          {questions.map((q, n) => ({ q, n })).reverse().map(({ q, n }) => (
             <li key={q.id}>
-              <button type="button" className="arch-qa-hist-q" title={q.text} onClick={() => jumpTo(q.id)}>{q.text}</button>
+              <button type="button" className="arch-qa-hist-q" title={q.text} onClick={() => jumpTo(q.id)}>
+                <span className="arch-qa-hist-n">{`#${n + 1}`}</span>
+                <span className="arch-qa-hist-t">
+                  <span className="arch-qa-hist-text">{q.text}</span>
+                  {answerSnippet(messages, q.id) && <span className="arch-qa-hist-a">{answerSnippet(messages, q.id)}</span>}
+                </span>
+              </button>
               <button type="button" className="arch-btn arch-btn-small" onClick={() => { setText(q.text); setHistOpen(false); inputRef.current?.focus(); }}>{t.arch_qa_reask}</button>
               <button type="button" className="arch-btn arch-btn-small" disabled={busy} aria-label={t.arch_qa_delete_one.replace("{q}", q.text)} title={t.arch_qa_delete_one.replace("{q}", q.text)} onClick={() => onDelete(q.id)}>✕</button>
             </li>

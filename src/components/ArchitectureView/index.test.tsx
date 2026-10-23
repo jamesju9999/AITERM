@@ -782,6 +782,16 @@ describe("ArchitectureView 稠密圖易讀性", () => {
     expect(nodeOf("Fm20")).toHaveClass("arch-node-dim");
   });
 
+  it("同一對模組、同一種連線的多條線，標籤合成一顆並標條數", async () => {
+    archLoad.mockResolvedValue(JSON.stringify({ ...DENSE, edges: [...edges, e("hub", "x1"), e("hub", "x1")] }));
+    await open_();
+    fireEvent.click(nodeOf("Fhub"));
+    await screen.findByRole("heading", { name: "Fhub" });
+    expect(onEdges()).toHaveLength(15);
+    expect(pills()).toHaveLength(13);
+    expect(Array.from(pills()).filter((n) => n.textContent === "import ×3")).toHaveLength(1);
+  });
+
   it("滑過節點時一跳強調（不選取）；移開還原", async () => {
     await open_();
     fireEvent.mouseEnter(nodeOf("Fm13")); // m13→m12 與 m14→m13
@@ -1139,7 +1149,8 @@ describe("ArchitectureView 架構問答與流程導覽", () => {
     fireEvent.click(screen.getByRole("button", { name: /^(歷史|History)/ }));
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^(刪除這題|Delete this question).*第一題/ })); });
     expect(screen.queryByText("答一")).toBeNull();
-    expect(screen.getByText("答二")).toBeInTheDocument();
+    expect(screen.queryByText("第一題")).toBeNull();
+    expect(screen.getAllByText("答二").length).toBeGreaterThan(0);
     await waitFor(() => expect(JSON.parse(archQaSave.mock.calls.at(-1)![1] as string).messages.map((m: { id: string }) => m.id)).toEqual(["u2", "a2"]));
   });
 
