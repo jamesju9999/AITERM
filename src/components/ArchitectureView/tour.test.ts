@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoplayDelayMs, clampStep, stepBounds, tourEdges } from "./tour";
+import { autoplayDelayMs, clampStep, stepBounds, tourEdges, tourReversedEdges } from "./tour";
 import type { Architecture, Edge } from "./model";
 import type { TourStep } from "./qa";
 
@@ -34,6 +34,25 @@ describe("tourEdges", () => {
   });
   it("只看 index 與 index+1", () => {
     expect(tourEdges(view, steps("c", "a", "d"), 1)).toEqual([view.edges[3]]);
+  });
+});
+
+describe("tourReversedEdges", () => {
+  it("這一步走的方向與連線方向相反（資料回傳）時，該連線標為反向", () => {
+    // 連線是 a→b；導覽從 b 回到 a
+    expect([...tourReversedEdges(view, steps("b", "a"), 0)]).toEqual([view.edges[0]]);
+  });
+  it("方向一致時不標；兩個方向的連線都存在時只有反向那條被標", () => {
+    expect(tourReversedEdges(view, steps("a", "d"), 0).size).toBe(0);
+    // a→b 與 b→a 都有：從 a 走到 b，只有 b→a 是反向
+    expect([...tourReversedEdges(view, steps("a", "b"), 0)]).toEqual([view.edges[2]]);
+  });
+  it("只有反向邊（c→b）而導覽從 b 到 c 時標為反向", () => {
+    expect([...tourReversedEdges(view, steps("b", "c"), 0)]).toEqual([view.edges[1]]);
+  });
+  it("沒有連線或最後一步時為空", () => {
+    expect(tourReversedEdges(view, steps("c", "d"), 0).size).toBe(0);
+    expect(tourReversedEdges(view, steps("a", "b"), 1).size).toBe(0);
   });
 });
 

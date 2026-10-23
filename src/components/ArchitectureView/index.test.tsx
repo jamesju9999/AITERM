@@ -1006,6 +1006,36 @@ describe("ArchitectureView 架構問答與流程導覽", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
+  it("導覽中資料往回走（b→a 但連線是 a→b）時箭頭倒過來、光點反向；順向時維持原樣", async () => {
+    window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+    const run = async (steps: unknown[]) => {
+      invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(steps));
+      await openQa();
+      await send();
+      await startTour();
+    };
+    await run([{ module: "b", caption: "回傳" }, { module: "a", caption: "收到" }]);
+    const on = document.querySelector('.arch-edge[data-on="true"]') as SVGPathElement;
+    expect(on.getAttribute("data-rev")).toBe("true");
+    expect(on.getAttribute("marker-start")).toContain("arch-arrow-on");
+    expect(on.getAttribute("marker-end")).toBeNull();
+    const m = document.querySelector("animateMotion")!;
+    expect(m.getAttribute("keyPoints")).toBe("1;0");
+  });
+
+  it("導覽順向（a→b）時用 marker-end、光點不反向", async () => {
+    window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply([{ module: "a", caption: "送出" }, { module: "b", caption: "處理" }]));
+    await openQa();
+    await send();
+    await startTour();
+    const on = document.querySelector('.arch-edge[data-on="true"]') as SVGPathElement;
+    expect(on.getAttribute("data-rev")).toBeNull();
+    expect(on.getAttribute("marker-end")).toContain("arch-arrow-on");
+    expect(on.getAttribute("marker-start")).toBeNull();
+    expect(document.querySelector("animateMotion")!.getAttribute("keyPoints")).toBeNull();
+  });
+
   it("兩段式提問：先挑檔、再讀檔，第二段訊息含讀到的檔案內容；答案與圖顯示", async () => {
     invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS));
     await openQa();

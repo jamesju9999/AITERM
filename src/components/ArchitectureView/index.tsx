@@ -17,7 +17,7 @@ import { FilePreview } from "./FilePreview";
 import { QaPanel, type QaMessage, type QaStage } from "./QaPanel";
 import { TourBar } from "./TourBar";
 import { ANSWER_SYSTEM, SELECT_SYSTEM, buildAnswerMessage, buildSelectMessage, parseAnswer, parseSelect, type Tour } from "./qa";
-import { clampStep, tourEdges } from "./tour";
+import { clampStep, tourEdges, tourReversedEdges } from "./tour";
 import { parseStoredQa, qaToMarkdown, serializeQa } from "./qaStore";
 import "./index.css";
 
@@ -445,14 +445,14 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       const { steps } = tour.tour;
       const modules = new Set<string>();
       for (const s of [steps[tour.index], steps[tour.index + 1]]) if (s) modules.add(s.module);
-      return { edges: new Set<Edge>(tourEdges(arch, steps, tour.index)), modules };
+      return { edges: new Set<Edge>(tourEdges(arch, steps, tour.index)), modules, reversed: tourReversedEdges(arch, steps, tour.index) };
     }
     if (activePath) {
       const modules = new Set<string>();
       for (const e of activePath) { modules.add(e.from); modules.add(e.to); }
-      return { edges: new Set<Edge>(activePath), modules };
+      return { edges: new Set<Edge>(activePath), modules, reversed: undefined };
     }
-    return near ? { edges: new Set<Edge>(near.edges), modules: near.modules } : null;
+    return near ? { edges: new Set<Edge>(near.edges), modules: near.modules, reversed: undefined } : null;
   }, [tour, arch, view, activePath, near]);
   const reduced = prefersReducedMotion();
   const pickPath = useCallback((p: Edge[]) => {
@@ -641,20 +641,22 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                     const b = layout.nodes[e.to];
                     if (!a || !b) return null;
                     const on = hl ? hl.edges.has(e) : false;
+                    // 導覽中資料往回走（例如控制器回傳給前端）時，箭頭與光點倒過來，跟字幕說的方向一致。
+                    const rev = on && !!hl?.reversed?.has(e);
                     const d = edgePath(a, b);
                     const dur = Math.min(4, Math.max(1, edgeLength(a, b) / 160));
                     const quiet = !hl && denseGraph;
                     return (
                       <g key={i} onMouseEnter={() => setHoverEdge(i)} onMouseLeave={() => setHoverEdge(null)}>
                         {on && <path d={d} fill="none" className="arch-edge-glow" filter="url(#arch-glow)" />}
-                        <path d={d} fill="none" markerEnd={`url(#${on ? "arch-arrow-on" : "arch-arrow"})`} data-on={on ? "true" : "false"}
+                        <path d={d} fill="none" {...{ [rev ? "markerStart" : "markerEnd"]: `url(#${on ? "arch-arrow-on" : "arch-arrow"})` }} data-on={on ? "true" : "false"} data-rev={rev ? "true" : undefined}
                           className={`arch-edge ${e.source === "ai" ? "arch-edge-ai" : ""} ${on ? "arch-edge-on" : ""} ${hl && !on ? "arch-edge-dim" : ""} ${quiet ? "arch-edge-quiet" : ""}`}>
                           <title>{e.note ?? e.kind}</title>
                         </path>
                         <path d={d} fill="none" className="arch-edge-hit" />
                         {on && !reduced && Array.from({ length: DOTS_PER_EDGE }, (_, k) => (
                           <circle key={k} r="3.5" className="arch-flow-dot">
-                            <animateMotion path={d} dur={`${dur.toFixed(2)}s`} begin={k === 0 ? "0s" : `-${((dur * k) / DOTS_PER_EDGE).toFixed(2)}s`} repeatCount="indefinite" />
+                            <animateMotion path={d} {...(rev ? { keyPoints: "1;0", keyTimes: "0;1", calcMode: "linear" } : {})} dur={`${dur.toFixed(2)}s`} begin={k === 0 ? "0s" : `-${((dur * k) / DOTS_PER_EDGE).toFixed(2)}s`} repeatCount="indefinite" />
                           </circle>
                         ))}
                       </g>
