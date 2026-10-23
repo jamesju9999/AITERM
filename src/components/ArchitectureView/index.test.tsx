@@ -1064,6 +1064,47 @@ describe("ArchitectureView 架構問答與流程導覽", () => {
     expect(node("Mc")).toHaveClass("arch-node-tour");
   });
 
+  it("真的問兩題（同一句）再刪 #1：只刪第一題與它的回答，第二題留著並存檔", async () => {
+    invokeAiComplete
+      .mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS, { answer: "第一次回答" }))
+      .mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS, { answer: "第二次回答" }));
+    await openQa();
+    await send("同一句");
+    expect(await screen.findByText("第一次回答")).toBeInTheDocument();
+    await send("同一句");
+    expect(await screen.findByText("第二次回答")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^(歷史|History)/ }));
+    const dels = screen.getAllByRole("button", { name: /^(刪除這題|Delete this question)/ });
+    expect(dels).toHaveLength(2);
+    await act(async () => { fireEvent.click(dels[1]); }); // 清單最新在上，第二個是 #1
+    await waitFor(() => expect(screen.queryByText("第一次回答")).toBeNull());
+    expect(screen.getAllByText("第二次回答").length).toBeGreaterThan(0);
+    await waitFor(() => expect(JSON.parse(archQaSave.mock.calls.at(-1)![1] as string).messages).toHaveLength(2));
+  });
+
+  it("刪單題與清除記錄後都能「復原刪除」，記錄存回原樣；再問新題後作廢", async () => {
+    archQaLoad.mockResolvedValue(JSON.stringify({ v: 1, messages: [
+      { id: "u1", role: "user", text: "第一題" },
+      { id: "a1", role: "ai", qa: { answer: "答一", diagram: "", dropped: 0, truncated: false, tour: null } },
+    ] }));
+    await openQa();
+    await screen.findByText("答一");
+    expect(screen.queryByRole("button", { name: /^(復原刪除|Undo delete)$/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^(歷史|History)/ }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^(刪除這題|Delete this question)/ })); });
+    expect(screen.queryByText("答一")).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^(復原刪除|Undo delete)$/ })); });
+    expect(screen.getAllByText("答一").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /^(復原刪除|Undo delete)$/ })).toBeNull();
+    // 清除記錄也能復原
+    fireEvent.click(screen.getByRole("button", { name: /^(清除記錄|Clear history)$/ }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /再按一次確認清除|Click again to clear/ })); });
+    expect(screen.queryByText("答一")).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^(復原刪除|Undo delete)$/ })); });
+    expect(screen.getAllByText("答一").length).toBeGreaterThan(0);
+    await waitFor(() => expect(JSON.parse(archQaSave.mock.calls.at(-1)![1] as string).messages.map((m: { id: string }) => m.id)).toEqual(["u1", "a1"]));
+  });
+
   it("導覽字幕列顯示證據那一行的程式碼（取自讀進來的檔案，不是 AI 寫的）", async () => {
     archReadFiles.mockResolvedValue([["a/x.ts", "  return ResponseEntity.ok(body);\nother"]]);
     invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply([

@@ -7,9 +7,9 @@ vi.mock("../MermaidBlock", () => ({ MermaidBlock: ({ chart }: { chart: string })
 
 import { QaPanel, type QaMessage } from "./QaPanel";
 
-const base = { busy: false, stage: "select" as const, elapsed: 0, onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onExport: vi.fn(), onClear: vi.fn(), onDelete: vi.fn(), onOpenFile: vi.fn() };
+const base = { busy: false, stage: "select" as const, elapsed: 0, onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onExport: vi.fn(), onClear: vi.fn(), onDelete: vi.fn(), canUndo: false, onUndo: vi.fn(), onOpenFile: vi.fn() };
 const mount = async (over: Partial<Parameters<typeof QaPanel>[0]> = {}) => {
-  const props = { ...base, messages: [] as QaMessage[], onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onExport: vi.fn(), onClear: vi.fn(), onDelete: vi.fn(), ...over };
+  const props = { ...base, messages: [] as QaMessage[], onSend: vi.fn(), onCancel: vi.fn(), onPlayTour: vi.fn(), onExport: vi.fn(), onClear: vi.fn(), onDelete: vi.fn(), onUndo: vi.fn(), ...over };
   const r = render(<LocaleProvider><QaPanel {...props} /></LocaleProvider>);
   await act(async () => {});
   return { ...r, props };
@@ -272,6 +272,18 @@ describe("QaPanel", () => {
       fireEvent.click(histBtn());
       fireEvent.click(screen.getAllByRole("button", { name: /^(刪除這題|Delete this question)/ })[1]);
       expect(props.onDelete).toHaveBeenCalledWith("u1");
+    });
+
+    it("可復原時顯示「復原刪除」，按下呼叫 onUndo；不能復原或送出中不顯示", async () => {
+      const a = await mount({ messages: [], canUndo: true });
+      fireEvent.click(screen.getByRole("button", { name: /^(復原刪除|Undo delete)$/ }));
+      expect(a.props.onUndo).toHaveBeenCalledTimes(1);
+      a.unmount();
+      const b = await mount({ messages: [], canUndo: false });
+      expect(screen.queryByRole("button", { name: /^(復原刪除|Undo delete)$/ })).toBeNull();
+      b.unmount();
+      await mount({ messages: [], canUndo: true, busy: true });
+      expect(screen.queryByRole("button", { name: /^(復原刪除|Undo delete)$/ })).toBeNull();
     });
 
     it("送出中刪除鈕停用", async () => {

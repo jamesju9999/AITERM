@@ -62,10 +62,13 @@ interface Props {
   onExport: () => void;
   onClear: () => void;
   onDelete: (questionId: string) => void;
+  /** 刪除單題或清除記錄後可以復原。 */
+  canUndo: boolean;
+  onUndo: () => void;
 }
 
 /** 畫布下方的問答抽屜；純展示，所有 AI 流程由父層驅動。 */
-export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPlayTour, onExport, onClear, onDelete }: Props) {
+export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPlayTour, onExport, onClear, onDelete, canUndo, onUndo }: Props) {
   const { t } = useLocale();
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
@@ -114,6 +117,7 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
         <button type="button" className="arch-btn arch-btn-small" aria-expanded={histOpen} disabled={questions.length === 0} onClick={() => setHistOpen((o) => !o)}>
           {t.arch_qa_history.replace("{n}", String(questions.length))}
         </button>
+        {canUndo && !busy && <button type="button" className="arch-btn arch-btn-small arch-btn-primary" onClick={onUndo}>{t.arch_qa_undo}</button>}
         {messages.length > 0 && (
           <>
             <button type="button" className="arch-btn arch-btn-small" onClick={onExport}>{t.arch_qa_export}</button>

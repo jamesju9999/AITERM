@@ -108,6 +108,8 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const [qaStage, setQaStage] = useState<QaStage>("select");
   const [qaElapsed, setQaElapsed] = useState(0);
   const [tour, setTour] = useState<{ tour: Tour; index: number; playing: boolean } | null>(null);
+  /** 刪除單題或清除記錄前的完整記錄；「復原刪除」用。開新資料夾、再問新題時作廢。 */
+  const [qaUndo, setQaUndo] = useState<QaMessage[] | null>(null);
   const qaRunRef = useRef(0);
   /** 問答記錄已從哪個資料夾讀回；與目前 root 相同才會存檔，避免讀回之前就用空陣列蓋掉舊記錄。 */
   const qaLoadedRef = useRef<string | null>(null);
@@ -127,6 +129,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     setDrillPath([]);
     setTour(null);
     setQaMessages([]);
+    setQaUndo(null);
     qaLoadedRef.current = null;
     qaRunRef.current++;
     setQaBusy(false);
@@ -285,6 +288,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const ask = useCallback(async (question: string) => {
     if (!arch || !scan || !root) return;
     const run = ++qaRunRef.current;
+    setQaUndo(null);
     setQaMessages((m) => [...m, { id: nanoid(), role: "user", text: question, at: Date.now() }]);
     setQaElapsed(0);
     setQaStage("select");
@@ -368,20 +372,25 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   }, [root, arch, qaMessages, t]);
 
   const clearQa = useCallback(() => {
+    setQaUndo(qaMessages.length > 0 ? qaMessages : null);
     setQaMessages([]);
     setTour(null);
-  }, []);
+  }, [qaMessages]);
 
   // 刪一題：連同它後面的回答（到下一個提問之前）一起刪。
   const deleteQuestion = useCallback((questionId: string) => {
-    setQaMessages((ms) => {
-      const from = ms.findIndex((m) => m.id === questionId && m.role === "user");
-      if (from < 0) return ms;
-      let to = from + 1;
-      while (to < ms.length && ms[to].role !== "user") to++;
-      return [...ms.slice(0, from), ...ms.slice(to)];
-    });
-  }, []);
+    const from = qaMessages.findIndex((m) => m.id === questionId && m.role === "user");
+    if (from < 0) return;
+    let to = from + 1;
+    while (to < qaMessages.length && qaMessages[to].role !== "user") to++;
+    setQaUndo(qaMessages);
+    setQaMessages([...qaMessages.slice(0, from), ...qaMessages.slice(to)]);
+  }, [qaMessages]);
+  const undoQa = useCallback(() => {
+    if (!qaUndo) return;
+    setQaMessages(qaUndo);
+    setQaUndo(null);
+  }, [qaUndo]);
 
   const playTour = useCallback((messageId: string) => {
     const msg = qaMessages.find((m) => m.id === messageId);
@@ -803,7 +812,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
         )}
       </div>
       {qaOpen && scan && arch && (
-        <QaPanel messages={qaMessages} busy={qaBusy} stage={qaStage} elapsed={qaElapsed} onSend={ask} onCancel={cancelAsk} onPlayTour={playTour} onExport={exportQa} onClear={clearQa} onDelete={deleteQuestion} />
+        <QaPanel messages={qaMessages} busy={qaBusy} stage={qaStage} elapsed={qaElapsed} onSend={ask} onCancel={cancelAsk} onPlayTour={playTour} onExport={exportQa} onClear={clearQa} onDelete={deleteQuestion} canUndo={qaUndo !== null} onUndo={undoQa} />
       )}
     </div>
   );
