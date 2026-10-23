@@ -18,3 +18,32 @@ export function isImeComposing(e: {
 }): boolean {
   return Boolean(e.nativeEvent?.isComposing ?? e.isComposing) || e.keyCode === 229;
 }
+
+/** compositionend 之後多久內的 Enter 仍視為「確認候選字」的那一下。 */
+export const IME_ENTER_GRACE_MS = 100;
+
+/**
+ * Safari／WKWebView（Tauri macOS）的事件順序是 compositionend 先於確認候選字的
+ * keydown，所以 keydown 當下 isComposing 已是 false、keyCode 也可能是 13，
+ * 只靠 isImeComposing 擋不住。這個 guard 自己記錄組字狀態與結束時間，
+ * 把 compositionend 後 IME_ENTER_GRACE_MS 內的 Enter 也吞掉。
+ *
+ * 用法：textarea 掛 onCompositionStart／onCompositionEnd，onKeyDown 內
+ * `if (guard.shouldIgnoreEnter(e)) return;`。
+ */
+export function createImeEnterGuard(now: () => number = () => performance.now()) {
+  let composing = false;
+  let endedAt = -Infinity;
+  return {
+    onCompositionStart() {
+      composing = true;
+    },
+    onCompositionEnd() {
+      composing = false;
+      endedAt = now();
+    },
+    shouldIgnoreEnter(e: Parameters<typeof isImeComposing>[0]): boolean {
+      return isImeComposing(e) || composing || now() - endedAt < IME_ENTER_GRACE_MS;
+    },
+  };
+}
