@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  ANSWER_SYSTEM, SELECT_SYSTEM, archSummary, buildAnswerMessage, buildSelectMessage, parseAnswer, parseSelect,
+  ANSWER_SYSTEM, SELECT_SYSTEM, archSummary, buildAnswerMessage, buildSelectMessage, extractJsonObject, parseAnswer, parseSelect,
 } from "./qa";
 import type { Architecture } from "./model";
 import type { ScanResult } from "../../ipc/architecture";
@@ -154,7 +154,6 @@ describe("parseAnswer", () => {
     expect(parseAnswer("```json\n" + JSON.stringify(goodAnswer) + "\n```", arch, scan)).not.toBeNull();
   });
   it("非 JSON 物件或 answer 不是非空字串回 null", () => {
-    expect(parseAnswer("hello", arch, scan)).toBeNull();
     expect(parseAnswer("[]", arch, scan)).toBeNull();
     expect(parseAnswer("null", arch, scan)).toBeNull();
     expect(parseAnswer(JSON.stringify({ answer: "" }), arch, scan)).toBeNull();
@@ -213,5 +212,121 @@ describe("parseAnswer", () => {
     expect(d(42)).toBe("");
     expect(d(null)).toBe("");
     expect(parseAnswer(JSON.stringify({ answer: "x" }), arch, scan)!.diagram).toBe("");
+  });
+});
+
+const GOOD_PRETTY = JSON.stringify(goodAnswer, null, 2);
+
+describe("extractJsonObject", () => {
+  it("乾淨 JSON 與整份圍欄", () => {
+    expect(extractJsonObject('{"a":1}')).toEqual({ a: 1 });
+    expect(extractJsonObject('```json\n{"a":1}\n```')).toEqual({ a: 1 });
+  });
+  it("前後有說明文字（Claude 常見的「以下是…」）", () => {
+    expect(extractJsonObject("以下是我的分析：\n" + GOOD_PRETTY + "\n希望有幫助！")).toEqual(goodAnswer);
+  });
+  it("圍欄不是整個回覆：圍欄後面還有解釋", () => {
+    expect(extractJsonObject("好的：\n```json\n" + GOOD_PRETTY + "\n```\n以上是答案，{可再追問}。")).toEqual(goodAnswer);
+  });
+  it("字串值內有真正的換行與 tab（長 Markdown answer）", () => {
+    const raw = '{"answer":"## 標題\n- 一\n\t- 二","diagram":""}';
+    expect(raw).toContain("\n"); // 確認夾具真的含字面換行
+    expect(() => JSON.parse(raw)).toThrow();
+    expect(extractJsonObject(raw)).toEqual({ answer: "## 標題\n- 一\n\t- 二", diagram: "" });
+  });
+  it("字串內的跳脫引號與已跳脫換行不被破壞", () => {
+    const raw = '{"answer":"他說 \\"hi\\"\\n換行 {花括號}",\n"x":1}';
+    expect(extractJsonObject("前言 " + raw + " 後記")).toEqual({ answer: '他說 "hi"\n換行 {花括號}', x: 1 });
+  });
+  it("物件與陣列尾逗號", () => {
+    expect(extractJsonObject('{"a":[1,2,],"b":{"c":1,},}')).toEqual({ a: [1, 2], b: { c: 1 } });
+    expect(extractJsonObject('{"a":"x,}"  ,}')).toEqual({ a: "x,}" }); // 字串裡的 ,} 不動
+  });
+  it("截斷在字串中間：補上引號與括號", () => {
+    const cut = '{"answer":"登入流程是這樣的：先送出請求，然後';
+    expect(extractJsonObject(cut)).toEqual({ answer: "登入流程是這樣的：先送出請求，然後" });
+  });
+  it("截斷在一步完整之後", () => {
+    const cut = '{"answer":"x","walkthrough":{"title":"t","steps":[{"module":"web","caption":"送出"},';
+    expect(extractJsonObject(cut)).toEqual({ answer: "x", walkthrough: { title: "t", steps: [{ module: "web", caption: "送出" }] } });
+  });
+  it("截斷在半個鍵／冒號後：退回到上一個完整成員", () => {
+    expect(extractJsonObject('{"answer":"x","diagram":')).toEqual({ answer: "x" });
+    expect(extractJsonObject('{"answer":"x","walk')).toEqual({ answer: "x" });
+    expect(extractJsonObject('{"answer":"x\\')).toEqual({ answer: "x" }); // 結尾懸著一個反斜線
+  });
+  it("截斷發生在步驟物件中間", () => {
+    const r = extractJsonObject('{"answer":"x","walkthrough":{"steps":[{"module":"web","caption":"a"},{"module":"server","cap');
+    expect((r!.walkthrough as { steps: unknown[] }).steps[0]).toEqual({ module: "web", caption: "a" });
+  });
+  it("純文字、陣列、空字串、純空白回 null", () => {
+    expect(extractJsonObject("這只是一段說明，沒有 JSON")).toBeNull();
+    expect(extractJsonObject("[1,2,3]")).toBeNull();
+    expect(extractJsonObject('[{"a":1}]')).toBeNull();
+    expect(extractJsonObject("null")).toBeNull();
+    expect(extractJsonObject("")).toBeNull();
+    expect(extractJsonObject("   \n ")).toBeNull();
+  });
+});
+
+describe("parseSelect 容錯", () => {
+  it("說明文字包住的 JSON 也能挑檔", () => {
+    const r = parseSelect('好的，我選：\n```json\n{"modules":["web"],"files":["web/api.ts"],}\n```\n以上。', arch, scan);
+    expect(r.modules).toEqual(["web"]);
+    expect(r.files).toContain("web/api.ts");
+  });
+});
+
+describe("parseAnswer 容錯", () => {
+  it("說明文字包住", () => {
+    const r = parseAnswer("以下是答案：\n" + GOOD_PRETTY + "\n如需更多請告訴我", arch, scan)!;
+    expect(r.answer).toBe(goodAnswer.answer);
+    expect(r.tour!.steps).toHaveLength(2);
+  });
+  it("圍欄後接解釋", () => {
+    expect(parseAnswer("```json\n" + GOOD_PRETTY + "\n```\n補充說明", arch, scan)!.tour).not.toBeNull();
+  });
+  it("answer 內含字面換行", () => {
+    const raw = '{"answer":"第一行\n第二行","walkthrough":{"steps":[]},"diagram":""}';
+    expect(parseAnswer(raw, arch, scan)!.answer).toBe("第一行\n第二行");
+  });
+  it("尾逗號", () => {
+    expect(parseAnswer('{"answer":"ok","diagram":"",}', arch, scan)!.answer).toBe("ok");
+  });
+  it("截斷：answer 救回來，沒有導覽", () => {
+    const r = parseAnswer('{"answer":"## 流程\\n先呼叫 API，然後', arch, scan)!;
+    expect(r.answer).toBe("## 流程\n先呼叫 API，然後");
+    expect(r.tour).toBeNull();
+  });
+  it("截斷在導覽中間：保留完整的步驟", () => {
+    const cut = '{"answer":"x","walkthrough":{"title":"t","steps":[{"module":"web","caption":"a"},{"module":"server","caption":"b"},{"module":"web","cap';
+    const r = parseAnswer(cut, arch, scan)!;
+    expect(r.tour!.steps.map((s) => s.caption)).toEqual(["a", "b"]);
+  });
+  it("最後手段：結構壞到修不了，仍用寬鬆掃描撈出 answer", () => {
+    // 巢狀括號錯亂，標準解析與修補都失敗。
+    const bad = '{"answer":"救得回來的\\n答案","walkthrough":{"steps":[}}]]';
+    expect(extractJsonObject(bad)).toBeNull();
+    const r = parseAnswer(bad, arch, scan)!;
+    expect(r.answer).toBe("救得回來的\n答案");
+    expect(r.tour).toBeNull();
+    expect(r.diagram).toBe("");
+  });
+  it("純文字（沒有 JSON）：整段當答案，去圍欄與前後空白", () => {
+    expect(parseAnswer("  登入流程：先 A 再 B。\n\n- 一\n- 二  ", arch, scan)).toEqual({ answer: "登入流程：先 A 再 B。\n\n- 一\n- 二", tour: null, diagram: "", dropped: 0 });
+    expect(parseAnswer("```markdown\n## 標題\n內容\n```", arch, scan)!.answer).toBe("## 標題\n內容");
+  });
+  it("看起來像失敗的 JSON 嘗試且修不了：回 null", () => {
+    expect(parseAnswer('{"answer": ', arch, scan)).toBeNull();
+    expect(parseAnswer('{"walkthrough":{"steps":[}}]]', arch, scan)).toBeNull();
+    expect(parseAnswer('```json\n{"oops": [}\n```', arch, scan)).toBeNull();
+    expect(parseAnswer("```JSON\n", arch, scan)).toBeNull();
+  });
+  it("空字串、空白、[]、null、數字回 null", () => {
+    for (const x of ["", "  \n", "[]", "null", "42", '"str"']) expect(parseAnswer(x, arch, scan)).toBeNull();
+  });
+  it("解得出物件但 answer 不是非空字串仍回 null（不降級成純文字）", () => {
+    expect(parseAnswer('{"walkthrough":{"steps":[]}}', arch, scan)).toBeNull();
+    expect(parseAnswer('說明 {"answer":"  "} 結束', arch, scan)).toBeNull();
   });
 });
