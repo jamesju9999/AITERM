@@ -40,6 +40,9 @@ vi.mock("../ModelPickerButton", () => ({
   ),
 }));
 
+// mermaid 在 jsdom 跑不起來；這裡只確認圖的原始碼有交給它。
+vi.mock("../MermaidBlock", () => ({ MermaidBlock: ({ chart }: { chart: string }) => <div data-testid="mermaid">{chart}</div> }));
+
 import { ArchitectureView } from "./index";
 import { fitScale, layoutGraph, PAD, LANE_W, COL_GAP, HEADER_H, NODE_H_COMPACT, ROW_GAP, LANE_PAD, READABLE_SCALE, MIN_ZOOM, MAX_ZOOM, initialView, trueFitView } from "./layout";
 import type { Architecture } from "./model";
@@ -926,5 +929,235 @@ describe("ArchitectureView 記住上次的專案資料夾", () => {
     renderView();
     expect(pickBtn()).toBeInTheDocument();
     spy.mockRestore();
+  });
+});
+
+describe("ArchitectureView 架構問答與流程導覽", () => {
+  const mod = (id: string, layer: string) => ({ id, layer, name: `M${id}`, files: [`${id}/x.ts`], tech: [], summary: "", dataflow: "" });
+  const QA_ARCH = {
+    layers: [{ id: "l1", name: "一" }, { id: "l2", name: "二" }, { id: "l3", name: "三" }],
+    modules: [mod("a", "l1"), mod("b", "l2"), mod("c", "l3")],
+    edges: [
+      { from: "a", to: "b", kind: "import", source: "scan", confidence: 1 },
+      { from: "b", to: "c", kind: "ipc", source: "ai", confidence: 0.9 },
+    ],
+    meta: { scannedAt: "", gitHead: "h1", analyzed: true, dropped: 0 },
+  };
+  const SELECT_REPLY = { content: JSON.stringify({ modules: ["a"], files: ["a/x.ts"] }), tool_calls: [], tool_calling_unsupported: false };
+  const answerReply = (steps: unknown[], extra: Record<string, unknown> = {}) => ({
+    content: JSON.stringify({ answer: "答案內文 **重點**", walkthrough: { title: "登入導覽", steps }, diagram: "flowchart LR\n A-->B", ...extra }),
+    tool_calls: [], tool_calling_unsupported: false,
+  });
+  const STEPS = [
+    { module: "a", caption: "前端送出" },
+    { module: "b", caption: "服務處理", evidence: { file: "b/x.ts", line: 1 } },
+    { module: "c", caption: "寫入儲存" },
+  ];
+
+  beforeEach(() => {
+    archLoad.mockResolvedValue(JSON.stringify(QA_ARCH));
+    archScan.mockResolvedValue({ ...SCAN, files: QA_ARCH.modules.map((m) => ({ path: `${m.id}/x.ts`, lang: "typescript", lines: 10 })) });
+    archReadFiles.mockResolvedValue([["a/x.ts", "FILE-A-CONTENT"]]);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const openQa = async () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    await screen.findByRole("button", { name: "Mb" });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: /^(問答|Q&A)$/ }));
+    await act(async () => {});
+  };
+  const send = async (q = "登入怎麼跑") => {
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: q } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^(送出|Send)$/ })); });
+  };
+  const playBtn = () => screen.findByRole("button", { name: /在流程圖上播放|Play on the diagram/ });
+  const onEdges = () => document.querySelectorAll('.arch-edge[data-on="true"]');
+  const node = (n: string) => document.querySelector(`.arch-node[aria-label="${n}"]`) as HTMLElement;
+  const startTour = async () => {
+    fireEvent.click(await playBtn());
+    await act(async () => {});
+  };
+  const stepText = (i: number) => screen.getByText(new RegExp(`第 ${i}/3 步|Step ${i}/3`));
+  const ctl = (re: RegExp) => screen.getByRole("button", { name: re });
+
+  it("抽屜預設關閉；工具列按鈕開關，且畫布仍在", async () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
+    await screen.findByRole("button", { name: "Mb" });
+    await act(async () => {});
+    expect(screen.queryByRole("textbox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^(問答|Q&A)$/ }));
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+    expect(node("Mb")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^(問答|Q&A)$/ }));
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("兩段式提問：先挑檔、再讀檔，第二段訊息含讀到的檔案內容；答案與圖顯示", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS));
+    await openQa();
+    await send();
+    expect(await screen.findByText("重點")).toBeInTheDocument();
+    expect(invokeAiComplete).toHaveBeenCalledTimes(2);
+    expect(archReadFiles).toHaveBeenLastCalledWith("/p", ["a/x.ts"]);
+    const [c1, c2] = invokeAiComplete.mock.calls;
+    expect(c1[0][0].content).toContain("可用檔案路徑");
+    expect(c1[0][0].content).toContain("登入怎麼跑");
+    expect(c2[0][0].content).toContain("FILE-A-CONTENT");
+    expect(c1[2]).not.toBe(c2[2]); // 每次呼叫各自的 stream id
+    expect(c1[3]).toBe("local");
+    const order = (m: { mock: { invocationCallOrder: number[] } }, i: number) => m.mock.invocationCallOrder[i];
+    expect(order(invokeAiComplete, 0)).toBeLessThan(order(archReadFiles, 0));
+    expect(order(archReadFiles, 0)).toBeLessThan(order(invokeAiComplete, 1));
+    expect(screen.getByTestId("mermaid").textContent).toContain("A-->B");
+    expect(await playBtn()).toHaveTextContent(/3/);
+  });
+
+  it("挑檔沒有任何有效檔案時仍會繼續回答，且不讀檔", async () => {
+    invokeAiComplete.mockResolvedValueOnce({ ...SELECT_REPLY, content: JSON.stringify({ modules: [], files: ["nope.ts"] }) }).mockResolvedValueOnce(answerReply([]));
+    await openQa();
+    await send();
+    expect(await screen.findByText("重點")).toBeInTheDocument();
+    expect(archReadFiles).not.toHaveBeenCalled();
+    expect(invokeAiComplete).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: /在流程圖上播放|Play on the diagram/ })).toBeNull();
+  });
+
+  it("導覽只高亮目前步與下一步的模組及其連線；上一步／下一步／暫停可用", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS));
+    await openQa();
+    await send();
+    expect(onEdges()).toHaveLength(0);
+    await startTour();
+    fireEvent.click(ctl(/^(暫停|Pause)$/));
+    expect(stepText(1)).toBeInTheDocument();
+    expect(onEdges()).toHaveLength(1); // 只有 a→b，不含 b→c
+    expect(node("Ma")).not.toHaveClass("arch-node-dim");
+    expect(node("Mb")).not.toHaveClass("arch-node-dim");
+    expect(node("Mc")).toHaveClass("arch-node-dim");
+    fireEvent.click(ctl(/下一步|Next step/));
+    expect(stepText(2)).toBeInTheDocument();
+    expect(onEdges()).toHaveLength(1); // 只有 b→c
+    expect(node("Ma")).toHaveClass("arch-node-dim");
+    expect(node("Mc")).not.toHaveClass("arch-node-dim");
+    fireEvent.click(ctl(/下一步|Next step/));
+    expect(onEdges()).toHaveLength(0); // 最後一步沒有下一步
+    expect(node("Mc")).not.toHaveClass("arch-node-dim");
+    expect(node("Mb")).toHaveClass("arch-node-dim");
+    fireEvent.click(ctl(/上一步|Previous step/));
+    expect(stepText(2)).toBeInTheDocument();
+  });
+
+  it("自動播放：每 3 秒前進，最後一步停住", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS));
+    await openQa();
+    await send();
+    const play = await playBtn();
+    vi.useFakeTimers();
+    fireEvent.click(play);
+    await act(async () => {});
+    expect(stepText(1)).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2999); });
+    expect(stepText(1)).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(stepText(2)).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(stepText(3)).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    expect(stepText(3)).toBeInTheDocument();
+    expect(ctl(/^(播放|Play)$/)).toBeInTheDocument();
+  });
+
+  it("prefers-reduced-motion：導覽以暫停狀態開始，不自動播放", async () => {
+    const orig = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ matches: q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false })) as unknown as typeof window.matchMedia;
+    try {
+      invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS));
+      await openQa();
+      await send();
+      const play = await playBtn();
+      vi.useFakeTimers();
+      fireEvent.click(play);
+      await act(async () => {});
+      expect(ctl(/^(播放|Play)$/)).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+      expect(stepText(1)).toBeInTheDocument();
+      expect(document.querySelector(".arch-flow-dot")).toBeNull();
+    } finally {
+      window.matchMedia = orig;
+    }
+  });
+
+  it("導覽中點別的模組不會結束導覽；Esc 結束並還原高亮；佐證按鈕開檔案預覽", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS));
+    await openQa();
+    await send();
+    await startTour();
+    fireEvent.click(ctl(/^(暫停|Pause)$/));
+    fireEvent.click(node("Mc"));
+    expect(await screen.findByRole("heading", { name: "Mc" })).toBeInTheDocument();
+    expect(stepText(1)).toBeInTheDocument();
+    expect(node("Mc")).toHaveClass("arch-node-dim"); // 仍照導覽高亮，不是照選取
+    fireEvent.click(ctl(/下一步|Next step/));
+    fireEvent.click(screen.getByRole("button", { name: "b/x.ts:1" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(archReadFile).toHaveBeenLastCalledWith("/p", "b/x.ts");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("button", { name: /結束導覽|End tour/ })).toBeNull();
+    // 導覽結束後高亮回到「照選取」：此時選 Ma 就該亮 Ma（導覽中它會被壓暗）。
+    fireEvent.click(node("Ma"));
+    expect(node("Ma")).not.toHaveClass("arch-node-dim");
+    expect(node("Mc")).toHaveClass("arch-node-dim");
+  });
+
+  it("取消：abortAi 用目前的 stream id，遲到的回覆被忽略（不讀檔、不第二次呼叫）", async () => {
+    let resolveFirst: (v: unknown) => void = () => {};
+    invokeAiComplete.mockReturnValueOnce(new Promise((r) => { resolveFirst = r; }));
+    await openQa();
+    await send();
+    expect(screen.getByText(/選擇相關檔案|Selecting relevant files/)).toBeInTheDocument();
+    const streamId = invokeAiComplete.mock.calls[0][2];
+    fireEvent.click(screen.getByRole("button", { name: /^(取消|Cancel)$/ }));
+    expect(abortAi).toHaveBeenCalledWith(streamId);
+    await act(async () => { resolveFirst(SELECT_REPLY); });
+    expect(archReadFiles).not.toHaveBeenCalled();
+    expect(invokeAiComplete).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("第二段進行中取消：abortAi 用第二段的 stream id", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockReturnValueOnce(new Promise(() => {}));
+    await openQa();
+    await send();
+    expect(await screen.findByText(/閱讀檔案並回答|Reading files and answering/)).toBeInTheDocument();
+    const second = invokeAiComplete.mock.calls[1][2];
+    fireEvent.click(screen.getByRole("button", { name: /^(取消|Cancel)$/ }));
+    expect(abortAi).toHaveBeenCalledWith(second);
+  });
+
+  it("幻覺的模組 id 整步丟掉並顯示丟棄數；播放鈕的步數不含被丟的", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply([STEPS[0], { module: "ghost", caption: "不存在" }, STEPS[1]]));
+    await openQa();
+    await send();
+    expect(await screen.findByText(/已丟棄 1 個無法驗證的步驟|Dropped 1 steps/)).toBeInTheDocument();
+    expect(await playBtn()).toHaveTextContent(/2/);
+  });
+
+  it("AI 回應格式不對時顯示錯誤泡泡", async () => {
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce({ content: "not json", tool_calls: [], tool_calling_unsupported: false });
+    await openQa();
+    await send();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/AI 回應不是有效的格式|not in a valid format/);
+  });
+
+  it("AI 未設定時顯示提示", async () => {
+    invokeAiComplete.mockRejectedValueOnce({ kind: "not_configured" });
+    await openQa();
+    await send();
+    expect(await screen.findByText(/尚未設定 AI|AI is not configured/)).toBeInTheDocument();
   });
 });

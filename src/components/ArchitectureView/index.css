@@ -198,3 +198,31 @@
 .arch-file-btn:hover code { color: var(--arch-hi); text-decoration: underline; }
 button.arch-evidence { border: 0; cursor: pointer; text-align: left; }
 button.arch-evidence:hover { color: var(--arch-hi); }
+
+/* 架構問答抽屜：在 .arch-body 之下、flex 排版，畫布會跟著縮小而不是被蓋住 */
+.arch-btn-active { border-color: var(--arch-hi); background: color-mix(in srgb, var(--arch-hi) 16%, var(--bg-tertiary)); }
+.arch-qa { flex: 0 0 320px; height: 320px; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border-color); background: var(--bg-secondary); }
+.arch-qa-list { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.arch-qa-hint { color: var(--text-muted); font-size: 13px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.arch-qa-hint p { margin: 0; }
+.arch-qa-example { white-space: normal; text-align: left; }
+.arch-qa-msg { max-width: 92%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.arch-qa-user { align-self: flex-end; background: color-mix(in srgb, var(--arch-hi) 18%, var(--bg-tertiary)); white-space: pre-wrap; }
+.arch-qa-ai { align-self: flex-start; background: var(--bg-primary); border: 1px solid var(--border-color); }
+.arch-qa-err { align-self: flex-start; color: var(--arch-err); border: 1px solid var(--arch-err); background: var(--bg-primary); }
+.arch-qa-play { margin: 6px 0; }
+.arch-qa-diagram { margin-top: 6px; }
+.arch-qa-diagram summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
+.arch-qa-muted { margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+.arch-qa-busy { align-self: flex-start; margin: 0 14px 6px; }
+.arch-qa-input { display: flex; gap: 8px; padding: 8px 14px 10px; border-top: 1px solid var(--border-color); align-items: flex-end; }
+.arch-qa-input textarea { flex: 1; resize: none; font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); }
+.arch-qa-input textarea:focus { outline: none; border-color: var(--arch-hi); }
+
+/* 導覽字幕列：畫布底部中央；縮放鈕在右上角，不會重疊 */
+.arch-tour { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 6; max-width: min(720px, calc(100% - 28px)); width: max-content; display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 12px; background: var(--bg-secondary); border: 1px solid var(--arch-hi); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); font-size: 13px; }
+.arch-tour-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.arch-tour-step { color: var(--arch-hi); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.arch-tour-caption { overflow-wrap: anywhere; }
+.arch-tour-evidence { background: none; border: none; padding: 0; color: var(--arch-hi); font: inherit; font-family: var(--font-mono, monospace); font-size: 12px; cursor: pointer; text-decoration: underline; }
+.arch-tour-ctl { display: flex; gap: 4px; flex-shrink: 0; }

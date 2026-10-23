@@ -12,6 +12,10 @@ import { buildDrillGraph, drillKey } from "./drill";
 import { edgeLength, edgeMidpoint, edgePath, initialView, isCompact, layerColor, layoutGraph, neighborhood, spreadLabels, trueFitView, zoomAt, MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, type Layout, type View } from "./layout";
 import { DetailPanel } from "./DetailPanel";
 import { FilePreview } from "./FilePreview";
+import { QaPanel, type QaMessage, type QaStage } from "./QaPanel";
+import { TourBar } from "./TourBar";
+import { ANSWER_SYSTEM, SELECT_SYSTEM, buildAnswerMessage, buildSelectMessage, parseAnswer, parseSelect, type Tour } from "./qa";
+import { clampStep, tourEdges } from "./tour";
 import "./index.css";
 
 const PROVIDER_KEY = "aiterm_arch_provider";
@@ -92,6 +96,14 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const closePreview = useCallback(() => setPreview(null), []);
   const streamIdRef = useRef<string | null>(null);
   const runRef = useRef(0);
+  const [qaOpen, setQaOpen] = useState(false);
+  const [qaMessages, setQaMessages] = useState<QaMessage[]>([]);
+  const [qaBusy, setQaBusy] = useState(false);
+  const [qaStage, setQaStage] = useState<QaStage>("select");
+  const [qaElapsed, setQaElapsed] = useState(0);
+  const [tour, setTour] = useState<{ tour: Tour; index: number; playing: boolean } | null>(null);
+  const qaRunRef = useRef(0);
+  const qaStreamRef = useRef<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const archRef = useRef<Architecture | null>(null);
   const viewRef = useRef<View>({ scale: 1, tx: 0, ty: 0 });
@@ -103,6 +115,10 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     setRoot(dir);
     setSelected(null);
     setDrillPath([]);
+    setTour(null);
+    setQaMessages([]);
+    qaRunRef.current++;
+    setQaBusy(false);
     setStatus({ kind: "busy", msg: t.arch_scanning });
     try {
       const s = await archScan(dir);
@@ -219,6 +235,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       // 根圖被取代：舊 drills 只留模組 id 仍存在的；鑽取位置可能失效，回到根層。
       setDrillPath([]);
       setSelected(null);
+      setTour(null);
       const drills = pruneDrills(current?.drills, new Set(merged.modules.map((m) => m.id)));
       return drills ? { ...merged, drills } : merged;
     });
@@ -241,6 +258,72 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     const id = streamIdRef.current;
     if (id) abortAi(id).catch(() => { /* 取消本身失敗也不打擾使用者 */ });
   }, []);
+
+  /**
+   * 架構問答：兩段式。(1) 只用架構摘要請 AI 挑檔；(2) 讀那些檔案再回答。
+   * 每個問題各自獨立——刻意不把先前的對話歷史送給 AI（摘要＋檔案內容已是完整脈絡，歷史只會讓提示越來越長）。
+   * 摘要一律用根層架構，即使目前鑽進了某個模組。取消用 run 計數器讓遲到的回覆被忽略。
+   */
+  const ask = useCallback(async (question: string) => {
+    if (!arch || !scan || !root) return;
+    const run = ++qaRunRef.current;
+    setQaMessages((m) => [...m, { id: nanoid(), role: "user", text: question }]);
+    setQaElapsed(0);
+    setQaStage("select");
+    setQaBusy(true);
+    setStatus((s) => (s.kind === "notice" || s.kind === "error" ? { kind: "idle" } : s));
+    try {
+      const id1 = nanoid();
+      qaStreamRef.current = id1;
+      const r1 = await invokeAiComplete([{ role: "user", content: buildSelectMessage(arch, question) }], SELECT_SYSTEM, id1, providerId || undefined);
+      if (run !== qaRunRef.current) return;
+      // 挑檔失敗或沒挑到檔案也繼續：只靠架構摘要回答。
+      const picked = r1.content ? parseSelect(r1.content, arch, scan) : { modules: [], files: [] };
+      setQaStage("answer");
+      const files = picked.files.length > 0 ? await archReadFiles(root, picked.files) : [];
+      if (run !== qaRunRef.current) return;
+      const id2 = nanoid();
+      qaStreamRef.current = id2;
+      const r2 = await invokeAiComplete([{ role: "user", content: buildAnswerMessage(arch, question, files) }], ANSWER_SYSTEM, id2, providerId || undefined);
+      if (run !== qaRunRef.current) return;
+      const qa = r2.content ? parseAnswer(r2.content, arch, scan) : null;
+      setQaMessages((m) => [...m, qa ? { id: nanoid(), role: "ai", qa } : { id: nanoid(), role: "error", text: t.arch_qa_bad_format }]);
+    } catch (e) {
+      if (run !== qaRunRef.current) return;
+      const err = e as AiError;
+      if (err?.kind === "not_configured") setStatus({ kind: "notice", msg: t.arch_no_ai });
+      else setQaMessages((m) => [...m, { id: nanoid(), role: "error", text: t.arch_qa_error.replace("{msg}", err?.kind ? formatAiError(err) : errText(e)) }]);
+    } finally {
+      if (run === qaRunRef.current) setQaBusy(false);
+    }
+  }, [arch, scan, root, providerId, t]);
+
+  const cancelAsk = useCallback(() => {
+    qaRunRef.current++;
+    setQaBusy(false);
+    const id = qaStreamRef.current;
+    if (id) abortAi(id).catch(() => { /* 取消本身失敗也不打擾使用者 */ });
+  }, []);
+
+  useEffect(() => {
+    if (!qaBusy) return;
+    const timer = setInterval(() => setQaElapsed((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [qaBusy]);
+
+  const playTour = useCallback((messageId: string) => {
+    const msg = qaMessages.find((m) => m.id === messageId);
+    if (!msg || msg.role !== "ai" || !msg.qa.tour) return;
+    // 導覽在根層播放：離開鑽取、清掉選取與資料流路徑。
+    setDrillPath([]);
+    setSelected(null);
+    setHoverEdge(null);
+    setPathPick(null);
+    setTour({ tour: msg.qa.tour, index: 0, playing: !prefersReducedMotion() });
+  }, [qaMessages]);
+  const endTour = useCallback(() => setTour(null), []);
+  const setTourIndex = useCallback((i: number) => setTour((c) => (c ? { ...c, index: clampStep(c.tour.steps, i) } : c)), []);
+  const setTourPlaying = useCallback((p: boolean) => setTour((c) => (c ? { ...c, playing: p } : c)), []);
 
   useEffect(() => {
     if (!analyzing) return;
@@ -295,13 +378,20 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const cur: View = manual && manual.layout === layout ? manual.view : fit;
   const activePath = pathPick && pathPick.view === view && pathPick.selected === selected ? pathPick.path : null;
   const hl = useMemo(() => {
+    // 導覽中：只亮目前這步與下一步的模組，以及兩者之間的連線；其餘變暗（優先於選取／路徑）。
+    if (tour && arch && view === arch) {
+      const { steps } = tour.tour;
+      const modules = new Set<string>();
+      for (const s of [steps[tour.index], steps[tour.index + 1]]) if (s) modules.add(s.module);
+      return { edges: new Set<Edge>(tourEdges(arch, steps, tour.index)), modules };
+    }
     if (activePath) {
       const modules = new Set<string>();
       for (const e of activePath) { modules.add(e.from); modules.add(e.to); }
       return { edges: new Set<Edge>(activePath), modules };
     }
     return near ? { edges: new Set<Edge>(near.edges), modules: near.modules } : null;
-  }, [activePath, near]);
+  }, [tour, arch, view, activePath, near]);
   const reduced = prefersReducedMotion();
   const pickPath = useCallback((p: Edge[]) => {
     if (!view || !selected) return;
@@ -324,6 +414,14 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const zoomOut = useCallback(() => zoomCenter(1 / ZOOM_STEP), [zoomCenter]);
   const zoomReset = useCallback(() => zoomCenter(1 / viewRef.current.scale), [zoomCenter]);
   useEffect(() => () => dragCleanupRef.current?.(), []);
+
+  // 導覽換步時把目前模組的卡片捲進可視範圍（jsdom 沒有 scrollIntoView）。
+  const tourModule = tour ? tour.tour.steps[tour.index]?.module : undefined;
+  useEffect(() => {
+    if (!tourModule || !layout) return;
+    const el = Array.from(canvasRef.current?.querySelectorAll<HTMLElement>("[data-mid]") ?? []).find((n) => n.dataset.mid === tourModule);
+    el?.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+  }, [tourModule, layout]);
 
   // Ctrl/⌘＋滾輪以游標為中心縮放；一般滾輪維持捲動。要 preventDefault 就必須是非 passive 的原生監聽。
   useEffect(() => {
@@ -410,6 +508,9 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
           )}
           {scan && !analyzing && (
             <button type="button" className="arch-btn arch-btn-primary" onClick={analyze} disabled={status.kind === "busy"}>{t.arch_analyze}</button>
+          )}
+          {scan && arch && (
+            <button type="button" className={`arch-btn ${qaOpen ? "arch-btn-active" : ""}`} aria-pressed={qaOpen} onClick={() => setQaOpen((o) => !o)}>{t.arch_qa_toggle}</button>
           )}
           {analyzing && (
             <span className="arch-analyzing" role="status">
@@ -504,7 +605,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                   const dim = hl && !hl.modules.has(m.id);
                   const compact = isCompact(m);
                   return (
-                    <button key={m.id} type="button" title={m.name} aria-label={m.name}
+                    <button key={m.id} type="button" title={m.name} aria-label={m.name} data-mid={m.id}
                       className={`arch-node ${compact ? "arch-node-compact" : ""} ${selected === m.id ? "arch-node-sel" : ""} ${dim ? "arch-node-dim" : ""}`}
                       style={{ left: p.x, top: p.y, width: p.w, height: p.h, ["--lc" as string]: layerColor(m.layer, layerIndex(m.layer)) }}
                       onClick={() => setSelected(m.id)} onDoubleClick={() => enter(m.id)}
@@ -537,10 +638,14 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
             <button type="button" className="arch-btn arch-zoom-fit" title={t.arch_zoom_hint} onClick={fitView}>{t.arch_fit}</button>
           </div>
         )}
+        {tour && <TourBar tour={tour.tour} index={tour.index} playing={tour.playing} onIndex={setTourIndex} onPlaying={setTourPlaying} onClose={endTour} onOpenFile={openFile} />}
         {root && preview && preview.root === root && <FilePreview root={root} path={preview.path} line={preview.line} onClose={closePreview} />}
         </div>
         {view && <DetailPanel arch={view} selected={selected} onSelect={setSelected} scan={scan} onExpand={enter} activePath={activePath} onPickPath={pickPath} onOpenFile={root ? openFile : undefined} />}
       </div>
+      {qaOpen && scan && arch && (
+        <QaPanel messages={qaMessages} busy={qaBusy} stage={qaStage} elapsed={qaElapsed} onSend={ask} onCancel={cancelAsk} onPlayTour={playTour} />
+      )}
     </div>
   );
 }
