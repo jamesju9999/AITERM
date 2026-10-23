@@ -17,7 +17,7 @@ import { FilePreview } from "./FilePreview";
 import { QaPanel, type QaMessage, type QaStage } from "./QaPanel";
 import { TourBar } from "./TourBar";
 import { ANSWER_SYSTEM, SELECT_SYSTEM, attachEvidenceText, buildAnswerMessage, buildSelectMessage, parseAnswer, parseSelect, type Tour } from "./qa";
-import { clampStep, tourEdges, tourReversedEdges } from "./tour";
+import { clampStep, tourRoute } from "./tour";
 import { parseStoredQa, qaToMarkdown, serializeQa } from "./qaStore";
 import "./index.css";
 
@@ -459,7 +459,10 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       const { steps } = tour.tour;
       const modules = new Set<string>();
       for (const s of [steps[tour.index], steps[tour.index + 1]]) if (s) modules.add(s.module);
-      return { edges: new Set<Edge>(tourEdges(arch, steps, tour.index)), modules, reversed: tourReversedEdges(arch, steps, tour.index) };
+      // 兩步之間沒有直接連線時，沿途經過的模組也一起亮，才看得出資料走過哪幾層。
+      const route = tourRoute(arch, steps, tour.index);
+      for (const m of route.modules) modules.add(m);
+      return { edges: new Set<Edge>(route.edges), modules, reversed: route.reversed };
     }
     if (activePath) {
       const modules = new Set<string>();
@@ -495,6 +498,16 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const tourModule = tour ? tour.tour.steps[tour.index]?.module : undefined;
   // 檔案預覽蓋住畫布右側時，把導覽（或選取）的模組平移到預覽左邊的可見區。
   const previewOpen = !!(root && preview && preview.root === root);
+  // 預覽關掉時，若畫布還停在我們平移過去的位置（使用者沒再動它），推回原位。
+  const panBackRef = useRef<{ layout: Layout; from: number; to: number } | null>(null);
+  useEffect(() => {
+    if (previewOpen) return;
+    const back = panBackRef.current;
+    panBackRef.current = null;
+    if (back && layoutRef.current === back.layout && Math.abs(viewRef.current.tx - back.to) < 1) {
+      setManual({ layout: back.layout, view: { ...viewRef.current, tx: back.from } });
+    }
+  }, [previewOpen]);
   const focusModules = tour && hl ? hl.modules : selected ? new Set([selected]) : null;
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -518,6 +531,10 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
     // 最多往左推到最左邊的卡片貼齊可視區左緣，不把它推出畫面。
     const delta = Math.min(overflow, Math.max(0, left - (cr.left + MARGIN)));
     if (delta < 1) return;
+    // 連續幾步都在平移時，要推回的是最初那個位置。
+    const prevPan = panBackRef.current;
+    const origin = prevPan && prevPan.layout === lay && Math.abs(viewRef.current.tx - prevPan.to) < 1 ? prevPan.from : viewRef.current.tx;
+    panBackRef.current = { layout: lay, from: origin, to: viewRef.current.tx - delta };
     setManual({ layout: lay, view: { ...viewRef.current, tx: viewRef.current.tx - delta } });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- focusModules 每次渲染都是新 Set，只在換步／開預覽／換選取時重算。
   }, [previewOpen, tourModule, selected]);
