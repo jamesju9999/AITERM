@@ -277,3 +277,4 @@ button.arch-evidence:hover { color: var(--arch-hi); }
 .arch-qa-hist li { display: flex; align-items: center; gap: 6px; padding: 2px; }
 .arch-qa-hist-q { flex: 1; min-width: 0; text-align: left; font: inherit; font-size: 13px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-primary); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .arch-qa-hist-q:hover { background: var(--bg-tertiary); }
+.arch-tour-code { flex-basis: 100%; display: block; padding: 3px 8px; border-radius: 6px; background: var(--bg-primary); border-left: 3px solid var(--arch-hi); font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }

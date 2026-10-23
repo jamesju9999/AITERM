@@ -106,3 +106,21 @@ describe("TourBar", () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("TourBar 證據那一行程式", () => {
+  const withText: Tour = { title: "t", steps: [{ module: "a", caption: "回傳", evidence: { file: "x/y.ts", line: 85, text: "return ResponseEntity.ok(body);" } }, { module: "b", caption: "沒文字", evidence: { file: "x/y.ts", line: 9 } }] };
+  const mountAt = (index: number) => render(
+    <LocaleProvider><TourBar tour={withText} index={index} playing={false} onIndex={() => {}} onPlaying={() => {}} onClose={() => {}} onOpenFile={() => {}} /></LocaleProvider>,
+  );
+  it("有 text 時在 file:line 旁顯示那一行的程式碼", () => {
+    mountAt(0);
+    expect(screen.getByText("x/y.ts:85")).toBeInTheDocument();
+    expect(screen.getByText("return ResponseEntity.ok(body);")).toBeInTheDocument();
+  });
+  it("沒有 text 時只顯示 file:line", () => {
+    mountAt(1);
+    expect(screen.getByText("x/y.ts:9")).toBeInTheDocument();
+    expect(document.querySelector(".arch-tour-code")).toBeNull();
+  });
+});
+

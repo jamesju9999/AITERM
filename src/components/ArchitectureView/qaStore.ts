@@ -19,7 +19,7 @@ function parseStep(v: unknown): TourStep | null {
   if (!isObj(v) || typeof v.module !== "string" || typeof v.caption !== "string") return null;
   const ev = v.evidence;
   if (isObj(ev) && typeof ev.file === "string" && typeof ev.line === "number") {
-    return { module: v.module, caption: v.caption, evidence: { file: ev.file, line: ev.line } };
+    return { module: v.module, caption: v.caption, evidence: { file: ev.file, line: ev.line, ...(typeof ev.text === "string" && ev.text ? { text: ev.text } : {}) } };
   }
   return { module: v.module, caption: v.caption };
 }

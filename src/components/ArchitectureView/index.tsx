@@ -16,13 +16,15 @@ import { useSidePane } from "./useSidePane";
 import { FilePreview } from "./FilePreview";
 import { QaPanel, type QaMessage, type QaStage } from "./QaPanel";
 import { TourBar } from "./TourBar";
-import { ANSWER_SYSTEM, SELECT_SYSTEM, buildAnswerMessage, buildSelectMessage, parseAnswer, parseSelect, type Tour } from "./qa";
+import { ANSWER_SYSTEM, SELECT_SYSTEM, attachEvidenceText, buildAnswerMessage, buildSelectMessage, parseAnswer, parseSelect, type Tour } from "./qa";
 import { clampStep, tourEdges, tourReversedEdges } from "./tour";
 import { parseStoredQa, qaToMarkdown, serializeQa } from "./qaStore";
 import "./index.css";
 
 const PROVIDER_KEY = "aiterm_arch_provider";
 const ROOT_KEY = "aiterm_arch_root";
+/** 問答每個檔案最多讀這麼多位元組（分析只讀 6000）：控制器的後半段方法才不會被截掉、AI 才看得到回傳那一行。 */
+const QA_FILE_BYTES = 12000;
 
 /** 鑽取路徑上的一層：模組 id、它的檔案、顯示名稱（麵包屑用）。 */
 interface DrillLevel { id: string; files: string[]; name: string }
@@ -296,7 +298,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       // 挑檔失敗或沒挑到檔案也繼續：只靠架構摘要回答。
       const picked = r1.content ? parseSelect(r1.content, arch, scan) : { modules: [], files: [] };
       setQaStage("answer");
-      const files = picked.files.length > 0 ? await archReadFiles(root, picked.files) : [];
+      const files = picked.files.length > 0 ? await archReadFiles(root, picked.files, QA_FILE_BYTES) : [];
       if (run !== qaRunRef.current) return;
       const id2 = nanoid();
       qaStreamRef.current = id2;
@@ -307,7 +309,8 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
         setQaMessages((m) => [...m, { id: nanoid(), role: "error", text: t.arch_qa_no_text }]);
       } else {
         const content = r2.content;
-        const qa = parseAnswer(content, arch, scan);
+        const parsed = parseAnswer(content, arch, scan);
+        const qa = parsed ? attachEvidenceText(parsed, files) : null;
         setQaMessages((m) => [...m, qa ? { id: nanoid(), role: "ai", qa } : { id: nanoid(), role: "error", text: t.arch_qa_bad_format, raw: content }]);
       }
     } catch (e) {

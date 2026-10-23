@@ -38,6 +38,11 @@ pub fn save_qa(root: &Path, json: &str) -> Result<(), String> {
     write_creating_dir(&qa_path(root), json)
 }
 
+/// 呼叫端要求的每檔讀取上限：沒給用預設，給了也不超過 `ceiling`（避免一次讀爆記憶體或 AI 的 context）。
+pub fn read_limit(requested: Option<usize>, default: usize, ceiling: usize) -> usize {
+    requested.map_or(default, |n| n.clamp(1, ceiling))
+}
+
 /// 把文字寫到使用者在「另存新檔」對話框選的路徑（匯出用）。路徑必須是絕對路徑且上層資料夾已存在。
 pub fn export_text(path: &Path, content: &str) -> Result<(), String> {
     if !path.is_absolute() {
@@ -148,6 +153,14 @@ mod tests {
         assert_eq!(load_qa(dir.path()).unwrap().as_deref(), Some("[1]"));
         assert_eq!(load(dir.path()).unwrap().as_deref(), Some("{}"));
         assert!(dir.path().join(".aiterm/architecture-qa.json").is_file());
+    }
+
+    #[test]
+    fn read_limit_defaults_and_clamps() {
+        assert_eq!(read_limit(None, 6000, 60000), 6000);
+        assert_eq!(read_limit(Some(12000), 6000, 60000), 12000);
+        assert_eq!(read_limit(Some(10_000_000), 6000, 60000), 60000);
+        assert_eq!(read_limit(Some(0), 6000, 60000), 1);
     }
 
     #[test]

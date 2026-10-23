@@ -14,8 +14,9 @@ export interface ScanResult {
 export const archScan = (root: string) => invoke<ScanResult>("arch_scan", { root });
 export const archLoad = (root: string) => invoke<string | null>("arch_load", { root });
 export const archSave = (root: string, json: string) => invoke<void>("arch_save", { root, json });
-export const archReadFiles = (root: string, paths: string[]) =>
-  invoke<[string, string][]>("arch_read_files", { root, paths });
+/** maxBytes：每檔讀取上限（位元組）；不給用後端預設 6000，後端另有天花板。 */
+export const archReadFiles = (root: string, paths: string[], maxBytes?: number) =>
+  invoke<[string, string][]>("arch_read_files", { root, paths, ...(maxBytes ? { maxBytes } : {}) });
 
 export interface FilePreview { content: string; truncated: boolean; total_bytes: number }
 export const archReadFile = (root: string, path: string) => invoke<FilePreview>("arch_read_file", { root, path });

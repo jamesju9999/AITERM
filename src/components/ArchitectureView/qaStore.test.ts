@@ -37,6 +37,10 @@ describe("serializeQa / parseStoredQa", () => {
     const back = parseStoredQa(serializeQa([ai({ tour, diagram: "graph LR; A-->B" })]));
     expect(back[0]).toMatchObject({ qa: { tour, diagram: "graph LR; A-->B" } });
   });
+  it("證據那行的程式碼文字（text）也會存、讀回", () => {
+    const tour = { title: "t", steps: [{ module: "m", caption: "c", evidence: { file: "a.ts", line: 3, text: "return x;" } }] };
+    expect(parseStoredQa(serializeQa([ai({ tour })]))[0]).toMatchObject({ qa: { tour } });
+  });
   it("導覽步驟型別不對時只丟該步，保留其餘", () => {
     const raw = JSON.stringify({ v: 1, messages: [{ id: "a", role: "ai", qa: { answer: "x", diagram: "", dropped: 0, truncated: false, tour: { title: "t", steps: [{ module: 1, caption: "bad" }, { module: "m", caption: "good" }] } } }] });
     const back = parseStoredQa(raw);

@@ -53,6 +53,7 @@ export function TourBar({ tour, index, playing, onIndex, onPlaying, onClose, onO
             {`${step.evidence.file}:${step.evidence.line}`}
           </button>
         )}
+        {step.evidence?.text && <code className="arch-tour-code" title={step.evidence.text}>{step.evidence.text}</code>}
       </div>
       <div className="arch-tour-ctl">
         <button type="button" className="arch-btn arch-btn-small" aria-label={t.arch_tour_prev} title={t.arch_tour_prev} disabled={first} onClick={() => onIndex(index - 1)}>⏮</button>

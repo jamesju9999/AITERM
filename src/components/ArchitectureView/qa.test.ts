@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  ANSWER_SYSTEM, SELECT_SYSTEM, archSummary, buildAnswerMessage, buildSelectMessage, extractJsonObject, parseAnswer, parseSelect,
+  ANSWER_SYSTEM, SELECT_SYSTEM, archSummary, attachEvidenceText, buildAnswerMessage, buildSelectMessage, extractJsonObject, parseAnswer, parseSelect,
 } from "./qa";
 import type { Architecture } from "./model";
 import type { ScanResult } from "../../ipc/architecture";
@@ -90,6 +90,48 @@ describe("buildSelectMessage / buildAnswerMessage", () => {
     expect(m).toContain("登入怎麼跑？");
     expect(m).toContain("### web/api.ts");
     expect(m).toContain("fetch('/login')");
+  });
+});
+
+describe("行號：回答訊息的每行程式前面有行號，證據才指得準", () => {
+  it("每行加上右對齊的行號前綴，行號從 1 起算", () => {
+    const m = buildAnswerMessage(arch, "q", [["a.java", "x\ny\nz"]]);
+    expect(m).toMatch(/\b1\| x\n\s*2\| y\n\s*3\| z/);
+  });
+  it("CRLF 與結尾換行不會多出一行空行號", () => {
+    const m = buildAnswerMessage(arch, "q", [["a.java", "x\r\ny\r\n"]]);
+    expect(m).toMatch(/1\| x\n\s*2\| y/);
+    expect(m).not.toMatch(/3\|/);
+  });
+  it("提示詞要求 evidence 的行號取自前綴，且回傳類步驟指到 return／回應那一行", () => {
+    expect(ANSWER_SYSTEM).toContain("行號前綴");
+    expect(ANSWER_SYSTEM).toMatch(/return|回傳/);
+  });
+});
+
+describe("attachEvidenceText", () => {
+  const qa = (evidence?: { file: string; line: number }) => ({
+    answer: "x", diagram: "", dropped: 0, truncated: false,
+    tour: { title: "t", steps: [{ module: "web", caption: "c", evidence }, { module: "server", caption: "no ev" }] },
+  });
+  const files: [string, string][] = [["web/api.ts", "const a = 1;\n  return res.json(data);\n\n}"]];
+  it("把證據那一行的程式（去頭尾空白）附在 evidence.text", () => {
+    const out = attachEvidenceText(qa({ file: "web/api.ts", line: 2 }), files);
+    expect(out.tour!.steps[0].evidence).toEqual({ file: "web/api.ts", line: 2, text: "return res.json(data);" });
+    expect(out.tour!.steps[1].evidence).toBeUndefined();
+  });
+  it("檔案沒讀進來、行號超出、或那一行是空白時不附 text（證據本身保留）", () => {
+    expect(attachEvidenceText(qa({ file: "other.ts", line: 1 }), files).tour!.steps[0].evidence).toEqual({ file: "other.ts", line: 1 });
+    expect(attachEvidenceText(qa({ file: "web/api.ts", line: 99 }), files).tour!.steps[0].evidence).toEqual({ file: "web/api.ts", line: 99 });
+    expect(attachEvidenceText(qa({ file: "web/api.ts", line: 3 }), files).tour!.steps[0].evidence).toEqual({ file: "web/api.ts", line: 3 });
+  });
+  it("超過 200 字的行截斷並加省略號；沒有導覽時原樣回傳", () => {
+    const long = [["web/api.ts", "x".repeat(300)]] as [string, string][];
+    const t = attachEvidenceText(qa({ file: "web/api.ts", line: 1 }), long).tour!.steps[0].evidence!.text!;
+    expect(t).toHaveLength(201);
+    expect(t.endsWith("…")).toBe(true);
+    const none = { answer: "x", diagram: "", dropped: 0, truncated: false, tour: null };
+    expect(attachEvidenceText(none, files)).toBe(none);
   });
 });
 

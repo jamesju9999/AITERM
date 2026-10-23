@@ -21,7 +21,9 @@ export const ANSWER_SYSTEM = [
   "規則：",
   "- answer 是 Markdown，使用繁體中文，直接回答問題。",
   "- walkthrough.steps[].module 必須是我提供的模組 id，並依資料流／控制流的先後順序排列，3 到 10 步。",
+  "- 檔案內容的每一行前面都有「行號|」前綴；evidence.line 必須取自那個行號前綴，不要自己數行。",
   "- evidence 是選填；只有在你確實從我提供的檔案看到時才寫，file:line 必須真實，不可虛構。",
+  "- 每一步的 evidence 要指到「做這件事的那一行」：例如回傳／回應的步驟指到 return 或寫出回應的那行，呼叫別的模組的步驟指到呼叫那行，而不是方法宣告或註解。",
   "- diagram 是 Mermaid 原始碼（sequenceDiagram 或 flowchart LR），不要加 markdown 程式碼圍欄，節點 id 只用 ASCII 英數字與底線。",
   "- 如果問題與流程無關，walkthrough 的 steps 給空陣列、diagram 給空字串。",
 ].join("\n");
@@ -61,8 +63,16 @@ export function buildSelectMessage(arch: Architecture, question: string): string
   return [`架構摘要：\n${archSummary(arch)}`, `可用檔案路徑：\n${paths}`, `問題：${question}`].join("\n\n");
 }
 
+/** 每行前面加上右對齊的行號與「|」，讓 AI 引用 evidence.line 時不必自己數行。 */
+function numberLines(content: string): string {
+  const lines = content.split(/\r?\n/);
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  const w = String(lines.length).length;
+  return lines.map((l, i) => `${String(i + 1).padStart(w)}| ${l}`).join("\n");
+}
+
 export function buildAnswerMessage(arch: Architecture, question: string, files: [string, string][]): string {
-  const body = files.map(([p, c]) => `### ${p}\n${c}`).join("\n\n");
+  const body = files.map(([p, c]) => `### ${p}\n${numberLines(c)}`).join("\n\n");
   return [`架構摘要：\n${archSummary(arch)}`, `檔案內容：\n${body || "（無）"}`, `問題：${question}`].join("\n\n");
 }
 
@@ -248,9 +258,30 @@ export function parseSelect(reply: string, arch: Architecture, scan: ScanResult)
   return { modules, files: files.slice(0, MAX_FILES) };
 }
 
-export interface TourStep { module: string; caption: string; evidence?: { file: string; line: number } }
+/** evidence.text：證據那一行的程式碼（我們自己從送給 AI 的檔案內容取出，不是 AI 寫的）。 */
+export interface TourStep { module: string; caption: string; evidence?: { file: string; line: number; text?: string } }
 export interface Tour { title: string; steps: TourStep[] }
 export interface QaAnswer { answer: string; tour: Tour | null; diagram: string; dropped: number; truncated: boolean }
+
+const EVIDENCE_TEXT_MAX = 200;
+
+/**
+ * 把每個導覽步驟證據那一行的實際程式碼附上去，讓使用者不必開檔案就看得到「是哪一行」。
+ * 文字來自我們送給 AI 的檔案內容；檔案沒讀進來、行號超出或該行是空白時不附（證據本身保留）。
+ */
+export function attachEvidenceText(qa: QaAnswer, files: [string, string][]): QaAnswer {
+  if (!qa.tour) return qa;
+  const byPath = new Map(files.map(([p, c]) => [p, c.split(/\r?\n/)]));
+  const steps = qa.tour.steps.map((s) => {
+    const ev = s.evidence;
+    if (!ev) return s;
+    const raw = byPath.get(ev.file)?.[ev.line - 1];
+    const text = raw?.trim();
+    if (!text) return s;
+    return { ...s, evidence: { ...ev, text: text.length > EVIDENCE_TEXT_MAX ? `${text.slice(0, EVIDENCE_TEXT_MAX)}…` : text } };
+  });
+  return { ...qa, tour: { ...qa.tour, steps } };
+}
 
 const DEFAULT_TOUR_TITLE = "流程導覽";
 

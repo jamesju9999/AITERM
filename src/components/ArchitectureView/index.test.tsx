@@ -1036,13 +1036,26 @@ describe("ArchitectureView 架構問答與流程導覽", () => {
     expect(document.querySelector("animateMotion")!.getAttribute("keyPoints")).toBeNull();
   });
 
+  it("導覽字幕列顯示證據那一行的程式碼（取自讀進來的檔案，不是 AI 寫的）", async () => {
+    archReadFiles.mockResolvedValue([["a/x.ts", "  return ResponseEntity.ok(body);\nother"]]);
+    invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply([
+      { module: "a", caption: "回傳", evidence: { file: "a/x.ts", line: 1 } },
+      { module: "b", caption: "收到" },
+    ]));
+    await openQa();
+    await send();
+    await startTour();
+    expect(await screen.findByText("return ResponseEntity.ok(body);")).toBeInTheDocument();
+    expect(screen.getByText("a/x.ts:1")).toBeInTheDocument();
+  });
+
   it("兩段式提問：先挑檔、再讀檔，第二段訊息含讀到的檔案內容；答案與圖顯示", async () => {
     invokeAiComplete.mockResolvedValueOnce(SELECT_REPLY).mockResolvedValueOnce(answerReply(STEPS));
     await openQa();
     await send();
     expect(await screen.findByText("重點")).toBeInTheDocument();
     expect(invokeAiComplete).toHaveBeenCalledTimes(2);
-    expect(archReadFiles).toHaveBeenLastCalledWith("/p", ["a/x.ts"]);
+    expect(archReadFiles).toHaveBeenLastCalledWith("/p", ["a/x.ts"], 12000); // 問答讀得比分析多（預設 6000）
     const [c1, c2] = invokeAiComplete.mock.calls;
     expect(c1[0][0].content).toContain("可用檔案路徑");
     expect(c1[0][0].content).toContain("登入怎麼跑");

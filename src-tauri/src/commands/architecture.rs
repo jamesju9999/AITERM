@@ -6,6 +6,8 @@ use crate::architecture::{scanner, store, types::ScanResult};
 const MAX_FILES: usize = 20000;
 /// 每個關鍵檔案送給 AI 的上限（位元組）。
 const MAX_FILE_BYTES: usize = 6000;
+/// 呼叫端可以要求的每檔讀取上限的天花板（問答要讀得比分析多）。
+const MAX_FILE_BYTES_CEILING: usize = 60000;
 
 #[tauri::command]
 pub async fn arch_scan(root: String) -> Result<ScanResult, String> {
@@ -45,8 +47,13 @@ pub fn arch_export_text(path: String, content: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn arch_read_files(root: String, paths: Vec<String>) -> Result<Vec<(String, String)>, String> {
-    tauri::async_runtime::spawn_blocking(move || store::read_files(&PathBuf::from(root), &paths, MAX_FILE_BYTES))
+pub async fn arch_read_files(
+    root: String,
+    paths: Vec<String>,
+    max_bytes: Option<usize>,
+) -> Result<Vec<(String, String)>, String> {
+    let limit = store::read_limit(max_bytes, MAX_FILE_BYTES, MAX_FILE_BYTES_CEILING);
+    tauri::async_runtime::spawn_blocking(move || store::read_files(&PathBuf::from(root), &paths, limit))
         .await
         .map_err(|e| e.to_string())
 }
