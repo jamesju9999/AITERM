@@ -11,6 +11,8 @@ import { buildBaseGraph, type Architecture, type Edge } from "./model";
 import { buildDrillGraph, drillKey } from "./drill";
 import { edgeLength, edgeMidpoint, edgePath, initialView, isCompact, layerColor, layoutGraph, neighborhood, spreadLabels, trueFitView, zoomAt, MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, type Layout, type View } from "./layout";
 import { DetailPanel } from "./DetailPanel";
+import { SidePane } from "./SidePane";
+import { useSidePane } from "./useSidePane";
 import { FilePreview } from "./FilePreview";
 import { QaPanel, type QaMessage, type QaStage } from "./QaPanel";
 import { TourBar } from "./TourBar";
@@ -76,6 +78,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [arch, setArch] = useState<Architecture | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const side = useSidePane();
   const [drillPath, setDrillPath] = useState<DrillLevel[]>([]);
   const [stale, setStale] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -614,7 +617,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
                     <button key={m.id} type="button" title={m.name} aria-label={m.name} data-mid={m.id}
                       className={`arch-node ${compact ? "arch-node-compact" : ""} ${selected === m.id ? "arch-node-sel" : ""} ${dim ? "arch-node-dim" : ""}`}
                       style={{ left: p.x, top: p.y, width: p.w, height: p.h, ["--lc" as string]: layerColor(m.layer, layerIndex(m.layer)) }}
-                      onClick={() => setSelected(m.id)} onDoubleClick={() => enter(m.id)}
+                      onClick={() => { setSelected(m.id); side.expand(); }} onDoubleClick={() => enter(m.id)}
                       onMouseEnter={() => setHoverNode(m.id)} onMouseLeave={() => setHoverNode((h) => (h === m.id ? null : h))}>
                       <span className="arch-node-head">
                         <span className="arch-node-name">{m.name}</span>
@@ -647,7 +650,11 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
         {tour && <TourBar tour={tour.tour} index={tour.index} playing={tour.playing} onIndex={setTourIndex} onPlaying={setTourPlaying} onClose={endTour} onOpenFile={openFile} />}
         {root && preview && preview.root === root && <FilePreview root={root} path={preview.path} line={preview.line} onClose={closePreview} />}
         </div>
-        {view && <DetailPanel arch={view} selected={selected} onSelect={setSelected} scan={scan} onExpand={enter} activePath={activePath} onPickPath={pickPath} onOpenFile={root ? openFile : undefined} />}
+        {view && (
+          <SidePane open={side.open} width={side.width} onWidth={side.setWidth} onToggle={side.toggle}>
+            <DetailPanel arch={view} selected={selected} onSelect={(id) => { setSelected(id); side.expand(); }} scan={scan} onExpand={enter} activePath={activePath} onPickPath={pickPath} onOpenFile={root ? openFile : undefined} />
+          </SidePane>
+        )}
       </div>
       {qaOpen && scan && arch && (
         <QaPanel messages={qaMessages} busy={qaBusy} stage={qaStage} elapsed={qaElapsed} onSend={ask} onCancel={cancelAsk} onPlayTour={playTour} />
