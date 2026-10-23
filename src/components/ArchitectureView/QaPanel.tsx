@@ -99,6 +99,7 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
                   <MermaidBlock chart={qa.diagram} />
                 </details>
               )}
+              {qa.truncated && <div className="arch-qa-muted">{t.arch_qa_truncated_warn}</div>}
               {qa.dropped > 0 && <div className="arch-qa-muted">{t.arch_qa_dropped.replace("{n}", String(qa.dropped))}</div>}
             </div>
           );

@@ -313,7 +313,7 @@ describe("parseAnswer 容錯", () => {
     expect(r.diagram).toBe("");
   });
   it("純文字（沒有 JSON）：整段當答案，去圍欄與前後空白", () => {
-    expect(parseAnswer("  登入流程：先 A 再 B。\n\n- 一\n- 二  ", arch, scan)).toEqual({ answer: "登入流程：先 A 再 B。\n\n- 一\n- 二", tour: null, diagram: "", dropped: 0 });
+    expect(parseAnswer("  登入流程：先 A 再 B。\n\n- 一\n- 二  ", arch, scan)).toEqual({ answer: "登入流程：先 A 再 B。\n\n- 一\n- 二", tour: null, diagram: "", dropped: 0, truncated: false });
     expect(parseAnswer("```markdown\n## 標題\n內容\n```", arch, scan)!.answer).toBe("## 標題\n內容");
   });
   it("看起來像失敗的 JSON 嘗試且修不了：回 null", () => {
@@ -328,5 +328,38 @@ describe("parseAnswer 容錯", () => {
   it("解得出物件但 answer 不是非空字串仍回 null（不降級成純文字）", () => {
     expect(parseAnswer('{"walkthrough":{"steps":[]}}', arch, scan)).toBeNull();
     expect(parseAnswer('說明 {"answer":"  "} 結束', arch, scan)).toBeNull();
+  });
+});
+
+describe("parseAnswer truncated 旗標", () => {
+  it("截斷在 answer 字串中間：保留半截答案並標 truncated", () => {
+    const r = parseAnswer('{"answer":"依提供的檔案，整條路徑是「前端流', arch, scan)!;
+    expect(r.answer).toBe("依提供的檔案，整條路徑是「前端流");
+    expect(r.truncated).toBe(true);
+  });
+  it("截斷在 answer 之後（補括號救回）也標 truncated", () => {
+    const r = parseAnswer('{"answer":"完整的答案。","walkthrough":{"title":"t","steps":[{"module":"web","caption":"送出"},', arch, scan)!;
+    expect(r.answer).toBe("完整的答案。");
+    expect(r.truncated).toBe(true);
+  });
+  it("最後手段的 answer 掃描（物件沒閉合、補括號也解不了）標 truncated", () => {
+    const r = parseAnswer('{"answer":"半截答案 \\"引', arch, scan)!;
+    expect(r.answer.startsWith("半截答案")).toBe(true);
+    expect(r.truncated).toBe(true);
+  });
+  it("正常完整回覆為 false", () => {
+    expect(parseAnswer(JSON.stringify(goodAnswer), arch, scan)!.truncated).toBe(false);
+    expect(parseAnswer("```json\n" + JSON.stringify(goodAnswer) + "\n```", arch, scan)!.truncated).toBe(false);
+  });
+  it("字串內字面換行／尾逗號的修補不算截斷", () => {
+    const nl = parseAnswer('{"answer":"## 標題\n- 一\n\t- 二","diagram":""}', arch, scan)!;
+    expect(nl.answer).toBe("## 標題\n- 一\n\t- 二");
+    expect(nl.truncated).toBe(false);
+    expect(parseAnswer('{"answer":"x","diagram":"",}', arch, scan)!.truncated).toBe(false);
+  });
+  it("純文字降級不算截斷", () => {
+    const r = parseAnswer("這是一段沒有 JSON 的純文字回答。", arch, scan)!;
+    expect(r.answer).toContain("純文字");
+    expect(r.truncated).toBe(false);
   });
 });

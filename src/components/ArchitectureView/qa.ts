@@ -172,26 +172,33 @@ function balancedEnd(text: string, start: number): number {
  * 陣列或其他非物件的合法 JSON 回 null。
  */
 export function extractJsonObject(reply: string): JsonObject | null {
+  return extractJson(reply).value;
+}
+
+/** 同 extractJsonObject，另外回報物件是否靠 (d) 補括號才解開（= 原文被截斷）。 */
+function extractJson(reply: string): { value: JsonObject | null; salvaged: boolean } {
+  const none = (value: JsonObject | null) => ({ value, salvaged: false });
   const text = stripFence(reply.trim()).trim();
-  if (!text) return null;
+  if (!text) return none(null);
   const direct = tryParse(text);
-  if (direct) return direct === "other" ? null : direct;
+  if (direct) return none(direct === "other" ? null : direct);
 
   const start = text.indexOf("{");
-  if (start === -1) return null;
+  if (start === -1) return none(null);
   // 候選結尾：括號配對收口的位置（後面還有帶花括號的說明文字也不怕），再來是最後一個 }。
   const ends = [balancedEnd(text, start), text.lastIndexOf("}")].filter((e, i, a) => e > start && a.indexOf(e) === i);
   for (const end of ends) {
     const sub = text.slice(start, end + 1);
     const b = tryParse(sub);
-    if (b && b !== "other") return b;
+    if (b && b !== "other") return none(b);
     const sc = scanJson(sub);
     if (sc.ok && sc.stack.length === 0 && !sc.inString) {
       const c = tryParse(sc.out);
-      if (c && c !== "other") return c;
+      if (c && c !== "other") return none(c);
     }
   }
-  return salvageTruncated(text.slice(start));
+  const salvaged = salvageTruncated(text.slice(start));
+  return { value: salvaged, salvaged: salvaged !== null };
 }
 
 /** 結構壞到修不了時的最後手段：只把 "answer" 的字串值寬鬆地讀出來。 */
@@ -243,28 +250,32 @@ export function parseSelect(reply: string, arch: Architecture, scan: ScanResult)
 
 export interface TourStep { module: string; caption: string; evidence?: { file: string; line: number } }
 export interface Tour { title: string; steps: TourStep[] }
-export interface QaAnswer { answer: string; tour: Tour | null; diagram: string; dropped: number }
+export interface QaAnswer { answer: string; tour: Tour | null; diagram: string; dropped: number; truncated: boolean }
 
 const DEFAULT_TOUR_TITLE = "流程導覽";
 
 export function parseAnswer(reply: string, arch: Architecture, scan: ScanResult): QaAnswer | null {
-  const raw = extractJsonObject(reply);
+  const { value: raw, salvaged } = extractJson(reply);
   if (raw) {
-    if (typeof raw.answer === "string" && raw.answer.trim()) return buildAnswer(raw, raw.answer, arch, scan);
+    if (typeof raw.answer === "string" && raw.answer.trim()) return buildAnswer(raw, raw.answer, arch, scan, salvaged);
     // 解得出物件但沒有 answer：可能是截斷在 answer 之前；嘗試寬鬆掃描，否則視為失敗。
     const loose = looseAnswer(stripFence(reply.trim()));
-    return loose ? { answer: loose, tour: null, diagram: "", dropped: 0 } : null;
+    return loose ? { answer: loose, tour: null, diagram: "", dropped: 0, truncated: salvaged } : null;
   }
   const text = stripFence(reply.trim()).trim();
   if (!text) return null;
   const loose = looseAnswer(text);
-  if (loose) return { answer: loose, tour: null, diagram: "", dropped: 0 };
+  if (loose) {
+    // 掃得出 answer 但整個物件解不開：物件沒收口才算被截斷。
+    const start = text.indexOf("{");
+    return { answer: loose, tour: null, diagram: "", dropped: 0, truncated: start !== -1 && balancedEnd(text, start) === -1 };
+  }
   // 看起來是失敗的 JSON 嘗試（或根本是合法的非物件 JSON）：讓 UI 顯示錯誤，而不是把半截 JSON 當答案。
   if (/^(?:\{|\[|```\s*json\b)/i.test(reply.trim()) || tryParse(text) !== undefined) return null;
-  return { answer: text, tour: null, diagram: "", dropped: 0 };
+  return { answer: text, tour: null, diagram: "", dropped: 0, truncated: false };
 }
 
-function buildAnswer(raw: JsonObject, answer: string, arch: Architecture, scan: ScanResult): QaAnswer {
+function buildAnswer(raw: JsonObject, answer: string, arch: Architecture, scan: ScanResult, truncated: boolean): QaAnswer {
   const moduleIds = new Set(arch.modules.map((m) => m.id));
   const lineCount = new Map(scan.files.map((f) => [f.path, f.lines]));
   const wt = raw.walkthrough && typeof raw.walkthrough === "object" ? (raw.walkthrough as Record<string, unknown>) : null;
@@ -290,5 +301,5 @@ function buildAnswer(raw: JsonObject, answer: string, arch: Architecture, scan: 
 
   const title = wt && typeof wt.title === "string" && wt.title.trim() ? wt.title : DEFAULT_TOUR_TITLE;
   const diagram = typeof raw.diagram === "string" ? stripFence(raw.diagram).trim() : "";
-  return { answer, tour: steps.length >= 2 ? { title, steps } : null, diagram, dropped };
+  return { answer, tour: steps.length >= 2 ? { title, steps } : null, diagram, dropped, truncated };
 }

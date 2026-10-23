@@ -98,8 +98,8 @@ describe("QaPanel", () => {
   it("AI 回答以 Markdown 渲染，有導覽顯示播放鈕，有 diagram 顯示圖，dropped 顯示提示", async () => {
     const msgs: QaMessage[] = [
       { id: "u1", role: "user", text: "怎麼登入" },
-      { id: "a1", role: "ai", qa: { answer: "**粗體答案**", tour: { title: "T", steps: [{ module: "a", caption: "c" }, { module: "b", caption: "d" }] }, diagram: "flowchart LR\n A-->B", dropped: 2 } },
-      { id: "a2", role: "ai", qa: { answer: "沒有導覽", tour: null, diagram: "", dropped: 0 } },
+      { id: "a1", role: "ai", qa: { answer: "**粗體答案**", tour: { title: "T", steps: [{ module: "a", caption: "c" }, { module: "b", caption: "d" }] }, diagram: "flowchart LR\n A-->B", dropped: 2, truncated: false } },
+      { id: "a2", role: "ai", qa: { answer: "沒有導覽", tour: null, diagram: "", dropped: 0, truncated: false } },
     ];
     const { props } = await mount({ messages: msgs });
     expect(screen.getByText("怎麼登入")).toBeInTheDocument();
@@ -112,6 +112,15 @@ describe("QaPanel", () => {
     expect(screen.getByTestId("mermaid").textContent).toContain("A-->B");
     expect(screen.getByText(/已丟棄 2 個無法驗證的步驟|Dropped 2 steps/)).toBeInTheDocument();
     expect(screen.queryByText(/已丟棄 0|Dropped 0/)).toBeNull();
+  });
+
+  it("只有 truncated 的回答顯示輸出長度上限警告", async () => {
+    const msgs: QaMessage[] = [
+      { id: "a1", role: "ai", qa: { answer: "完整答案", tour: null, diagram: "", dropped: 0, truncated: false } },
+      { id: "a2", role: "ai", qa: { answer: "半截答案", tour: null, diagram: "", dropped: 0, truncated: true } },
+    ];
+    await mount({ messages: msgs });
+    expect(screen.getAllByText(/回覆可能被模型的輸出長度上限截斷|reply may have been cut off/i)).toHaveLength(1);
   });
 
   it("錯誤訊息顯示為錯誤泡泡", async () => {
