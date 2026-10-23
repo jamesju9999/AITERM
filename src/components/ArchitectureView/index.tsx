@@ -9,7 +9,7 @@ import { ModelPickerButton } from "../ModelPickerButton";
 import { ANALYZE_SYSTEM, buildAnalyzeMessage, mergeScanEdges, parseAnalysis, pickKeyFiles } from "./analyze";
 import { buildBaseGraph, type Architecture, type Edge } from "./model";
 import { buildDrillGraph, drillKey } from "./drill";
-import { edgeLength, edgeMidpoint, edgePath, initialView, isCompact, layerColor, layoutGraph, neighborhood, spreadLabels, trueFitView, zoomAt, type Layout, type View } from "./layout";
+import { edgeLength, edgeMidpoint, edgePath, initialView, isCompact, layerColor, layoutGraph, neighborhood, spreadLabels, trueFitView, zoomAt, MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, type Layout, type View } from "./layout";
 import { DetailPanel } from "./DetailPanel";
 import { FilePreview } from "./FilePreview";
 import "./index.css";
@@ -310,7 +310,19 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const fitView = useCallback(() => {
     if (layout) setManual({ layout, view: trueFitView(layout.width, layout.height, viewport.w, viewport.h) });
   }, [layout, viewport]);
-  useEffect(() => { viewRef.current = cur; layoutRef.current = layout; });
+  const viewportRef = useRef(viewport);
+  useEffect(() => { viewRef.current = cur; layoutRef.current = layout; viewportRef.current = viewport; });
+  // 工具列的縮放：繞可視區中心（含內部捲動量，與滾輪一致）。
+  const zoomCenter = useCallback((factor: number) => {
+    const layoutNow = layoutRef.current;
+    const el = canvasRef.current;
+    if (!layoutNow || !el) return;
+    const vp = viewportRef.current;
+    setManual({ layout: layoutNow, view: zoomAt(viewRef.current, factor, el.scrollLeft + vp.w / 2, el.scrollTop + vp.h / 2) });
+  }, []);
+  const zoomIn = useCallback(() => zoomCenter(ZOOM_STEP), [zoomCenter]);
+  const zoomOut = useCallback(() => zoomCenter(1 / ZOOM_STEP), [zoomCenter]);
+  const zoomReset = useCallback(() => zoomCenter(1 / viewRef.current.scale), [zoomCenter]);
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
   // Ctrl/⌘＋滾輪以游標為中心縮放；一般滾輪維持捲動。要 preventDefault 就必須是非 passive 的原生監聽。
@@ -326,13 +338,35 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
       const factor = Math.exp(-e.deltaY * 0.0015);
       setManual({ layout: layoutNow, view: zoomAt(viewRef.current, factor, e.clientX - r.left + el.scrollLeft, e.clientY - r.top + el.scrollTop) });
     };
+    // macOS WKWebView 的觸控板捏合是 Safari 的 gesture* 事件（不是 ctrl+wheel）；scale 是自 gesturestart 起的累計倍率。
+    let lastScale = 1;
+    const onGestureStart = (e: Event) => { e.preventDefault(); lastScale = 1; };
+    const onGestureChange = (e: Event) => {
+      e.preventDefault();
+      const layoutNow = layoutRef.current;
+      const g = e as Event & { scale?: number; clientX?: number; clientY?: number };
+      if (!layoutNow || !g.scale || !(g.scale > 0)) return;
+      const r = el.getBoundingClientRect();
+      const factor = g.scale / lastScale;
+      lastScale = g.scale;
+      setManual({ layout: layoutNow, view: zoomAt(viewRef.current, factor, (g.clientX ?? 0) - r.left + el.scrollLeft, (g.clientY ?? 0) - r.top + el.scrollTop) });
+    };
+    const onGestureEnd = (e: Event) => { e.preventDefault(); lastScale = 1; };
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    el.addEventListener("gesturestart", onGestureStart as EventListener);
+    el.addEventListener("gesturechange", onGestureChange as EventListener);
+    el.addEventListener("gestureend", onGestureEnd as EventListener);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", onGestureStart as EventListener);
+      el.removeEventListener("gesturechange", onGestureChange as EventListener);
+      el.removeEventListener("gestureend", onGestureEnd as EventListener);
+    };
   }, []);
 
   const startPan = (e: React.MouseEvent) => {
     if (e.button !== 0 || !layoutRef.current) return;
-    if ((e.target as Element).closest(".arch-node, .arch-fit, .arch-empty")) return;
+    if ((e.target as Element).closest(".arch-node, .arch-zoom, .arch-empty")) return;
     const layoutNow = layoutRef.current;
     const start = { x: e.clientX, y: e.clientY, view: viewRef.current };
     const move = (m: MouseEvent) => setManual({ layout: layoutNow, view: { ...start.view, tx: start.view.tx + m.clientX - start.x, ty: start.view.ty + m.clientY - start.y } });
@@ -495,7 +529,14 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
             </div>
           )}
         </div>
-        {view && layout && <button type="button" className="arch-btn arch-fit" onClick={fitView}>{t.arch_fit}</button>}
+        {view && layout && (
+          <div className="arch-zoom" role="toolbar" title={t.arch_zoom_hint}>
+            <button type="button" className="arch-btn arch-zoom-btn" aria-label={t.arch_zoom_out} title={t.arch_zoom_out} disabled={cur.scale <= MIN_ZOOM + 1e-9} onClick={zoomOut}>－</button>
+            <button type="button" className="arch-zoom-pct" data-testid="arch-zoom-pct" title={t.arch_zoom_reset} onClick={zoomReset}>{Math.round(cur.scale * 100)}%</button>
+            <button type="button" className="arch-btn arch-zoom-btn" aria-label={t.arch_zoom_in} title={t.arch_zoom_in} disabled={cur.scale >= MAX_ZOOM - 1e-9} onClick={zoomIn}>＋</button>
+            <button type="button" className="arch-btn arch-zoom-fit" title={t.arch_zoom_hint} onClick={fitView}>{t.arch_fit}</button>
+          </div>
+        )}
         {root && preview && preview.root === root && <FilePreview root={root} path={preview.path} line={preview.line} onClose={closePreview} />}
         </div>
         {view && <DetailPanel arch={view} selected={selected} onSelect={setSelected} scan={scan} onExpand={enter} activePath={activePath} onPickPath={pickPath} onOpenFile={root ? openFile : undefined} />}

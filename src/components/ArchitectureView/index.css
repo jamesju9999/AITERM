@@ -35,7 +35,20 @@
 /* 畫布：點狀格線底，內部捲動；詳情面板是固定寬度的兄弟，不會蓋住畫布 */
 .arch-body { display: flex; flex: 1; min-height: 0; }
 .arch-canvas-wrap { flex: 1; min-width: 0; position: relative; display: flex; }
-.arch-fit { position: absolute; top: 10px; right: 14px; z-index: 5; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+.arch-zoom {
+  position: absolute; top: 10px; right: 14px; z-index: 5;
+  display: flex; align-items: center; gap: 2px; padding: 3px 4px; border-radius: 8px;
+  background: var(--bg-secondary); border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.arch-zoom-btn { padding: 2px 8px; }
+.arch-zoom-btn:disabled { opacity: 0.4; cursor: default; }
+.arch-zoom-pct {
+  min-width: 44px; text-align: center; font: 11px var(--mono, monospace); color: var(--text-muted);
+  background: transparent; border: 0; border-radius: 4px; padding: 3px 4px; cursor: pointer;
+}
+.arch-zoom-pct:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.08); }
+.arch-zoom-fit { font-size: 11.5px; padding: 2px 8px; }
 .arch-canvas {
   flex: 1; min-width: 0; position: relative; overflow: auto; cursor: grab;
   background-image: radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px);

@@ -189,6 +189,8 @@ export const MIN_ZOOM = 0.2;
 /** 自動視圖的易讀下限：真適合比這小就停在這個比例，其餘靠平移。 */
 export const READABLE_SCALE = 0.55;
 export const MAX_ZOOM = 2.5;
+/** ＋／－按鈕每按一次的縮放倍率。 */
+export const ZOOM_STEP = 1.25;
 export interface View { scale: number; tx: number; ty: number }
 
 export function clampZoom(z: number): number {

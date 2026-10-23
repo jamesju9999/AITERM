@@ -41,7 +41,7 @@ vi.mock("../ModelPickerButton", () => ({
 }));
 
 import { ArchitectureView } from "./index";
-import { fitScale, layoutGraph, PAD, LANE_W, COL_GAP, HEADER_H, NODE_H_COMPACT, ROW_GAP, LANE_PAD, READABLE_SCALE, MIN_ZOOM, initialView, trueFitView } from "./layout";
+import { fitScale, layoutGraph, PAD, LANE_W, COL_GAP, HEADER_H, NODE_H_COMPACT, ROW_GAP, LANE_PAD, READABLE_SCALE, MIN_ZOOM, MAX_ZOOM, initialView, trueFitView } from "./layout";
 import type { Architecture } from "./model";
 
 const PROVIDERS = [
@@ -553,6 +553,118 @@ describe("ArchitectureView 資料流與縮放平移", () => {
     expect(xf().s).toBeCloseTo(tf.scale);
     expect(xf().s).toBeLessThan(READABLE_SCALE);
     expect(xf().ty).toBeCloseTo(tf.ty);
+  });
+
+  describe("可見的縮放工具列與觸控板捏合", () => {
+    const pct = () => screen.getByTestId("arch-zoom-pct");
+    const btn = (re: RegExp) => screen.getByRole("button", { name: re });
+    const gesture = (type: string, props: Record<string, number>) => {
+      const ev = Object.assign(new Event(type, { bubbles: true, cancelable: true }), props);
+      act(() => { canvas().dispatchEvent(ev); });
+      return ev;
+    };
+
+    it("自動視圖也顯示目前百分比（scale*100 四捨五入）", async () => {
+      await open_();
+      expect(pct()).toHaveTextContent(`${Math.round(xf().s * 100)}%`);
+      expect(pct()).toHaveTextContent("55%");
+    });
+
+    it("＋／－以 1.25 倍、繞視窗中心縮放，百分比同步", async () => {
+      await open_();
+      const v0 = xf();
+      const cx = VIEW_W / 2, cy = VIEW_H / 2;
+      fireEvent.click(btn(/放大|Zoom in/));
+      const v1 = xf();
+      expect(v1.s).toBeCloseTo(v0.s * 1.25);
+      expect(v1.tx).toBeCloseTo(cx - (cx - v0.tx) * 1.25);
+      expect(v1.ty).toBeCloseTo(cy - (cy - v0.ty) * 1.25);
+      expect(pct()).toHaveTextContent(`${Math.round(v1.s * 100)}%`);
+      fireEvent.click(btn(/縮小|Zoom out/));
+      expect(xf().s).toBeCloseTo(v0.s);
+      expect(xf().tx).toBeCloseTo(v0.tx);
+      expect(xf().ty).toBeCloseTo(v0.ty);
+    });
+
+    it("點百分比重設為 100%（繞視窗中心）", async () => {
+      await open_();
+      const v0 = xf();
+      fireEvent.click(pct());
+      const v1 = xf();
+      expect(v1.s).toBeCloseTo(1);
+      expect(pct()).toHaveTextContent("100%");
+      const cx = VIEW_W / 2, cy = VIEW_H / 2;
+      expect(v1.tx).toBeCloseTo(cx - (cx - v0.tx) * (1 / v0.s));
+      expect(v1.ty).toBeCloseTo(cy - (cy - v0.ty) * (1 / v0.s));
+    });
+
+    it("到 MAX_ZOOM／MIN_ZOOM 時對應按鈕 disabled", async () => {
+      await open_();
+      for (let i = 0; i < 20; i++) if (!(btn(/放大|Zoom in/) as HTMLButtonElement).disabled) fireEvent.click(btn(/放大|Zoom in/));
+      expect(xf().s).toBeCloseTo(MAX_ZOOM);
+      expect(btn(/放大|Zoom in/)).toBeDisabled();
+      expect(btn(/縮小|Zoom out/)).not.toBeDisabled();
+      for (let i = 0; i < 20; i++) if (!(btn(/縮小|Zoom out/) as HTMLButtonElement).disabled) fireEvent.click(btn(/縮小|Zoom out/));
+      expect(xf().s).toBeCloseTo(MIN_ZOOM);
+      expect(btn(/縮小|Zoom out/)).toBeDisabled();
+      expect(btn(/放大|Zoom in/)).not.toBeDisabled();
+    });
+
+    it("按鈕有 title 提示，並提到 Ctrl/⌘ ＋ 滾輪與拖曳平移", async () => {
+      await open_();
+      expect(btn(/放大|Zoom in/).getAttribute("title")).toBeTruthy();
+      const tip = document.querySelector(".arch-zoom")!.getAttribute("title") ?? "";
+      expect(tip).toMatch(/Ctrl\/⌘/);
+    });
+
+    it("滾輪縮放與適合視窗之後百分比都更新", async () => {
+      await open_();
+      fireEvent.wheel(canvas(), { deltaY: -100, ctrlKey: true, clientX: 100, clientY: 100 });
+      expect(pct()).toHaveTextContent(`${Math.round(xf().s * 100)}%`);
+      expect(pct()).not.toHaveTextContent("55%");
+      fireEvent.click(screen.getByRole("button", { name: /適合視窗|Fit to window/ }));
+      expect(pct()).toHaveTextContent(`${Math.round(xf().s * 100)}%`);
+      expect(xf().s).toBeLessThan(READABLE_SCALE);
+    });
+
+    it("在工具列上按下滑鼠不會開始平移", async () => {
+      await open_();
+      const v0 = xf();
+      const bar = document.querySelector(".arch-zoom") as HTMLElement;
+      fireEvent.mouseDown(bar, { button: 0, clientX: 10, clientY: 10 });
+      fireEvent.mouseMove(window, { clientX: 60, clientY: 70 });
+      fireEvent.mouseUp(window);
+      expect(xf()).toEqual(v0);
+      expect(canvas()).not.toHaveClass("arch-panning");
+    });
+
+    it("macOS 捏合：gesturechange 依 scale 比例縮放並 preventDefault，結束後可再開始", async () => {
+      await open_();
+      const v0 = xf();
+      gesture("gesturestart", { scale: 1, clientX: 100, clientY: 100 });
+      const ev = gesture("gesturechange", { scale: 1.5, clientX: 100, clientY: 100 });
+      expect(ev.defaultPrevented).toBe(true);
+      const v1 = xf();
+      expect(v1.s).toBeCloseTo(v0.s * 1.5);
+      expect(v1.tx).toBeCloseTo(100 - (100 - v0.tx) * 1.5);
+      gesture("gesturechange", { scale: 2, clientX: 100, clientY: 100 });
+      expect(xf().s).toBeCloseTo(v0.s * 2); // 相對上一次 scale，不是累乘
+      expect(pct()).toHaveTextContent(`${Math.round(xf().s * 100)}%`);
+      gesture("gestureend", { scale: 2, clientX: 100, clientY: 100 });
+      const v2 = xf();
+      gesture("gesturestart", { scale: 1, clientX: 100, clientY: 100 });
+      gesture("gesturechange", { scale: 0.5, clientX: 100, clientY: 100 });
+      expect(xf().s).toBeCloseTo(v2.s * 0.5);
+    });
+
+    it("捏合被夾在 MIN_ZOOM／MAX_ZOOM 內", async () => {
+      await open_();
+      gesture("gesturestart", { scale: 1, clientX: 50, clientY: 50 });
+      gesture("gesturechange", { scale: 100, clientX: 50, clientY: 50 });
+      expect(xf().s).toBeCloseTo(MAX_ZOOM);
+      gesture("gesturechange", { scale: 0.001, clientX: 50, clientY: 50 });
+      expect(xf().s).toBeCloseTo(MIN_ZOOM);
+    });
   });
 
   it("背景拖曳會平移；按在卡片上不平移，且仍可點選", async () => {
