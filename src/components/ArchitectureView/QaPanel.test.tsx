@@ -1,3 +1,4 @@
+import { onTestFinished } from "vitest";
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../contexts/LocaleContext";
@@ -181,5 +182,56 @@ describe("QaPanel", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("歷史", () => {
+    const msgs: QaMessage[] = [
+      { id: "u1", role: "user", text: "第一題登入" },
+      { id: "a1", role: "ai", qa: { answer: "答一", tour: null, diagram: "", dropped: 0, truncated: false } },
+      { id: "u2", role: "user", text: "第二題資料庫" },
+      { id: "a2", role: "ai", qa: { answer: "答二", tour: null, diagram: "", dropped: 0, truncated: false } },
+    ];
+    const histBtn = () => screen.getByRole("button", { name: /^(歷史|History)/ });
+
+    it("沒有訊息時沒有歷史鈕；展開後列出所有問題，最新的在最上面", async () => {
+      const empty = await mount();
+      expect(screen.queryByRole("button", { name: /^(歷史|History)/ })).toBeNull();
+      empty.unmount();
+      await mount({ messages: msgs });
+      expect(screen.queryByRole("list", { name: /^(歷史|History)/ })).toBeNull();
+      fireEvent.click(histBtn());
+      const items = within(screen.getByRole("list", { name: /^(歷史|History)/ })).getAllByRole("listitem").map((o) => o.textContent ?? "");
+      expect(items[0]).toContain("第二題資料庫");
+      expect(items[1]).toContain("第一題登入");
+    });
+
+    it("點問題會捲到那一題並收起清單", async () => {
+      const scroll = vi.fn();
+      const orig = HTMLElement.prototype.scrollIntoView;
+      HTMLElement.prototype.scrollIntoView = scroll;
+      onTestFinished(() => { HTMLElement.prototype.scrollIntoView = orig; });
+      await mount({ messages: msgs });
+      fireEvent.click(histBtn());
+      fireEvent.click(screen.getByRole("button", { name: /第一題登入/ }));
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect((scroll.mock.contexts[0] as HTMLElement).getAttribute("data-mid")).toBe("u1");
+      expect(screen.queryByRole("list", { name: /^(歷史|History)/ })).toBeNull();
+    });
+
+    it("「再問一次」把問題填進輸入框、不送出", async () => {
+      const { props } = await mount({ messages: msgs });
+      fireEvent.click(histBtn());
+      fireEvent.click(screen.getAllByRole("button", { name: /^(再問一次|Ask again)/ })[0]);
+      expect((input() as HTMLTextAreaElement).value).toBe("第二題資料庫");
+      expect(props.onSend).not.toHaveBeenCalled();
+      expect(screen.queryByRole("list", { name: /^(歷史|History)/ })).toBeNull();
+    });
+
+    it("Esc 收起清單", async () => {
+      await mount({ messages: msgs });
+      fireEvent.click(histBtn());
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByRole("list", { name: /^(歷史|History)/ })).toBeNull();
+    });
   });
 });

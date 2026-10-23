@@ -53,6 +53,20 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
   const listRef = useRef<HTMLDivElement>(null);
   const ime = useRef(createImeEnterGuard());
   const [confirmClear, setConfirmClear] = useState(false);
+  const [histOpen, setHistOpen] = useState(false);
+  const questions = messages.filter((m): m is Extract<QaMessage, { role: "user" }> => m.role === "user");
+
+  useEffect(() => {
+    if (!histOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setHistOpen(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [histOpen]);
+
+  const jumpTo = (id: string) => {
+    setHistOpen(false);
+    listRef.current?.querySelector<HTMLElement>(`[data-mid="${id}"]`)?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  };
 
   // 清除會刪掉存在專案裡的記錄：第一下只進入確認狀態，3 秒內再按一次才清；不用 window.confirm（Tauri 裡不可靠）。
   useEffect(() => {
@@ -79,12 +93,25 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
     <section className="arch-qa" aria-label={t.arch_qa_title}>
       {messages.length > 0 && (
         <div className="arch-qa-bar">
+          <button type="button" className="arch-btn arch-btn-small" aria-expanded={histOpen} onClick={() => setHistOpen((o) => !o)}>
+            {t.arch_qa_history.replace("{n}", String(questions.length))}
+          </button>
           <button type="button" className="arch-btn arch-btn-small" onClick={onExport}>{t.arch_qa_export}</button>
           <button type="button" className={`arch-btn arch-btn-small ${confirmClear ? "arch-btn-danger" : ""}`} disabled={busy}
             onClick={() => { if (confirmClear) { setConfirmClear(false); onClear(); } else setConfirmClear(true); }}>
             {confirmClear ? t.arch_qa_clear_confirm : t.arch_qa_clear}
           </button>
         </div>
+      )}
+      {histOpen && questions.length > 0 && (
+        <ul className="arch-qa-hist" aria-label={t.arch_qa_history.replace("{n}", String(questions.length))}>
+          {[...questions].reverse().map((q) => (
+            <li key={q.id}>
+              <button type="button" className="arch-qa-hist-q" title={q.text} onClick={() => jumpTo(q.id)}>{q.text}</button>
+              <button type="button" className="arch-btn arch-btn-small" onClick={() => { setText(q.text); setHistOpen(false); }}>{t.arch_qa_reask}</button>
+            </li>
+          ))}
+        </ul>
       )}
       <div className="arch-qa-list" ref={listRef}>
         {messages.length === 0 && (
@@ -96,7 +123,7 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
           </div>
         )}
         {messages.map((m) => {
-          if (m.role === "user") return <div key={m.id} className="arch-qa-msg arch-qa-user">{m.text}</div>;
+          if (m.role === "user") return <div key={m.id} data-mid={m.id} className="arch-qa-msg arch-qa-user">{m.text}</div>;
           if (m.role === "error") return (
             <div key={m.id} className="arch-qa-msg arch-qa-err" role="alert">
               {m.text}
