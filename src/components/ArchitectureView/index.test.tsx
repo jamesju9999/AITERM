@@ -445,6 +445,9 @@ describe("ArchitectureView 資料流與縮放平移", () => {
     renderView();
     fireEvent.click(screen.getByRole("button", { name: /選擇專案資料夾|Choose project folder/ }));
     await screen.findByRole("button", { name: "Mb" });
+    // findBy 在 DOM 一出現就回來，此時 passive effect（同步 viewRef/layoutRef 的那個）可能還沒跑；
+    // 清空 effect 佇列才是「畫面可以操作」的真正前提，否則縮放按鈕會讀到舊的 ref 而什麼都不做。
+    await act(async () => {});
   };
   const nodeOf = (name: string) => document.querySelector(`.arch-node[aria-label="${name}"]`) as HTMLElement;
   const stage = () => document.querySelector(".arch-stage") as HTMLElement;
