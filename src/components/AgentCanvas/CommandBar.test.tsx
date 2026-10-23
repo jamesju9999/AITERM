@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import type { AgentRow } from "../../ipc/agents";
@@ -55,6 +55,50 @@ const type = (text: string) => {
 beforeEach(() => {
   attach.mockClear();
   vi.mocked(listProviders).mockResolvedValue([{ id: "pv", name: "P", provider_type: "openai", model: "m", is_default: true } as never]);
+});
+
+describe("CommandBar 輸入法確認候選字的 Enter（WKWebView：compositionend 先於 keydown）", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const box = () => screen.getByTestId("ac-cmd-input");
+  const setup = async () => {
+    const d = deps(ai('{"kind":"fast","reason":"理由"}'));
+    view(d);
+    await act(async () => {});
+    fireEvent.change(box(), { target: { value: "你好" } });
+    return d;
+  };
+
+  it("compositionend 後立刻 Enter（keyCode 13、isComposing=false）不送出；150ms 後才送出", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const d = await setup();
+    fireEvent.compositionStart(box());
+    fireEvent.compositionEnd(box());
+    fireEvent.keyDown(box(), { key: "Enter", keyCode: 13 });
+    await act(async () => {});
+    expect(screen.queryByTestId("ac-cmd-plan")).toBeNull();
+    expect(d.complete).not.toHaveBeenCalled();
+    now += 150;
+    fireEvent.keyDown(box(), { key: "Enter", keyCode: 13 });
+    expect(await screen.findByTestId("ac-cmd-plan")).toBeTruthy();
+  });
+
+  it("組字中 (keyCode 229) 不送出", async () => {
+    const d = await setup();
+    fireEvent.keyDown(box(), { key: "Enter", keyCode: 229 });
+    await act(async () => {});
+    expect(screen.queryByTestId("ac-cmd-plan")).toBeNull();
+    expect(d.complete).not.toHaveBeenCalled();
+  });
+
+  it("一般 Enter 送出；Shift+Enter 不送出", async () => {
+    await setup();
+    fireEvent.keyDown(box(), { key: "Enter", keyCode: 13, shiftKey: true });
+    await act(async () => {});
+    expect(screen.queryByTestId("ac-cmd-plan")).toBeNull();
+    fireEvent.keyDown(box(), { key: "Enter", keyCode: 13 });
+    expect(await screen.findByTestId("ac-cmd-plan")).toBeTruthy();
+  });
 });
 
 describe("CommandBar", () => {

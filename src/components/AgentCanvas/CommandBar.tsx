@@ -5,6 +5,7 @@ import { invokeAiComplete } from "../../ipc/ai";
 import { askAgent, assignAgent, createAgent, getReferences, type AgentRow } from "../../ipc/agents";
 import { listProviders } from "../../ipc/provider";
 import { addAttachment, createTask, getProjectBrief, setProjectBrief, type TaskWithAttachments } from "../../ipc/tasks";
+import { createImeEnterGuard } from "../../lib/imeComposing";
 import { MarkdownText } from "../../lib/markdown";
 import { ModelPickerButton } from "../ModelPickerButton";
 import type { ProviderInfo } from "../../ipc/provider";
@@ -68,6 +69,7 @@ export function CommandBar({
   /** 附的圖：可有可無。 */
   const [images, setImages] = useState<{ file: File; url: string | null }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const ime = useRef(createImeEnterGuard());
   const shot = useRef(0);
   const imagesRef = useRef(images);
   useEffect(() => {
@@ -314,9 +316,11 @@ export function CommandBar({
           placeholder={t.ac_cmd_placeholder}
           disabled={busy}
           onChange={(e) => setText(e.target.value)}
+          onCompositionStart={() => ime.current.onCompositionStart()}
+          onCompositionEnd={() => ime.current.onCompositionEnd()}
           onKeyDown={(e) => {
-            // 輸入法組字中的 Enter 是選字，不是送出。
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            // 輸入法組字中（含 WKWebView 先 compositionend 才 keydown）的 Enter 是選字，不是送出。
+            if (e.key === "Enter" && !e.shiftKey && !ime.current.shouldIgnoreEnter(e)) {
               e.preventDefault();
               void analyze();
             }
