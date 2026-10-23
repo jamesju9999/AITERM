@@ -49,7 +49,7 @@ export function parseStoredQa(json: string): QaMessage[] {
   const out: QaMessage[] = [];
   for (const m of raw.messages) {
     if (!isObj(m) || typeof m.id !== "string") continue;
-    if (m.role === "user" && typeof m.text === "string") out.push({ id: m.id, role: "user", text: m.text });
+    if (m.role === "user" && typeof m.text === "string") out.push({ id: m.id, role: "user", text: m.text, ...(typeof m.at === "number" && Number.isFinite(m.at) ? { at: m.at } : {}) });
     else if (m.role === "ai") {
       const qa = parseQa(m.qa);
       if (qa) out.push({ id: m.id, role: "ai", qa });

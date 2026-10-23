@@ -205,6 +205,22 @@ describe("QaPanel", () => {
       expect(items[1]).toContain("第一題登入");
     });
 
+    it("有提問時間就顯示（今年省略年份、跨年顯示年份）；舊記錄沒有時間就不顯示", async () => {
+      const now = new Date();
+      const thisYear = new Date(now.getFullYear(), 0, 5, 9, 7).getTime();
+      const lastYear = new Date(now.getFullYear() - 1, 11, 31, 23, 59).getTime();
+      await mount({ messages: [
+        { id: "u0", role: "user", text: "舊的" },
+        { id: "u1", role: "user", text: "去年", at: lastYear },
+        { id: "u2", role: "user", text: "今年", at: thisYear },
+      ] });
+      fireEvent.click(histBtn());
+      const items = within(screen.getByRole("list", { name: /^(歷史|History)/ })).getAllByRole("listitem");
+      expect(items[0].querySelector("time")?.textContent).toBe("01/05 09:07");
+      expect(items[1].querySelector("time")?.textContent).toBe(`${now.getFullYear() - 1}/12/31 23:59`);
+      expect(items[2].querySelector("time")).toBeNull();
+    });
+
     it("同一句問題問兩次時，清單用 #序號 和回答第一行區分", async () => {
       const dup: QaMessage[] = [
         { id: "u1", role: "user", text: "同一題" },

@@ -285,7 +285,7 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
   const ask = useCallback(async (question: string) => {
     if (!arch || !scan || !root) return;
     const run = ++qaRunRef.current;
-    setQaMessages((m) => [...m, { id: nanoid(), role: "user", text: question }]);
+    setQaMessages((m) => [...m, { id: nanoid(), role: "user", text: question, at: Date.now() }]);
     setQaElapsed(0);
     setQaStage("select");
     setQaBusy(true);

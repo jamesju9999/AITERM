@@ -6,11 +6,20 @@ import { MermaidBlock } from "../MermaidBlock";
 import type { QaAnswer } from "./qa";
 
 export type QaMessage =
-  | { id: string; role: "user"; text: string }
+  | { id: string; role: "user"; text: string; /** 提問時間（毫秒）；舊記錄沒有。 */ at?: number }
   | { id: string; role: "ai"; qa: QaAnswer }
   | { id: string; role: "error"; text: string; raw?: string };
 
 const RAW_MAX = 4000;
+
+const p2 = (n: number) => String(n).padStart(2, "0");
+
+/** 歷史清單的提問時間：今年省略年份。 */
+function formatAsked(at: number, now: Date = new Date()): string {
+  const d = new Date(at);
+  const md = `${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  return d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}/${md}`;
+}
 
 /** 歷史清單用：問題後面那則回答的第一行文字（去掉 Markdown 記號），讓同一句問題的不同次回答分得出來。 */
 function answerSnippet(msgs: QaMessage[], questionId: string): string {
@@ -120,7 +129,10 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
           {questions.map((q, n) => ({ q, n })).reverse().map(({ q, n }) => (
             <li key={q.id}>
               <button type="button" className="arch-qa-hist-q" title={q.text} onClick={() => jumpTo(q.id)}>
-                <span className="arch-qa-hist-n">{`#${n + 1}`}</span>
+                <span className="arch-qa-hist-n">
+                  {`#${n + 1}`}
+                  {q.at !== undefined && <time className="arch-qa-hist-time" dateTime={new Date(q.at).toISOString()}>{formatAsked(q.at)}</time>}
+                </span>
                 <span className="arch-qa-hist-t">
                   <span className="arch-qa-hist-text">{q.text}</span>
                   {answerSnippet(messages, q.id) && <span className="arch-qa-hist-a">{answerSnippet(messages, q.id)}</span>}

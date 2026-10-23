@@ -290,3 +290,5 @@ button.arch-evidence:hover { color: var(--arch-hi); }
 @keyframes arch-tour-pulse { 50% { box-shadow: 0 0 0 2px var(--arch-hi), 0 0 30px color-mix(in srgb, var(--arch-hi) 85%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .arch-node-tour { animation: none; } }
 .arch-loop-pill { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; }
+.arch-qa-hist-n { display: flex; flex-direction: column; align-items: flex-start; min-width: 74px; }
+.arch-qa-hist-time { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }

@@ -41,6 +41,13 @@ describe("serializeQa / parseStoredQa", () => {
     const tour = { title: "t", steps: [{ module: "m", caption: "c", evidence: { file: "a.ts", line: 3, text: "return x;" } }] };
     expect(parseStoredQa(serializeQa([ai({ tour })]))[0]).toMatchObject({ qa: { tour } });
   });
+  it("提問時間（at）會存、讀回；舊記錄沒有或型別不對就沒有", () => {
+    const back = parseStoredQa(serializeQa([{ id: "u", role: "user", text: "q", at: 1700000000000 }]));
+    expect(back).toEqual([{ id: "u", role: "user", text: "q", at: 1700000000000 }]);
+    const old = parseStoredQa(JSON.stringify({ v: 1, messages: [{ id: "a", role: "user", text: "x" }, { id: "b", role: "user", text: "y", at: "昨天" }] }));
+    expect(old).toEqual([{ id: "a", role: "user", text: "x" }, { id: "b", role: "user", text: "y" }]);
+  });
+
   it("導覽步驟型別不對時只丟該步，保留其餘", () => {
     const raw = JSON.stringify({ v: 1, messages: [{ id: "a", role: "ai", qa: { answer: "x", diagram: "", dropped: 0, truncated: false, tour: { title: "t", steps: [{ module: 1, caption: "bad" }, { module: "m", caption: "good" }] } } }] });
     const back = parseStoredQa(raw);
