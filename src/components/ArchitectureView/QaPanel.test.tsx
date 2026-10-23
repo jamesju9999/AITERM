@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
 vi.mock("../MermaidBlock", () => ({ MermaidBlock: ({ chart }: { chart: string }) => <div data-testid="mermaid">{chart}</div> }));
@@ -40,6 +40,39 @@ describe("QaPanel", () => {
     fireEvent.change(input(), { target: { value: "你好" } });
     fireEvent.keyDown(input(), { key: "Enter", isComposing: true });
     expect(props.onSend).not.toHaveBeenCalled();
+  });
+
+  describe("輸入法確認候選字的 Enter（WKWebView：compositionend 先於 keydown）", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("compositionend 後立刻 Enter（keyCode 13、isComposing=false）不送出；150ms 後才送出", async () => {
+      const { props } = await mount();
+      vi.useFakeTimers();
+      fireEvent.change(input(), { target: { value: "你好" } });
+      fireEvent.compositionStart(input());
+      fireEvent.compositionEnd(input());
+      fireEvent.keyDown(input(), { key: "Enter", keyCode: 13 });
+      expect(props.onSend).not.toHaveBeenCalled();
+      act(() => { vi.advanceTimersByTime(150); });
+      fireEvent.keyDown(input(), { key: "Enter", keyCode: 13 });
+      expect(props.onSend).toHaveBeenCalledWith("你好");
+    });
+
+    it("組字中 (keyCode 229) 不送出", async () => {
+      const { props } = await mount();
+      fireEvent.change(input(), { target: { value: "你好" } });
+      fireEvent.keyDown(input(), { key: "Enter", keyCode: 229 });
+      expect(props.onSend).not.toHaveBeenCalled();
+    });
+
+    it("沒組字的 Enter 送出；Shift+Enter 不送出", async () => {
+      const { props } = await mount();
+      fireEvent.change(input(), { target: { value: "hi" } });
+      fireEvent.keyDown(input(), { key: "Enter", keyCode: 13, shiftKey: true });
+      expect(props.onSend).not.toHaveBeenCalled();
+      fireEvent.keyDown(input(), { key: "Enter", keyCode: 13 });
+      expect(props.onSend).toHaveBeenCalledWith("hi");
+    });
   });
 
   it("忙碌時顯示階段、m:ss 與取消；不能送出", async () => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
+import { createImeEnterGuard } from "../../lib/imeComposing";
 import { MarkdownText } from "../../lib/markdown";
 import { MermaidBlock } from "../MermaidBlock";
 import type { QaAnswer } from "./qa";
@@ -48,6 +49,7 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
   const { t } = useLocale();
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const ime = useRef(createImeEnterGuard());
 
   useEffect(() => {
     const el = listRef.current;
@@ -116,10 +118,12 @@ export function QaPanel({ messages, busy, stage, elapsed, onSend, onCancel, onPl
           rows={2}
           placeholder={t.arch_qa_placeholder}
           onChange={(e) => setText(e.target.value)}
+          onCompositionStart={() => ime.current.onCompositionStart()}
+          onCompositionEnd={() => ime.current.onCompositionEnd()}
           onKeyDown={(e) => {
             // Esc 不該連帶關掉檔案預覽或結束導覽。
             if (e.key === "Escape") { e.stopPropagation(); e.nativeEvent.stopImmediatePropagation(); return; }
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
+            if (e.key === "Enter" && !e.shiftKey && !ime.current.shouldIgnoreEnter(e)) { e.preventDefault(); send(); }
           }}
         />
         <button type="button" className="arch-btn arch-btn-primary" disabled={busy || !text.trim()} onClick={send}>{t.arch_qa_send}</button>
