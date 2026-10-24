@@ -182,6 +182,9 @@ export function layerColor(layerId: string, index: number): string {
   return FIXED_LAYER_COLORS[layerId] ?? LAYER_PALETTE[((index % LAYER_PALETTE.length) + LAYER_PALETTE.length) % LAYER_PALETTE.length];
 }
 
+/** 跨區連線兩端的直線段長度。 */
+const STUB = 16;
+
 function edgeGeom(from: Rect, to: Rect): [Pt, Pt, Pt, Pt] {
   if ((from.zone ?? "main") !== (to.zone ?? "main")) {
     // 跨區（主流程↔共用底座↔支援週邊）：區與區上下排列，從下緣出、上緣入。
@@ -195,8 +198,12 @@ function edgeGeom(from: Rect, to: Rect): [Pt, Pt, Pt, Pt] {
     const x2 = lo <= hi ? x1 : near(to, from.x + from.w / 2);
     const y1 = down ? from.y + from.h : from.y;
     const y2 = down ? to.y : to.y + to.h;
-    const dy = Math.max(40, Math.abs(y2 - y1) / 2) * (down ? 1 : -1);
-    return [{ x: x1, y: y1 }, { x: x1, y: y1 + dy }, { x: x2, y: y2 - dy }, { x: x2, y: y2 }];
+    const sg = down ? 1 : -1;
+    // 兩端各留一小段直線（STUB），箭頭才會落在筆直的線上，不會歪在曲線的彎處。
+    const ya = y1 + sg * STUB;
+    const yb = y2 - sg * STUB;
+    const dy = Math.max(30, Math.abs(yb - ya) / 2) * sg;
+    return [{ x: x1, y: ya }, { x: x1, y: ya + dy }, { x: x2, y: yb - dy }, { x: x2, y: yb }];
   }
   const y1 = from.y + from.h / 2;
   const y2 = to.y + to.h / 2;
@@ -215,6 +222,10 @@ function edgeGeom(from: Rect, to: Rect): [Pt, Pt, Pt, Pt] {
 /** 不同欄：側邊到側邊的貝茲曲線；同欄：向右凸出的弧線。 */
 export function edgePath(from: Rect, to: Rect): string {
   const [a, b, c, d] = edgeGeom(from, to);
+  if ((from.zone ?? "main") !== (to.zone ?? "main")) {
+    const sg = to.y >= from.y ? 1 : -1;
+    return `M ${a.x} ${a.y - sg * STUB} L ${a.x} ${a.y} C ${b.x} ${b.y} ${c.x} ${c.y} ${d.x} ${d.y} L ${d.x} ${d.y + sg * STUB}`;
+  }
   return `M ${a.x} ${a.y} C ${b.x} ${b.y} ${c.x} ${c.y} ${d.x} ${d.y}`;
 }
 

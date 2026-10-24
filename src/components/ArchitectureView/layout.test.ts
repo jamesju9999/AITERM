@@ -406,6 +406,16 @@ describe("三區排版（主流程／共用底座／支援週邊）", () => {
     const side = edgePath(l.nodes.f1, l.nodes.b1);
     expect(side.startsWith(`M ${l.nodes.f1.x + NODE_W} `)).toBe(true);
   });
+  it("跨區連線兩端各有一段垂直直線，箭頭落在直線上而不是彎處", () => {
+    const l = layoutGraph(zoned);
+    const d = edgePath(l.nodes.b1, l.nodes.d1);
+    const m = d.match(/^M (\S+) (\S+) L (\S+) (\S+) C .* (\S+) (\S+) L (\S+) (\S+)$/)!;
+    expect(m).not.toBeNull();
+    expect(m[1]).toBe(m[3]);
+    expect(m[5]).toBe(m[7]);
+    expect(Number(m[4])).toBeGreaterThan(Number(m[2]));
+    expect(Number(m[8])).toBeGreaterThan(Number(m[6]));
+  });
   it("跨區連線兩端落在卡片寬度之內，且水平位移不超過兩卡中心的距離（曲線才接得正）", () => {
     const l = layoutGraph(zoned);
     for (const [from, to] of [[l.nodes.b1, l.nodes.d1], [l.nodes.d1, l.nodes.f1]]) {
