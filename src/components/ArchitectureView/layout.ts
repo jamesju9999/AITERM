@@ -186,8 +186,13 @@ function edgeGeom(from: Rect, to: Rect): [Pt, Pt, Pt, Pt] {
   if ((from.zone ?? "main") !== (to.zone ?? "main")) {
     // 跨區（主流程↔共用底座↔支援週邊）：區與區上下排列，從下緣出、上緣入。
     const down = to.y >= from.y;
-    const x1 = from.x + from.w / 2;
-    const x2 = to.x + to.w / 2;
+    // 兩端的 x 取彼此最近的點（重疊就取重疊區中央），水平位移小，曲線才會幾乎垂直地接上卡片邊緣、箭頭才正。
+    const m = Math.min(24, from.w / 4, to.w / 4);
+    const lo = Math.max(from.x + m, to.x + m);
+    const hi = Math.min(from.x + from.w - m, to.x + to.w - m);
+    const near = (r: Rect, other: number) => Math.min(Math.max(other, r.x + m), r.x + r.w - m);
+    const x1 = lo <= hi ? (lo + hi) / 2 : near(from, to.x + to.w / 2);
+    const x2 = lo <= hi ? x1 : near(to, from.x + from.w / 2);
     const y1 = down ? from.y + from.h : from.y;
     const y2 = down ? to.y : to.y + to.h;
     const dy = Math.max(40, Math.abs(y2 - y1) / 2) * (down ? 1 : -1);

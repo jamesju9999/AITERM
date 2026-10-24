@@ -397,13 +397,26 @@ describe("三區排版（主流程／共用底座／支援週邊）", () => {
   });
   it("跨區連線從下緣出、上緣入（垂直走線）；同區仍是側邊到側邊", () => {
     const l = layoutGraph(zoned);
-    const down = edgePath(l.nodes.b1, l.nodes.d1);
-    expect(down.startsWith(`M ${l.nodes.b1.x + NODE_W / 2} ${l.nodes.b1.y + l.nodes.b1.h} `)).toBe(true);
-    expect(down.endsWith(`${l.nodes.d1.x + NODE_W / 2} ${l.nodes.d1.y}`)).toBe(true);
-    const up = edgePath(l.nodes.d1, l.nodes.f1);
-    expect(up.startsWith(`M ${l.nodes.d1.x + NODE_W / 2} ${l.nodes.d1.y} `)).toBe(true);
+    const nums = (d: string) => d.match(/-?\d+(\.\d+)?/g)!.map(Number);
+    const down = nums(edgePath(l.nodes.b1, l.nodes.d1));
+    expect(down[1]).toBe(l.nodes.b1.y + l.nodes.b1.h);
+    expect(down[down.length - 1]).toBe(l.nodes.d1.y);
+    const up = nums(edgePath(l.nodes.d1, l.nodes.f1));
+    expect(up[1]).toBe(l.nodes.d1.y);
     const side = edgePath(l.nodes.f1, l.nodes.b1);
     expect(side.startsWith(`M ${l.nodes.f1.x + NODE_W} `)).toBe(true);
+  });
+  it("跨區連線兩端落在卡片寬度之內，且水平位移不超過兩卡中心的距離（曲線才接得正）", () => {
+    const l = layoutGraph(zoned);
+    for (const [from, to] of [[l.nodes.b1, l.nodes.d1], [l.nodes.d1, l.nodes.f1]]) {
+      const n = edgePath(from, to).match(/-?\d+(\.\d+)?/g)!.map(Number);
+      const [x1, x2] = [n[0], n[n.length - 2]];
+      expect(x1).toBeGreaterThanOrEqual(from.x);
+      expect(x1).toBeLessThanOrEqual(from.x + from.w);
+      expect(x2).toBeGreaterThanOrEqual(to.x);
+      expect(x2).toBeLessThanOrEqual(to.x + to.w);
+      expect(Math.abs(x2 - x1)).toBeLessThanOrEqual(Math.abs(to.x + to.w / 2 - (from.x + from.w / 2)));
+    }
   });
 });
 
