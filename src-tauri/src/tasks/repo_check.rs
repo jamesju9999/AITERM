@@ -34,6 +34,7 @@ fn is_board_folder(path: &Path) -> bool {
 }
 
 pub async fn check_repo(path: &str) -> RepoCheck {
+    super::path_refresh::refresh().await;
     if path.trim().is_empty() || !Path::new(path).is_dir() {
         return RepoCheck::Missing;
     }

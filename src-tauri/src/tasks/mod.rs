@@ -14,6 +14,7 @@ pub mod monitor;
 pub mod scheduler;
 pub mod agents;
 pub mod workflow;
+pub mod path_refresh;
 pub mod repo_check;
 pub mod quota;
 pub mod questions;

@@ -87,6 +87,8 @@ pub async fn lookup(names: &[&str]) -> Result<String, String> {
 }
 
 pub async fn check(claude_command: &str) -> Result<ToolsCheck, String> {
+    // Windows：使用者剛裝完 git／claude，行程的 PATH 還是舊的。
+    super::path_refresh::refresh().await;
     let claude = program_of(claude_command);
     let out = lookup(&[&claude, "codex", "git"]).await?;
     Ok(ToolsCheck {
