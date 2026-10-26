@@ -128,6 +128,7 @@ describe("終端機分頁的 Claude 協作側欄", () => {
     expect(container.querySelector(".aiterm-cact")).toBeNull();
   });
 
+  // CI 的機器比本機慢三四倍（本機 1.2 秒、CI 曾跑到 5.1 秒踩到預設的 5 秒上限），單獨放寬這一條，斷言不動。
   it("終端機標題列有「協作圖」開關：有活動才出現，點一下收起／重新顯示側欄，並與設定同步", async () => {
     const { container, getByRole, queryByRole } = mount();
     await waitFor(() => expect(listenHandlers.has("claude-activity://test-session")).toBe(true));
@@ -142,7 +143,7 @@ describe("終端機分頁的 Claude 協作側欄", () => {
     expect(localStorage.getItem("aiterm-claude-activity-enabled")).toBe("0");
     await act(async () => { getByRole("button", { name: /協作圖/ }).click(); });
     expect(container.querySelector(".aiterm-cact")).not.toBeNull();
-  });
+  }, 20_000);
 
   it("設定關閉時按鈕仍在（有活動），可以從這裡重新打開", async () => {
     localStorage.setItem("aiterm-claude-activity-enabled", "0");
