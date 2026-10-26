@@ -262,19 +262,25 @@ mod tests {
         assert!(get(&pool).await.unwrap().is_empty());
     }
 
+    /// Windows 的絕對路徑要有磁碟機代號：「/old/…」在那裡不算絕對，測試資料要補上 `C:`。
+    fn abs(p: &str) -> String {
+        if cfg!(windows) { format!("C:{p}") } else { p.to_string() }
+    }
+
     #[test]
     fn which_reference_a_tool_call_reads() {
-        let refs = vec!["/old/HTBTW_Source".to_string(), "/docs".to_string()];
+        let (old, docs) = (abs("/old/HTBTW_Source"), abs("/docs"));
+        let refs = vec![old.clone(), docs.clone()];
         let hit = |tool: &str, input: serde_json::Value| reference_of_access(&refs, tool, &input).cloned();
-        assert_eq!(hit("Read", serde_json::json!({"file_path": "/old/HTBTW_Source/FR/FR1000.egl"})).as_deref(), Some("/old/HTBTW_Source"));
-        assert_eq!(hit("Grep", serde_json::json!({"pattern": "x", "path": "/docs"})).as_deref(), Some("/docs"));
-        assert_eq!(hit("Glob", serde_json::json!({"pattern": "**/*.egl", "path": "/old/HTBTW_Source/AC"})).as_deref(), Some("/old/HTBTW_Source"));
+        assert_eq!(hit("Read", serde_json::json!({"file_path": abs("/old/HTBTW_Source/FR/FR1000.egl")})).as_deref(), Some(old.as_str()));
+        assert_eq!(hit("Grep", serde_json::json!({"pattern": "x", "path": docs})).as_deref(), Some(docs.as_str()));
+        assert_eq!(hit("Glob", serde_json::json!({"pattern": "**/*.egl", "path": abs("/old/HTBTW_Source/AC")})).as_deref(), Some(old.as_str()));
         // 路徑字首相同但是別的資料夾、相對路徑、沒有路徑的搜尋、Bash：都不算。
-        assert_eq!(hit("Read", serde_json::json!({"file_path": "/old/HTBTW_Source2/a.egl"})), None);
+        assert_eq!(hit("Read", serde_json::json!({"file_path": abs("/old/HTBTW_Source2/a.egl")})), None);
         assert_eq!(hit("Read", serde_json::json!({"file_path": "FR/FR1000.egl"})), None);
         assert_eq!(hit("Grep", serde_json::json!({"pattern": "x"})), None);
         assert_eq!(hit("Bash", serde_json::json!({"command": "cat /docs/a.md"})), None);
-        assert_eq!(hit("Edit", serde_json::json!({"file_path": "/docs/a.md"})), None);
+        assert_eq!(hit("Edit", serde_json::json!({"file_path": abs("/docs/a.md")})), None);
     }
 
     #[tokio::test]

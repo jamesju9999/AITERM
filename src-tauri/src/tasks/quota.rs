@@ -957,7 +957,9 @@ mod tests {
             });
         }
         state.register(&id, "tab", pool.clone(), ReplyLabel { agent_id: Some("a1".into()), ..label() });
-        state.set_references(&id, vec!["/old/src".into()]);
+        let abs = |p: &str| if cfg!(windows) { format!("C:{p}") } else { p.to_string() };
+        let (old_src, old_file) = (abs("/old/src"), abs("/old/src/FR/a.egl"));
+        state.set_references(&id, vec![old_src.clone()]);
         let base = state.hook_base(&id).await.unwrap();
         let client = reqwest::Client::new();
         let post = |body: serde_json::Value| client.post(format!("{base}/working")).json(&body).send();
@@ -966,11 +968,11 @@ mod tests {
         assert!(crate::tasks::references::recent_reads(&pool, 10).await.unwrap().is_empty());
         let before = changes.load(std::sync::atomic::Ordering::SeqCst);
 
-        post(serde_json::json!({"tool_name":"Read","tool_input":{"file_path":"/old/src/FR/a.egl"}})).await.unwrap();
-        post(serde_json::json!({"tool_name":"Grep","tool_input":{"pattern":"x","path":"/old/src"}})).await.unwrap();
+        post(serde_json::json!({"tool_name":"Read","tool_input":{"file_path":old_file.as_str()}})).await.unwrap();
+        post(serde_json::json!({"tool_name":"Grep","tool_input":{"pattern":"x","path":old_src}})).await.unwrap();
         let rows = crate::tasks::references::recent_reads(&pool, 10).await.unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!((rows[0].ref_path.as_str(), rows[0].agent_id.as_deref(), rows[0].reads), ("/old/src", Some("a1"), 2));
+        assert_eq!((rows[0].ref_path.as_str(), rows[0].agent_id.as_deref(), rows[0].reads), (old_src.as_str(), Some("a1"), 2));
         // 兩次讀取只通知畫面一次（節流）。
         assert_eq!(changes.load(std::sync::atomic::Ordering::SeqCst) - before, 1);
     }

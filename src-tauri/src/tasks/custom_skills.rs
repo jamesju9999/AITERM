@@ -258,7 +258,9 @@ mod tests {
         assert_eq!(prompt_note(&[]), "");
         let k = SkillInfo { name: "htbtw-egl".into(), description: "讀寫 MS950".into(), path: "/s/htbtw-egl".into(), source: "repo".into() };
         let note = prompt_note(&[k]);
-        assert!(note.contains("- htbtw-egl：讀寫 MS950（/s/htbtw-egl/SKILL.md）"), "{note}");
+        // 分隔符號跟著平台（Windows 是反斜線），所以用 Path 組出預期值。
+        let file = Path::new("/s/htbtw-egl").join(SKILL_FILE);
+        assert!(note.contains(&format!("- htbtw-egl：讀寫 MS950（{}）", file.display())), "{note}");
         assert!(note.contains("需要時") && note.contains("只能讀"), "{note}");
     }
 
