@@ -440,7 +440,11 @@ __aiterm_cmd_running=0
 # 才剛被 __aiterm_precmd（同一輪求值裡排在它前面）重設成 0，會被誤判成「有新指令
 # 要執行」，在使用者還沒打任何字之前就先送出一個假的 C。這個旗標讓整段
 # PROMPT_COMMAND 求值期間（含中間任何框架自己的項目）都豁免於 DEBUG trap。
-__aiterm_in_precmd=0
+# 初始為 1：rc 檔後半段（DEBUG trap 裝好之後）的每個指令也會觸發 DEBUG trap，
+# 會在第一個提示字元之前送出假的 C，接著第一次 precmd 再送 D;0，
+# 讓「第一個 C 就是啟動指令」的判斷把剛開好的分頁當成指令已結束。
+# 第一輪 PROMPT_COMMAND 跑完時 __aiterm_append_b_marker 會把它設回 0。
+__aiterm_in_precmd=1
 
 __aiterm_preexec() {
   if [[ $__aiterm_in_precmd -eq 1 ]]; then
@@ -842,9 +846,13 @@ mod tests {
         // review that actually tested the claim. Pin the ordering here so a future edit
         // that swaps these two lines fails a test instead of shipping silently.
         let ec_pos = content.find("local ec=$?").expect("local ec=$? should be present");
-        let flag_set_pos = content
-            .find("__aiterm_in_precmd=1")
-            .expect("__aiterm_in_precmd=1 should be present");
+        // 檔案前面還有一個初始值 `__aiterm_in_precmd=1`（擋住 rc 檔後半段的假 C），
+        // 這裡只比 __aiterm_precmd 函式裡面的那一個。
+        let precmd_pos = content.find("__aiterm_precmd() {").expect("__aiterm_precmd should be present");
+        let flag_set_pos = precmd_pos
+            + content[precmd_pos..]
+                .find("__aiterm_in_precmd=1")
+                .expect("__aiterm_in_precmd=1 should be present in __aiterm_precmd");
         assert!(
             ec_pos < flag_set_pos,
             "local ec=$? must come before __aiterm_in_precmd=1 is set, or the exit code \
