@@ -304,6 +304,20 @@ fn prefer_bash_over_sh(program: PathBuf, bash_exists: bool) -> PathBuf {
     }
 }
 
+/// 整合用的 rc 檔放在固定的暫存路徑，每開一個分頁（或每個平行的測試）都會重寫一次。
+/// 直接 `fs::write` 會先截斷再寫入，另一個剛好在這時啟動的 shell 就會讀到空檔或半份檔案——
+/// 使用者自己的 rc（別名、PATH）整個沒被載入。先寫成獨一無二的暫存檔再改名，讀的人只會看到舊的或新的完整檔案。
+#[cfg(not(windows))]
+fn write_atomically(path: &std::path::Path, content: &str) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let tmp = path.with_extension(format!("tmp{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    if std::fs::write(&tmp, content).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        // 改名失敗：舊檔內容相同，留著用，清掉暫存檔。
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
 /// Setup OS-specific shell integration hooks for block reporting (OSC 133).
 #[cfg(not(windows))]
 pub(crate) fn inject_shell_integration(program: PathBuf) -> ShellSpec {
@@ -330,7 +344,7 @@ elif [[ -f "$HOME/.zshenv" ]]; then
   source "$HOME/.zshenv"
 fi
 "#;
-        let _ = std::fs::write(temp_dir.join(".zshenv"), zshenv_content);
+        write_atomically(&temp_dir.join(".zshenv"), zshenv_content);
 
         // .zprofile — sources user's real .zprofile (login shell init).
         let zprofile_content = r#"
@@ -341,7 +355,7 @@ elif [[ -f "$HOME/.zprofile" ]]; then
   source "$HOME/.zprofile"
 fi
 "#;
-        let _ = std::fs::write(temp_dir.join(".zprofile"), zprofile_content);
+        write_atomically(&temp_dir.join(".zprofile"), zprofile_content);
 
         // .zshrc — sources user's real .zprofile first (since this is a non-login
         // interactive shell, zsh won't read .zprofile automatically; sourcing it
@@ -415,7 +429,7 @@ if (( ! ${+aliases[claude]} )) && (( ! ${+functions[claude]} )); then
   }
 fi
 "#;
-        let _ = std::fs::write(temp_dir.join(".zshrc"), zshrc_content);
+        write_atomically(&temp_dir.join(".zshrc"), zshrc_content);
 
         envs.push(("ZDOTDIR".into(), temp_dir.to_string_lossy().into_owned()));
     }
@@ -494,7 +508,7 @@ if ! alias claude >/dev/null 2>&1 && ! declare -F claude >/dev/null 2>&1; then
   }
 fi
 "#;
-        let _ = std::fs::write(&rcfile, bashrc_content);
+        write_atomically(&rcfile, bashrc_content);
         args.push("--rcfile".into());
         args.push(rcfile.to_string_lossy().into_owned());
     }

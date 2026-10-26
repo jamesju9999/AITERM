@@ -3,6 +3,9 @@
 //! 這裡從系統設定（機器層＋使用者層）重新讀 PATH，把行程裡沒有的路徑補上。
 //! 其他平台不做事。
 
+// 解析與合併的純函式只有 Windows 的 refresh 會用，其他平台只有測試用到。
+#![cfg_attr(not(windows), allow(dead_code))]
+
 /// `reg query` 的輸出裡取出值：`    Path    REG_EXPAND_SZ    C:\a;%SystemRoot%\b`。
 fn parse_reg_value(output: &str) -> Option<String> {
     output.lines().find_map(|l| {

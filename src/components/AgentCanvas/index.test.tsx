@@ -1059,7 +1059,7 @@ describe("AgentCanvasView", () => {
     const { unmount } = view();
     const clear = async () => {
       fireEvent.click(await screen.findByTestId("ac-formation"));
-      fireEvent.click(screen.getByTestId("ac-clear-team"));
+      fireEvent.click(await screen.findByTestId("ac-clear-team"));
     };
     vi.mocked(confirm).mockResolvedValueOnce(false);
     await clear();
@@ -1106,8 +1106,9 @@ describe("AgentCanvasView", () => {
     expect(await within(dlg).findByText(/按「選擇…」挑 Agent 要寫程式的資料夾/)).toBeTruthy();
     expect(within(dlg).queryByText(/workspace/)).toBeNull();
     fireEvent.click(within(dlg).getByRole("button", { name: "選擇…" }));
-    fireEvent.click(await within(dlg).findByRole("button", { name: "初始化為 git repo" }));
-    await waitFor(() => expect(initRepo).toHaveBeenCalledWith("/repo", "p1"));
+    // 這兩步要等目錄檢查回來；CI 上預設的 1 秒會不夠。
+    fireEvent.click(await within(dlg).findByRole("button", { name: "初始化為 git repo" }, { timeout: 5000 }));
+    await waitFor(() => expect(initRepo).toHaveBeenCalledWith("/repo", "p1"), { timeout: 5000 });
     const apply = chooseTemplate(dlg, "tpl-builtin-quick");
     await waitFor(() => expect(apply).not.toBeDisabled());
     fireEvent.click(apply);
