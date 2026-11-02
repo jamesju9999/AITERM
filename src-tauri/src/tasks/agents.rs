@@ -411,6 +411,90 @@ pub async fn pause_agents_of_orphaned_cards(pool: &SqlitePool) -> Result<u64, sq
     Ok(res.rows_affected())
 }
 
+/// 換程式庫位置的結果。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct RelocateReport {
+    /// 改了幾位 Agent。
+    pub agents: usize,
+    /// 這些 Agent 在新程式庫裡找不到分支（本機與遠端都沒有）：派工時會從目前的 HEAD 重新開始。
+    pub missing_branches: Vec<String>,
+}
+
+/// 專案資料夾複製到別台電腦之後，Agent 記的程式庫路徑（`project_dir`）在新機器上不存在。
+/// 把舊路徑換成新路徑；`agents.project_dir` 平常不可改（分支已經從那個程式庫分出去），
+/// 所以只在**舊路徑在這台電腦上已經不存在**時才允許，以免把兩個不同的程式庫混在一起。
+///
+/// - 舊的 worktree 資料夾（從別台電腦複製來的，`.git` 檔指向不存在的位置）改名保留，不刪。
+/// - 新程式庫只有遠端的 `origin/aiterm-agent/…` 時，先建本機分支再說：
+///   不然派工時 `worktree add -b` 會從 HEAD 開一條新的，把遠端的進度悄悄丟掉。
+pub async fn relocate_repo(pool: &SqlitePool, project_path: &Path, old_dir: &str, new_dir: &str) -> Result<RelocateReport, String> {
+    if old_dir == new_dir {
+        return Err("新舊位置相同".to_string());
+    }
+    if Path::new(old_dir).is_dir() {
+        return Err(format!("原位置在這台電腦上還存在，不能直接換掉：{old_dir}"));
+    }
+    let agents: Vec<AgentRow> = list_agents(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|a| a.project_dir == old_dir)
+        .collect();
+    if agents.is_empty() {
+        return Err(format!("沒有 Agent 使用這個位置：{old_dir}"));
+    }
+    let running: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE status = ? AND project_dir = ?")
+        .bind(STATUS_RUNNING)
+        .bind(old_dir)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    if running > 0 {
+        return Err("有卡片正在執行，請等它結束再換位置".to_string());
+    }
+
+    let client = crate::vcs::git::GitClient::new(new_dir.to_string(), None);
+    let local: Vec<String> = match client.branch_list().await? {
+        crate::vcs::types::VcsResult::Branches { branches } => branches.into_iter().map(|b| b.name).collect(),
+        _ => Vec::new(),
+    };
+    let mut report = RelocateReport::default();
+    for a in &agents {
+        let branch = branch_name(&a.id);
+        if !local.contains(&branch) {
+            let remote = format!("origin/{branch}");
+            if local.contains(&remote) {
+                client.create_branch(&branch, Some(&remote)).await?;
+            } else {
+                report.missing_branches.push(a.name.clone());
+            }
+        }
+        // 複製來的 worktree 資料夾已經不屬於任何 git 登記：改名留著，不刪使用者的檔案。
+        let wt = agent_dir(project_path, &a.id).join("worktree");
+        if wt.exists() {
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let _ = std::fs::rename(&wt, wt.with_file_name(format!("worktree.old-{stamp}")));
+        }
+    }
+    sqlx::query("UPDATE agents SET project_dir = ?, worktree_path = NULL WHERE project_dir = ?")
+        .bind(new_dir)
+        .bind(old_dir)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE tasks SET project_dir = ? WHERE project_dir = ?")
+        .bind(new_dir)
+        .bind(old_dir)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    if crate::tasks::repo_check::saved_project_repo(pool).await.map_err(|e| e.to_string())?.as_deref() == Some(old_dir) {
+        crate::tasks::repo_check::save_project_repo(pool, new_dir).await.map_err(|e| e.to_string())?;
+    }
+    report.agents = agents.len();
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,5 +787,40 @@ mod tests {
         assign_task(&pool, &t2, Some(&aid)).await.unwrap();
         let o1 = store::get_task(&pool, &t1).await.unwrap().unwrap().sort_order;
         assert_eq!(first_queued_order(&pool, &aid).await.unwrap(), Some(o1));
+    }
+
+    #[tokio::test]
+    async fn relocate_repo_swaps_dirs_only_when_the_old_one_is_gone() {
+        let pool = mem_pool().await;
+        let a = coder(&pool, "工程師1").await;
+        let project = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            assert!(std::process::Command::new("git").args(args).current_dir(repo.path()).status().unwrap().success());
+        };
+        git(&["init", "-q"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let new_dir = repo.path().to_string_lossy().into_owned();
+
+        // 舊位置還在 → 不准換
+        let still_there = project.path().to_string_lossy().into_owned();
+        sqlx::query("UPDATE agents SET project_dir = ?").bind(&still_there).execute(&pool).await.unwrap();
+        assert!(relocate_repo(&pool, project.path(), &still_there, &new_dir).await.is_err());
+
+        // 舊位置不存在 → 換掉；分支不在新程式庫就回報，worktree 資料夾改名保留
+        sqlx::query("UPDATE agents SET project_dir = '/gone/repo', worktree_path = '/gone/wt'").execute(&pool).await.unwrap();
+        let wt = agent_dir(project.path(), &a).join("worktree");
+        std::fs::create_dir_all(&wt).unwrap();
+        let report = relocate_repo(&pool, project.path(), "/gone/repo", &new_dir).await.unwrap();
+        assert_eq!(report.agents, 1);
+        assert_eq!(report.missing_branches, vec!["工程師1".to_string()]);
+        let row = get_agent(&pool, &a).await.unwrap().unwrap();
+        assert_eq!(row.project_dir, new_dir);
+        assert!(row.worktree_path.is_none());
+        assert!(!wt.exists());
+        assert!(std::fs::read_dir(agent_dir(project.path(), &a)).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("worktree.old-")));
+
+        // 已經換過了：舊位置沒有 Agent 在用
+        assert!(relocate_repo(&pool, project.path(), "/gone/repo", &new_dir).await.is_err());
     }
 }

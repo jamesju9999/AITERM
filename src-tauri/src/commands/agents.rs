@@ -465,6 +465,28 @@ pub fn agents_open_repo(path: String) -> Result<(), String> {
     cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// 專案資料夾複製到別台電腦後，把 Agent 記的程式庫路徑換成這台電腦上的位置（見 `agents::relocate_repo`）。
+#[tauri::command]
+pub async fn agents_relocate_repo(
+    project_id: String,
+    old_dir: String,
+    new_dir: String,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<agents::RelocateReport, String> {
+    let p = project(&reg, &project_id)?;
+    match crate::tasks::repo_check::check_repo(&new_dir).await {
+        crate::tasks::repo_check::RepoCheck::Ok { .. } => {}
+        crate::tasks::repo_check::RepoCheck::Missing => return Err(format!("資料夾不存在：{new_dir}")),
+        crate::tasks::repo_check::RepoCheck::NotRepo => return Err(format!("Agent 的程式庫必須是 git repo：{new_dir}")),
+        crate::tasks::repo_check::RepoCheck::NoCommits => return Err(format!("這個 git repo 還沒有任何 commit：{new_dir}")),
+        crate::tasks::repo_check::RepoCheck::BoardFolder => return Err(format!("這是看板專案資料夾，不是程式碼：{new_dir}")),
+    }
+    let report = agents::relocate_repo(&p.pool, &p.path, &old_dir, &new_dir).await?;
+    emit_updated(&app);
+    Ok(report)
+}
+
 /// 對話框選資料夾時呼叫：是不是可以用的 git repo。
 #[tauri::command]
 pub async fn agents_check_repo(path: String) -> Result<crate::tasks::repo_check::RepoCheck, String> {

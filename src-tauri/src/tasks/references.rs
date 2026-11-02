@@ -67,7 +67,7 @@ pub fn prompt_note(refs: &[Reference]) -> String {
     if refs.is_empty() {
         return String::new();
     }
-    let mut s = String::from("\n\n參考資料（只能讀，不要在這些資料夾裡新增、修改或刪除任何檔案）：\n");
+    let mut s = String::from("\n\n參考資料夾（只能讀，不要在這些資料夾裡新增、修改或刪除任何檔案）：\n");
     for r in refs {
         if r.note.is_empty() {
             s.push_str(&format!("- {}\n", r.path));
