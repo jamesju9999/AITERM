@@ -528,6 +528,77 @@ pub async fn agents_get_references(
     crate::tasks::references::get(&p.pool).await.map_err(|e| e.to_string())
 }
 
+#[derive(serde::Serialize)]
+pub struct MethodDiscussionStarted {
+    pub discussion_id: String,
+    pub tab_id: String,
+}
+
+/// 建團隊前的方法討論：開一個真的 Claude Code 分頁（工作目錄是程式庫，參考資料夾唯讀掛進去）。
+/// `prompt` 內的 `{{DECISION_PATH}}` 會換成決定檔的路徑；AI 寫了那個檔，`agents_method_discussion_read` 就讀得到。
+#[tauri::command]
+pub async fn agents_method_discussion_start(
+    project_id: String,
+    repo_dir: String,
+    prompt: String,
+    reg: State<'_, ProjectRegistry>,
+    config: State<'_, std::sync::Arc<crate::config::ConfigStore>>,
+    pty: State<'_, std::sync::Arc<crate::pty::PtyManager>>,
+    app: AppHandle,
+) -> Result<MethodDiscussionStarted, String> {
+    let p = project(&reg, &project_id)?;
+    let claude_cmd = config.get().task_board.claude_command;
+    if !crate::tasks::dispatch::looks_like_claude(&claude_cmd) {
+        return Err(format!("方法討論需要 Claude Code：目前的派工指令是 `{claude_cmd}`。請到設定把派工指令改成 claude。"));
+    }
+    let refs = crate::tasks::references::get(&p.pool).await.map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = crate::tasks::method_discussion::discussion_dir(&p.path, &id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = crate::tasks::method_discussion::decision_path(&p.path, &id);
+    let mut full = crate::tasks::method_discussion::fill_prompt(&prompt, &path);
+    full.push_str(&crate::tasks::references::prompt_note(&refs));
+    let settings = dir.join("claude-settings.json");
+    std::fs::write(&settings, crate::tasks::method_discussion::settings_json(&refs)).map_err(|e| e.to_string())?;
+    let extra = [
+        crate::tasks::quota::settings_flag(&settings),
+        crate::tasks::references::add_dir_args(&refs),
+        // 決定檔所在資料夾也要能寫：它在程式庫之外
+        crate::tasks::quota::path_flag("--add-dir", &dir),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ");
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let (tab_id, _) = crate::tasks::dispatch::spawn_and_run(
+        &app,
+        &pty,
+        &repo_dir,
+        &claude_cmd,
+        Some(&session_id),
+        &full,
+        false,
+        None,
+        (!extra.is_empty()).then_some(extra.as_str()),
+        false,
+        |_| {},
+    )
+    .await?;
+    Ok(MethodDiscussionStarted { discussion_id: id, tab_id })
+}
+
+/// 決定檔的文字；AI 還沒寫就是 `None`。
+#[tauri::command]
+pub async fn agents_method_discussion_read(
+    project_id: String,
+    discussion_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<Option<String>, String> {
+    let p = project(&reg, &project_id)?;
+    Ok(crate::tasks::method_discussion::read_decision(&p.path, &discussion_id))
+}
+
 /// 存參考資料夾清單（整份取代）。資料夾必須存在；下一張派出去的卡才生效。
 #[tauri::command]
 pub async fn agents_set_references(

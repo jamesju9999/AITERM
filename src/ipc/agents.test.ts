@@ -9,7 +9,9 @@ import {
   deleteAgent,
   listAgents,
   mergeAgent,
+  readMethodDecision,
   resolveAgent,
+  startMethodDiscussion,
   updateAgent,
 } from "./agents";
 
@@ -61,5 +63,18 @@ describe("ipc/agents", () => {
     expect(invoke).toHaveBeenLastCalledWith("tasks_assign_agent", { projectId: "p1", taskId: "t1", agentId: null, fast: false });
     await assignAgent("p1", "t1", "a1", true);
     expect(invoke).toHaveBeenLastCalledWith("tasks_assign_agent", { projectId: "p1", taskId: "t1", agentId: "a1", fast: true });
+  });
+
+  it("startMethodDiscussion", async () => {
+    vi.mocked(invoke).mockResolvedValue({ discussion_id: "d1", tab_id: "t1" });
+    const r = await startMethodDiscussion("p1", "/repo", "hello");
+    expect(invoke).toHaveBeenCalledWith("agents_method_discussion_start", { projectId: "p1", repoDir: "/repo", prompt: "hello" });
+    expect(r.discussion_id).toBe("d1");
+  });
+
+  it("readMethodDecision", async () => {
+    vi.mocked(invoke).mockResolvedValue(null);
+    expect(await readMethodDecision("p1", "d1")).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("agents_method_discussion_read", { projectId: "p1", discussionId: "d1" });
   });
 });

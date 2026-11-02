@@ -220,6 +220,19 @@ export interface Reference {
 
 export const getReferences = (projectId: string): Promise<Reference[]> => invoke("agents_get_references", { projectId });
 
+export interface MethodDiscussionStarted {
+  discussion_id: string;
+  tab_id: string;
+}
+
+/** 建團隊前的方法討論：開一個真的 Claude Code 分頁。prompt 內的 `{{DECISION_PATH}}` 由後端換成決定檔路徑。 */
+export const startMethodDiscussion = (projectId: string, repoDir: string, prompt: string): Promise<MethodDiscussionStarted> =>
+  invoke("agents_method_discussion_start", { projectId, repoDir, prompt });
+
+/** 決定檔的文字；AI 還沒寫就是 null。 */
+export const readMethodDecision = (projectId: string, discussionId: string): Promise<string | null> =>
+  invoke("agents_method_discussion_read", { projectId, discussionId });
+
 /** 整份取代；回傳整理後的清單（去重複、去空白）。資料夾不存在會回錯誤。 */
 export const setReferences = (projectId: string, references: Reference[]): Promise<Reference[]> =>
   invoke("agents_set_references", { projectId, references });
