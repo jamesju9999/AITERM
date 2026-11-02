@@ -15,6 +15,7 @@ export function MethodDiscussion({
   complete,
   getContext,
   busy,
+  confirmLocked = false,
   onConfirm,
   onBack,
 }: {
@@ -22,6 +23,8 @@ export function MethodDiscussion({
   getContext: () => Promise<{ brief: string; refs: Reference[] }>;
   /** 外層正在建團隊：鎖住輸入與確認。 */
   busy: boolean;
+  /** 只鎖「確認」：討論本身不需要前置條件（例如程式庫還沒選好），建團隊才需要。 */
+  confirmLocked?: boolean;
   onConfirm: (d: MethodDecision) => void;
   onBack: () => void;
 }) {
@@ -107,7 +110,7 @@ export function MethodDiscussion({
           className="aiterm-btn aiterm-btn--primary"
           data-testid="ac-md-confirm"
           title={decision ? undefined : t.ac_md_confirm_hint}
-          disabled={!decision || thinking || busy}
+          disabled={!decision || thinking || busy || confirmLocked}
           onClick={() => decision && onConfirm(decision)}
         >
           {t.ac_md_confirm}

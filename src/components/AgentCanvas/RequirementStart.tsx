@@ -169,7 +169,8 @@ export function RequirementStart({
               brief: ((await getProjectBrief(projectId).catch(() => null)) ?? "").trim(),
               refs: await getReferences(projectId).catch(() => []),
             })}
-            busy={busy || !repoOk}
+            busy={busy}
+            confirmLocked={!repoOk}
             onConfirm={(d) => void confirmDecision(d)}
             onBack={() => setDiscuss(false)}
           />

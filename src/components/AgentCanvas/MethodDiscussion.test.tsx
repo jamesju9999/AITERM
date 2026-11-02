@@ -9,7 +9,7 @@ const decisionReply =
   JSON.stringify({ approach: "batch", reason: "骨架相同", trial: "先試 5 支", requirement: "轉換 Cm 畫面" }) +
   "\n```";
 
-function setup(complete: (m: { role: "user"; content: string }[], s: string) => Promise<string>) {
+function setup(complete: (m: { role: "user"; content: string }[], s: string) => Promise<string>, confirmLocked = false) {
   const onConfirm = vi.fn();
   const onBack = vi.fn();
   render(
@@ -18,6 +18,7 @@ function setup(complete: (m: { role: "user"; content: string }[], s: string) => 
         complete={complete}
         getContext={async () => ({ brief: "", refs: [] })}
         busy={false}
+        confirmLocked={confirmLocked}
         onConfirm={onConfirm}
         onBack={onBack}
       />
@@ -92,5 +93,14 @@ describe("MethodDiscussion", () => {
     await waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByText("還有什麼要補充？")).toBeTruthy());
     expect(screen.getByTestId("ac-md-decision")).toBeTruthy();
+  });
+
+  it("lets the user discuss while confirm is locked, but keeps confirm disabled", async () => {
+    const complete = vi.fn().mockResolvedValue(decisionReply);
+    setup(complete, true);
+    await send("533 支畫面");
+    await waitFor(() => expect(screen.getByTestId("ac-md-decision")).toBeTruthy());
+    expect((screen.getByTestId("ac-md-input") as HTMLTextAreaElement).disabled).toBe(false);
+    expect((screen.getByTestId("ac-md-confirm") as HTMLButtonElement).disabled).toBe(true);
   });
 });
