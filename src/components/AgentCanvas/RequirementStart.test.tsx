@@ -17,6 +17,8 @@ vi.mock("../../ipc/agents", () => ({
   checkRepo: vi.fn().mockResolvedValue({ status: "ok", branch: "main" }),
   createAgent: vi.fn().mockResolvedValue("agent-1"),
   getReferences: vi.fn().mockResolvedValue([]),
+  startMethodDiscussion: vi.fn().mockResolvedValue({ discussion_id: "d1" }),
+  readMethodDecision: vi.fn().mockResolvedValue(null),
   setProjectRepo: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../TaskBoard/useRefineTask", () => ({
@@ -24,17 +26,14 @@ vi.mock("../TaskBoard/useRefineTask", () => ({
 }));
 
 import { invokeAiComplete } from "../../ipc/ai";
-import { checkRepo } from "../../ipc/agents";
+import { checkRepo, readMethodDecision, startMethodDiscussion } from "../../ipc/agents";
 import { createTask } from "../../ipc/tasks";
 import { listProviders } from "../../ipc/provider";
 import { RequirementStart } from "./RequirementStart";
 
 const provider = { id: "p1", name: "P", is_default: true } as never;
 
-const decisionReply =
-  "建議批次。\n```decision\n" +
-  JSON.stringify({ approach: "batch", reason: "骨架相同", trial: "先試 5 支", requirement: "轉換 Cm 畫面" }) +
-  "\n```";
+const decisionJson = JSON.stringify({ approach: "batch", reason: "骨架相同", trial: "先試 5 支", requirement: "轉換 Cm 畫面" });
 
 function renderStart(onStarted = vi.fn()) {
   render(
@@ -49,6 +48,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(listProviders).mockResolvedValue([provider]);
   vi.mocked(checkRepo).mockResolvedValue({ status: "ok", branch: "main" });
+  vi.mocked(startMethodDiscussion).mockResolvedValue({ discussion_id: "d1" } as never);
+  vi.mocked(readMethodDecision).mockResolvedValue(null);
 });
 
 describe("RequirementStart method discussion", () => {
@@ -69,15 +70,16 @@ describe("RequirementStart method discussion", () => {
   });
 
   it("confirming a decision builds the team with that decision in the card", async () => {
-    // 第一次呼叫是討論回覆；之後（團隊推薦、完成定義）都失敗 → 走預設團隊、沒有完成定義。
-    vi.mocked(invokeAiComplete)
-      .mockResolvedValueOnce({ content: decisionReply } as never)
-      .mockRejectedValue(new Error("no ai"));
+    // 決定來自決定檔；之後（團隊推薦、完成定義）的 AI 呼叫都失敗 → 走預設團隊、沒有完成定義。
+    vi.mocked(readMethodDecision).mockResolvedValue(decisionJson);
+    vi.mocked(invokeAiComplete).mockRejectedValue(new Error("no ai"));
     const onStarted = renderStart();
     fireEvent.click(await screen.findByTestId("ac-md-toggle"));
     fireEvent.change(screen.getByTestId("ac-md-input"), { target: { value: "533 支畫面" } });
-    fireEvent.click(screen.getByTestId("ac-md-send"));
-    await screen.findByTestId("ac-md-decision");
+    fireEvent.click(screen.getByTestId("ac-md-start"));
+    await screen.findByTestId("ac-md-decision", undefined, { timeout: 4000 });
+    expect(startMethodDiscussion).toHaveBeenCalledWith("proj", "/repo", expect.stringContaining("533 支畫面"));
+    expect(readMethodDecision).toHaveBeenCalledWith("proj", "d1");
     fireEvent.click(screen.getByTestId("ac-md-confirm"));
     await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
     const card = vi.mocked(createTask).mock.calls[0][1];
@@ -88,7 +90,7 @@ describe("RequirementStart method discussion", () => {
 
   it("locks the confirm button while the repo check is not ok", async () => {
     vi.mocked(checkRepo).mockImplementation(async (path) => (path === "/bad" ? { status: "missing" } : { status: "ok", branch: "main" }));
-    vi.mocked(invokeAiComplete).mockResolvedValueOnce({ content: decisionReply } as never);
+    vi.mocked(readMethodDecision).mockResolvedValue(decisionJson);
     const props = { projectId: "proj", onRepoChange: vi.fn(), onStarted: vi.fn() };
     const ui = (repo: string) => (
       <LocaleProvider>
@@ -98,9 +100,9 @@ describe("RequirementStart method discussion", () => {
     const { rerender } = render(ui("/repo"));
     fireEvent.click(await screen.findByTestId("ac-md-toggle"));
     fireEvent.change(screen.getByTestId("ac-md-input"), { target: { value: "533 支畫面" } });
-    await waitFor(() => expect((screen.getByTestId("ac-md-send") as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByTestId("ac-md-send"));
-    await screen.findByTestId("ac-md-decision");
+    await waitFor(() => expect((screen.getByTestId("ac-md-start") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId("ac-md-start"));
+    await screen.findByTestId("ac-md-decision", undefined, { timeout: 4000 });
     await waitFor(() => expect((screen.getByTestId("ac-md-confirm") as HTMLButtonElement).disabled).toBe(false));
     rerender(ui("/bad"));
     await waitFor(() => expect((screen.getByTestId("ac-md-confirm") as HTMLButtonElement).disabled).toBe(true));

@@ -3,7 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { invokeAiComplete } from "../../ipc/ai";
-import { assignAgent, checkRepo, createAgent, getReferences, setProjectRepo, type RepoCheck } from "../../ipc/agents";
+import { assignAgent, checkRepo, createAgent, getReferences, readMethodDecision, setProjectRepo, startMethodDiscussion, type RepoCheck } from "../../ipc/agents";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { createTask, getProjectBrief, setProjectBrief } from "../../ipc/tasks";
 import { ModelPickerButton } from "../ModelPickerButton";
@@ -12,7 +12,7 @@ import { restoreWebviewFocus } from "../../lib/webviewFocus";
 import { RepoStatus } from "./RepoStatus";
 import { confirmInitRepo } from "./repoInit";
 import { MethodDiscussion } from "./MethodDiscussion";
-import type { MethodDecision } from "./methodDecision";
+import { buildDiscussionPrompt, type MethodDecision } from "./methodDecision";
 import { startFromRequirement, StartError, type StartArgs, type StartDeps, type StartResult } from "./startFromRequirement";
 
 /** 跟專案簡介、範本推薦共用模型偏好。 */
@@ -164,11 +164,12 @@ export function RequirementStart({
             )}
           </div>
           <MethodDiscussion
-            complete={(messages, system) => deps.complete(messages, system, "method-discussion", providerId)}
-            getContext={async () => ({
-              brief: ((await getProjectBrief(projectId).catch(() => null)) ?? "").trim(),
-              refs: await getReferences(projectId).catch(() => []),
-            })}
+            start={async (opening) => {
+              if (!repo) throw new Error(t.ac_req_repo_pick);
+              const r = await startMethodDiscussion(projectId, repo, buildDiscussionPrompt(opening));
+              return { discussionId: r.discussion_id };
+            }}
+            read={(id) => readMethodDecision(projectId, id)}
             busy={busy}
             confirmLocked={!repoOk}
             onConfirm={(d) => void confirmDecision(d)}

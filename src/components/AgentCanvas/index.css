@@ -959,8 +959,6 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-res-x { flex: none; margin-left: 4px; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); font: inherit; font-size: 14px; line-height: 18px; cursor: pointer; opacity: 0; }
 .ac-res:hover .ac-res-x, .ac-res-pop-item:hover .ac-res-x, .ac-res-x:focus-visible { opacity: 1; }
 .ac-res-x:hover { background: rgba(239, 68, 68, 0.18); color: #ef4444; }
-.ac-md-thread { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; }
-.ac-md-turn { white-space: pre-wrap; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; max-width: 90%; }
-.ac-md-turn--user { align-self: flex-end; background: var(--bg-tertiary); color: var(--text-primary); }
-.ac-md-turn--assistant { align-self: flex-start; border: 1px solid var(--border-color); background: var(--bg-primary, var(--bg-secondary)); color: var(--text-primary); }
+.ac-md { display: flex; flex-direction: column; gap: 12px; }
+.ac-md-intro, .ac-md-status { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-muted); }
 .ac-md-decision { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 10px; border: 1px solid var(--accent-border, var(--border-color)); background: var(--bg-tertiary); font-size: 13px; }
