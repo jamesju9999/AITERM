@@ -59,7 +59,6 @@ import { TopMoreMenu } from "./TopMoreMenu";
 
 /** 編制還沒載入（或讀不到）時，選單照樣出現：團隊範本在裡面。 */
 const EMPTY_FORMATIONS: FormationsState = { formations: [], active: null, pending: null, busy: [], log: [] };
-import { BugReportDialog } from "./BugReportDialog";
 import { DbSkillDialog } from "./DbSkillDialog";
 import { ResourceLayer } from "./ResourceLayer";
 import { accessLinks, folderLinks, folderResources, resourcesOf } from "./resources";
@@ -68,6 +67,7 @@ import { CustomSkillsDialog } from "./CustomSkillsDialog";
 import { RoleIcon } from "./RoleIcon";
 import { parseDbSkill, parseSkillPaths, skillActivity, SKILL_LINGER_SECS, sqlPreview } from "./dbSkill";
 import { ToolsBanner } from "./ToolsBanner";
+import { RepoMovedBanner, useMissingRepoDirs } from "./RepoMovedBanner";
 import { missingTools } from "./toolsCheck";
 import { listProjects, type ProjectInfo } from "../../ipc/projects";
 import {
@@ -104,7 +104,7 @@ import { TeamTemplateDialog } from "./TeamTemplateDialog";
 import { toCreate, toFormationAgents } from "./teamTemplates";
 import { answerQuestion, listQuestions, onQuestionsUpdated, type QuestionView } from "../../ipc/questions";
 import { projectSummary, type ProjectSummary } from "./projectSummary";
-import { sumUsage } from "./tokenUsage";
+import { formatTokens, sumUsage, totalTokens } from "./tokenUsage";
 import { TokenBudgetChip } from "./TokenBudgetChip";
 import { ProjectBriefDialog } from "./ProjectBriefDialog";
 import { CommandBar } from "./CommandBar";
@@ -298,7 +298,8 @@ export function AgentCanvasView({
   const prevTasks = useRef<TaskWithAttachments[] | null>(null);
   const [newModule, setNewModule] = useState(false);
   /** 回報問題（moduleId：從某個完成的模組按右鍵進來）。 */
-  const [bugFor, setBugFor] = useState<{ moduleId: string | null } | null>(null);
+  /** 在模組上按右鍵回報問題：交給下方輸入列處理。 */
+  const [reportFor, setReportFor] = useState<{ moduleId: string; nonce: number } | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   /** 打開驗收報告的那張驗收卡。 */
@@ -1040,7 +1041,30 @@ export function AgentCanvasView({
     return { w: Math.max(w, railExtent.right) + WORLD_MARGIN, h: Math.max(h, railExtent.bottom) + WORLD_MARGIN };
   }, [shownAgents, railExtent]);
 
+  const movedDirs = useMissingRepoDirs(agents);
+  const openRefs = useCallback(() => setRefsOpen(true), []);
+  /** 資源區膠囊上的 ×：確認後移除。下一張派出去的卡才生效。 */
+  const removeFolder = async (path: string, name: string) => {
+    if (!projectId || !(await confirm(t.ac_refs_remove_confirm(name), { kind: "warning" }))) return;
+    try {
+      const saved = await setReferences(projectId, references.filter((r) => r.path !== path));
+      setRefsOf({ projectId, list: saved });
+    } catch (e) {
+      setToast(errText(e));
+    }
+  };
   const summary = useMemo(() => projectSummary(agents, tasks), [agents, tasks]);
+  // 收尾卡：全部完成才有。以最後一張卡的結束時間當 key，之後又有新工作完成會再出現一次。
+  const [doneDismissed, setDoneDismissed] = useState<string | null>(null);
+  const doneInfo = useMemo(() => {
+    if (summary.kind !== "in_repo" && summary.kind !== "integrated" && summary.kind !== "all_passed") return null;
+    const key = `${projectId}:${tasks.reduce((m, c) => Math.max(m, c.finished_at ?? 0), 0)}`;
+    const outputs = tasks.filter((c) => c.card_kind === "work" && c.status === "done" && c.provides).slice(0, 5);
+    const verify = tasks
+      .filter((c) => c.card_kind === "verify" && c.status === "done" && c.verdict === "pass")
+      .sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))[0];
+    return { key, outputs, verify };
+  }, [summary, tasks, projectId]);
   const hasOrchestrator = agents.some((a) => a.kind === "orchestrator");
   const hasVerifier = agents.some((a) => a.kind === "verifier");
 
@@ -1125,7 +1149,7 @@ export function AgentCanvasView({
     <div
       className="task-board agent-canvas"
       style={{
-        gridTemplateRows: `auto ${missing.length ? "auto " : ""}auto minmax(0, 1fr) ${layout.logCollapsed ? "auto" : `${layout.logHeight}px`}`,
+        gridTemplateRows: `auto ${missing.length ? "auto " : ""}${movedDirs.length ? "auto " : ""}auto minmax(0, 1fr) ${layout.logCollapsed ? "auto" : `${layout.logHeight}px`}`,
       }}
     >
       <div className="ac-top">
@@ -1237,20 +1261,6 @@ export function AgentCanvasView({
             </button>
           </>
         )}
-        {projectId && agents.some((a) => a.kind === "coder") && (
-          <>
-            <span className="ac-top-sep" aria-hidden />
-            <button
-              className="aiterm-btn aiterm-btn--sm ac-top-btn ac-bug-btn"
-              data-testid="ac-bug"
-              title={t.ac_bug_button_tip}
-              onClick={() => setBugFor({ moduleId: null })}
-            >
-              <RoleIcon name="bug" size={14} />
-              <span className="ac-top-label">{t.ac_bug_button}</span>
-            </button>
-          </>
-        )}
         <span className="ac-top-sep" aria-hidden />
         {/* 待決策只在有問題時出現；導覽的「待決策」那一步圈這一整區。 */}
         <span className="ac-top-status" data-guide="inbox">
@@ -1270,6 +1280,8 @@ export function AgentCanvasView({
       {tools && missing.length > 0 && (
         <ToolsBanner check={tools} missing={missing} busy={toolsBusy} onRecheck={() => void recheckTools()} />
       )}
+
+      {projectId && movedDirs.length > 0 && <RepoMovedBanner projectId={projectId} agents={agents} dirs={movedDirs} onDone={() => void refresh()} />}
 
       <div className="ac-pool" data-guide="pool">
         <span className="ac-pool-label">{t.ac_pool}</span>
@@ -1480,6 +1492,8 @@ export function AgentCanvasView({
                   agentName={agentName}
                   revision={tasks}
                   onExtent={setRailExtent}
+                  onAddFolder={projectId ? openRefs : undefined}
+                  onRemoveFolder={projectId ? (r) => void removeFolder(r.id.slice("ref:".length), r.name) : undefined}
                 />
                 {shownAgents.map((shown) => {
                   const a = agents.find((x) => x.id === shown.id) as AgentRow;
@@ -1551,7 +1565,7 @@ export function AgentCanvasView({
                       onRetry={() => projectId && void run(() => resolveAgent(projectId, a.id, "retry"))}
                       onSkip={() => projectId && void run(() => resolveAgent(projectId, a.id, "skip"))}
                       onTranscript={setTranscriptFor}
-                      onReportBug={(moduleId) => setBugFor({ moduleId })}
+                      onReportBug={(moduleId) => setReportFor((r) => ({ moduleId, nonce: (r?.nonce ?? 0) + 1 }))}
                       onOpenTab={openTab}
                       onMerge={() => doMerge(a)}
                       onAbortMerge={() => doAbortMerge(a)}
@@ -1565,12 +1579,40 @@ export function AgentCanvasView({
               </div>
             </div>
           </section>
+          {doneInfo && doneInfo.key !== doneDismissed && (
+            <div className="ac-done-card" data-testid="ac-done-card" role="status">
+              <div className="ac-done-head">
+                <b>✓ {t.ac_done_title}</b>
+                <button className="ac-iconbtn" title={t.ac_done_close} aria-label={t.ac_done_close} onClick={() => setDoneDismissed(doneInfo.key)}>
+                  ×
+                </button>
+              </div>
+              {doneInfo.outputs.length > 0 && (
+                <ul className="ac-done-outputs" aria-label={t.ac_done_outputs}>
+                  {doneInfo.outputs.map((m) => (
+                    <li key={m.id} title={m.provides ?? undefined}>
+                      <span>{m.title}</span> <code>{m.provides}</code>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="ac-done-meta">
+                {doneInfo.verify && (
+                  <button className="ac-link" onClick={() => setVerifyFor(doneInfo.verify!.id)}>
+                    ✓ {t.ac_done_verified} · {t.ac_verify_report}
+                  </button>
+                )}
+                {!!projectUsage?.cards && <span>{t.ac_tokens(formatTokens(totalTokens(projectUsage.usage)))}</span>}
+              </div>
+            </div>
+          )}
           {agents.length > 0 && projectId && (
             <CommandBar
               projectId={projectId}
               repo={(projRepoOf?.projectId === projectId ? projRepoOf.path : null) ?? agents[0]?.project_dir ?? null}
               agents={agents}
               tasks={tasks}
+              report={reportFor}
               onDispatched={() => void refresh()}
             />
           )}
@@ -1643,7 +1685,7 @@ export function AgentCanvasView({
         !guide.hintsOff &&
         !hintDismissed &&
         // 有對話框開著時不冒提示，免得浮在對話框上面。
-        !(config || newModule || bugFor || templatesOpen || briefOpen || refsOpen || customSkillsFor || verifyFor || transcriptCard || helpOpen || inbox.open) && (
+        !(config || newModule || templatesOpen || briefOpen || refsOpen || customSkillsFor || verifyFor || transcriptCard || helpOpen || inbox.open) && (
           <GuideHint
             hint={hint}
             onDismiss={() =>
@@ -1766,19 +1808,6 @@ export function AgentCanvasView({
           onClose={() => setNewModule(false)}
           onSaved={() => {
             setNewModule(false);
-            void refresh();
-          }}
-        />
-      )}
-      {bugFor && projectId && (
-        <BugReportDialog
-          projectId={projectId}
-          agents={agents}
-          tasks={tasks}
-          moduleId={bugFor.moduleId}
-          onClose={() => setBugFor(null)}
-          onSent={() => {
-            setBugFor(null);
             void refresh();
           }}
         />

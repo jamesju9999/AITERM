@@ -70,6 +70,17 @@ export function VerifyReportDialog({
         evidence: t.ac_verify_evidence,
         overall: t.ac_verify_overall,
         summary: t.ac_verify_summary,
+        project: t.ac_verify_r_project,
+        date: t.ac_verify_r_date,
+        projectType: t.ac_verify_r_type,
+        conclusion: t.ac_verify_r_conclusion,
+        verdictPass: t.ac_verify_r_verdict_pass,
+        verdictFail: t.ac_verify_r_verdict_fail,
+        overview: t.ac_verify_r_overview,
+        detail: t.ac_verify_r_detail,
+        criterion: t.ac_verify_r_criterion,
+        result: t.ac_verify_r_result,
+        generatedBy: t.ac_verify_r_generated,
       });
       await writeTextFile(path, html);
       setExported(path);

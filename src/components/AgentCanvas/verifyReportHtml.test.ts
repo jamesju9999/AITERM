@@ -6,6 +6,8 @@ const L: VerifyReportLabels = {
   title: "驗收報告", pass: "通過", fail: "沒通過", manual: "需你確認", steps: "重現步驟", expected: "預期",
   actual: "實際", notes: "說明", evidence: "證據", overall: "整體說明",
   summary: (p, f, m) => `通過 ${p} · 沒通過 ${f} · 需你確認 ${m}`,
+  project: "專案", date: "驗收日期", projectType: "專案類型", conclusion: "驗收結論", verdictPass: "驗收通過",
+  verdictFail: "驗收未通過", overview: "驗收總覽", detail: "驗收明細", criterion: "驗收項目", result: "結果", generatedBy: "由 AITerm 產生",
 };
 
 describe("verifyReportHtml", () => {
@@ -26,10 +28,29 @@ describe("verifyReportHtml", () => {
     const html = verifyReportHtml(view, { project: "Ask Test", date: "2026-10-17" }, L);
     expect(html.startsWith("<!doctype html>")).toBe(true);
     expect(html).toContain('<img src="data:image/png;base64,AAAA"');
-    expect(html).toContain("Ask Test · 2026-10-17 · 通過 1 · 沒通過 1 · 需你確認 0 · web");
+    expect(html).toContain("<dd>Ask Test</dd>");
+    expect(html).toContain("<dd>2026-10-17</dd>");
+    expect(html).toContain("<dd>web</dd>");
+    expect(html).toContain("通過 1 · 沒通過 1 · 需你確認 0");
     expect(html).toContain("npm test 通過");
     expect(html).toContain("已關閉伺服器");
     expect(html.indexOf("按 +1")).toBeLessThan(html.indexOf("歸零"));
+  });
+
+  it("有結論橫幅、總覽表（連到明細）與每項編號", () => {
+    const html = verifyReportHtml(view, { project: "P", date: "d" }, L);
+    expect(html).toContain('class="verdict fail"');
+    expect(html).toContain("驗收未通過");
+    expect(html).toContain('<a href="#i1">');
+    expect(html).toContain('id="i2"');
+    const pass = verifyReportHtml({ ...view, report: { ...view.report, verdict: "pass" as const } }, { project: "P", date: "d" }, L);
+    expect(pass).toContain('class="verdict pass"');
+  });
+
+  it("沒有任何項目時不會出現總覽表", () => {
+    const html = verifyReportHtml({ report: { verdict: "pass", items: [] }, images: {} }, { project: "P", date: "d" }, L);
+    expect(html).not.toContain("<table>");
+    expect(html).not.toContain("NaN");
   });
 
   it("報告內容是 Agent 寫的，一律跳脫", () => {

@@ -83,6 +83,10 @@ export interface DispatchEnv {
   tasks: TaskWithAttachments[];
   t: Translations;
   providerId?: string;
+  /** bug／小修改：指定交給誰；沒指定就是最不忙的工程師。 */
+  assigneeId?: string | null;
+  /** bug／小修改：相關模組的說明（已經是要寫進卡片的那句話）。 */
+  related?: string | null;
 }
 
 export interface DispatchResult {
@@ -112,7 +116,7 @@ async function attachImages(d: DispatchDeps, projectId: string, taskId: string, 
   }
 }
 
-const newCard = (d: Pick<StartDeps, "createTask">, env: DispatchEnv, title: string, body: string) =>
+const newCard = (d: Pick<StartDeps, "createTask">, env: DispatchEnv, title: string, body: string, label: string | null = null) =>
   d.createTask(env.projectId, {
     title,
     body,
@@ -121,7 +125,7 @@ const newCard = (d: Pick<StartDeps, "createTask">, env: DispatchEnv, title: stri
     interactive: false,
     use_bridge: false,
     bridge_tiers: null,
-    label: null,
+    label,
     isolate_worktree: null,
   });
 
@@ -145,12 +149,12 @@ export async function dispatchInput(
   }
 
   if (kind === "fast" || kind === "bug") {
-    const assignee = pickAssignee(agents, tasks, null);
+    const assignee = pickAssignee(agents, tasks, env.assigneeId ?? null);
     if (assignee) {
       const shots = images.length > 0;
       const instructions = kind === "bug" ? (shots ? t.ac_bug_instructions : t.ac_bug_instructions_noshot) : shots ? t.ac_cmd_image_note : "";
-      const { title, body } = bugCard(text, instructions, null);
-      const taskId = await newCard(d, env, title, body);
+      const { title, body } = bugCard(text, instructions, env.related ?? null);
+      const taskId = await newCard(d, env, title, body, kind === "bug" ? t.ac_bug_label : null);
       await attachImages(d, projectId, taskId, images);
       await d.assignAgent(projectId, taskId, assignee.id, kind === "fast");
       return { kind, taskId, agentName: nameOf(assignee.id) };

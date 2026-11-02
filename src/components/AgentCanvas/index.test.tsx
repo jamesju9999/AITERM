@@ -46,6 +46,7 @@ vi.mock("../../ipc/agents", () => ({
   assignAgent: vi.fn().mockResolvedValue(undefined),
   overrideModule: vi.fn().mockResolvedValue(undefined),
   checkRepo: vi.fn().mockResolvedValue({ status: "ok", branch: "main" }),
+  relocateRepo: vi.fn().mockResolvedValue({ agents: 1, missing_branches: [] }),
   initRepo: vi.fn().mockResolvedValue(undefined),
   openRepo: vi.fn().mockResolvedValue(undefined),
   verifyReport: vi.fn().mockResolvedValue({ report: null, images: {} }),
@@ -120,6 +121,7 @@ import {
   acceptVerification,
   assignAgent,
   checkRepo,
+  relocateRepo,
   checkTools,
   createAgent,
   listDbQueries,
@@ -147,7 +149,7 @@ import {
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
-import { addAttachment, codexInfo, createTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { codexInfo, createTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { listProjects } from "../../ipc/projects";
@@ -260,6 +262,9 @@ beforeEach(() => {
   }
 });
 
+/** 頂列「⋯」選單。 */
+const openMore = () => fireEvent.click(screen.getByRole("button", { name: /更多|More/ }));
+
 describe("AgentCanvasView", () => {
   it("把資料庫技能拖到工程師上：選連線與權限後存檔", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
@@ -314,7 +319,9 @@ describe("AgentCanvasView", () => {
     vi.mocked(listTasks).mockResolvedValue([]);
     const { unmount } = view();
     await screen.findByTestId("agent-a1");
-    expect(screen.queryByTestId("ac-resource-rail")).toBeNull();
+    // 沒有人用資料庫技能：資源區只剩「＋ 參考資料夾」，沒有任何資源膠囊。
+    expect(document.querySelector("[data-resource-id]")).toBeNull();
+    expect(screen.getByTestId("ac-res-add-folder")).toBeInTheDocument();
     unmount();
 
     vi.mocked(listAgents).mockResolvedValue([
@@ -394,6 +401,23 @@ describe("AgentCanvasView", () => {
     expect(screen.getByTestId("ac-references").textContent).toMatch(/1/);
   });
 
+  it("參考資料夾：資源區膠囊上的 × 要確認才移除；取消就留著", async () => {
+    const { confirm } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(getReferences).mockResolvedValue([{ path: "/Users/me/HTBTW_Source", note: "" }]);
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(setReferences).mockClear();
+    view();
+    const x = await screen.findByTestId("resource-remove-ref:/Users/me/HTBTW_Source");
+    vi.mocked(confirm).mockResolvedValueOnce(false);
+    fireEvent.click(x);
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.stringContaining("HTBTW_Source"), expect.anything()));
+    expect(setReferences).not.toHaveBeenCalled();
+    fireEvent.click(x);
+    await waitFor(() => expect(setReferences).toHaveBeenCalledWith("p1", []));
+    await waitFor(() => expect(screen.queryByTestId("resource-ref:/Users/me/HTBTW_Source")).toBeNull());
+  });
+
   it("參考資料夾：有人正在讀就發亮、寫誰在讀，並拉一條線；活動記錄每張卡一行；讀完一陣子就熄", async () => {
     const now = Math.floor(Date.now() / 1000);
     vi.mocked(getReferences).mockResolvedValue([{ path: "/Users/me/HTBTW_Source", note: "舊系統原始碼" }]);
@@ -411,8 +435,8 @@ describe("AgentCanvasView", () => {
     expect(screen.getByTestId("access-a1-ref:/Users/me/HTBTW_Source").getAttribute("data-state")).toBe("query");
     expect(screen.queryByTestId("access-a2-ref:/Users/me/HTBTW_Source"), "很久以前讀的不畫線").toBeNull();
     const log = document.querySelector(".ac-log") as HTMLElement;
-    expect(log.textContent).toContain("Coder Agent1 讀取參考資料 HTBTW_Source（12 次）");
-    expect(log.textContent).toContain("工程師2 讀取參考資料 HTBTW_Source（4 次）");
+    expect(log.textContent).toContain("Coder Agent1 讀取參考資料夾 HTBTW_Source（12 次）");
+    expect(log.textContent).toContain("工程師2 讀取參考資料夾 HTBTW_Source（4 次）");
   });
 
   it("自訂技能：拖到工程師上，勾選程式庫與自己的技能，也能從資料夾加入，存檔", async () => {
@@ -1403,7 +1427,7 @@ describe("AgentCanvasView", () => {
     expect(agents.every((a) => a.dx >= 40 && a.dy >= 40)).toBe(true);
   });
 
-  describe("回報問題", () => {
+  describe("回報問題（併入下方輸入列）", () => {
     // 寫規格的人排第一、也最閒：確認「最不忙」不會挑到他。
     const team = () => [
       agent({ id: "s1", name: "分析師", produces_spec: true, canvas_y: 480 }),
@@ -1411,71 +1435,79 @@ describe("AgentCanvasView", () => {
       agent({ id: "a2", name: "工程師2", canvas_y: 240 }),
       agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 400 }),
     ];
+    const doneModule = () => card({ id: "M", title: "W3c 檔案儲存", status: "done", outcome: "success", agent_id: "a1" });
 
-    it("頂列：描述＋貼上截圖，送出就建卡、附上截圖並派給最不忙的工程師（不含寫規格的人）", async () => {
-      vi.mocked(listAgents).mockResolvedValue(team());
-      vi.mocked(listTasks).mockResolvedValue([card({ id: "q", status: "queued", agent_id: "a1" })]);
-      view();
-      fireEvent.click(await screen.findByTestId("ac-bug"));
-      const dlg = await screen.findByRole("dialog", { name: "回報問題" });
-      const send = within(dlg).getByRole("button", { name: "送出並派工" });
-      expect(send).toBeDisabled();
-      expect(within(dlg).getByRole("combobox", { name: "交給" }).textContent).toContain("自動（最不忙的：工程師2）");
-      fireEvent.change(within(dlg).getByRole("textbox"), { target: { value: "存檔後清單沒有更新\n步驟：新增一筆再存檔" } });
-      const png = new File([new Uint8Array([1, 2, 3])], "image.png", { type: "image/png" });
-      fireEvent.paste(within(dlg).getByRole("textbox"), { clipboardData: { files: [png] } });
-      expect(within(dlg).getByTestId("bug-shots").querySelector('[title="screenshot-1.png"]')).not.toBeNull();
-      fireEvent.click(send);
-      await waitFor(() => expect(assignAgent).toHaveBeenCalledWith("p1", "bug-1", "a2"));
-      const [, args] = vi.mocked(createTask).mock.calls[0];
-      expect(args.title).toBe("存檔後清單沒有更新");
-      expect(args.label).toBe("問題回報");
-      expect(args.body).toContain("步驟：新增一筆再存檔");
-      expect(args.body).toContain("請先看附件的截圖、重現問題");
-      expect(vi.mocked(addAttachment).mock.calls[0].slice(1, 3)).toEqual(["bug-1", "screenshot-1.png"]);
-      // 先附上截圖再派工：派工的瞬間排程器可能就開工了，提示要已經帶著附件。
-      expect(vi.mocked(addAttachment).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(assignAgent).mock.invocationCallOrder[0]);
-      expect(screen.queryByRole("dialog", { name: "回報問題" })).toBeNull();
-    });
-
-    it("不附截圖也能送出，而且卡片不會叫 Agent 去看不存在的截圖", async () => {
+    it("頂列「⋯」選單裡不再有回報問題", async () => {
       vi.mocked(listAgents).mockResolvedValue(team());
       vi.mocked(listTasks).mockResolvedValue([]);
       view();
-      fireEvent.click(await screen.findByTestId("ac-bug"));
-      const dlg = await screen.findByRole("dialog", { name: "回報問題" });
-      fireEvent.change(within(dlg).getByRole("textbox"), { target: { value: "按存檔沒反應" } });
-      fireEvent.click(within(dlg).getByRole("button", { name: "送出並派工" }));
-      await waitFor(() => expect(assignAgent).toHaveBeenCalled());
-      const [, args] = vi.mocked(createTask).mock.calls[0];
-      expect(args.body).toContain("按存檔沒反應");
-      expect(args.body).not.toContain("請先看附件的截圖");
-      expect(args.body).toContain("不必找截圖");
-      expect(addAttachment).not.toHaveBeenCalled();
-    });
-
-    it("在完成的模組上按右鍵：帶入模組，預設交給原本做的人；也可以改給別人", async () => {
-      vi.mocked(listAgents).mockResolvedValue(team());
-      vi.mocked(listTasks).mockResolvedValue([card({ id: "M", title: "W3c 檔案儲存", status: "done", outcome: "success", agent_id: "a1" })]);
-      view();
-      fireEvent.contextMenu(await screen.findByTestId("chip-M"));
-      const dlg = await screen.findByRole("dialog", { name: "回報問題" });
-      expect((within(dlg).getByRole("combobox", { name: "跟哪個模組有關" }) as HTMLSelectElement).value).toBe("M");
-      const who = within(dlg).getByRole("combobox", { name: "交給" }) as HTMLSelectElement;
-      expect(who.value).toBe("a1");
-      fireEvent.change(within(dlg).getByRole("textbox"), { target: { value: "存檔失敗" } });
-      fireEvent.keyDown(within(dlg).getByRole("textbox"), { key: "Enter", metaKey: true });
-      await waitFor(() => expect(assignAgent).toHaveBeenCalledWith("p1", "bug-1", "a1"));
-      expect(vi.mocked(createTask).mock.calls[0][1].body).toContain("相關模組：W3c 檔案儲存（已完成）");
-    });
-
-    it("桌布上沒有工程師時頂列不出現按鈕", async () => {
-      vi.mocked(listAgents).mockResolvedValue([agent({ id: "r1", kind: "reviewer", name: "R" })]);
-      vi.mocked(listTasks).mockResolvedValue([]);
-      view();
-      await screen.findByTestId("agent-r1");
+      await screen.findByTestId("agent-a1");
+      openMore();
       expect(screen.queryByTestId("ac-bug")).toBeNull();
     });
+
+    it("在完成的模組上按右鍵：輸入列帶入相關模組，直接當 bug、預設交給原本做的人", async () => {
+      vi.mocked(listAgents).mockResolvedValue(team());
+      vi.mocked(listTasks).mockResolvedValue([doneModule()]);
+      view();
+      fireEvent.contextMenu(await screen.findByTestId("chip-M"));
+      expect(await screen.findByTestId("ac-cmd-related")).toHaveTextContent("相關模組：W3c 檔案儲存");
+      const input = screen.getByTestId("ac-cmd-input");
+      fireEvent.change(input, { target: { value: "存檔失敗" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      const plan = await screen.findByTestId("ac-cmd-plan");
+      expect(screen.getByTestId("ac-cmd-kind-bug")).toHaveAttribute("aria-pressed", "true");
+      expect((within(plan).getByRole("combobox", { name: "交給" }) as HTMLSelectElement).value).toBe("a1");
+      fireEvent.click(screen.getByTestId("ac-cmd-confirm"));
+      await waitFor(() => expect(assignAgent).toHaveBeenCalledWith("p1", "bug-1", "a1", false));
+      const [, args] = vi.mocked(createTask).mock.calls[0];
+      expect(args.label).toBe("問題回報");
+      expect(args.body).toContain("相關模組：W3c 檔案儲存（已完成）");
+    });
+
+    it("確認前可以改交給別的工程師", async () => {
+      vi.mocked(listAgents).mockResolvedValue(team());
+      vi.mocked(listTasks).mockResolvedValue([doneModule()]);
+      view();
+      fireEvent.contextMenu(await screen.findByTestId("chip-M"));
+      const input = await screen.findByTestId("ac-cmd-input");
+      fireEvent.change(input, { target: { value: "存檔失敗" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      const plan = await screen.findByTestId("ac-cmd-plan");
+      fireEvent.change(within(plan).getByRole("combobox", { name: "交給" }), { target: { value: "a2" } });
+      fireEvent.click(screen.getByTestId("ac-cmd-confirm"));
+      await waitFor(() => expect(assignAgent).toHaveBeenCalledWith("p1", "bug-1", "a2", false));
+    });
+  });
+
+  it("專案資料夾複製到別台電腦：程式庫路徑不存在就出現橫幅，指定新位置、確認後換掉", async () => {
+    const { open, confirm } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(listAgents).mockResolvedValue([agent({ project_dir: "/Users/old/repo" })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(checkRepo).mockImplementation(async (p) => (p === "/Users/old/repo" ? { status: "missing" } : { status: "ok", branch: "main" }));
+    vi.mocked(relocateRepo).mockClear();
+    view();
+    const banner = await screen.findByTestId("ac-repo-moved");
+    expect(banner).toHaveTextContent("/Users/old/repo");
+
+    // 取消確認：什麼都不換
+    vi.mocked(open).mockResolvedValueOnce("/Users/new/repo");
+    vi.mocked(confirm).mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByTestId("ac-repo-moved-pick"));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.stringContaining("/Users/new/repo"), expect.anything()));
+    expect(relocateRepo).not.toHaveBeenCalled();
+
+    vi.mocked(open).mockResolvedValueOnce("/Users/new/repo");
+    fireEvent.click(screen.getByTestId("ac-repo-moved-pick"));
+    await waitFor(() => expect(relocateRepo).toHaveBeenCalledWith("p1", "/Users/old/repo", "/Users/new/repo"));
+  });
+
+  it("程式庫都在這台電腦上就不出現橫幅", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    await screen.findByTestId("agent-a1");
+    expect(screen.queryByTestId("ac-repo-moved")).toBeNull();
   });
 
   it("活動記錄每一行有角色色點", async () => {
@@ -1807,7 +1839,9 @@ describe("AgentCanvasView", () => {
       ]);
       vi.mocked(listTasks).mockResolvedValue([]);
       view();
-      await screen.findByTestId("ac-resource-rail");
+      // 資源區在資料載入前就有「＋ 參考資料夾」，要等到資料夾膠囊出現、位置才算好。
+      await screen.findByTestId("resource-ref:/Users/me/HTBTW_Source");
+      await waitFor(() => expect(document.querySelector<HTMLElement>("[data-resource-rail]")?.style.top).toBe("1384px"));
       const canvas = document.querySelector<HTMLElement>('[data-drop="canvas"]') as HTMLElement;
       Object.defineProperty(canvas, "clientWidth", { configurable: true, value: 1000 });
       Object.defineProperty(canvas, "clientHeight", { configurable: true, value: 600 });

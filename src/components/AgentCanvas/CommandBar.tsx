@@ -9,6 +9,8 @@ import { createImeEnterGuard } from "../../lib/imeComposing";
 import { MarkdownText } from "../../lib/markdown";
 import { ModelPickerButton } from "../ModelPickerButton";
 import type { ProviderInfo } from "../../ipc/provider";
+import { localizedCardTitle } from "./cardTitle";
+import { pickAssignee } from "./bugReport";
 import { dispatchInput, INPUT_KINDS, routeInput, type AddAttachment, type DispatchResult, type InputKind, type RouteDecision } from "./routeInput";
 import type { StartDeps } from "./startFromRequirement";
 
@@ -47,6 +49,7 @@ export function CommandBar({
   deps = defaultDeps,
   attach = addAttachment,
   ask = askAgent,
+  report = null,
 }: {
   projectId: string;
   /** 專案記住的程式庫；null = 沒有（沒有就不能建卡）。 */
@@ -58,6 +61,8 @@ export function CommandBar({
   deps?: StartDeps;
   attach?: AddAttachment;
   ask?: NonNullable<Parameters<typeof dispatchInput>[3]["askAgent"]>;
+  /** 在完成的模組上按右鍵「回報問題」：帶入相關模組、直接當 bug 處理。nonce 每按一次加一，同一個模組再按也會重新觸發。 */
+  report?: { moduleId: string; nonce: number } | null;
 }) {
   const { t } = useLocale();
   const [text, setText] = useState("");
@@ -69,6 +74,10 @@ export function CommandBar({
   /** 附的圖：可有可無。 */
   const [images, setImages] = useState<{ file: File; url: string | null }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  /** 回報問題帶入的相關模組（空字串 = 沒有）與使用者手動指定的工程師（null = 自動）。 */
+  const [relatedId, setRelatedId] = useState("");
+  const [assigneeId, setAssigneeId] = useState<string | null>(null);
   const ime = useRef(createImeEnterGuard());
   const shot = useRef(0);
   const imagesRef = useRef(images);
@@ -103,6 +112,24 @@ export function CommandBar({
   }, []);
 
   const busy = phase.kind === "routing" || phase.kind === "working";
+
+  useEffect(() => {
+    if (!report) return;
+    setRelatedId(report.moduleId);
+    setAssigneeId(null);
+    setPhase({ kind: "idle" });
+    setNotice(null);
+    setError(null);
+    inputRef.current?.focus();
+  }, [report]);
+
+  const modules = tasks.filter((x) => x.card_kind === "work" && x.status === "done" && x.agent_id && !x.archived_at);
+  const coders = agents.filter((a) => a.kind === "coder" && !a.produces_spec);
+  const relatedMod = modules.find((m) => m.id === relatedId);
+  const relatedOwner = relatedMod?.agent_id ?? null;
+  // 有相關模組時預設交給原本做的人（他的分支上就是那段程式）；使用者改過就照使用者的。
+  const effectiveAssignee = assigneeId ?? (relatedOwner && coders.some((a) => a.id === relatedOwner) ? relatedOwner : "");
+  const autoName = pickAssignee(agents, tasks, null)?.name;
 
   // 等 Agent 回答：問答卡完成就顯示它寫的答案；失敗就說明原因。
   const asked = phase.kind === "asking" ? tasks.find((x) => x.id === phase.taskId) : undefined;
@@ -146,6 +173,11 @@ export function CommandBar({
     if (!content || busy) return;
     setError(null);
     setNotice(null);
+    // 從模組右鍵帶來的一定是 bug，不必再問 AI。
+    if (relatedMod) {
+      setPhase({ kind: "plan", decision: { kind: "bug", reason: "" }, usedDefault: false });
+      return;
+    }
     setPhase({ kind: "routing" });
     const pid = providerId ?? (await defaultProvider.current);
     const { decision, usedDefault } = await routeInput(deps, projectId, content, pid);
@@ -161,7 +193,16 @@ export function CommandBar({
       const r = await dispatchInput(
         kind,
         content,
-        { projectId, repoDir: repo, agents, tasks, t, providerId: pid },
+        {
+          projectId,
+          repoDir: repo,
+          agents,
+          tasks,
+          t,
+          providerId: pid,
+          assigneeId: effectiveAssignee || null,
+          related: relatedMod ? t.ac_bug_related(localizedCardTitle(relatedMod, t)) : null,
+        },
         { ...deps, addAttachment: attach, askAgent: ask },
         images.map((i) => i.file),
       );
@@ -172,6 +213,8 @@ export function CommandBar({
         setNotice(r.fellBack ? t.ac_cmd_fell_back(r.agentName ?? "") : t.ac_cmd_done(kindLabel(r.kind), r.agentName ?? ""));
       }
       setText("");
+      setRelatedId("");
+      setAssigneeId(null);
       clearImages();
       onDispatched(r);
     } catch (e) {
@@ -213,6 +256,35 @@ export function CommandBar({
           </div>
           {phase.decision.reason && <p className="ac-cmd-reason">{phase.decision.reason}</p>}
           <p className="ac-cmd-tip">{kindTip(phase.decision.kind)}</p>
+          {(phase.decision.kind === "bug" || phase.decision.kind === "fast") && coders.length > 0 && (
+            <div className="ac-cmd-assign">
+              {phase.decision.kind === "bug" && (
+                <label>
+                  <span>{t.ac_bug_module}</span>
+                  <select value={relatedId} onChange={(e) => setRelatedId(e.target.value)}>
+                    <option value="">{t.ac_bug_module_none}</option>
+                    {modules.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {localizedCardTitle(m, t)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label>
+                <span>{t.ac_bug_assignee}</span>
+                <select value={effectiveAssignee} onChange={(e) => setAssigneeId(e.target.value)}>
+                  <option value="">{t.ac_bug_auto(autoName ?? "—")}</option>
+                  {coders.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                      {a.role ? ` · ${a.role}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
           {phase.decision.kind === "question" && images.length > 0 && (
             <p className="ac-bad-text ac-cmd-note" data-testid="ac-cmd-question-no-image">
               {t.ac_cmd_question_no_image}
@@ -254,6 +326,14 @@ export function CommandBar({
             <MarkdownText text={phase.text} />
           </div>
         </div>
+      )}
+      {relatedMod && phase.kind === "idle" && (
+        <p className="ac-cmd-note ac-cmd-related" data-testid="ac-cmd-related">
+          {t.ac_bug_related(localizedCardTitle(relatedMod, t))}
+          <button type="button" className="ac-iconbtn" aria-label={t.ac_cmd_cancel} onClick={() => setRelatedId("")}>
+            ×
+          </button>
+        </p>
       )}
       {notice && phase.kind === "idle" && (
         <p className="ac-good-text ac-cmd-note" data-testid="ac-cmd-notice" role="status">
@@ -309,6 +389,7 @@ export function CommandBar({
           }}
         />
         <textarea
+          ref={inputRef}
           className="ac-cmd-input"
           data-testid="ac-cmd-input"
           rows={1}

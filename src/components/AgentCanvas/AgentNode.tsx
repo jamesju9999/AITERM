@@ -373,7 +373,8 @@ export function AgentNode({
           </b>
           {/* 角色名太長時只截角色，模型永遠看得到；完整角色名在提示裡。 */}
           <span className="ac-agent-sub" title={agent.model ? `${agent.role} · ${agent.model}` : agent.role}>
-            <span className="ac-agent-role">{agent.role}</span>
+            {/* 角色名跟名稱一樣就不重複顯示。 */}
+            {agent.role.trim() !== agent.name.trim() && <span className="ac-agent-role">{agent.role}</span>}
             {agent.cli === "codex" ? (
               <span className="ac-model ac-model--codex">{agent.model ? `Codex · ${agent.model}` : "Codex"}</span>
             ) : (
@@ -398,7 +399,7 @@ export function AgentNode({
         </button>
       </div>
       {/* 暫停／停止：標題列已經很擠（名稱會被截成「工…」），另外放一列有文字的小按鈕。 */}
-      {(manualPaused || allPaused || (running && !agent.paused_task_id && onStop) || (onTogglePause && !allPaused && !agent.paused_task_id)) && (
+      {(manualPaused || allPaused || (running && !agent.paused_task_id && onStop) || (onTogglePause && !allPaused && !agent.paused_task_id && status !== "done")) && (
         <div className="ac-agent-ctl">
           {(manualPaused || allPaused) && <span className="ac-badge ac-badge--paused">{t.ac_paused_badge}</span>}
           <span className="ac-spacer" />
@@ -413,7 +414,8 @@ export function AgentNode({
             </button>
           )}
           {/* 手動暫停中就一定要有「繼續」，就算同時有張卡被取消卡住（失敗暫停的畫面不能把它蓋掉）。 */}
-          {onTogglePause && !allPaused && (manualPaused || !agent.paused_task_id) && (
+          {/* 做完的 Agent 沒有東西可暫停；手動暫停過的還是要有「繼續」。 */}
+          {onTogglePause && !allPaused && (manualPaused || (!agent.paused_task_id && status !== "done")) && (
             <button
               className="ac-ctlbtn"
               data-testid={`agent-pause-${agent.id}`}
@@ -462,7 +464,7 @@ export function AgentNode({
             <RoleIcon name="doc" size={13} />
             <span className="ac-skill-row-label">{customSkills.names.join("、")}</span>
           </span>
-          {customSkills.missing.length > 0 && <span className="ac-db-sql ac-skill-lost">{t.ac_cs_missing_chip(customSkills.missing)}</span>}
+          {customSkills.missing.length > 0 && <span className="ac-db-sql ac-skill-lost">{t.ac_cs_missing_chip(customSkills.missing)} · {t.ac_cs_fix_hint}</span>}
           {customSkills.active && <span className="ac-db-sql">{t.ac_cs_in_use(customSkills.active)}</span>}
         </button>
       )}

@@ -31,6 +31,8 @@ export function ResourceLayer({
   agentName,
   revision,
   onExtent,
+  onAddFolder,
+  onRemoveFolder,
 }: {
   containerRef: RefObject<HTMLElement | null>;
   agents: AgentRow[];
@@ -41,6 +43,10 @@ export function ResourceLayer({
   revision: unknown;
   /** 資源區（含展開的清單）的右緣與底端；桌布大小要把它算進去。 */
   onExtent: (e: { right: number; bottom: number }) => void;
+  /** 資源區最後的「＋ 參考資料夾」膠囊；沒給就不顯示（沒有任何資源時整個資源區也不出現）。 */
+  onAddFolder?: () => void;
+  /** 參考資料夾膠囊上的 ×（滑鼠停上去才看得到）；沒給就不顯示。確認與存檔由呼叫端處理。 */
+  onRemoveFolder?: (r: Resource) => void;
 }) {
   const { t } = useLocale();
   const [hover, setHover] = useState<string | null>(null);
@@ -58,7 +64,7 @@ export function ResourceLayer({
   // 量 Agent 卡與膠囊的位置：卡片高度隨內容變，膠囊寬度隨名稱變。有變才更新，不會無限迴圈。
   useLayoutEffect(() => {
     const root = containerRef.current;
-    if (!root || resources.length === 0) return;
+    if (!root || (resources.length === 0 && !onAddFolder)) return;
     const agentPos: Record<string, Pos> = {};
     let bottom = 0;
     let left = Infinity;
@@ -82,7 +88,7 @@ export function ResourceLayer({
     });
     const next = { rail, railW, agents: agentPos, pills };
     if (JSON.stringify(next) !== JSON.stringify(geo)) setGeo(next);
-  }, [containerRef, agents, resources, links, revision, open, geo]);
+  }, [containerRef, agents, resources, links, revision, open, geo, onAddFolder]);
 
   useEffect(() => {
     if (!geo) return;
@@ -100,8 +106,25 @@ export function ResourceLayer({
     return () => window.removeEventListener("mousedown", close);
   }, [open]);
 
-  if (resources.length === 0) return null;
+  if (resources.length === 0 && !onAddFolder) return null;
   const modeLabel = (m: Resource["holders"][number]["mode"]) => t.ac_db_mode_short(m);
+  const removeBtn = (r: Resource) =>
+    r.type === "folder" && onRemoveFolder ? (
+      <button
+        type="button"
+        className="ac-res-x"
+        data-testid={`resource-remove-${r.id}`}
+        title={t.ac_res_remove_tip}
+        aria-label={`${t.ac_refs_remove} ${r.name}`}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemoveFolder(r);
+        }}
+      >
+        ×
+      </button>
+    ) : null;
 
   // 要畫的線：使用中的狀態，加上滑鼠停著那個資源的所有權限（灰色）。
   // 標籤寫「誰 權限」，在資源上方往上疊，好幾位共用時才不會疊在一起。
@@ -182,6 +205,7 @@ export function ResourceLayer({
                         ? `${agentName(r.holders[0].agentId)} · ${modeLabel(r.holders[0].mode)}`
                         : t.ac_res_holders(r.holders.length)}
                 </span>
+                {removeBtn(r)}
               </div>
             );
           }
@@ -207,6 +231,7 @@ export function ResourceLayer({
                       <span className="ac-res-pop-who">
                         {r.everyone ? t.ac_res_everyone : r.holders.map((h) => `${agentName(h.agentId)}（${modeLabel(h.mode)}）`).join("、")}
                       </span>
+                      {removeBtn(r)}
                     </div>
                   ))}
                 </div>
@@ -214,6 +239,11 @@ export function ResourceLayer({
             </div>
           );
         })}
+        {onAddFolder && (
+          <button type="button" className="ac-res ac-res--add" data-testid="ac-res-add-folder" title={t.ac_res_add_folder_tip} onClick={onAddFolder}>
+            {t.ac_res_add_folder}
+          </button>
+        )}
       </div>
     </>
   );

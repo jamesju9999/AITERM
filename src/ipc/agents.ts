@@ -115,6 +115,16 @@ export type RepoCheck =
 
 export const checkRepo = (path: string): Promise<RepoCheck> => invoke("agents_check_repo", { path });
 
+export interface RelocateReport {
+  agents: number;
+  /** 新程式庫裡找不到分支的 Agent 名稱：派工時從目前的 HEAD 重新開始。 */
+  missing_branches: string[];
+}
+
+/** 專案資料夾複製到別台電腦後，把 Agent 的程式庫路徑從舊位置換成這台電腦上的位置。 */
+export const relocateRepo = (projectId: string, oldDir: string, newDir: string): Promise<RelocateReport> =>
+  invoke("agents_relocate_repo", { projectId, oldDir, newDir });
+
 /** git init（必要時）＋把現有檔案建成第一個 commit。 */
 /** `projectId`：看板專案資料夾在這個程式庫裡面時，第一個 commit 不收進它。 */
 export const initRepo = (path: string, projectId?: string): Promise<void> =>

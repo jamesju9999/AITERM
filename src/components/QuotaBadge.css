@@ -17,7 +17,7 @@
   width: 36px;
   height: 4px;
   border-radius: 2px;
-  background: var(--border, #3a3a3a);
+  background: color-mix(in srgb, currentColor 28%, transparent);
   overflow: hidden;
   flex-shrink: 0;
 }
