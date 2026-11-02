@@ -11,7 +11,9 @@ import { useRefineTask } from "../TaskBoard/useRefineTask";
 import { restoreWebviewFocus } from "../../lib/webviewFocus";
 import { RepoStatus } from "./RepoStatus";
 import { confirmInitRepo } from "./repoInit";
-import { startFromRequirement, StartError, type StartDeps, type StartResult } from "./startFromRequirement";
+import { MethodDiscussion } from "./MethodDiscussion";
+import type { MethodDecision } from "./methodDecision";
+import { startFromRequirement, StartError, type StartArgs, type StartDeps, type StartResult } from "./startFromRequirement";
 
 /** 跟專案簡介、範本推薦共用模型偏好。 */
 const REFINE_PROVIDER_KEY = "aiterm_refine_provider";
@@ -56,6 +58,8 @@ export function RequirementStart({
   const refiner = useRefineTask();
   /** 潤飾前的內容；有值才顯示「還原」。 */
   const [beforeRefine, setBeforeRefine] = useState<string | null>(null);
+  /** 勾了就先跟 AI 討論做法，確認決定後才建團隊。 */
+  const [discuss, setDiscuss] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -118,12 +122,11 @@ export function RequirementStart({
     setText(r.body);
   };
 
-  const submit = async () => {
-    if (!repo || !text.trim()) return;
+  const run = async (args: StartArgs) => {
     setBusy(true);
     setError(null);
     try {
-      onStarted(await startFromRequirement({ projectId, requirement: text, repoDir: repo, t, providerId, autoStart: skipSkills }, deps));
+      onStarted(await startFromRequirement(args, deps));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       // 團隊已經建好：需求框會隨桌布不再空而消失，要告訴使用者接下來怎麼做。
@@ -133,51 +136,89 @@ export function RequirementStart({
     }
   };
 
+  const submit = async () => {
+    if (!repo || !text.trim()) return;
+    await run({ projectId, requirement: text, repoDir: repo, t, providerId, autoStart: skipSkills });
+  };
+
+  const confirmDecision = async (decision: MethodDecision) => {
+    if (!repo) return;
+    await run({ projectId, requirement: decision.requirement, decision, repoDir: repo, t, providerId, autoStart: skipSkills });
+  };
+
   return (
     <div className="ac-req" data-testid="ac-req">
       <h3 className="ac-req-title">{t.ac_req_title}</h3>
       <p className="ac-req-sub">{t.ac_req_sub}</p>
-      <textarea
-        className="ac-req-input"
-        data-testid="ac-req-input"
-        rows={4}
-        value={text}
-        placeholder={t.ac_req_placeholder}
-        disabled={busy || refiner.busy}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submit();
-        }}
-      />
-      <div className="ac-req-tools">
-        {providers.length > 0 && (
-          <ModelPickerButton providers={providers} selectedId={providerId ?? ""} onChange={setProviderId} disabled={refiner.busy || busy} />
-        )}
-        <button
-          type="button"
-          className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
-          data-testid="ac-req-refine"
-          title={t.ac_req_refine_hint}
-          disabled={busy || refiner.busy || !text.trim() || providers.length === 0}
-          onClick={() => void refine()}
-        >
-          {refiner.busy ? t.board_refine_busy : t.board_refine}
-        </button>
-        {beforeRefine !== null && (
-          <button
-            type="button"
-            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
-            data-testid="ac-req-refine-undo"
-            disabled={refiner.busy}
-            onClick={() => {
-              setText(beforeRefine);
-              setBeforeRefine(null);
+      {providerId !== undefined && (
+        <label className="ac-req-skip" title={t.ac_md_toggle_tip}>
+          <input type="checkbox" data-testid="ac-md-toggle" checked={discuss} disabled={busy} onChange={(e) => setDiscuss(e.target.checked)} />
+          <span>{t.ac_md_toggle}</span>
+        </label>
+      )}
+      {discuss ? (
+        <>
+          <div className="ac-req-tools">
+            {providers.length > 0 && (
+              <ModelPickerButton providers={providers} selectedId={providerId ?? ""} onChange={setProviderId} disabled={refiner.busy || busy} />
+            )}
+          </div>
+          <MethodDiscussion
+            complete={(messages, system) => deps.complete(messages, system, "method-discussion", providerId)}
+            getContext={async () => ({
+              brief: ((await getProjectBrief(projectId).catch(() => null)) ?? "").trim(),
+              refs: await getReferences(projectId).catch(() => []),
+            })}
+            busy={busy || !repoOk}
+            onConfirm={(d) => void confirmDecision(d)}
+            onBack={() => setDiscuss(false)}
+          />
+        </>
+      ) : (
+        <>
+          <textarea
+            className="ac-req-input"
+            data-testid="ac-req-input"
+            rows={4}
+            value={text}
+            placeholder={t.ac_req_placeholder}
+            disabled={busy || refiner.busy}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submit();
             }}
-          >
-            {t.board_refine_undo}
-          </button>
-        )}
-      </div>
+          />
+          <div className="ac-req-tools">
+            {providers.length > 0 && (
+              <ModelPickerButton providers={providers} selectedId={providerId ?? ""} onChange={setProviderId} disabled={refiner.busy || busy} />
+            )}
+            <button
+              type="button"
+              className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+              data-testid="ac-req-refine"
+              title={t.ac_req_refine_hint}
+              disabled={busy || refiner.busy || !text.trim() || providers.length === 0}
+              onClick={() => void refine()}
+            >
+              {refiner.busy ? t.board_refine_busy : t.board_refine}
+            </button>
+            {beforeRefine !== null && (
+              <button
+                type="button"
+                className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+                data-testid="ac-req-refine-undo"
+                disabled={refiner.busy}
+                onClick={() => {
+                  setText(beforeRefine);
+                  setBeforeRefine(null);
+                }}
+              >
+                {t.board_refine_undo}
+              </button>
+            )}
+          </div>
+        </>
+      )}
       <div className="ac-req-repo">
         <span className="ac-req-repo-label">{t.ac_req_repo_label}</span>
         {repo ? (
@@ -198,17 +239,19 @@ export function RequirementStart({
         <input type="checkbox" data-testid="ac-req-skip-skills" checked={skipSkills} disabled={busy} onChange={(e) => setSkipSkills(e.target.checked)} />
         <span>{t.ac_req_skip_skills}</span>
       </label>
-      <div className="ac-req-actions">
-        <span className="ac-req-shortcut">{t.ac_req_shortcut}</span>
-        <button
-          className="aiterm-btn aiterm-btn--primary"
-          data-testid="ac-req-send"
-          disabled={busy || !text.trim() || !repoOk}
-          onClick={() => void submit()}
-        >
-          {busy ? t.ac_req_busy : t.ac_req_send}
-        </button>
-      </div>
+      {!discuss && (
+        <div className="ac-req-actions">
+          <span className="ac-req-shortcut">{t.ac_req_shortcut}</span>
+          <button
+            className="aiterm-btn aiterm-btn--primary"
+            data-testid="ac-req-send"
+            disabled={busy || !text.trim() || !repoOk}
+            onClick={() => void submit()}
+          >
+            {busy ? t.ac_req_busy : t.ac_req_send}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
