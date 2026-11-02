@@ -4,6 +4,7 @@ import { writePty } from "../ipc/pty";
 import { parseAnsiToRenderedLines, readRenderedLines, findContentEndRow, type RenderedLine } from "../lib/ansiBlockParser";
 import type { GitBlockInfo } from "../ipc/vcs";
 import { looksLikePrompt, lastNonEmptyLine } from "../lib/promptDetect";
+import { clearedStartRow, markerClearedByScreenErase, outputStartRow, snapshotRowsAbove, type RowsAboveSnapshot } from "../lib/liveStartRow";
 import { parseRemoteLogin, isLogoutCommand } from "../lib/remoteSession";
 
 /** 沒有 OSC 133 的 shell（ssh 進 NAS 等）收不到「指令結束」訊號時，等畫面
@@ -154,7 +155,7 @@ export function useTerminalBlocks(
   // docs/superpowers/specs/2026-09-16-live-block-rendering-design.md：
   // running 中的區塊現在也要持續讀取畫面緩衝區更新 renderedLines
   // （見下面的 scheduleLiveRender），不是只有結束時讀一次。
-  const outputStartRef = useRef<{ blockId: string; marker: IMarker } | null>(null);
+  const outputStartRef = useRef<{ blockId: string; marker: IMarker; above: RowsAboveSnapshot } | null>(null);
   // scheduleLiveRender 節流：同一個節流週期內收到多個 chunk，只在最後一次
   // 真正重新掃描緩衝區算 renderedLines，不會累積成「chunk 數 × 目前已輸出
   // 列數」的計算量。用 setTimeout 不用 requestAnimationFrame：這裡只是
@@ -253,8 +254,12 @@ export function useTerminalBlocks(
         // 卡片尾端混進同一個分頁更早跑過的 `ifconfig` 殘留行，中間隔著
         // 一大段空白）。
         const cursorRow = buf.baseY + buf.cursorY;
-        const endRow = findContentEndRow(buf, cursorRow, start.marker.line + term.rows, term.cols);
-        const renderedLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, term.cols);
+        // 起點不一定是標記列：TUI 清畫面後從視窗最上方重畫時，介面上半部在標記列上方（見 liveStartRow.ts）。
+        const startRow = markerClearedByScreenErase(buf, start.marker.isDisposed, term.options.scrollback ?? 1000, term.rows)
+          ? clearedStartRow(buf, cursorRow)
+          : outputStartRow(buf, start.above, start.marker.line);
+        const endRow = findContentEndRow(buf, cursorRow, startRow + term.rows, term.cols);
+        const renderedLines = readRenderedLines(buf, startRow, endRow, term.cols);
 
         const withLines = blocksRef.current.map((b) => (b.id === blockId ? { ...b, renderedLines } : b));
         blocksRef.current = withLines;
@@ -389,8 +394,11 @@ export function useTerminalBlocks(
         // 跟 scheduleLiveRender 同一個理由、同一套算法（見該處的說明）：
         // 結案當下游標可能還停在互動選單中段，不是內容實際畫到的最深列。
         const cursorRow = buf.baseY + buf.cursorY;
-        const endRow = findContentEndRow(buf, cursorRow, start.marker.line + term.rows, term.cols);
-        renderedLines = readRenderedLines(buf, Math.max(0, start.marker.line), endRow, cols);
+        const startRow = markerClearedByScreenErase(buf, start.marker.isDisposed, term.options.scrollback ?? 1000, term.rows)
+          ? clearedStartRow(buf, cursorRow)
+          : outputStartRow(buf, start.above, start.marker.line);
+        const endRow = findContentEndRow(buf, cursorRow, startRow + term.rows, term.cols);
+        renderedLines = readRenderedLines(buf, startRow, endRow, cols);
         start.marker.dispose();
         outputStartRef.current = null;
       }
@@ -585,7 +593,7 @@ export function useTerminalBlocks(
           const marker = term.registerMarker(0);
           if (marker) {
             outputStartRef.current?.marker.dispose();
-            outputStartRef.current = { blockId: running.id, marker };
+            outputStartRef.current = { blockId: running.id, marker, above: snapshotRowsAbove(term.buffer.active, marker.line) };
           }
         }
         return true;
