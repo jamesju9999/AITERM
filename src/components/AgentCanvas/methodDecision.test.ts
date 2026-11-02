@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildDiscussionMessage, formatDecision, parseDecision, type MethodDecision } from "./methodDecision";
+import { buildDiscussionPrompt, DECISION_PATH_PLACEHOLDER, formatDecision, parseDecisionJson, type MethodDecision } from "./methodDecision";
 
 const good: MethodDecision = {
   approach: "batch",
@@ -9,27 +9,24 @@ const good: MethodDecision = {
   requirement: "把 Cm 畫面轉成網頁",
 };
 
-const fence = (o: unknown) => "我建議這樣做。\n```decision\n" + JSON.stringify(o) + "\n```\n";
-
-describe("parseDecision", () => {
-  it("reads the decision block from a reply", () => {
-    expect(parseDecision(fence(good))).toEqual(good);
+describe("parseDecisionJson", () => {
+  it("reads a valid decision file", () => {
+    expect(parseDecisionJson(JSON.stringify(good))).toEqual(good);
   });
-  it("returns null when there is no block", () => {
-    expect(parseDecision("還在討論，先問你幾個問題")).toBeNull();
+  it("returns null for malformed JSON (the file may be half-written)", () => {
+    expect(parseDecisionJson("{oops")).toBeNull();
   });
-  it("returns null for malformed JSON", () => {
-    expect(parseDecision("```decision\n{oops\n```")).toBeNull();
+  it("returns null for empty text", () => {
+    expect(parseDecisionJson("")).toBeNull();
   });
   it("rejects an unknown approach", () => {
-    expect(parseDecision(fence({ ...good, approach: "magic" }))).toBeNull();
+    expect(parseDecisionJson(JSON.stringify({ ...good, approach: "magic" }))).toBeNull();
   });
-  it("rejects a decision with an empty requirement", () => {
-    expect(parseDecision(fence({ ...good, requirement: "  " }))).toBeNull();
+  it("rejects an empty requirement", () => {
+    expect(parseDecisionJson(JSON.stringify({ ...good, requirement: "  " }))).toBeNull();
   });
-  it("takes the last block when the reply has several", () => {
-    const reply = fence({ ...good, approach: "single" }) + fence(good);
-    expect(parseDecision(reply)?.approach).toBe("batch");
+  it("accepts reason and trial being absent", () => {
+    expect(parseDecisionJson(JSON.stringify({ approach: "single", requirement: "x" }))).toEqual({ approach: "single", reason: "", trial: "", requirement: "x" });
   });
 });
 
@@ -45,20 +42,18 @@ describe("formatDecision", () => {
   });
 });
 
-describe("buildDiscussionMessage", () => {
-  it("flattens the turns in order and includes the project context", () => {
-    const m = buildDiscussionMessage(
-      [
-        { role: "user", content: "要轉換舊平台" },
-        { role: "assistant", content: "有幾支？" },
-        { role: "user", content: "533 支畫面" },
-      ],
-      "專案簡介 X",
-      [{ path: "/old", note: "舊系統" }],
-    );
-    expect(m.indexOf("要轉換舊平台")).toBeLessThan(m.indexOf("有幾支？"));
-    expect(m.indexOf("有幾支？")).toBeLessThan(m.indexOf("533 支畫面"));
-    expect(m).toContain("專案簡介 X");
-    expect(m).toContain("/old：舊系統");
+describe("buildDiscussionPrompt", () => {
+  it("keeps the placeholder exactly once so the backend can fill the real path", () => {
+    const p = buildDiscussionPrompt("要轉換舊平台");
+    expect(p.split(DECISION_PATH_PLACEHOLDER).length - 1).toBe(1);
+  });
+  it("includes the user's opening and the file schema", () => {
+    const p = buildDiscussionPrompt("要轉換舊平台");
+    expect(p).toContain("要轉換舊平台");
+    expect(p).toContain('"approach"');
+    expect(p).toContain("single|batch|generator");
+  });
+  it("tells the AI it may read the reference folders and must not claim it cannot", () => {
+    expect(buildDiscussionPrompt("x")).toContain("先讀");
   });
 });

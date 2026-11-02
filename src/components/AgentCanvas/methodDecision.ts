@@ -1,8 +1,6 @@
-import type { Reference } from "../../ipc/agents";
-
 /**
  * 空桌布的「方法討論」：先跟 AI 多輪討論這批工作的做法，確認後才建團隊。
- * 對話走純文字補全；AI 準備好提案時在回覆裡附一個 ```decision JSON 區塊，這裡負責解析。
+ * 對話在真的 Claude Code session 裡進行；AI 把決定寫進 JSON 檔，這裡負責提示詞與解析。
  */
 
 export type Approach = "single" | "batch" | "generator";
@@ -17,11 +15,6 @@ export interface MethodDecision {
   requirement: string;
 }
 
-export interface DiscussionTurn {
-  role: "user" | "assistant";
-  content: string;
-}
-
 const APPROACHES: readonly Approach[] = ["single", "batch", "generator"];
 
 const APPROACH_LABEL: Record<Approach, string> = {
@@ -30,50 +23,11 @@ const APPROACH_LABEL: Record<Approach, string> = {
   generator: "先做產生器（一張卡寫並驗證產生器，再由它大量輸出）",
 };
 
-export function buildDiscussionSystem(): string {
-  return [
-    "你在協助使用者決定 AITerm「Agent 協作」這批工作的做法，只討論、不執行，也不要假裝已經建了任何東西。",
-    "",
-    "可選的做法：",
-    ...APPROACHES.map((a) => `- ${a}：${APPROACH_LABEL[a]}`),
-    "",
-    "批次只在四項全符合時才建議：有明確清單且通常 20 項以上；每項用同一份 template；驗證方式相同且可機械判斷；項目之間沒有依賴。",
-    "能被產生器涵蓋的部分，優先建議先做產生器；批次只處理產生器處理不了的例外項目。",
-    "不確定就先問使用者（清單有多大、每項是否同型、怎麼驗證），一次問一到兩個問題，不要一次丟一長串。",
-    "",
-    "當你有把握提案時，在回覆最後附上一個 decision 區塊（回覆其餘部分用使用者的語言簡短說明）：",
-    '```decision\n{"approach":"single|batch|generator","reason":"為什麼","trial":"試跑計畫與驗證方式，沒有就留空字串","requirement":"整理後的完整需求"}\n```',
-    "使用者還有疑問或想調整時，就繼續討論，之後再附新的 decision 區塊；以最後一個為準。",
-  ].join("\n");
-}
+/** 後端會把它換成決定檔的真實路徑。 */
+export const DECISION_PATH_PLACEHOLDER = "{{DECISION_PATH}}";
 
-/** `deps.complete` 只收 user 訊息，所以把整段對話攤平成一則，並附上專案背景。 */
-export function buildDiscussionMessage(turns: DiscussionTurn[], brief: string, refs: Reference[]): string {
-  const parts: string[] = [];
-  if (brief.trim()) parts.push(`專案簡介：\n${brief.trim()}`);
-  parts.push(
-    refs.length
-      ? `參考資料夾（唯讀，例如舊系統原始碼）：\n${refs.map((r) => `- ${r.path}${r.note ? `：${r.note}` : ""}`).join("\n")}`
-      : "參考資料夾：沒有",
-  );
-  parts.push("到目前為止的對話：\n" + turns.map((x) => `${x.role === "user" ? "使用者" : "你"}：${x.content}`).join("\n\n"));
-  parts.push("請接著回覆使用者。");
-  return parts.join("\n\n");
-}
-
-const BLOCK = /```decision\s*\n([\s\S]*?)```/g;
-
-/** 取回覆裡最後一個 decision 區塊；格式不對一律回 null（當作還在討論）。 */
-export function parseDecision(reply: string): MethodDecision | null {
-  const blocks = [...reply.matchAll(BLOCK)];
-  const last = blocks[blocks.length - 1];
-  if (!last) return null;
-  let raw: unknown;
-  try {
-    raw = JSON.parse(last[1].trim());
-  } catch {
-    return null;
-  }
+/** 驗證並整理決定；不合格式回 null。`parseDecisionJson` 只是它的 JSON 入口。 */
+function toDecision(raw: unknown): MethodDecision | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   const approach = o.approach;
@@ -85,6 +39,37 @@ export function parseDecision(reply: string): MethodDecision | null {
     trial: typeof o.trial === "string" ? o.trial.trim() : "",
     requirement,
   };
+}
+
+/** 決定檔可能寫到一半或還沒有：任何讀不懂的內容都回 null（當作還在討論）。 */
+export function parseDecisionJson(text: string): MethodDecision | null {
+  if (!text.trim()) return null;
+  try {
+    return toDecision(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+/** 開給 Claude Code session 的第一則提示：角色、判斷標準、決定檔格式。 */
+export function buildDiscussionPrompt(opening: string): string {
+  return [
+    "你在協助使用者決定 AITerm「Agent 協作」這批工作該怎麼做，先討論、不要動手改任何程式。",
+    "你可以也應該直接讀程式庫與參考資料夾（先讀它們的 CLAUDE.md／README，再看實際檔案）、跑唯讀指令做統計，再提建議；不要說你讀不到。",
+    "",
+    "可選的做法：",
+    ...APPROACHES.map((a) => `- ${a}：${APPROACH_LABEL[a]}`),
+    "",
+    "批次只在四項全符合時才建議：有明確清單且通常 20 項以上；每項用同一份 template；驗證方式相同且可機械判斷；項目之間沒有依賴。",
+    "能被產生器涵蓋的部分，優先建議先做產生器；批次只處理產生器處理不了的例外項目。",
+    "不確定就先看資料、再問使用者，一次問一到兩個問題。",
+    "",
+    `當你有把握提案時，用 Write 工具把下面格式的 JSON 寫到 ${DECISION_PATH_PLACEHOLDER}（整份覆寫），然後用使用者的語言簡短說明，並請使用者回到 AITerm 的 Agent 協作畫面按「確認」：`,
+    '{"approach":"single|batch|generator","reason":"為什麼，要引用你看到的實際資料","trial":"試跑計畫與驗證方式，沒有就留空字串","requirement":"整理後的完整需求"}',
+    "使用者想調整時繼續討論，之後覆寫同一個檔案；以最後一次寫入為準。",
+    "",
+    `使用者的開場說明：\n${opening.trim()}`,
+  ].join("\n");
 }
 
 /** 寫進需求卡與專案簡介的文字；讓後面的角色看得到決定與理由。 */
