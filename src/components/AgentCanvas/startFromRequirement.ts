@@ -2,6 +2,7 @@ import type { AgentKind, NewAgentArgs, Reference } from "../../ipc/agents";
 import type { Translations } from "../../lib/i18n";
 import { bugCard } from "./bugReport";
 import { buildDoneMessage, buildDoneSystem, parseDoneCriteria, withDoneCriteria } from "./doneCriteria";
+import { formatDecision, type MethodDecision } from "./methodDecision";
 import { buildRecommendMessage, buildRecommendSystem, parseRecommendation } from "./teamRecommend";
 import { builtinTemplates, toCreate, type TeamTemplate } from "./teamTemplates";
 
@@ -48,6 +49,8 @@ export interface StartArgs {
    * 需求框預設傳 false：使用者可能想先把資料庫、自訂技能掛到工程師身上，準備好再按「開始執行」。
    */
   autoStart?: boolean;
+  /** 方法討論確認後的做法決定；有的話取代 requirement 當作需求，並寫進簡介與需求卡。 */
+  decision?: MethodDecision;
 }
 
 export interface StartResult {
@@ -97,11 +100,12 @@ const msg = (e: unknown) => (e instanceof Error ? e.message : typeof e === "stri
 
 export async function startFromRequirement(args: StartArgs, d: StartDeps): Promise<StartResult> {
   const { projectId, repoDir, t } = args;
-  const requirement = args.requirement.trim();
+  const requirement = (args.decision?.requirement ?? args.requirement).trim();
+  const decisionText = args.decision ? formatDecision(args.decision) : "";
 
   const brief = ((await d.getBrief(projectId).catch(() => null)) ?? "").trim();
   // 簡介是空的才寫入：簡介是專案的長期背景，之後的需求不該把它越寫越亂。
-  if (!brief) await d.setBrief(projectId, requirement).catch(() => {});
+  if (!brief) await d.setBrief(projectId, [requirement, decisionText].filter(Boolean).join("\n\n")).catch(() => {});
 
   let tpl: TeamTemplate | null = null;
   let summary = "";
@@ -109,7 +113,7 @@ export async function startFromRequirement(args: StartArgs, d: StartDeps): Promi
   if (args.providerId) {
     try {
       const refs = await d.getReferences(projectId).catch(() => []);
-      const described = brief ? `${brief}\n\n本次需求：\n${requirement}` : requirement;
+      const described = [brief ? `${brief}\n\n本次需求：\n${requirement}` : requirement, decisionText].filter(Boolean).join("\n\n");
       const reply = await d.complete(
         [{ role: "user", content: buildRecommendMessage(described, refs) }],
         buildRecommendSystem(t),
@@ -146,7 +150,7 @@ export async function startFromRequirement(args: StartArgs, d: StartDeps): Promi
   try {
     const station = pickFirstStation(created);
     if (!station) throw new Error("no coder");
-    const { title, body } = bugCard(requirement, "", null);
+    const { title, body } = bugCard(requirement, decisionText, null);
     const criteria = await draftDoneCriteria(d, requirement, brief, args.providerId);
     const taskId = await d.createTask(projectId, {
       title,

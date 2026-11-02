@@ -148,4 +148,45 @@ describe("startFromRequirement", () => {
     const d2 = deps({ createAgent: vi.fn().mockRejectedValue(new Error("nope")) });
     await expect(startFromRequirement({ ...base, requirement: "x" }, d2)).rejects.toMatchObject({ teamCreated: false });
   });
+
+  describe("with a method decision", () => {
+    const decision = {
+      approach: "generator" as const,
+      reason: "畫面骨架相同",
+      trial: "先試 5 支",
+      requirement: "把 Cm 畫面轉成網頁",
+    };
+
+    it("uses the decision's requirement and stores it with the decision as the brief", async () => {
+      const d = deps({ getBrief: vi.fn().mockResolvedValue("") });
+      await startFromRequirement({ ...base, requirement: "舊平台轉換", decision }, d);
+      const brief = (d.setBrief as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+      expect(brief).toContain("把 Cm 畫面轉成網頁");
+      expect(brief).toContain("先做產生器");
+      expect(brief).toContain("理由：畫面骨架相同");
+    });
+
+    it("puts the decision into the card body and uses the requirement as the title", async () => {
+      const d = deps();
+      await startFromRequirement({ ...base, requirement: "舊平台轉換", decision }, d);
+      const arg = (d.createTask as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(arg.title).toContain("把 Cm 畫面轉成網頁");
+      expect(arg.body).toContain("做法決定：");
+      expect(arg.body).toContain("試跑計畫：先試 5 支");
+    });
+
+    it("lets the recommender see the decision", async () => {
+      const complete = vi.fn().mockRejectedValue(new Error("no ai"));
+      await startFromRequirement({ ...base, requirement: "舊平台轉換", decision }, deps({ complete }));
+      const firstUserMsg = complete.mock.calls[0][0][0].content as string;
+      expect(firstUserMsg).toContain("做法決定：");
+    });
+
+    it("behaves as before when there is no decision", async () => {
+      const d = deps();
+      await startFromRequirement({ ...base, requirement: "build a todo app" }, d);
+      const arg = (d.createTask as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(arg.body).not.toContain("做法決定");
+    });
+  });
 });
