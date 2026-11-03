@@ -203,6 +203,10 @@ export const stopTask = (projectId: string, id: string): Promise<void> =>
 export const continueChat = (projectId: string, id: string): Promise<string> =>
   invoke("tasks_continue_chat", { projectId, id });
 
+/** 執行中的卡片「補充一句」：直接把一句話送進它的 Claude session（不開分頁、不停掉重建）。 */
+export const nudgeTask = (projectId: string, id: string, message: string): Promise<void> =>
+  invoke("tasks_nudge", { projectId, id, message });
+
 export const markTaskDone = (projectId: string, id: string): Promise<void> =>
   invoke("tasks_mark_done", { projectId, id });
 

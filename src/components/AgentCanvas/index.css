@@ -966,3 +966,7 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-md { display: flex; flex-direction: column; gap: 12px; }
 .ac-md-intro, .ac-md-status { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-muted); }
 .ac-md-decision { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 10px; border: 1px solid var(--accent-border, var(--border-color)); background: var(--bg-tertiary); font-size: 13px; }
+
+.ac-nudge { display: flex; gap: 6px; margin-top: 6px; }
+.ac-nudge-input { flex: 1; min-width: 0; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--ac-edge); background: var(--bg-primary); color: var(--text-primary); font: inherit; font-size: 12px; }
+.ac-nudge-input:disabled { opacity: 0.6; }

@@ -10,6 +10,7 @@ import { deriveModuleState, type ModuleState } from "./deriveModuleState";
 import { localizedCardTitle } from "./cardTitle";
 import { formatElapsed } from "./formatElapsed";
 import { waitingPrerequisites } from "./prerequisites";
+import { NudgeBox } from "./NudgeBox";
 import { waitingReason } from "./waitingReason";
 import { shortBranch } from "./projectSummary";
 import { formatTokens, moduleCards, sumUsage, totalTokens, usageBreakdown, type UsageSum } from "./tokenUsage";
@@ -74,6 +75,7 @@ export function AgentNode({
   onReportBug,
   onOpenTab,
   onContinueChat,
+  onNudge,
   onMerge,
   onAbortMerge,
   onRelease,
@@ -126,6 +128,8 @@ export function AgentNode({
   onReportBug?: (moduleId: string) => void;
   /** 已完成的模組「接著談」：用原本的 Claude session 重開分頁接回對話。 */
   onContinueChat?: (moduleId: string) => void;
+  /** 執行中的卡「補充一句」：直接把一句話送進它的 Claude session。失敗要丟例外（外層顯示原因）。 */
+  onNudge?: (taskId: string, message: string) => Promise<void>;
   onOpenTab: (tabId: string) => void;
   onMerge: () => void;
   onAbortMerge: () => void;
@@ -251,6 +255,9 @@ export function AgentNode({
         </div>
         {snip && <div className="ac-snip">{snip}</div>}
         <div className="ac-now-sub">{t.ac_elapsed(formatElapsed(nowSecs - (running.dispatched_at ?? nowSecs)))}</div>
+        {onNudge && running.tab_id && !question && !running.quota_wait_at && (
+          <NudgeBox agentId={agent.id} onSend={(message) => onNudge(running.id, message)} />
+        )}
         {question ? (
           <button className="ac-reply-wait ac-ask" onClick={() => onOpenQuestion?.(question.id)}>
             <span>{t.ac_waiting_decision(question.question)}</span>

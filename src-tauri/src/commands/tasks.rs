@@ -286,6 +286,28 @@ pub async fn tasks_move(
     Ok(())
 }
 
+/// 執行中的卡片「補充一句」：不開分頁、不停掉重建，直接把一句話送進它的 Claude session（見 `tasks::nudge`）。
+/// 補充等於使用者介入對話，所以記成使用者輸入：這張自動卡會轉成互動卡，不會在補充那一輪回完就被結案。
+#[tauri::command]
+pub async fn tasks_nudge(
+    project_id: String,
+    id: String,
+    message: String,
+    reg: State<'_, ProjectRegistry>,
+    pty: State<'_, Arc<crate::pty::PtyManager>>,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    let task = store::get_task(&p.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "找不到這張卡片。".to_string())?;
+    let (tab_id, text) = crate::tasks::nudge::plan(&task, &message)?;
+    crate::tasks::dispatch::write_then_submit(&pty, &tab_id, &text).await?;
+    // 比照使用者在分頁裡打字：夠長的整行輸入會讓監看把這張卡轉成互動卡。
+    pty.note_user_input(&tab_id, format!("{text}\r").as_bytes());
+    Ok(())
+}
+
 /// 已完成的卡片「接著談」：用原本的 Claude session 重開分頁接回對話。回傳分頁 id。
 /// 不改卡片狀態、不重跑審核（見 `tasks::continue_chat`）。
 #[tauri::command]
