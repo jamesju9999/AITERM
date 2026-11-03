@@ -480,12 +480,22 @@ pub(crate) async fn finalize_merge_card(
     }
 }
 
-/// 開工前合併的準備：上次沒解完的合併先還原；上一輪留下、沒 commit 的東西原樣 commit 保存。
+/// 開工前合併的準備：處理上次停在工作資料夾裡的合併，再把上一輪沒 commit 的東西原樣 commit 保存。
 /// 不先處理的話 git 會因為「本地有改動會被覆蓋」直接拒絕合併，派工失敗、工程師暫停，
-/// 而畫面上沒有地方能處理工作資料夾。順序不能反：合併停著時 commit 會把衝突標記提交進去。
+/// 而畫面上沒有地方能處理工作資料夾。
+/// - 合併停著、衝突已全部解完（只差 commit）：完成它，不能丟掉人工解好的內容。
+/// - 合併停著、還有衝突沒解：還原，重新合併。還原失敗就停下來回錯誤——
+///   這時 commit 會把衝突標記提交進去。
 async fn prepare_for_merge(client: &crate::vcs::git::GitClient) -> Result<(), String> {
     if client.is_merge_in_progress().await {
-        let _ = client.merge_abort().await;
+        if client.conflicted_files().await?.is_empty() {
+            client.commit_all("Merge 前置（衝突已解決，開工前補完合併）").await?;
+        } else {
+            client.merge_abort().await.map_err(|e| format!("無法還原上次沒解完的合併：{e}"))?;
+            if client.is_merge_in_progress().await {
+                return Err("無法還原上次沒解完的合併：還原後仍停在合併中".to_string());
+            }
+        }
     }
     if client.has_uncommitted_changes().await? {
         client.commit_all("WIP: 保留上一輪沒提交的內容（開工前自動提交，才能合併前置）").await?;
@@ -553,6 +563,10 @@ pub(crate) async fn premerge_prerequisites(
 ) -> Result<Premerge, String> {
     let plan = crate::tasks::workflow::premerge_plan(pool, task).await.map_err(|e| e.to_string())?;
     let client = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
+    // 沒有前置要合併就不動工作資料夾：殘留內容留給結案時用正式訊息提交、納入審查範圍。
+    if plan.is_empty() {
+        return Ok(Premerge { merged: Vec::new(), conflict: None });
+    }
     // 上一次派工留下的：沒人解完的衝突、沒 commit 的內容。從乾淨的狀態開始，不然 git 會拒絕任何新的合併。
     prepare_for_merge(&client).await?;
     let mut merged = Vec::new();
@@ -3713,21 +3727,78 @@ mod agent_dispatch_tests {
         let _ = approved;
     }
 
-    /// 上次派工留下沒解完的合併：重新派工要先清掉，不然 git 拒絕任何新合併。
+    /// 上次派工留下、還有衝突沒解的合併：重新派工先還原再重新合併，同樣回報衝突
+    /// （而不是 git 的「還有未完成的合併」錯誤）。
     #[tokio::test]
-    async fn a_stale_unfinished_merge_is_cleared_before_the_next_attempt() {
+    async fn a_stale_merge_with_unresolved_conflicts_is_redone_from_scratch() {
         let repo = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
         let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "X 的版本\n").await;
         commit_file(&y_wt, "a.txt", "Y 的版本\n");
         assert!(premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().conflict.is_some());
-        // 工程師解到一半：檔案改好、`git add` 了，但沒 commit（合併還停著、已沒有衝突檔）。
-        fs::write(y_wt.join("a.txt"), "半成品\n").unwrap();
+
+        let again = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap();
+
+        assert_eq!(again.conflict.expect("仍是衝突").files, vec!["a.txt".to_string()]);
+    }
+
+    /// 衝突已經解完（`git add` 了）但還沒 commit：重試要把合併完成，不能丟掉人工解好的內容。
+    #[tokio::test]
+    async fn a_resolved_but_uncommitted_merge_is_completed_not_thrown_away() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "X 的版本\n").await;
+        commit_file(&y_wt, "a.txt", "Y 的版本\n");
+        assert!(premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().conflict.is_some());
+        fs::write(y_wt.join("a.txt"), "人工解好的版本\n").unwrap();
         StdCommand::new("git").args(["add", "a.txt"]).current_dir(&y_wt).status().unwrap();
 
-        // 再來一次：從乾淨狀態重新合併、同樣回報衝突（而不是 git 的「還有未完成的合併」錯誤）。
-        let again = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap();
-        assert_eq!(again.conflict.expect("仍是衝突").files, vec!["a.txt".to_string()]);
+        let pm = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap();
+
+        assert!(pm.conflict.is_none(), "已解完，不該再回報衝突");
+        assert_eq!(fs::read_to_string(y_wt.join("a.txt")).unwrap(), "人工解好的版本\n");
+        let merging = StdCommand::new("git").args(["rev-parse", "-q", "--verify", "MERGE_HEAD"]).current_dir(&y_wt).status().unwrap();
+        assert!(!merging.success(), "合併要完成（commit），不能停在原地");
+    }
+
+    /// abort 失敗（例如 index.lock 還在）：不能繼續 commit，否則會把衝突標記提交進去。
+    #[tokio::test]
+    async fn a_failed_abort_stops_instead_of_committing_conflict_markers() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "X 的版本\n").await;
+        commit_file(&y_wt, "a.txt", "Y 的版本\n");
+        assert!(premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().conflict.is_some());
+        let head_before = head(&y_wt);
+        let git_dir = StdCommand::new("git").args(["rev-parse", "--absolute-git-dir"]).current_dir(&y_wt).output().unwrap();
+        let lock = std::path::PathBuf::from(String::from_utf8_lossy(&git_dir.stdout).trim()).join("index.lock");
+        fs::write(&lock, "").unwrap();
+
+        let err = premerge_prerequisites(&pool, &card, &y_wt).await.err().expect("abort 失敗要回錯誤");
+
+        assert!(err.contains("無法還原"), "錯誤要來自還原失敗這一步，而不是後面碰巧失敗的 git add：{err}");
+        fs::remove_file(&lock).unwrap();
+        assert_eq!(head(&y_wt), head_before, "不能多出任何 commit");
+        assert!(fs::read_to_string(y_wt.join("a.txt")).unwrap().contains("<<<<<<<"), "衝突標記沒被提交掉");
+    }
+
+    /// 沒有前置要合併：工作資料夾裡的殘留不該被動（只有真的要合併時才需要先清乾淨）。
+    #[tokio::test]
+    async fn leftovers_are_left_alone_when_there_is_nothing_to_merge() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "A\n").await;
+        let dep = &crate::tasks::workflow::deps_of(&card)[0];
+        sqlx::query("UPDATE tasks SET agent_id = ? WHERE id = ?").bind(&card.agent_id).bind(dep).execute(&pool).await.unwrap();
+        fs::write(y_wt.join("notes.md"), "殘留\n").unwrap();
+        let before = head(&y_wt);
+
+        let pm = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap();
+
+        assert!(pm.merged.is_empty() && pm.conflict.is_none());
+        assert_eq!(head(&y_wt), before, "沒有要合併就不該自動 commit");
+        let dirty = StdCommand::new("git").args(["status", "--porcelain"]).current_dir(&y_wt).output().unwrap();
+        assert!(String::from_utf8_lossy(&dirty.stdout).contains("notes.md"));
     }
 
     /// 工程師沒把衝突解完：結案不能把衝突標記 commit 進去。

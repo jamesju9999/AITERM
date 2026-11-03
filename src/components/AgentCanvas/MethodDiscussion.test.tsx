@@ -17,6 +17,7 @@ function setup({ start, read, confirmLocked = false }: Opts = {}) {
   const startFn = vi.fn(start ?? (async () => ({ discussionId: "d1", tabId: "t1" })));
   const openTab = vi.fn();
   const onDecisionReady = vi.fn();
+  const onRunningChange = vi.fn();
   const readFn = vi.fn(read ?? (async () => null));
   const onConfirm = vi.fn();
   const onBack = vi.fn();
@@ -31,11 +32,12 @@ function setup({ start, read, confirmLocked = false }: Opts = {}) {
         onBack={onBack}
         openTab={openTab}
         onDecisionReady={onDecisionReady}
+        onRunningChange={onRunningChange}
         pollMs={10}
       />
     </LocaleProvider>,
   );
-  return { startFn, readFn, onConfirm, onBack, openTab, onDecisionReady, ...view };
+  return { startFn, readFn, onConfirm, onBack, openTab, onDecisionReady, onRunningChange, ...view };
 }
 
 const begin = async (text = "533 支畫面") => {
@@ -174,5 +176,17 @@ describe("MethodDiscussion", () => {
     await begin();
     await screen.findByTestId("ac-md-decision");
     expect(onDecisionReady).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports running while a discussion is open and not running after restart or unmount", async () => {
+    const { onRunningChange, unmount } = setup();
+    await begin();
+    await waitFor(() => expect(onRunningChange).toHaveBeenLastCalledWith(true));
+    fireEvent.click(await screen.findByTestId("ac-md-restart"));
+    await waitFor(() => expect(onRunningChange).toHaveBeenLastCalledWith(false));
+    await begin();
+    await waitFor(() => expect(onRunningChange).toHaveBeenLastCalledWith(true));
+    unmount();
+    expect(onRunningChange).toHaveBeenLastCalledWith(false);
   });
 });

@@ -107,4 +107,19 @@ describe("RequirementStart method discussion", () => {
     rerender(ui("/bad"));
     await waitFor(() => expect((screen.getByTestId("ac-md-confirm") as HTMLButtonElement).disabled).toBe(true));
   });
+
+  it("locks the toggle while a discussion is running so the discussion cannot be dropped by accident", async () => {
+    renderStart();
+    const toggle = (await screen.findByTestId("ac-md-toggle")) as HTMLInputElement;
+    fireEvent.click(toggle);
+    fireEvent.change(await screen.findByTestId("ac-md-input"), { target: { value: "533 支畫面" } });
+    await waitFor(() => expect((screen.getByTestId("ac-md-start") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId("ac-md-start"));
+    await screen.findByTestId("ac-md-status");
+
+    await waitFor(() => expect(toggle.disabled).toBe(true));
+
+    fireEvent.click(screen.getByTestId("ac-md-restart"));
+    await waitFor(() => expect(toggle.disabled).toBe(false));
+  });
 });

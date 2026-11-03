@@ -27,12 +27,19 @@ pub fn fill_prompt(template: &str, decision_path: &Path) -> String {
     template.replace(PATH_PLACEHOLDER, &decision_path.to_string_lossy())
 }
 
-/// 決定檔的文字；還沒有、或 id 不合法就是 `None`。解析與驗證交給前端（檔案可能寫到一半）。
+/// 決定檔大小上限：決定只有幾行 JSON，超過就當作不是（資料夾裡可能被放進符號連結或大檔）。
+const MAX_DECISION_BYTES: usize = 256 * 1024;
+
+/// 決定檔的文字；還沒有、太大、或 id 不合法就是 `None`。解析與驗證交給前端（檔案可能寫到一半）。
 pub fn read_decision(project_path: &Path, id: &str) -> Option<String> {
     if !valid_id(id) {
         return None;
     }
-    std::fs::read_to_string(decision_path(project_path, id)).ok()
+    let path = decision_path(project_path, id);
+    if std::fs::metadata(&path).ok()?.len() > MAX_DECISION_BYTES as u64 {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()
 }
 
 /// 討論 session 的設定檔：禁止用內建工具編輯參考資料夾（跟派工同一條規則）。
@@ -43,6 +50,17 @@ pub fn settings_json(refs: &[Reference]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_oversized_decision_file_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "abc-123";
+        std::fs::create_dir_all(discussion_dir(dir.path(), id)).unwrap();
+        std::fs::write(decision_path(dir.path(), id), "x".repeat(MAX_DECISION_BYTES + 1)).unwrap();
+        assert_eq!(read_decision(dir.path(), id), None, "太大的檔案不讀（決定只有幾行 JSON）");
+        std::fs::write(decision_path(dir.path(), id), "{}").unwrap();
+        assert_eq!(read_decision(dir.path(), id).as_deref(), Some("{}"));
+    }
 
     #[test]
     fn decision_path_lives_under_the_project_tasks_dir() {

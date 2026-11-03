@@ -17,6 +17,7 @@ export function MethodDiscussion({
   onBack,
   openTab,
   onDecisionReady,
+  onRunningChange,
   pollMs = 2000,
 }: {
   start: (opening: string) => Promise<{ discussionId: string; tabId: string }>;
@@ -31,6 +32,8 @@ export function MethodDiscussion({
   openTab?: (tabId: string) => void;
   /** 這一輪討論第一次讀到決定時呼叫一次（使用者多半正在 Claude Code 分頁裡，要把他叫回來）。 */
   onDecisionReady?: () => void;
+  /** 討論進行中（已開分頁、還沒按重新開始）。外層據此鎖住「先討論做法」開關，免得誤點把討論丟掉。 */
+  onRunningChange?: (running: boolean) => void;
   pollMs?: number;
 }) {
   const { t } = useLocale();
@@ -45,12 +48,14 @@ export function MethodDiscussion({
   const readRef = useRef(read);
   const openTabRef = useRef(openTab);
   const onDecisionReadyRef = useRef(onDecisionReady);
+  const onRunningChangeRef = useRef(onRunningChange);
   /** 這一輪討論是否已經通知過「決定出爐」。 */
   const announcedRef = useRef(false);
   useEffect(() => {
     readRef.current = read;
     openTabRef.current = openTab;
     onDecisionReadyRef.current = onDecisionReady;
+    onRunningChangeRef.current = onRunningChange;
   });
 
   useEffect(() => {
@@ -59,6 +64,12 @@ export function MethodDiscussion({
       mountedRef.current = false;
     };
   }, []);
+
+  const running = discussionId !== null;
+  useEffect(() => {
+    onRunningChangeRef.current?.(running);
+    return () => onRunningChangeRef.current?.(false);
+  }, [running]);
 
   // 有討論 id 就輪詢；決定卡出現後仍繼續（AI 可能覆寫）。重新開始或卸載時清掉。
   useEffect(() => {

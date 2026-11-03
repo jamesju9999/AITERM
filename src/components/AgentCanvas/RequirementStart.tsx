@@ -60,6 +60,8 @@ export function RequirementStart({
   const [beforeRefine, setBeforeRefine] = useState<string | null>(null);
   /** 勾了就先跟 AI 討論做法，確認決定後才建團隊。 */
   const [discuss, setDiscuss] = useState(false);
+  /** 方法討論進行中（已開 Claude Code 分頁）：開關鎖住，免得誤點把討論狀態丟掉。 */
+  const [discussing, setDiscussing] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -152,7 +154,7 @@ export function RequirementStart({
       <p className="ac-req-sub">{t.ac_req_sub}</p>
       {providerId !== undefined && (
         <label className="ac-req-skip" title={t.ac_md_toggle_tip}>
-          <input type="checkbox" data-testid="ac-md-toggle" checked={discuss} disabled={busy} onChange={(e) => setDiscuss(e.target.checked)} />
+          <input type="checkbox" data-testid="ac-md-toggle" checked={discuss} disabled={busy || discussing} onChange={(e) => setDiscuss(e.target.checked)} />
           <span>{t.ac_md_toggle}</span>
         </label>
       )}
@@ -172,6 +174,7 @@ export function RequirementStart({
             read={(id) => readMethodDecision(projectId, id)}
             openTab={(tabId) => window.dispatchEvent(new CustomEvent("aiterm:focus-tab-when-ready", { detail: { tabId } }))}
             onDecisionReady={() => window.dispatchEvent(new CustomEvent("aiterm:discussion-decision-ready"))}
+            onRunningChange={setDiscussing}
             busy={busy}
             confirmLocked={!repoOk}
             onConfirm={(d) => void confirmDecision(d)}
