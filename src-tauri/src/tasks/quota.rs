@@ -270,6 +270,21 @@ impl QuotaState {
     }
 
     /// `ask_human`：建立問題、進入等決策、通知。回傳要回給 Claude 的文字與是否是錯誤。
+    /// `remember`：寫進專案記事本，署名這張卡的 Agent。
+    async fn remember(&self, task_id: &str, note: &str) -> (String, bool) {
+        let Some((pool, label)) = self.entries.lock().get(task_id).map(|e| (e.pool.clone(), e.label.clone())) else {
+            return ("這張卡已經結束，不能再記。".into(), true);
+        };
+        let author = match label.agent_id.as_deref() {
+            Some(id) => crate::tasks::agents::list_agents(&pool).await.ok().and_then(|a| a.into_iter().find(|a| a.id == id)).map(|a| a.name),
+            None => None,
+        };
+        match crate::tasks::notes::add_note(&pool, author.as_deref().unwrap_or(""), note).await {
+            Ok(_) => ("已記進專案記事本，之後的卡片會看到。".into(), false),
+            Err(e) => (e, true),
+        }
+    }
+
     async fn ask(&self, task_id: &str, q: &crate::tasks::questions::NewQuestion) -> (String, bool) {
         let Some((pool, label)) = self.entries.lock().get(task_id).map(|e| (e.pool.clone(), e.label.clone())) else {
             return ("這張卡已經結束，不能再提問。".into(), true);
@@ -780,6 +795,10 @@ async fn start_server(state: Arc<QuotaState>) -> Result<(u16, String), String> {
                 let (text, is_error) = state.ask(&task_id, &question).await;
                 axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
             }
+            crate::tasks::ask::Rpc::Remember { id, note } => {
+                let (text, is_error) = state.remember(&task_id, &note).await;
+                axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
+            }
             crate::tasks::ask::Rpc::Db { id, call } => {
                 let (text, is_error) = state.db(&task_id, call).await;
                 axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
@@ -941,6 +960,45 @@ mod tests {
         let uses = crate::tasks::custom_skills::recent_uses(&pool, 10).await.unwrap();
         assert_eq!(uses.len(), 1);
         assert_eq!((uses[0].skill.as_str(), uses[0].agent_id.as_deref(), uses[0].task_id.as_str()), ("htbtw-egl", Some("a1"), id.as_str()));
+    }
+
+    /// `remember` 走 MCP 寫進專案記事本，署名這張卡的 Agent；之後的卡片背景帶得到。
+    #[tokio::test]
+    async fn remember_over_mcp_lands_in_the_notes_signed_by_the_agent() {
+        let pool = mem_pool().await;
+        let agent = crate::tasks::agents::create_agent(
+            &pool,
+            &crate::tasks::agents::NewAgent { kind: "coder", name: "工程師1", role: "", prompt_prefix: "", project_dir: "/r", canvas_x: 0.0, canvas_y: 0.0 },
+        )
+        .await
+        .unwrap();
+        let id = store::create_task(&pool, "t", "", "/r", true, false).await.unwrap();
+        let state = QuotaState::new();
+        state.register(&id, "tab", pool.clone(), ReplyLabel { agent_id: Some(agent), ..label() });
+        let url = state.mcp_url(&id).await.unwrap();
+        let client = reqwest::Client::new();
+        let call = |args: serde_json::Value| {
+            let (c, url) = (client.clone(), url.clone());
+            async move {
+                let r: serde_json::Value = c
+                    .post(url)
+                    .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"remember","arguments":args}}))
+                    .send()
+                    .await
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap();
+                r
+            }
+        };
+        let ok = call(serde_json::json!({"note":"計時一律用 performance.now()"})).await;
+        assert_eq!(ok["result"]["isError"], false, "{ok}");
+        let notes = crate::tasks::notes::list_notes(&pool).await.unwrap();
+        assert_eq!((notes[0].author.as_str(), notes[0].text.as_str()), ("工程師1", "計時一律用 performance.now()"));
+        let too_long = call(serde_json::json!({"note": "字".repeat(crate::tasks::notes::NOTE_MAX_CHARS + 1)})).await;
+        assert_eq!(too_long["result"]["isError"], true);
+        assert_eq!(crate::tasks::notes::list_notes(&pool).await.unwrap().len(), 1);
     }
 
     /// PostToolUse 讀了參考資料夾裡的檔案 → 累計到那張卡那個資料夾；畫面的通知有節流。

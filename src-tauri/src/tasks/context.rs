@@ -121,8 +121,13 @@ pub fn team_map(task: &TaskRow, tasks: &[TaskRow], agents: &[AgentRow]) -> Strin
 
 /// 放在卡片內容前面的一整段。簡介與地圖都沒有時是空字串。
 pub fn context_section(brief: Option<&str>, map: &str) -> String {
+    context_section_with_notes(brief, map, "")
+}
+
+/// 同上，多帶「專案記事本」（`tasks::notes::notes_section` 組好的整段，可為空）。
+pub fn context_section_with_notes(brief: Option<&str>, map: &str, notes: &str) -> String {
     let brief = brief.map(str::trim).filter(|b| !b.is_empty());
-    if brief.is_none() && map.trim().is_empty() {
+    if brief.is_none() && map.trim().is_empty() && notes.trim().is_empty() {
         return String::new();
     }
     let mut s = String::from(
@@ -139,6 +144,9 @@ pub fn context_section(brief: Option<&str>, map: &str) -> String {
     if !map.trim().is_empty() {
         s.push_str(&format!("\n### 團隊分工\n{map}"));
     }
+    if !notes.trim().is_empty() {
+        s.push_str(&format!("\n{notes}"));
+    }
     s.push_str("\n---\n\n");
     s
 }
@@ -149,11 +157,16 @@ pub async fn project_context(pool: &SqlitePool, task: &TaskRow) -> String {
         let brief = get_brief(pool).await?;
         let tasks = crate::tasks::store::list_tasks(pool).await?;
         let agents = crate::tasks::agents::list_agents(pool).await?;
-        Ok::<_, sqlx::Error>((brief, tasks, agents))
+        let notes = crate::tasks::notes::list_notes(pool).await?;
+        Ok::<_, sqlx::Error>((brief, tasks, agents, notes))
     }
     .await;
     match loaded {
-        Ok((brief, tasks, agents)) => context_section(brief.as_deref(), &team_map(task, &tasks, &agents)),
+        Ok((brief, tasks, agents, notes)) => context_section_with_notes(
+            brief.as_deref(),
+            &team_map(task, &tasks, &agents),
+            &crate::tasks::notes::notes_section(&notes),
+        ),
         Err(e) => {
             eprintln!("project context for {}: {e}", task.id);
             String::new()
@@ -177,6 +190,25 @@ mod tests {
 
     fn module(id: &str, title: &str, owner: &str, order: f64) -> TaskRow {
         TaskRow { title: title.into(), agent_id: Some(owner.into()), sort_order: order, status: "queued".into(), outcome: None, ..test_row(id) }
+    }
+
+    #[test]
+    fn notes_alone_still_make_a_section_and_come_after_the_team_map() {
+        let notes = "### 專案記事本\n- 用 pnpm\n";
+        let only_notes = context_section_with_notes(None, "", notes);
+        assert!(only_notes.starts_with("## 專案背景") && only_notes.contains("- 用 pnpm"));
+        let all = context_section_with_notes(Some("簡介"), "- 「計時器」：工程師1\n", notes);
+        assert!(all.find("### 團隊分工").unwrap() < all.find("### 專案記事本").unwrap());
+        assert_eq!(context_section_with_notes(None, "", "  "), "");
+    }
+
+    #[tokio::test]
+    async fn project_context_includes_the_notes_other_cards_left() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        crate::tasks::init_schema(&pool).await.unwrap();
+        crate::tasks::notes::add_note(&pool, "工程師1", "計時一律用 performance.now()").await.unwrap();
+        let s = project_context(&pool, &test_row("t1")).await;
+        assert!(s.contains("計時一律用 performance.now()") && s.contains("（工程師1）"));
     }
 
     #[tokio::test]

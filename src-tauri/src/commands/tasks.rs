@@ -107,6 +107,26 @@ pub async fn tasks_set_project_brief(project_id: String, brief: Option<String>, 
     crate::tasks::context::set_brief(&p.pool, brief.as_deref()).await.map_err(|e| e.to_string())
 }
 
+/// 專案記事本：各張卡用 `remember` 留下、之後每張卡都會帶的共用筆記。
+#[tauri::command]
+pub async fn tasks_list_notes(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Vec<crate::tasks::notes::NoteRow>, String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::notes::list_notes(&p.pool).await.map_err(|e| e.to_string())
+}
+
+/// 使用者自己加一則（署名留空）。
+#[tauri::command]
+pub async fn tasks_add_note(project_id: String, text: String, reg: State<'_, ProjectRegistry>) -> Result<crate::tasks::notes::NoteRow, String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::notes::add_note(&p.pool, "", &text).await
+}
+
+#[tauri::command]
+pub async fn tasks_delete_note(project_id: String, id: i64, reg: State<'_, ProjectRegistry>) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::notes::delete_note(&p.pool, id).await.map_err(|e| e.to_string())
+}
+
 #[derive(Serialize)]
 pub struct TaskWithAttachments {
     #[serde(flatten)]

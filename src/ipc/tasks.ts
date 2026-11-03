@@ -151,6 +151,17 @@ export const getProjectBrief = (projectId: string): Promise<string | null> => in
 export const setProjectBrief = (projectId: string, brief: string | null): Promise<void> =>
   invoke("tasks_set_project_brief", { projectId, brief });
 
+export interface ProjectNote {
+  id: number;
+  /** 留下這則的 Agent 名稱；使用者自己加的是空字串。 */
+  author: string;
+  text: string;
+  created_at: string;
+}
+export const listProjectNotes = (projectId: string): Promise<ProjectNote[]> => invoke("tasks_list_notes", { projectId });
+export const addProjectNote = (projectId: string, text: string): Promise<ProjectNote> => invoke("tasks_add_note", { projectId, text });
+export const deleteProjectNote = (projectId: string, id: number): Promise<void> => invoke("tasks_delete_note", { projectId, id });
+
 export const createTask = (
   projectId: string,
   args: {
