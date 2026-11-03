@@ -322,6 +322,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
           type: "terminal",
           ptySessionId: payload.session_id,
           spawnedByAgent: true,
+          spawnedCommand: payload.command ?? undefined,
         }]);
         if (!activeIsBusy && !viewingOverlay && !viewingAgentCanvas) {
           selectTab(newId);
@@ -988,6 +989,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                   }}
                   onAttention={(kind) => handleAttention(tab.id, tab.title, kind)}
                   externalSessionId={tab.spawnedByAgent ? tab.ptySessionId : undefined}
+                  externalCommand={tab.spawnedByAgent ? tab.spawnedCommand : undefined}
                   onRunningChange={(isRunning) => { tabRunningRef.current.set(tab.id, isRunning); }}
                   onClaudeDetected={onClaudeDetected}
                   initialSuggestionGoal={tab.suggestionGoal}

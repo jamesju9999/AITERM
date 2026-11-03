@@ -111,6 +111,8 @@ export interface TerminalViewProps {
    *  agent-coordination tools (spawn_tab), where the backend already has a
    *  live session before any TerminalView exists to render it. */
   externalSessionId?: string;
+  /** 接手的 PTY 裡後端已經啟動的指令。有值時補建一個 running 區塊，不然 Claude 的畫面沒有地方畫。 */
+  externalCommand?: string;
   /** Reports whether this tab's most recent command block is currently
    *  running (as opposed to completed/failed/no blocks yet). Used by
    *  TerminalApp to decide whether to steal focus for a newly agent-spawned
@@ -185,7 +187,7 @@ const SEARCH_OPTS = {
   },
 };
 
-export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, onRunningChange, initialCwd, initialCommand, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, initialSuggestionGoal, onSuggestionGoalChange, initialSuggestionMilestones, onSuggestionMilestonesChange, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard, registerBusyProbe, unregisterBusyProbe }: TerminalViewProps) {
+export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen = true, onSessionCreated, externalSessionId, externalCommand, onRunningChange, initialCwd, initialCommand, initialMission, enterpriseTask, onAgentProgress, onMissionEnd, onSummaryUpdate, onCwdChange, onAttention, onClaudeDetected, initialSuggestionGoal, onSuggestionGoalChange, initialSuggestionMilestones, onSuggestionMilestonesChange, claudeBridge, tabId, remoteOwner = null, onRemoteOwnerChange, registerCloseGuard, unregisterCloseGuard, registerBusyProbe, unregisterBusyProbe }: TerminalViewProps) {
   type ViewTab = "terminal" | "files";
   const [viewTab, setViewTab] = useState<ViewTab>("terminal");
   const navigate = useNavigate();
@@ -487,7 +489,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     if (isClaudeCommand(cmd)) onClaudeDetectedRef.current?.();
   }, [releaseHeldCompletion]);
 
-  const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, beginTrackedBlock, appendOutput, setBlockGitInfo, finalizeBlock, getRemoteSession } = useTerminalBlocks(
+  const { blocks, isAlternateBuffer, isRawKeyboardModeActive, submitCommand, beginTrackedBlock, adoptRunningBlock, appendOutput, setBlockGitInfo, finalizeBlock, getRemoteSession } = useTerminalBlocks(
     sessionId,
     termState,
     lastCwdRef,
@@ -498,6 +500,16 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
     undefined,
     handlePromptReady,
   );
+
+  // 後端先把指令寫進 PTY、前端才接手分頁：OSC 133 C 早就過了，沒有區塊的話 Claude 的畫面
+  // 無處可畫（區塊列只畫卡片，剩一句空提示）。接手好、xterm 與 sessionId 都就緒時補建一次。
+  const adoptedCommandRef = useRef(false);
+  useEffect(() => {
+    if (!externalSessionId || !externalCommand || adoptedCommandRef.current) return;
+    if (!termState || sessionId !== externalSessionId) return;
+    adoptedCommandRef.current = true;
+    adoptRunningBlock(externalCommand);
+  }, [externalSessionId, externalCommand, termState, sessionId, adoptRunningBlock]);
 
   // 下一步建議側欄：終端機裡有 AI 命令列工具（claude、codex…）在跑時才有意義。
   // 偵測只點亮開關按鈕，不會自動開啟——側欄一開終端機就變窄、觸發 PTY resize。
