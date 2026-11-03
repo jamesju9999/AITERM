@@ -552,6 +552,8 @@ pub async fn agents_method_discussion_start(
         return Err(format!("方法討論需要 Claude Code：目前的派工指令是 `{claude_cmd}`。請到設定把派工指令改成 claude。"));
     }
     let refs = crate::tasks::references::get(&p.pool).await.map_err(|e| e.to_string())?;
+    // 順手清掉一週前的舊討論資料夾（討論只是暫存的決定檔與設定檔）。
+    crate::tasks::method_discussion::prune_old(&p.path, std::time::Duration::from_secs(7 * 86_400));
     let id = uuid::Uuid::new_v4().to_string();
     let dir = crate::tasks::method_discussion::discussion_dir(&p.path, &id);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

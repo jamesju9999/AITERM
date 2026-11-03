@@ -27,6 +27,31 @@ pub fn fill_prompt(template: &str, decision_path: &Path) -> String {
     template.replace(PATH_PLACEHOLDER, &decision_path.to_string_lossy())
 }
 
+/// 清掉 `tasks/discussion-<id>/` 裡超過 `max_age` 沒動過的舊討論資料夾，回傳刪了幾個。
+/// 只動名稱是 `discussion-` 加合法 id 的資料夾（卡片資料夾不碰）；任何一步失敗就略過。
+pub fn prune_old(project_path: &Path, max_age: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(project_path.join("tasks")) else { return 0 };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(id) = name.strip_prefix("discussion-") else { continue };
+        if !valid_id(id) {
+            continue;
+        }
+        let path = entry.path();
+        let old = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age > max_age);
+        if old && path.is_dir() && std::fs::remove_dir_all(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// 決定檔大小上限：決定只有幾行 JSON，超過就當作不是（資料夾裡可能被放進符號連結或大檔）。
 const MAX_DECISION_BYTES: usize = 256 * 1024;
 
@@ -64,6 +89,40 @@ pub fn settings_json(refs: &[Reference]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_discussion(project: &Path, id: &str, age_days: u64) {
+        let dir = discussion_dir(project, id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("decision.json"), "{}").unwrap();
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_days * 86_400);
+        std::fs::File::open(&dir).unwrap().set_modified(when).unwrap();
+    }
+
+    #[test]
+    fn prune_removes_only_old_discussion_folders() {
+        let project = tempfile::tempdir().unwrap();
+        make_discussion(project.path(), "old-1", 10);
+        make_discussion(project.path(), "new-1", 1);
+        // 不是討論資料夾（卡片資料夾）：即使很舊也不能動。
+        let card = project.path().join("tasks").join("card-xyz");
+        std::fs::create_dir_all(&card).unwrap();
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86_400);
+        std::fs::File::open(&card).unwrap().set_modified(when).unwrap();
+
+        let removed = prune_old(project.path(), std::time::Duration::from_secs(7 * 86_400));
+
+        assert_eq!(removed, 1);
+        assert!(!discussion_dir(project.path(), "old-1").exists());
+        assert!(discussion_dir(project.path(), "new-1").exists());
+        assert!(card.exists(), "非討論資料夾不能刪");
+    }
+
+    #[test]
+    fn prune_without_a_tasks_dir_is_a_no_op() {
+        let project = tempfile::tempdir().unwrap();
+        assert_eq!(prune_old(project.path(), std::time::Duration::from_secs(1)), 0);
+    }
+
 
     #[test]
     fn extra_args_refuse_paths_that_cannot_be_quoted_instead_of_dropping_them() {
