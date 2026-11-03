@@ -8,13 +8,15 @@ const json = (o: Partial<Record<string, string>> = {}) =>
   JSON.stringify({ approach: "batch", reason: "骨架相同", trial: "先試 5 支", requirement: "轉換 Cm 畫面", ...o });
 
 interface Opts {
-  start?: (opening: string) => Promise<{ discussionId: string }>;
+  start?: (opening: string) => Promise<{ discussionId: string; tabId: string }>;
   read?: (id: string) => Promise<string | null>;
   confirmLocked?: boolean;
 }
 
 function setup({ start, read, confirmLocked = false }: Opts = {}) {
-  const startFn = vi.fn(start ?? (async () => ({ discussionId: "d1" })));
+  const startFn = vi.fn(start ?? (async () => ({ discussionId: "d1", tabId: "t1" })));
+  const openTab = vi.fn();
+  const onDecisionReady = vi.fn();
   const readFn = vi.fn(read ?? (async () => null));
   const onConfirm = vi.fn();
   const onBack = vi.fn();
@@ -27,11 +29,13 @@ function setup({ start, read, confirmLocked = false }: Opts = {}) {
         confirmLocked={confirmLocked}
         onConfirm={onConfirm}
         onBack={onBack}
+        openTab={openTab}
+        onDecisionReady={onDecisionReady}
         pollMs={10}
       />
     </LocaleProvider>,
   );
-  return { startFn, readFn, onConfirm, onBack, ...view };
+  return { startFn, readFn, onConfirm, onBack, openTab, onDecisionReady, ...view };
 }
 
 const begin = async (text = "533 支畫面") => {
@@ -133,5 +137,42 @@ describe("MethodDiscussion", () => {
     const { onBack } = setup();
     fireEvent.click(screen.getByTestId("ac-md-back"));
     expect(onBack).toHaveBeenCalled();
+  });
+
+  it("opens the discussion tab right after start, and again from the button", async () => {
+    const { openTab } = setup();
+    await begin();
+    await waitFor(() => expect(openTab).toHaveBeenCalledWith("t1"));
+    expect(openTab).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByTestId("ac-md-open"));
+    expect(openTab).toHaveBeenCalledTimes(2);
+    expect(openTab).toHaveBeenLastCalledWith("t1");
+  });
+
+  it("does not open any tab when start fails", async () => {
+    const { openTab } = setup({ start: async () => Promise.reject(new Error("boom")) });
+    await begin();
+    await waitFor(() => expect(screen.getByText(/boom/)).toBeTruthy());
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it("announces the first decision once, not on every poll or update", async () => {
+    let text = json();
+    const { onDecisionReady } = setup({ read: async () => text });
+    await begin();
+    await screen.findByTestId("ac-md-decision");
+    text = json({ reason: "改成新理由" });
+    await waitFor(() => expect(screen.getByTestId("ac-md-decision").textContent).toContain("改成新理由"));
+    expect(onDecisionReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces again after a restart produces a new decision", async () => {
+    const { onDecisionReady } = setup({ read: async () => json() });
+    await begin();
+    await screen.findByTestId("ac-md-decision");
+    fireEvent.click(screen.getByTestId("ac-md-restart"));
+    await begin();
+    await screen.findByTestId("ac-md-decision");
+    expect(onDecisionReady).toHaveBeenCalledTimes(2);
   });
 });

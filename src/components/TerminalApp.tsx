@@ -234,6 +234,39 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     return () => window.removeEventListener("aiterm:focus-tab", onFocusTab);
   }, [tabs, selectTab]);
 
+  // 方法討論：開始後要切到討論用的 Claude Code 分頁。跟 aiterm:focus-tab 的差別是分頁可能還沒建好
+  // （後端的開分頁事件與前端請求誰先到不一定），沒找到不是「分頁被關掉」，而是登記起來等接手。
+  useEffect(() => {
+    const onFocusWhenReady = (e: Event) => {
+      const id = (e as CustomEvent<{ tabId?: string }>).detail?.tabId;
+      if (!id) return;
+      const tab = tabs.find((tb) => tb.ptySessionId === id);
+      if (!tab) {
+        pendingFocusRef.current.add(id);
+        return;
+      }
+      setHomeActive(false);
+      setBoardActive(false);
+      selectTab(tab.id);
+    };
+    window.addEventListener("aiterm:focus-tab-when-ready", onFocusWhenReady);
+    return () => window.removeEventListener("aiterm:focus-tab-when-ready", onFocusWhenReady);
+  }, [tabs, selectTab]);
+
+  // 登記著的請求：分頁出現（接手完成、狀態已更新）就切過去。使用者明確要這個分頁，
+  // 不受接手時「不要打斷」判斷的限制。
+  useEffect(() => {
+    if (pendingFocusRef.current.size === 0) return;
+    for (const tab of tabs) {
+      if (tab.ptySessionId && pendingFocusRef.current.delete(tab.ptySessionId)) {
+        setHomeActive(false);
+        setBoardActive(false);
+        selectTab(tab.id);
+        break;
+      }
+    }
+  }, [tabs, selectTab]);
+
   // Enterprise: pending task notification + skill toast
   const [pendingTask, setPendingTask] = useState<TaskPacket | null>(null);
   const [skillToast, setSkillToast] = useState<SkillInstalledPayload | null>(null);
@@ -242,6 +275,10 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   // mcp-coordination-tab-spawned handler below to decide whether switching
   // focus to a newly agent-spawned tab would interrupt the user.
   const tabRunningRef = useRef<Map<string, boolean>>(new Map());
+
+  // 先請求「分頁一建好就切過去」的 PTY session：後端開分頁的事件與前端的請求誰先到不一定，
+  // 兩種順序都要能切（分頁已在→立刻切；還沒→登記，接手時切）。
+  const pendingFocusRef = useRef<Set<string>>(new Set());
 
   // Sessions already adopted as a tab. A backend spawn emits its event once,
   // but the handler can still run twice: Tauri's `unlisten()` rejects
@@ -627,6 +664,18 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
       }
     }
   }, [t]);
+
+  // 方法討論有決定了：使用者多半正在 Claude Code 分頁裡，用分頁徽章（視窗沒在前景時再加桌面通知）叫他回協作頁確認。
+  // 不自動切回去——他可能正在讀 AI 的回覆，搶走畫面比脫勾更糟。
+  useEffect(() => {
+    const onDecisionReady = () => {
+      for (const tab of tabsRef.current) {
+        if (tab.type === "agent-canvas") handleAttention(tab.id, tab.title, "waiting");
+      }
+    };
+    window.addEventListener("aiterm:discussion-decision-ready", onDecisionReady);
+    return () => window.removeEventListener("aiterm:discussion-decision-ready", onDecisionReady);
+  }, [handleAttention]);
 
   // Global Keyboard shortcuts for Tab Management
   useEffect(() => {

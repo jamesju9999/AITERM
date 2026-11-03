@@ -409,8 +409,8 @@ export function TabBar({
                 <span className="mail-connection-badge" role="img" aria-label={t.mail_connection_failed_label(String(mailFailedAccountCount))}>!</span>
               )}
               {/* 錨在圖示右下角。mail 的兩個 badge 只出現在 mail 分頁、
-                  這個只出現在 terminal 分頁，位置不會互撞。 */}
-              {tab.type === "terminal" && tab.attention && (
+                  這個只出現在 terminal／協作頁分頁（協作頁：方法討論有決定時叫使用者回來），位置不會互撞。 */}
+              {(tab.type === "terminal" || tab.type === "agent-canvas") && tab.attention && (
                 <span
                   className={`terminal-attention-badge terminal-attention-badge--${tab.attention}`}
                   role="img"

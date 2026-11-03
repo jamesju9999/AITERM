@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -301,6 +301,63 @@ describe("TerminalApp: Task Board view slot (Task 4)", () => {
 
     await waitFor(() => expect(screen.getAllByText(/Agent: claude/).length).toBeGreaterThan(0));
     expect(screen.getByText("agent-canvas-stub")).toBeVisible();
+  });
+
+  // 方法討論：開始後要切到討論用的 Claude Code 分頁。事件與分頁建好的先後不一定，兩種順序都要切得過去。
+  async function openCanvas() {
+    localStorage.setItem(SESSION_TABS_KEY, JSON.stringify([{ title: "Agent 協作", type: "agent-canvas" }]));
+    renderApp();
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("select-first-tab"));
+    expect(await screen.findByText("agent-canvas-stub")).toBeVisible();
+  }
+  const focusWhenReady = (tabId: string) =>
+    act(() => {
+      window.dispatchEvent(new CustomEvent("aiterm:focus-tab-when-ready", { detail: { tabId } }));
+    });
+
+  it("switches to the discussion tab when the focus request arrives before the tab exists", async () => {
+    await openCanvas();
+    focusWhenReady("disc-1");
+    // 請求先到：還在協作頁，沒有「分頁已被關掉」之類的錯誤。
+    expect(screen.getByText("agent-canvas-stub")).toBeVisible();
+
+    capturedCoordinationSpawn!({ session_id: "disc-1", command: "claude" });
+
+    await waitFor(() => expect(screen.getByText("agent-canvas-stub")).not.toBeVisible());
+  });
+
+  it("switches to the discussion tab when the tab was created before the focus request", async () => {
+    await openCanvas();
+    capturedCoordinationSpawn!({ session_id: "disc-2", command: "claude" });
+    await waitFor(() => expect(screen.getAllByText(/Agent: claude/).length).toBeGreaterThan(0));
+    expect(screen.getByText("agent-canvas-stub")).toBeVisible();
+
+    focusWhenReady("disc-2");
+
+    await waitFor(() => expect(screen.getByText("agent-canvas-stub")).not.toBeVisible());
+  });
+
+  it("puts an attention badge on the Agent Canvas tab when the discussion has a decision", async () => {
+    await openCanvas();
+    capturedCoordinationSpawn!({ session_id: "disc-3", command: "claude" });
+    focusWhenReady("disc-3");
+    await waitFor(() => expect(screen.getByText("agent-canvas-stub")).not.toBeVisible());
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("aiterm:discussion-decision-ready"));
+    });
+
+    await waitFor(() => expect(document.querySelector(".terminal-attention-badge--waiting")).not.toBeNull());
+  });
+
+  it("puts no badge on the canvas tab while the user is looking at it", async () => {
+    await openCanvas();
+    act(() => {
+      window.dispatchEvent(new CustomEvent("aiterm:discussion-decision-ready"));
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(document.querySelector(".terminal-attention-badge")).toBeNull();
   });
 
   // Regression test for a real bug caught on video: dispatching ONE card put

@@ -15,9 +15,11 @@ export function MethodDiscussion({
   confirmLocked = false,
   onConfirm,
   onBack,
+  openTab,
+  onDecisionReady,
   pollMs = 2000,
 }: {
-  start: (opening: string) => Promise<{ discussionId: string }>;
+  start: (opening: string) => Promise<{ discussionId: string; tabId: string }>;
   read: (discussionId: string) => Promise<string | null>;
   /** 外層正在建團隊：鎖住輸入與確認。 */
   busy: boolean;
@@ -25,19 +27,30 @@ export function MethodDiscussion({
   confirmLocked?: boolean;
   onConfirm: (d: MethodDecision) => void;
   onBack: () => void;
+  /** 切到討論用的 Claude Code 分頁（開始後自動呼叫一次，也給「前往討論分頁」鈕用）。 */
+  openTab?: (tabId: string) => void;
+  /** 這一輪討論第一次讀到決定時呼叫一次（使用者多半正在 Claude Code 分頁裡，要把他叫回來）。 */
+  onDecisionReady?: () => void;
   pollMs?: number;
 }) {
   const { t } = useLocale();
   const [opening, setOpening] = useState("");
   const [starting, setStarting] = useState(false);
   const [discussionId, setDiscussionId] = useState<string | null>(null);
+  const [tabId, setTabId] = useState<string | null>(null);
   const [decision, setDecision] = useState<MethodDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
   /** 外層常傳行內函式；用 ref 讀最新的，輪詢才不會每次重繪就重設計時器。 */
   const readRef = useRef(read);
+  const openTabRef = useRef(openTab);
+  const onDecisionReadyRef = useRef(onDecisionReady);
+  /** 這一輪討論是否已經通知過「決定出爐」。 */
+  const announcedRef = useRef(false);
   useEffect(() => {
     readRef.current = read;
+    openTabRef.current = openTab;
+    onDecisionReadyRef.current = onDecisionReady;
   });
 
   useEffect(() => {
@@ -56,7 +69,13 @@ export function MethodDiscussion({
         const text = await readRef.current(discussionId);
         if (!alive || !mountedRef.current || text == null) return;
         const d = parseDecisionJson(text);
-        if (d) setDecision(d);
+        if (d) {
+          setDecision(d);
+          if (!announcedRef.current) {
+            announcedRef.current = true;
+            onDecisionReadyRef.current?.();
+          }
+        }
       } catch {
         // 讀不到就當還沒寫好，下一輪再試
       }
@@ -75,7 +94,12 @@ export function MethodDiscussion({
     setStarting(true);
     try {
       const r = await start(text);
-      if (mountedRef.current) setDiscussionId(r.discussionId);
+      if (mountedRef.current) {
+        announcedRef.current = false;
+        setDiscussionId(r.discussionId);
+        setTabId(r.tabId);
+        openTabRef.current?.(r.tabId);
+      }
     } catch (e) {
       if (mountedRef.current) setError(t.ac_md_error(e instanceof Error ? e.message : String(e)));
     } finally {
@@ -85,6 +109,7 @@ export function MethodDiscussion({
 
   const restart = () => {
     setDiscussionId(null);
+    setTabId(null);
     setDecision(null);
   };
 
@@ -126,6 +151,11 @@ export function MethodDiscussion({
       ) : (
         <>
           <p className="ac-md-status" data-testid="ac-md-status">{t.ac_md_running}</p>
+          {tabId && openTab && (
+            <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" data-testid="ac-md-open" onClick={() => openTab(tabId)}>
+              {t.ac_md_open_tab}
+            </button>
+          )}
           {decision && (
             <div className="ac-md-decision" data-testid="ac-md-decision">
               <strong>{t.ac_md_decision_title}：{approachLabel[decision.approach]}</strong>

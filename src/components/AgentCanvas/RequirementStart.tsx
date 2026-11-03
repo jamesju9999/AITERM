@@ -167,9 +167,11 @@ export function RequirementStart({
             start={async (opening) => {
               if (!repo) throw new Error(t.ac_req_repo_pick);
               const r = await startMethodDiscussion(projectId, repo, buildDiscussionPrompt(opening));
-              return { discussionId: r.discussion_id };
+              return { discussionId: r.discussion_id, tabId: r.tab_id };
             }}
             read={(id) => readMethodDecision(projectId, id)}
+            openTab={(tabId) => window.dispatchEvent(new CustomEvent("aiterm:focus-tab-when-ready", { detail: { tabId } }))}
+            onDecisionReady={() => window.dispatchEvent(new CustomEvent("aiterm:discussion-decision-ready"))}
             busy={busy}
             confirmLocked={!repoOk}
             onConfirm={(d) => void confirmDecision(d)}
