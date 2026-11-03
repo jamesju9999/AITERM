@@ -1289,10 +1289,21 @@ impl Dispatcher for RealDispatcher {
             }
         });
         drop(git_prep);
+        let early_tab = (self.app.clone(), project.pool.clone(), task.id.clone());
         let on_spawned = |tab_id: &str| {
             if let Some(register) = register {
                 register(tab_id);
             }
+            // 分頁一建好就記下 id 並通知畫面：之後等 Claude 起來、送完提示詞最久 30 秒，
+            // 這段時間「前往分頁」才找得到分頁（原本要等整個派工結束才寫）。
+            let (app, pool, task_id) = early_tab;
+            let tab_id = tab_id.to_string();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = store::set_tab_id(&pool, &task_id, &tab_id).await {
+                    eprintln!("early set_tab_id {task_id}: {e}");
+                }
+                let _ = app.emit("tasks-updated", ());
+            });
         };
         let spawned = match &codex_line {
             Some(line) => {
@@ -1765,7 +1776,8 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
             // 先原子地認領再去 spawn——理由見 store::claim_for_dispatch。
             // 認領不到代表別人先拿走了，直接重掃。
             match store::claim_for_dispatch(&project.pool, &next.id).await {
-                Ok(true) => {}
+                // 卡片已經是 running：先通知畫面，之後開分頁最久要等 30 秒。
+                Ok(true) => dispatcher.changed(),
                 Ok(false) => continue,
                 Err(e) => {
                     eprintln!("claim {} failed ({}): {e}", next.id, project.name);
@@ -1878,7 +1890,7 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
                 };
                 // 先原子地認領再去 spawn——理由見 store::claim_for_dispatch。
                 match store::claim_for_dispatch(&project.pool, &head.id).await {
-                    Ok(true) => {}
+                    Ok(true) => dispatcher.changed(),
                     Ok(false) => continue,
                     Err(e) => {
                         eprintln!("claim {} failed ({}): {e}", head.id, project.name);
@@ -2790,6 +2802,42 @@ mod loop_tests {
         assert_eq!(titles(&all, "queued"), vec!["B"], "暫停後 B 不能被接著派出去");
         let agent = crate::tasks::agents::get_agent(&project.pool, &c1).await.unwrap().unwrap();
         assert_eq!(agent.paused_task_id.as_deref(), Some(a.id.as_str()));
+    }
+
+    /// 認領之後、慢慢開分頁（最久 30 秒）之前，就要通知畫面：否則卡片已經是 running，
+    /// 畫面還顯示「排隊中，等待名額」（實測抓到）。
+    #[tokio::test]
+    async fn the_ui_is_told_a_card_started_before_the_slow_dispatch_begins() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Checks {
+            changed: AtomicUsize,
+            changed_before_dispatch: AtomicUsize,
+        }
+        #[async_trait::async_trait]
+        impl Dispatcher for Checks {
+            async fn dispatch(&self, _p: &ProjectHandle, _t: &TaskRow) -> Result<(), String> {
+                self.changed_before_dispatch.store(self.changed.load(Ordering::SeqCst), Ordering::SeqCst);
+                Ok(())
+            }
+            fn changed(&self) {
+                self.changed.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        // Agent 卡。
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        card_for(&project, "A", &c1, false).await;
+        let d = Checks { changed: AtomicUsize::new(0), changed_before_dispatch: AtomicUsize::new(0) };
+        drain_once(&reg, &d, 5).await;
+        assert!(d.changed_before_dispatch.load(Ordering::SeqCst) >= 1, "Agent 卡認領後沒有通知畫面就開始派工");
+
+        // 互動卡（另一條路徑）。
+        let (reg2, project2, _parent2) = one_project_registry().await;
+        let id = store::create_task(&project2.pool, "I", "", "/r", true, true).await.unwrap();
+        store::move_task(&project2.pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        let d2 = Checks { changed: AtomicUsize::new(0), changed_before_dispatch: AtomicUsize::new(0) };
+        drain_once(&reg2, &d2, 5).await;
+        assert!(d2.changed_before_dispatch.load(Ordering::SeqCst) >= 1, "互動卡認領後沒有通知畫面就開始派工");
     }
 
     /// 派工失敗要通知畫面重讀（不然看板停在失敗之前，使用者看不到「重試」鈕；實測抓到）。
