@@ -429,6 +429,16 @@ pub(crate) async fn finalize_agent_card(
             if let Err(e) = store::set_end_sha(pool, task_id, &sha).await {
                 eprintln!("set_end_sha {task_id}: {e}");
             }
+            // 開工時解衝突的合併帶進來的是前置的內容：審查範圍改從它之後算起。
+            if let Ok(Some(task)) = store::get_task(pool, task_id).await {
+                if let Some(start) = task.start_sha.as_deref() {
+                    if let Ok(Some(merge)) = client.last_leading_merge(start).await {
+                        if let Err(e) = store::set_start_sha(pool, task_id, &merge).await {
+                            eprintln!("set_start_sha {task_id}: {e}");
+                        }
+                    }
+                }
+            }
             monitor::TaskOutcome::Success
         }
         Err(e) => {
@@ -3879,6 +3889,47 @@ mod agent_dispatch_tests {
         let marker = fs::read_to_string(y_wt.join("a.txt")).unwrap();
         assert!(marker.contains("<<<<<<<"), "檔案維持衝突狀態，沒被 commit 掉");
         assert!(agents::get_agent(&pool, &agent_id).await.unwrap().unwrap().paused_task_id.is_some());
+    }
+
+    /// 衝突是工程師開工時解的：解衝突的合併 commit 帶進來的是前置的內容，不是這張卡的成果。
+    /// 結案時把審查範圍的起點移到那個合併之後，審核者只看這張卡自己的改動。
+    #[tokio::test]
+    async fn the_review_range_starts_after_the_conflict_merge() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "X 的版本\n").await;
+        commit_file(&y_wt, "a.txt", "Y 的版本\n");
+        store::set_start_sha(&pool, &card.id, &head(&y_wt)).await.unwrap();
+        assert!(premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().conflict.is_some());
+        fs::write(y_wt.join("a.txt"), "解好的版本\n").unwrap();
+        StdCommand::new("git").args(["add", "a.txt"]).current_dir(&y_wt).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "--no-edit"]).current_dir(&y_wt).status().unwrap();
+        let merge_commit = head(&y_wt);
+        commit_file(&y_wt, "mine.txt", "這張卡自己的成果\n");
+        let agent_id = card.agent_id.clone().unwrap();
+
+        let outcome = finalize_agent_card(&pool, &agent_id, &card.id, "m", &y_wt, monitor::TaskOutcome::Success).await;
+
+        assert!(matches!(outcome, monitor::TaskOutcome::Success));
+        let row = store::get_task(&pool, &card.id).await.unwrap().unwrap();
+        assert_eq!(row.start_sha.as_deref(), Some(merge_commit.as_str()), "起點要移到解衝突的合併之後");
+    }
+
+    /// 沒有任何合併 commit：起點不動。
+    #[tokio::test]
+    async fn the_review_range_start_is_untouched_without_merges() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "A\n").await;
+        let start = head(&y_wt);
+        store::set_start_sha(&pool, &card.id, &start).await.unwrap();
+        commit_file(&y_wt, "mine.txt", "自己的成果\n");
+        let agent_id = card.agent_id.clone().unwrap();
+
+        finalize_agent_card(&pool, &agent_id, &card.id, "m", &y_wt, monitor::TaskOutcome::Success).await;
+
+        let row = store::get_task(&pool, &card.id).await.unwrap().unwrap();
+        assert_eq!(row.start_sha.as_deref(), Some(start.as_str()));
     }
 
     /// 工程師解完衝突並 commit 之後，結案照常記下 end_sha。

@@ -462,6 +462,32 @@ impl GitClient {
         .map(|_| ())
     }
 
+    /// `start..HEAD` 最前面連續的合併 commit 裡最後一個（由舊到新）。沒有合併 commit 就是 `None`。
+    /// 只走第一親代（被合進來的分支上的 commit 不算）。工程師開工時解衝突、完成的合併 commit 帶進來的是別人的內容，不是這張卡的成果，
+    /// 審查範圍要從它之後算起。只看最前面連續的一段：之後工程師自己做的事不能被排除。
+    pub async fn last_leading_merge(&self, start: &str) -> Result<Option<String>, String> {
+        let out = self
+            .git(&[
+                "rev-list".to_string(),
+                "--first-parent".to_string(),
+                "--reverse".to_string(),
+                "--parents".to_string(),
+                format!("{start}..HEAD"),
+            ])
+            .await?;
+        let mut last = None;
+        for line in out.lines() {
+            let mut parts = line.split_whitespace();
+            let Some(sha) = parts.next() else { continue };
+            if parts.count() >= 2 {
+                last = Some(sha.to_string());
+            } else {
+                break;
+            }
+        }
+        Ok(last)
+    }
+
     /// `rev` 是不是目前 HEAD 的祖先（含 HEAD 本身），也就是「已經合進來了」。
     /// 查不到 `rev` 也回 `false`。
     pub async fn is_ancestor_of_head(&self, rev: &str) -> bool {
