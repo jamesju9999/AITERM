@@ -1307,6 +1307,20 @@ describe("AgentCanvasView", () => {
       expect(readTranscript).not.toHaveBeenCalled();
     });
 
+    it("「接著談」鈕排在標題前面：標題很長被截斷時，鈕也不會被擠出可視範圍（實機抓到）", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "撰寫一個 ESP32 範例程式（預設：Arduino 框架、通用 ESP32 DevKit 開發板）內容很長很長很長", status: "done", outcome: "success", agent_id: "a1", session_id: "s-1" }),
+      ]);
+      view();
+      const chip = await screen.findByTestId("chip-A");
+      const btn = screen.getByTestId("chip-continue-A");
+      // 在 DOM 順序上，鈕要早於標題文字（chip 的 overflow 是從尾端截斷的）。
+      const titleNode = Array.from(chip.childNodes).find((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").includes("ESP32"));
+      expect(titleNode).toBeTruthy();
+      expect(btn.compareDocumentPosition(titleNode as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
     it("接著談失敗時顯示後端說明的原因", async () => {
       vi.mocked(listAgents).mockResolvedValue([agent()]);
       vi.mocked(listTasks).mockResolvedValue([

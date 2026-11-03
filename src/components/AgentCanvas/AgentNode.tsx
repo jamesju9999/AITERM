@@ -537,7 +537,6 @@ export function AgentNode({
                       : undefined
                   }
                 >
-                  {icon} {m.title}
                   {m.status === "done" && m.session_id && onContinueChat && (
                     <button
                       type="button"
@@ -554,6 +553,7 @@ export function AgentNode({
                       💬
                     </button>
                   )}
+                  {icon} {m.title}
                   {m.fast && (
                     <span className="ac-chip-fast" data-testid={`chip-fast-${m.id}`} title={t.ac_cmd_fast_badge_tip}>
                       {t.ac_cmd_fast_badge}
