@@ -88,6 +88,8 @@ export interface DispatchEnv {
   assigneeId?: string | null;
   /** bug／小修改：相關模組的說明（已經是要寫進卡片的那句話）。 */
   related?: string | null;
+  /** bug／小修改：建成互動卡（使用者要在工程師的分頁裡親自參與，做完自己按「標記完成」）。其他分類忽略。 */
+  interactive?: boolean;
 }
 
 export interface DispatchResult {
@@ -117,13 +119,20 @@ async function attachImages(d: DispatchDeps, projectId: string, taskId: string, 
   }
 }
 
-const newCard = (d: Pick<StartDeps, "createTask">, env: DispatchEnv, title: string, body: string, label: string | null = null) =>
+const newCard = (
+  d: Pick<StartDeps, "createTask">,
+  env: DispatchEnv,
+  title: string,
+  body: string,
+  label: string | null = null,
+  interactive = false,
+) =>
   d.createTask(env.projectId, {
     title,
     body,
     project_dir: env.repoDir,
     parallel_ok: true,
-    interactive: false,
+    interactive,
     use_bridge: false,
     bridge_tiers: null,
     label,
@@ -155,7 +164,7 @@ export async function dispatchInput(
       const shots = images.length > 0;
       const instructions = kind === "bug" ? (shots ? t.ac_bug_instructions : t.ac_bug_instructions_noshot) : shots ? t.ac_cmd_image_note : "";
       const { title, body } = bugCard(text, instructions, env.related ?? null);
-      const taskId = await newCard(d, env, title, body, kind === "bug" ? t.ac_bug_label : null);
+      const taskId = await newCard(d, env, title, body, kind === "bug" ? t.ac_bug_label : null, env.interactive === true);
       await attachImages(d, projectId, taskId, images);
       await d.assignAgent(projectId, taskId, assignee.id, kind === "fast");
       return { kind, taskId, agentName: nameOf(assignee.id) };

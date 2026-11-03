@@ -78,6 +78,8 @@ export function CommandBar({
   /** 回報問題帶入的相關模組（空字串 = 沒有）與使用者手動指定的工程師（null = 自動）。 */
   const [relatedId, setRelatedId] = useState("");
   const [assigneeId, setAssigneeId] = useState<string | null>(null);
+  /** 「我要親自參與」：小修改／bug 建成互動卡（在工程師的分頁裡來回聊，做完自己按「標記完成」）。 */
+  const [interactive, setInteractive] = useState(false);
   const ime = useRef(createImeEnterGuard());
   const shot = useRef(0);
   const imagesRef = useRef(images);
@@ -202,6 +204,7 @@ export function CommandBar({
           providerId: pid,
           assigneeId: effectiveAssignee || null,
           related: relatedMod ? t.ac_bug_related(localizedCardTitle(relatedMod, t)) : null,
+          interactive,
         },
         { ...deps, addAttachment: attach, askAgent: ask },
         images.map((i) => i.file),
@@ -215,6 +218,7 @@ export function CommandBar({
       setText("");
       setRelatedId("");
       setAssigneeId(null);
+      setInteractive(false);
       clearImages();
       onDispatched(r);
     } catch (e) {
@@ -282,6 +286,15 @@ export function CommandBar({
                     </option>
                   ))}
                 </select>
+              </label>
+              <label className="ac-cmd-interactive" title={t.ac_cmd_interactive_tip}>
+                <input
+                  type="checkbox"
+                  data-testid="ac-cmd-interactive"
+                  checked={interactive}
+                  onChange={(e) => setInteractive(e.target.checked)}
+                />
+                <span>{t.ac_cmd_interactive}</span>
               </label>
             </div>
           )}

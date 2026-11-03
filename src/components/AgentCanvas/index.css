@@ -953,6 +953,7 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-cmd-assign { display: flex; gap: 10px; margin-top: 8px; }
 .ac-cmd-assign label { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; font-size: 11.5px; color: var(--text-muted); }
 .ac-cmd-assign select { min-width: 0; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--ac-edge); background: var(--bg-primary); color: var(--text-primary); font: inherit; font-size: 12px; }
+.ac-cmd-assign .ac-cmd-interactive { flex: 0 0 auto; flex-direction: row; align-items: center; align-self: flex-end; gap: 6px; padding-bottom: 4px; white-space: nowrap; color: var(--text-primary); }
 .ac-cmd-related { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
 .ac-res--add { cursor: pointer; border-style: dashed; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; align-self: center; }
 .ac-res--add:hover { color: var(--text-primary); border-color: var(--accent, #38bdf8); }

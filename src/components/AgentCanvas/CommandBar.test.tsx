@@ -265,4 +265,39 @@ describe("CommandBar", () => {
     expect((screen.getByTestId("ac-cmd-confirm") as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByTestId("ac-cmd-question-no-image")).toBeNull();
   });
+
+  it("小修改與 bug 的確認面板有「我要親自參與」：勾了就建成互動卡，預設不勾", async () => {
+    const d = deps(ai('{"kind":"fast","reason":""}'));
+    view(d);
+    type("按鈕改紅色");
+    await screen.findByTestId("ac-cmd-plan");
+    const box = screen.getByTestId("ac-cmd-interactive") as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    fireEvent.click(screen.getByTestId("ac-cmd-confirm"));
+    await waitFor(() => expect(d.createTask).toHaveBeenCalled());
+    expect(vi.mocked(d.createTask).mock.calls[0][1].interactive).toBe(true);
+  });
+
+  it("沒勾「我要親自參與」就是一般自動卡", async () => {
+    const d = deps(ai('{"kind":"bug","reason":""}'));
+    view(d);
+    type("按開始沒反應");
+    await screen.findByTestId("ac-cmd-plan");
+    fireEvent.click(screen.getByTestId("ac-cmd-confirm"));
+    await waitFor(() => expect(d.createTask).toHaveBeenCalled());
+    expect(vi.mocked(d.createTask).mock.calls[0][1].interactive).toBe(false);
+  });
+
+  it("新需求與問題的面板沒有「我要親自參與」", async () => {
+    const d = deps(ai('{"kind":"requirement","reason":""}', "答案"));
+    view(d);
+    type("做計時器");
+    await screen.findByTestId("ac-cmd-plan");
+    expect(screen.queryByTestId("ac-cmd-interactive")).toBeNull();
+    fireEvent.click(screen.getByTestId("ac-cmd-kind-question"));
+    expect(screen.queryByTestId("ac-cmd-interactive")).toBeNull();
+    fireEvent.click(screen.getByTestId("ac-cmd-kind-fast"));
+    expect(screen.getByTestId("ac-cmd-interactive")).toBeTruthy();
+  });
 });

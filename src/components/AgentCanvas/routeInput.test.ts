@@ -112,6 +112,30 @@ describe("dispatchInput", () => {
     expect(vi.mocked(d.createTask).mock.calls[0][1].body).toContain(t.ac_bug_instructions_noshot);
   });
 
+  // 「我要親自參與」：建成互動卡，人在工程師的分頁裡來回聊，做完自己按「標記完成」。
+  it("interactive：小修改與 bug 可以建成互動卡，預設不是", async () => {
+    for (const kind of ["fast", "bug"] as const) {
+      const plain = deps();
+      await dispatchInput(kind, "調一下版面", env([spec, c1]), plain);
+      expect(vi.mocked(plain.createTask).mock.calls[0][1].interactive).toBe(false);
+
+      const mine = deps();
+      await dispatchInput(kind, "調一下版面", { ...env([spec, c1]), interactive: true }, mine);
+      expect(vi.mocked(mine.createTask).mock.calls[0][1].interactive).toBe(true);
+    }
+  });
+
+  it("interactive：新需求走規格流程，不會變成互動卡；退回完整流程時也不會", async () => {
+    const d = deps({ complete: vi.fn().mockResolvedValue('{"criteria":[]}') });
+    await dispatchInput("requirement", "做計時器", { ...env([c1, spec]), interactive: true }, d);
+    expect(vi.mocked(d.createTask).mock.calls[0][1].interactive).toBe(false);
+
+    const fell = deps({ complete: vi.fn().mockResolvedValue('{"criteria":[]}') });
+    const r = await dispatchInput("fast", "按鈕改紅色", { ...env([spec]), interactive: true }, fell);
+    expect(r.fellBack).toBe(true);
+    expect(vi.mocked(fell.createTask).mock.calls[0][1].interactive).toBe(false);
+  });
+
   it("question：交給 Agent 讀程式庫回答，不用本地模型、不建一般卡", async () => {
     const complete = vi.fn();
     const askAgent = vi.fn().mockResolvedValue({ task_id: "ask-1", agent_name: "工程師1" });
