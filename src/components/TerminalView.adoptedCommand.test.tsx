@@ -1,3 +1,4 @@
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -104,5 +105,34 @@ describe("接手後端已啟動指令的分頁（externalSessionId + externalCom
     await waitFor(() => {
       expect(container.querySelector('[data-testid="block-list-empty"]')).toBeInTheDocument();
     });
+  });
+
+  // StrictMode 會把 effect 跑兩次：接手補建只能有一張卡，不能兩張。
+  it("在 StrictMode 下也只補建一張卡", async () => {
+    const { container } = render(
+      <React.StrictMode>
+        <LocaleProvider>
+          <MemoryRouter>
+            <TerminalView
+              tabId="tab-3"
+              externalSessionId="adopted-strict"
+              externalCommand="claude"
+              registerCloseGuard={() => {}}
+              unregisterCloseGuard={() => {}}
+            />
+          </MemoryRouter>
+        </LocaleProvider>
+      </React.StrictMode>,
+    );
+
+    const dataEvent = ptyDataEvent("adopted-strict");
+    await waitFor(() => expect(listenHandlers.has(dataEvent)).toBe(true));
+    const base64 = btoa("CLAUDE-WELCOME\r\n");
+    act(() => {
+      listenHandlers.get(dataEvent)!.forEach((h) => h({ payload: { base64 } }));
+    });
+
+    await waitFor(() => expect(container.querySelector(".aiterm-block-card")).toBeInTheDocument());
+    expect(container.querySelectorAll(".aiterm-block-card")).toHaveLength(1);
   });
 });
