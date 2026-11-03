@@ -970,3 +970,12 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-nudge { display: flex; gap: 6px; margin-top: 6px; }
 .ac-nudge-input { flex: 1; min-width: 0; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--ac-edge); background: var(--bg-primary); color: var(--text-primary); font: inherit; font-size: 12px; }
 .ac-nudge-input:disabled { opacity: 0.6; }
+
+.ac-notes { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--aiterm-border, rgba(255, 255, 255, 0.12)); }
+.ac-notes-title { margin: 0 0 4px; font-size: 13px; }
+.ac-notes-list { list-style: none; margin: 6px 0; padding: 0; max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.ac-note { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.ac-note-author { flex: none; opacity: 0.6; }
+.ac-note-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ac-note-add { display: flex; gap: 8px; }
+.ac-note-add .task-field-input { flex: 1; min-width: 0; }

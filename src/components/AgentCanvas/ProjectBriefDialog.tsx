@@ -6,6 +6,7 @@ import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getProjectBrief, setProjectBrief } from "../../ipc/tasks";
 import { ModelPickerButton } from "../ModelPickerButton";
 import { BRIEF_REFINE_SYSTEM, buildBriefRefineMessage, parseBriefReply } from "./briefRefine";
+import { ProjectNotes } from "./ProjectNotes";
 
 /** 超過就提醒：每張卡都會帶著這段（後端放進提示時另有更寬的硬上限）。 */
 const BRIEF_SOFT_LIMIT = 2000;
@@ -148,6 +149,7 @@ export function ProjectBriefDialog({
         <div className={`ac-brief-count${count > BRIEF_SOFT_LIMIT ? " ac-bad-text" : ""}`}>{t.ac_brief_count(count)}</div>
         {count > BRIEF_SOFT_LIMIT && <p className="task-field-hint ac-bad-text">{t.ac_brief_long}</p>}
         {error && <p className="ac-bad-text">{error}</p>}
+        <ProjectNotes projectId={projectId} />
         <div className="task-dialog-actions">
           <button className="aiterm-btn aiterm-btn--secondary" onClick={onClose}>
             {t.ac_brief_cancel}

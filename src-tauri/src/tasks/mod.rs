@@ -17,6 +17,7 @@ pub mod workflow;
 pub mod path_refresh;
 pub mod repo_check;
 pub mod quota;
+pub mod tell;
 pub mod questions;
 pub mod ask;
 pub mod usage;
@@ -34,6 +35,7 @@ pub mod repo_snapshot;
 pub mod formations;
 pub mod continue_chat;
 pub mod method_discussion;
+pub mod notes;
 pub mod nudge;
 
 use std::path::{Path, PathBuf};
@@ -298,6 +300,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query("CREATE TABLE IF NOT EXISTS project_settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
         .execute(pool)
         .await?;
+    notes::init_schema(pool).await?;
     Ok(())
 }
 
