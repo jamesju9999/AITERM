@@ -967,6 +967,9 @@ pub fn verify_body(modules: &[&TaskRow], spec_text: &str, json_path: &Path, evid
          - 其他桌面或手機 App（原生、Tauri、iOS、Android）：只做建置、測試、啟動不當掉；\
          需要操作畫面的條件標成 manual。\n\
          \n專案自己有測試就一定要跑。\n\
+         \n不管規格有沒有寫，都要先驗證專案的主要入口能用：網頁就打開根網址（首頁），確認畫面有內容、沒有跳錯誤頁、主控台沒有錯誤；\
+         後端就呼叫一個最基本的端點；命令列工具就執行一次最基本的指令。這一項用 criterion「主要入口可用」寫進 items（省略 module_id），\
+         入口打不開就是 fail，不管其他條件過了幾條。\n\
          \n截圖一律存成這個資料夾底下的絕對路徑：{evidence}（例如 {evidence}/start.png）。存到別的地方會被拒絕。\n\
          伺服器只能用下面「可用的埠」，驗收結束前把你啟動的伺服器、瀏覽器都關掉（browser_close）。\n\
          瀏覽器工具回報瀏覽器沒有安裝（not installed／not found）時，先執行 `{install}` 再重試一次（第一次要下載約 100MB）。\n\
@@ -3081,6 +3084,17 @@ pub(crate) mod tests {
         let body = verify_body(&[&m], "", Path::new("/j"), Path::new("/e"));
         assert!(body.contains("每個模組都至少要有一條"), "{body}");
         assert!(body.contains("需處理"), "要說清楚漏掉的後果：{body}");
+    }
+
+    /// 規格沒寫「打開首頁要能看到畫面」時，驗收者也要先確認入口能用（實測：驗收通過，使用者一開根網址卻是空白）。
+    #[test]
+    fn the_verify_prompt_always_asks_for_an_entry_point_smoke_test() {
+        let m = TaskRow { title: "計時器".into(), body: "按開始倒數".into(), ..test_row("m1") };
+        let body = verify_body(&[&m], "規格：倒數 25 分鐘", Path::new("/j"), Path::new("/e"));
+        assert!(body.contains("主要入口"), "{body}");
+        assert!(body.contains("不管規格有沒有寫"), "{body}");
+        let no_spec = verify_body(&[&m], "", Path::new("/j"), Path::new("/e"));
+        assert!(no_spec.contains("主要入口"), "沒有規格時也要有：{no_spec}");
     }
 
     #[test]
