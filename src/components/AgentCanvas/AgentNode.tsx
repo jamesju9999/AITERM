@@ -73,6 +73,7 @@ export function AgentNode({
   onTranscript,
   onReportBug,
   onOpenTab,
+  onContinueChat,
   onMerge,
   onAbortMerge,
   onRelease,
@@ -123,6 +124,8 @@ export function AgentNode({
   onTranscript: (taskId: string) => void;
   /** 在完成的模組上按右鍵：回報這個模組的問題。 */
   onReportBug?: (moduleId: string) => void;
+  /** 已完成的模組「接著談」：用原本的 Claude session 重開分頁接回對話。 */
+  onContinueChat?: (moduleId: string) => void;
   onOpenTab: (tabId: string) => void;
   onMerge: () => void;
   onAbortMerge: () => void;
@@ -535,6 +538,22 @@ export function AgentNode({
                   }
                 >
                   {icon} {m.title}
+                  {m.status === "done" && m.session_id && onContinueChat && (
+                    <button
+                      type="button"
+                      className="ac-chip-continue"
+                      data-testid={`chip-continue-${m.id}`}
+                      title={t.ac_continue_chat_tip}
+                      aria-label={t.ac_continue_chat}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onContinueChat(m.id);
+                      }}
+                    >
+                      💬
+                    </button>
+                  )}
                   {m.fast && (
                     <span className="ac-chip-fast" data-testid={`chip-fast-${m.id}`} title={t.ac_cmd_fast_badge_tip}>
                       {t.ac_cmd_fast_badge}

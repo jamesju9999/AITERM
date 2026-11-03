@@ -199,6 +199,10 @@ export const moveTask = (
 export const stopTask = (projectId: string, id: string): Promise<void> =>
   invoke("tasks_stop", { projectId, id });
 
+/** 已完成的卡片「接著談」：用原本的 Claude session 重開分頁接回對話，回傳分頁 id。不改卡片狀態。 */
+export const continueChat = (projectId: string, id: string): Promise<string> =>
+  invoke("tasks_continue_chat", { projectId, id });
+
 export const markTaskDone = (projectId: string, id: string): Promise<void> =>
   invoke("tasks_mark_done", { projectId, id });
 

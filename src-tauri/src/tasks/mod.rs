@@ -32,6 +32,7 @@ pub mod references;
 pub mod custom_skills;
 pub mod repo_snapshot;
 pub mod formations;
+pub mod continue_chat;
 pub mod method_discussion;
 
 use std::path::{Path, PathBuf};

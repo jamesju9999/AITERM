@@ -286,6 +286,57 @@ pub async fn tasks_move(
     Ok(())
 }
 
+/// 已完成的卡片「接著談」：用原本的 Claude session 重開分頁接回對話。回傳分頁 id。
+/// 不改卡片狀態、不重跑審核（見 `tasks::continue_chat`）。
+#[tauri::command]
+pub async fn tasks_continue_chat(
+    project_id: String,
+    id: String,
+    reg: State<'_, ProjectRegistry>,
+    config: State<'_, Arc<crate::config::ConfigStore>>,
+    pty: State<'_, Arc<crate::pty::PtyManager>>,
+    app: AppHandle,
+) -> Result<String, String> {
+    use crate::tasks::continue_chat;
+    let p = project(&reg, &project_id)?;
+    let task = store::get_task(&p.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "找不到這張卡片。".to_string())?;
+    let claude_cmd = config.get().task_board.claude_command;
+    let agent_running = match &task.agent_id {
+        Some(a) => store::list_tasks(&p.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|t| t.status == "running" && t.agent_id.as_deref() == Some(a.as_str())),
+        None => false,
+    };
+    let session_log_exists = match (&task.session_id, crate::tasks::session_log::claude_projects_root()) {
+        (Some(sid), Some(root)) => crate::tasks::session_log::find_session_log(&root, sid).is_some(),
+        _ => false,
+    };
+    let agent_wt = task.agent_id.as_ref().map(|a| crate::tasks::agents::agent_dir(&p.path, a).join("worktree"));
+    let plan = continue_chat::plan(
+        &task,
+        &continue_chat::Facts {
+            claude_command: &claude_cmd,
+            agent_has_running_card: agent_running,
+            session_log_exists,
+            agent_worktree: agent_wt.as_deref(),
+        },
+    )?;
+    // 參考資料夾：跟派工一樣唯讀掛進去（設定檔 deny 編輯），卡片資料夾也要能寫。
+    let refs = crate::tasks::references::get(&p.pool).await.unwrap_or_default();
+    let dir = task_dir(&p.path, &task.id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let settings = dir.join("continue-settings.json");
+    fs::write(&settings, crate::tasks::method_discussion::settings_json(&refs)).map_err(|e| e.to_string())?;
+    let extra = crate::tasks::method_discussion::extra_args(&settings, &refs, &dir)?;
+    let line = crate::tasks::dispatch::launch_command_with(&claude_cmd, Some(&plan.session_id), true, Some(&extra));
+    crate::tasks::dispatch::spawn_plain_tab(&app, &pty, &plan.dir, &line, "claude").await
+}
+
 #[tauri::command]
 pub async fn tasks_stop(
     project_id: String,

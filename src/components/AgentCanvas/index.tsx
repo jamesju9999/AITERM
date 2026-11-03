@@ -80,6 +80,7 @@ import {
   getProjectBrief,
   markTaskDone,
   stopTask,
+  continueChat,
   onTasksUpdated,
   type MergeOutcome,
   type TaskWithAttachments,
@@ -886,6 +887,18 @@ export function AgentCanvasView({
     void run(() => markTaskDone(projectId, taskId));
   };
 
+  // 已完成的模組「接著談」：後端用原本的 Claude session 開分頁，開好就切過去（分頁可能還沒建好，
+  // 用 focus-tab-when-ready，跟方法討論同一條路）。不能接的原因由後端說明，顯示在提示列。
+  const continueModuleChat = async (moduleId: string) => {
+    if (!projectId) return;
+    try {
+      const tabId = await continueChat(projectId, moduleId);
+      window.dispatchEvent(new CustomEvent("aiterm:focus-tab-when-ready", { detail: { tabId } }));
+    } catch (e) {
+      setToast(errText(e));
+    }
+  };
+
   const openTab = (tabId: string) => {
     window.dispatchEvent(new CustomEvent("aiterm:focus-tab", { detail: { tabId } }));
   };
@@ -1569,6 +1582,7 @@ export function AgentCanvasView({
                       onTranscript={setTranscriptFor}
                       onReportBug={(moduleId) => setReportFor((r) => ({ moduleId, nonce: (r?.nonce ?? 0) + 1 }))}
                       onOpenTab={openTab}
+                      onContinueChat={(moduleId) => void continueModuleChat(moduleId)}
                       onMerge={() => doMerge(a)}
                       onAbortMerge={() => doAbortMerge(a)}
                       onRelease={(moduleId) => projectId && void run(() => overrideModule(projectId, moduleId))}

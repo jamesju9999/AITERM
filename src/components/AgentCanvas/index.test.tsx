@@ -29,6 +29,7 @@ vi.mock("../../ipc/tasks", () => ({
   addAttachment: vi.fn().mockResolvedValue({ id: "att", task_id: "bug-1", filename: "x", stored_path: "x" }),
   markTaskDone: vi.fn().mockResolvedValue(undefined),
   stopTask: vi.fn().mockResolvedValue(undefined),
+  continueChat: vi.fn().mockResolvedValue("tab-cc"),
   deleteTask: vi.fn().mockResolvedValue(undefined),
   codexInfo: vi.fn().mockResolvedValue({ models: [], login: null, error: null }),
 }));
@@ -149,7 +150,7 @@ import {
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
-import { codexInfo, createTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { codexInfo, continueChat, createTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, readTranscript, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { listProjects } from "../../ipc/projects";
@@ -1280,6 +1281,39 @@ describe("AgentCanvasView", () => {
       view();
       const node = await screen.findByTestId("agent-a1");
       expect(within(node).getByText("排隊中，等待全域名額")).toBeTruthy();
+    });
+
+    it("已完成、有對話記錄的模組 chip 有「接著談」：按了開分頁接回對話，並請終端機切過去", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1", session_id: "s-1" }),
+        card({ id: "B", title: "B 沒對話", status: "done", outcome: "success", agent_id: "a1", session_id: null }),
+      ]);
+      const focus = vi.fn();
+      window.addEventListener("aiterm:focus-tab-when-ready", focus);
+      onTestFinished(() => window.removeEventListener("aiterm:focus-tab-when-ready", focus));
+      view();
+      await screen.findByTestId("chip-A");
+      expect(screen.queryByTestId("chip-continue-B")).toBeNull();
+
+      fireEvent.click(screen.getByTestId("chip-continue-A"));
+
+      await waitFor(() => expect(continueChat).toHaveBeenCalledWith("p1", "A"));
+      await waitFor(() => expect(focus).toHaveBeenCalled());
+      expect((focus.mock.calls[0][0] as CustomEvent).detail).toEqual({ tabId: "tab-cc" });
+      // 按「接著談」不該同時觸發 chip 本身的點擊（開對話記錄）。
+      expect(readTranscript).not.toHaveBeenCalled();
+    });
+
+    it("接著談失敗時顯示後端說明的原因", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1", session_id: "s-1" }),
+      ]);
+      vi.mocked(continueChat).mockRejectedValueOnce("這位工程師正在做別的卡");
+      view();
+      fireEvent.click(await screen.findByTestId("chip-continue-A"));
+      expect(await screen.findByText(/這位工程師正在做別的卡/)).toBeTruthy();
     });
 
     it("頂列「全部暫停」暫停整個專案，再按一次繼續", async () => {

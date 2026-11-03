@@ -446,6 +446,32 @@ pub async fn spawn_command(
     Ok((tab_id, result))
 }
 
+/// 開一個分頁、在 `dir` 裡跑 `line`（例如 `claude --resume <id>`），不送提示詞、不登記任何卡片
+/// （「接著談」用）。回傳分頁 id。分頁標題用 `label`（不把整行放進去）。
+pub async fn spawn_plain_tab(
+    app: &AppHandle,
+    pty: &PtyManager,
+    dir: &std::path::Path,
+    line: &str,
+    label: &str,
+) -> Result<String, String> {
+    let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+    let tab_id = crate::pty::create_with_app(pty, app.clone(), size, Some(dir.to_path_buf()), None)
+        .map_err(|e| e.to_string())?;
+    wait_for_shell_prompt(pty, &tab_id).await;
+    if let Err(e) = pty.write(&tab_id, format!("{line}\r").as_bytes()) {
+        let _ = pty.close(&tab_id);
+        return Err(e.to_string());
+    }
+    if let Err(e) = app.emit(
+        "mcp-coordination-tab-spawned",
+        TabSpawnedEvent { session_id: tab_id.clone(), command: Some(label.to_string()) },
+    ) {
+        eprintln!("emit mcp-coordination-tab-spawned failed: {e}");
+    }
+    Ok(tab_id)
+}
+
 /// Codex 卡片收尾的輪詢間隔。
 const CODEX_POLL_MS: u64 = 1_000;
 
