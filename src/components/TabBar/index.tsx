@@ -82,6 +82,8 @@ export interface Tab {
    *  也是 TerminalApp 決定要不要用 externalSessionId 接手既有 PTY session
    *  （而非自己開新的）的依據。只存在記憶體，不進 localStorage。 */
   spawnedByAgent?: boolean;
+  /** 後端替這個分頁啟動的指令（spawnedByAgent 才有）。 */
+  spawnedCommand?: string;
   /**
    * 這個終端機分頁有沒有注入 Claude Code 橋接環境變數，以及來源。
    *

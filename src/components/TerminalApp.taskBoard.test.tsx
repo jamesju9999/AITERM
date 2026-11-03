@@ -83,6 +83,7 @@ vi.mock("../hooks/useTerminalBlocks", () => ({
     isAlternateBuffer: false,
     submitCommand: vi.fn(),
     beginTrackedBlock: vi.fn(),
+    adoptRunningBlock: vi.fn(),
     appendOutput: vi.fn(),
     setBlockGitInfo: vi.fn(),
     termInstance: null,

@@ -50,6 +50,10 @@ export interface UseTerminalBlocksResult {
    *  漏掉的位元組可能連帶讓卡片內容跟畫面對不上，這跟本機分頁執行
    *  `clear`/`cls` 時「畫面跟卡片一起清空」是同一個邏輯。 */
   clearAllBlocks: () => void;
+  /** 接手一個「已經在跑」的指令（後端先把指令寫進 PTY、前端分頁才建好）：
+   *  OSC 133 C 早就過了，不補的話一個區塊都沒有，畫面只剩空提示。
+   *  已有 running 區塊就什麼都不做。 */
+  adoptRunningBlock: (cmd: string) => void;
 }
 
 // `clear` is the Unix/PowerShell screen-clear command; `cls` is cmd.exe's (and
@@ -518,6 +522,23 @@ export function useTerminalBlocks(
     [sessionId, cwdRef, clearAllBlocks, onCommandStarted],
   );
 
+  const adoptRunningBlock = useCallback(
+    (cmd: string) => {
+      if (!term) return;
+      if (blocksRef.current[blocksRef.current.length - 1]?.status === "running") return;
+      beginTrackedBlock(cmd);
+      const running = blocksRef.current[blocksRef.current.length - 1];
+      if (running?.status !== "running") return;
+      // 輸出起點取緩衝區最上方：指令是在前端接手之前就開始的，已經畫出來的部分也要算進卡片。
+      const buf = term.buffer.active;
+      const marker = term.registerMarker(-(buf.baseY + buf.cursorY));
+      if (!marker) return;
+      outputStartRef.current?.marker.dispose();
+      outputStartRef.current = { blockId: running.id, marker, above: snapshotRowsAbove(buf, marker.line) };
+    },
+    [term, beginTrackedBlock],
+  );
+
   useEffect(() => {
     if (!term) return;
 
@@ -737,6 +758,7 @@ export function useTerminalBlocks(
     blocks,
     submitCommand,
     beginTrackedBlock,
+    adoptRunningBlock,
     appendOutput,
     setBlockGitInfo,
     isAlternateBuffer,
