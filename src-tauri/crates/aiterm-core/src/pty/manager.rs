@@ -14,6 +14,8 @@ pub struct PtyManager {
     sessions: Mutex<HashMap<String, Arc<PtySession>>>,
     /// 每個 session 使用者（不是程式）送出的對話行數，見 `user_input`。
     user_input: Mutex<HashMap<String, super::user_input::UserInputTracker>>,
+    /// 後端替分頁打字（派工貼提示詞）期間，先把使用者的輸入暫存，見 `input_gate`。
+    input_gates: Mutex<HashMap<String, super::input_gate::InputGate>>,
 }
 
 /// True when `elevated` already holds a channel in the `Connected` state.
@@ -88,6 +90,34 @@ impl PtyManager {
         self.get(id)?.write(data)
     }
 
+    /// 後端要替這個分頁打字了（例如派工貼提示詞）：關閘，使用者同時打的字先暫存。
+    /// 一定要配對呼叫 `unlock_input`。
+    pub fn lock_input(&self, id: &str) {
+        self.input_gates.lock().entry(id.to_string()).or_default().lock();
+    }
+
+    /// 使用者從前端打的字：閘門關著就暫存，否則直接寫進去。
+    pub fn write_user(&self, id: &str, data: &[u8]) -> PtyResult<()> {
+        let session = self.get(id)?;
+        let now = self.input_gates.lock().entry(id.to_string()).or_default().submit(data);
+        match now {
+            Some(bytes) => session.write(&bytes),
+            None => Ok(()),
+        }
+    }
+
+    /// 後端打完了：開閘，把暫存的使用者輸入依原順序送進去。分頁已經不在了就算了。
+    pub fn unlock_input(&self, id: &str) -> PtyResult<()> {
+        let held = self.input_gates.lock().remove(id).map(|mut g| g.release()).unwrap_or_default();
+        if held.is_empty() {
+            return Ok(());
+        }
+        match self.get(id) {
+            Ok(session) => session.write(&held),
+            Err(_) => Ok(()),
+        }
+    }
+
     /// 記錄使用者從前端送進這個 session 的輸入（程式自己寫的不要走這裡）。
     pub fn note_user_input(&self, id: &str, data: &[u8]) {
         self.user_input.lock().entry(id.to_string()).or_default().feed(data);
@@ -109,6 +139,7 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| PtyError::SessionNotFound(id.to_string()))?;
         self.user_input.lock().remove(id);
+        self.input_gates.lock().remove(id);
         session.kill()?;
         // Dropping the last Arc below will join the reader thread.
         drop(session);
@@ -270,6 +301,71 @@ impl PtyManager {
 
 #[cfg(test)]
 mod tests {
+    /// 閘門關著時，使用者的輸入要等放行才進 shell（不是被丟掉，也不是搶在後端前面）。
+    #[test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    fn locked_user_input_reaches_the_shell_only_after_unlock() {
+        use std::sync::Arc;
+        let m = PtyManager::new();
+        let out: Arc<parking_lot::Mutex<Vec<u8>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink = out.clone();
+        let id = m
+            .create_with_callback(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }, move |chunk| {
+                sink.lock().extend_from_slice(&chunk);
+            })
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        let seen = |needle: &str| String::from_utf8_lossy(&out.lock()).contains(needle);
+
+        m.lock_input(&id);
+        m.write_user(&id, b"echo HELD\x5fMARK\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        assert!(!seen("HELD_MARK"), "閘門關著，使用者的輸入不該進 shell");
+
+        m.unlock_input(&id).unwrap();
+        for _ in 0..40 {
+            if seen("HELD_MARK") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(seen("HELD_MARK"), "放行後暫存的輸入要送進 shell");
+        let _ = m.close(&id);
+    }
+
+    /// 沒有鎖的時候，使用者的輸入照舊直接進 shell（閘門不能把正常輸入吃掉）。
+    #[test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    fn user_input_reaches_the_shell_immediately_when_not_locked() {
+        use std::sync::Arc;
+        let m = PtyManager::new();
+        let out: Arc<parking_lot::Mutex<Vec<u8>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink = out.clone();
+        let id = m
+            .create_with_callback(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }, move |chunk| {
+                sink.lock().extend_from_slice(&chunk);
+            })
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        m.write_user(&id, b"echo OPEN\x5fMARK\n").unwrap();
+        let mut ok = false;
+        for _ in 0..40 {
+            if String::from_utf8_lossy(&out.lock()).contains("OPEN_MARK") {
+                ok = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(ok, "沒鎖時，使用者輸入要直接進 shell");
+        let _ = m.close(&id);
+    }
+
+    #[test]
+    fn write_user_to_a_missing_session_is_an_error() {
+        let m = PtyManager::new();
+        assert!(m.write_user("nope", b"x").is_err());
+    }
+
     #[test]
     fn user_input_lines_count_only_what_the_user_noted() {
         let m = PtyManager::new();

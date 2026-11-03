@@ -527,6 +527,27 @@ pub(crate) async fn wait_for_shell_prompt(pty: &PtyManager, tab_id: &str) {
     }
 }
 
+/// 派工替分頁打字（啟動指令、貼提示詞）的期間，使用者同時從前端打的字會跟它交錯成同一則訊息
+/// （實測：使用者在 Claude 剛啟動時打字，文字被接在任務提示詞後面）。建立時關閘、離開時
+/// （不論成功或失敗）放行，使用者的輸入暫存到放行才依序送進去。
+pub(crate) struct InputLockGuard<'a> {
+    pty: &'a PtyManager,
+    tab_id: String,
+}
+
+impl<'a> InputLockGuard<'a> {
+    pub(crate) fn new(pty: &'a PtyManager, tab_id: &str) -> Self {
+        pty.lock_input(tab_id);
+        Self { pty, tab_id: tab_id.to_string() }
+    }
+}
+
+impl Drop for InputLockGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.pty.unlock_input(&self.tab_id);
+    }
+}
+
 /// Full dispatch: create a visible tab in `project_dir` running
 /// `claude_command`, emit the adopt event, wait for it to settle, type the
 /// prompt in. Returns `(tab_id, DispatchResult)`.
@@ -552,6 +573,8 @@ pub async fn spawn_and_run(
         bridge_env,
     )
     .map_err(|e| e.to_string())?;
+    // 從這裡到提示詞送完，使用者的輸入先暫存（離開函式時放行，見 InputLockGuard）。
+    let _input_lock = InputLockGuard::new(pty, &tab_id);
     // 分頁有了、claude 還沒啟動：讓呼叫端先把卡片登記好。claude 一拿到提示詞
     // 幾秒內就可能打 hook 或呼叫 ask_human，這個函式卻要等到送完提示詞（最久
     // 再等 15 秒）才回傳——之後才登記的話，那些呼叫會被當成「卡片已結束」。
@@ -591,6 +614,37 @@ fn launch_failed_message(claude_command: &str, code: i32) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// 使用者在派工替分頁打字期間打的字，要等放行才進去（不是跟提示詞交錯、也不是被丟掉）。
+    #[test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    fn input_lock_guard_holds_user_input_until_dropped() {
+        use std::sync::Arc;
+        let pty = PtyManager::new();
+        let out: Arc<parking_lot::Mutex<Vec<u8>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink = out.clone();
+        let id = pty
+            .create_with_callback(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }, move |c| {
+                sink.lock().extend_from_slice(&c);
+            })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(1200));
+        let seen = |n: &str| String::from_utf8_lossy(&out.lock()).contains(n);
+        {
+            let _guard = InputLockGuard::new(&pty, &id);
+            pty.write_user(&id, b"echo GUARD\x5fMARK\n").unwrap();
+            std::thread::sleep(Duration::from_millis(800));
+            assert!(!seen("GUARD_MARK"), "守衛還在，使用者的輸入不該進去");
+        }
+        for _ in 0..40 {
+            if seen("GUARD_MARK") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(seen("GUARD_MARK"), "守衛離開後要放行");
+        let _ = pty.close(&id);
+    }
+
     use super::*;
 
     #[test]

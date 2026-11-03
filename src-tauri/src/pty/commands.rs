@@ -51,7 +51,8 @@ pub fn pty_write(
     id: String,
     data: String,
 ) -> Result<(), PtyError> {
-    manager.write(&id, data.as_bytes())?;
+    // 後端正在替這個分頁打字（派工貼提示詞）時，這裡的輸入會先暫存，等它打完才送進去。
+    manager.write_user(&id, data.as_bytes())?;
     // 前端寫入就是使用者在打字（程式派工是後端直接寫，不經過這裡）：派工卡據此判斷使用者接手了。
     manager.note_user_input(&id, data.as_bytes());
     Ok(())
