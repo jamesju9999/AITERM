@@ -140,7 +140,7 @@ use commands::{
     },
     questions::{questions_answer, questions_list},
     tasks::{
-        tasks_list, tasks_token_usage, tasks_get_token_budget, tasks_set_token_budget, tasks_get_project_brief, tasks_set_project_brief, tasks_list_notes, tasks_add_note, tasks_delete_note, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_continue_chat, tasks_nudge, tasks_delete,
+        tasks_list, tasks_token_usage, tasks_get_token_budget, tasks_set_token_budget, tasks_get_project_brief, tasks_set_project_brief, tasks_list_notes, tasks_add_note, tasks_delete_note, tasks_create, tasks_update, tasks_move, tasks_stop, tasks_continue_chat, tasks_nudge, tasks_list_messages, tasks_delete,
         tasks_add_attachment, tasks_remove_attachment, tasks_clone, tasks_read_transcript,
         tasks_save_transcript, tasks_mark_done, tasks_used_dirs, tasks_used_labels,
         tasks_set_summary, tasks_set_label, tasks_archive, tasks_unarchive,
@@ -796,6 +796,7 @@ pub fn run() {
             tasks_stop,
             tasks_continue_chat,
             tasks_nudge,
+            tasks_list_messages,
             tasks_mark_done,
             tasks_merge_worktree,
             tasks_abort_merge,

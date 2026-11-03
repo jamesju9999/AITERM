@@ -159,6 +159,20 @@ export interface ProjectNote {
   created_at: string;
 }
 export const listProjectNotes = (projectId: string): Promise<ProjectNote[]> => invoke("tasks_list_notes", { projectId });
+export interface CardMessage {
+  id: number;
+  /** Unix 秒。 */
+  at: number;
+  kind: "nudge" | "tell";
+  /** 收到這句話的卡片。 */
+  task_id: string;
+  /** 說話的 Agent；使用者補充是 null。 */
+  from_agent: string | null;
+  to_agent: string | null;
+  text: string;
+}
+/** 最近的補充一句與 Agent 之間的傳訊（活動記錄用）。 */
+export const listCardMessages = (projectId: string): Promise<CardMessage[]> => invoke("tasks_list_messages", { projectId });
 export const addProjectNote = (projectId: string, text: string): Promise<ProjectNote> => invoke("tasks_add_note", { projectId, text });
 export const deleteProjectNote = (projectId: string, id: number): Promise<void> => invoke("tasks_delete_note", { projectId, id });
 

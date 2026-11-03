@@ -83,6 +83,8 @@ import {
   stopTask,
   continueChat,
   nudgeTask,
+  listCardMessages,
+  type CardMessage,
   onTasksUpdated,
   type MergeOutcome,
   type TaskWithAttachments,
@@ -194,6 +196,9 @@ function storeProject(id: string) {
   }
 }
 
+/** 活動記錄裡一句補充／傳訊最多顯示幾個字。 */
+const MSG_LOG_CHARS = 80;
+
 function errText(e: unknown): string {
   return typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);
 }
@@ -257,6 +262,7 @@ export function AgentCanvasView({
   const [lostSkills, setLostSkills] = useState<string[]>([]);
   const [skillUsesOf, setSkillUsesOf] = useState<{ projectId: string; rows: SkillUseRow[] } | null>(null);
   /** 讀了參考資料的記錄（讀取中的線、活動記錄）。 */
+  const [messagesOf, setMessagesOf] = useState<{ projectId: string; rows: CardMessage[] } | null>(null);
   const [refReadsOf, setRefReadsOf] = useState<{ projectId: string; rows: ReferenceReadRow[] } | null>(null);
   // 檔案系統的事不會推送過來，所以在技能清單（或儲存後的畫面）變動時重查一次。
   const allSkillPathsKey = agents.flatMap((a) => parseSkillPaths(a.custom_skills)).join("\n");
@@ -270,6 +276,7 @@ export function AgentCanvasView({
       alive = false;
     };
   }, [allSkillPathsKey]);
+  const messages = useMemo(() => (messagesOf?.projectId === projectId ? messagesOf.rows : []), [messagesOf, projectId]);
   const refReads = useMemo(() => (refReadsOf?.projectId === projectId ? refReadsOf.rows : []), [refReadsOf, projectId]);
   /** 團隊編制（見 FormationMenu）。 */
   const [formsOf, setFormsOf] = useState<{ projectId: string; state: FormationsState } | null>(null);
@@ -428,6 +435,9 @@ export function AgentCanvasView({
         .catch(() => {});
       listReferenceReads(projectId)
         .then((rows) => alive && setRefReadsOf({ projectId, rows }))
+        .catch(() => {});
+      listCardMessages(projectId)
+        .then((rows) => alive && setMessagesOf({ projectId, rows }))
         .catch(() => {});
       formationsState(projectId, formDefaultName.current)
         .then((state) => alive && setFormsOf({ projectId, state }))
@@ -685,6 +695,16 @@ export function AgentCanvasView({
       const folder = r.ref_path.split(/[\\/]/).filter(Boolean).pop() ?? r.ref_path;
       ev.push({ at: r.last_at, text: t.ac_log_ref_read(agentName(r.agent_id), folder, r.reads), kind: "dispatch", role: agentKind(r.agent_id) });
     }
+    // 補充一句與 Agent 之間的傳訊：話很長時只留開頭，完整內容在對方的對話裡。
+    const clip = (s: string) => (s.length > MSG_LOG_CHARS ? `${s.slice(0, MSG_LOG_CHARS)}…` : s);
+    for (const m of messages) {
+      const to = m.to_agent ? agentName(m.to_agent) : "";
+      if (m.kind === "tell" && m.from_agent) {
+        ev.push({ at: m.at, text: t.ac_log_tell(agentName(m.from_agent), to, clip(m.text)), kind: "dispatch", role: agentKind(m.from_agent) });
+      } else {
+        ev.push({ at: m.at, text: t.ac_log_nudge(to, clip(m.text)), kind: "dispatch", role: agentKind(m.to_agent) });
+      }
+    }
     // 資料庫技能的查詢：活動記錄顯示完整 SQL。
     for (const q of dbQueries) {
       const who = agentName(q.agent_id);
@@ -707,7 +727,7 @@ export function AgentCanvasView({
       ev.push({ at: l.at, text: t.ac_log_formation(l.from_name, l.to_name), kind: "dispatch" });
     }
     return ev.sort((a, b) => b.at - a.at).slice(0, 40);
-  }, [tasks, agentName, agentKind, dbQueries, skillUsesOf, refReads, projectId, forms, t]);
+  }, [tasks, agentName, agentKind, dbQueries, skillUsesOf, refReads, messages, projectId, forms, t]);
 
   // ── 拖曳 ───────────────────────────────────────────────────────────────
 
@@ -930,6 +950,10 @@ export function AgentCanvasView({
     try {
       await nudgeTask(projectId, taskId, message);
       setToast(t.ac_nudge_sent);
+      // 剛補充的那句要馬上出現在活動記錄（後端不會為這件事發 tasks-updated）。
+      listCardMessages(projectId)
+        .then((rows) => setMessagesOf({ projectId, rows }))
+        .catch(() => {});
     } catch (e) {
       setToast(errText(e));
       throw e;

@@ -316,7 +316,7 @@ impl QuotaState {
                         && !e.blocking_ask
                         && e.wait.is_none()
                 })
-                .map(|(_, e)| e.tab_id.clone());
+                .map(|(id, e)| (id.clone(), e.tab_id.clone()));
             if tab.is_some() {
                 if let Some(e) = entries.get_mut(from_task) {
                     e.last_tell = Some(Instant::now());
@@ -324,14 +324,32 @@ impl QuotaState {
             }
             tab
         };
-        let Some(tab_id) = tab_id else {
+        let Some((target_task, tab_id)) = tab_id else {
             return (
                 format!("「{}」現在沒有在執行的卡片（或正在等人回答／等額度），訊息沒有送出。這件事請改用 remember 記進專案記事本，他之後開工會看到。", target.name),
                 true,
             );
         };
         match send(tab_id, crate::tasks::tell::wire_text(&sender_name, &message)).await {
-            Ok(()) => (format!("已送給「{}」。", target.name), false),
+            Ok(()) => {
+                // 留一筆讓活動記錄查得到；寫不進去不影響這句話已送達。
+                if let Err(e) = crate::tasks::messages::record(
+                    &pool,
+                    crate::tasks::messages::KIND_TELL,
+                    &target_task,
+                    label.agent_id.as_deref(),
+                    Some(&target.id),
+                    &message,
+                )
+                .await
+                {
+                    eprintln!("record tell {from_task} → {target_task}: {e}");
+                }
+                if let Some(f) = self.on_change.get() {
+                    f();
+                }
+                (format!("已送給「{}」。", target.name), false)
+            }
             Err(e) => (format!("送不出去：{e}"), true),
         }
     }
@@ -1115,8 +1133,14 @@ mod tests {
         assert!(err && text.contains("沒有在執行"), "{text}");
         state.set_asking(&t2, false);
 
+        assert!(crate::tasks::messages::recent(&pool, 10).await.unwrap().is_empty(), "送不出去的不能留紀錄");
         let (text, err) = state.tell(&t1, "工程師2", "formatTime\n改名成 fmt").await;
         assert!(!err, "{text}");
+        let logged = crate::tasks::messages::recent(&pool, 10).await.unwrap();
+        assert_eq!(logged.len(), 1);
+        assert_eq!((logged[0].kind.as_str(), logged[0].task_id.as_str()), ("tell", t2.as_str()));
+        assert_eq!((logged[0].from_agent.as_deref(), logged[0].to_agent.as_deref()), (Some(a1.as_str()), Some(a2.as_str())));
+        assert_eq!(logged[0].text, "formatTime 改名成 fmt");
         {
             let sent = sent.lock();
             assert_eq!(sent.len(), 1);
