@@ -896,6 +896,8 @@ export function AgentCanvasView({
     return a.kind === "coder" ? "ok" : "bad";
   };
 
+  // 有卡片、而且全部都已結束（沒有計畫中、排隊或執行中的）：沒有東西可暫停，「全部暫停」不顯示。
+  const allFinished = tasks.length > 0 && tasks.every((x) => x.status === "done");
   const ghostCard = ghost?.kind === "module" ? tasks.find((x) => x.id === ghost.id) : undefined;
   const coderIds = useMemo(() => new Set(agents.filter((a) => a.kind === "coder").map((a) => a.id)), [agents]);
   const hasReviewer = agents.some((a) => a.kind === "reviewer");
@@ -1247,7 +1249,7 @@ export function AgentCanvasView({
             </button>
           </>
         )}
-        {projectId && agents.length > 0 && (
+        {projectId && agents.length > 0 && (manualPause.all || !allFinished) && (
           <>
             <span className="ac-top-sep" aria-hidden />
             <button

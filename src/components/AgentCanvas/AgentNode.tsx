@@ -10,6 +10,7 @@ import { deriveModuleState, type ModuleState } from "./deriveModuleState";
 import { localizedCardTitle } from "./cardTitle";
 import { formatElapsed } from "./formatElapsed";
 import { waitingPrerequisites } from "./prerequisites";
+import { waitingReason } from "./waitingReason";
 import { shortBranch } from "./projectSummary";
 import { formatTokens, moduleCards, sumUsage, totalTokens, usageBreakdown, type UsageSum } from "./tokenUsage";
 
@@ -276,7 +277,7 @@ export function AgentNode({
   const idleLine = () => {
     if (agent.kind === "coder") {
       if (status === "done") return <span><span className="ac-check">✓</span> {t.ac_all_passed}</span>;
-      if (queued.length) return t.ac_waiting_slot;
+      if (queued.length) return waitingReason(queued, tasks, hasReviewer) === "deps" ? t.ac_waiting_deps : t.ac_waiting_slot;
       if (moduleStates.some(({ s }) => s === "awaiting_review" || s === "reviewing")) return t.ac_ms_awaiting_review;
       if (moduleStates.some(({ s }) => s === "attention" || s === "review_failed")) {
         return <span className="ac-bad-text">{t.ac_release_hint}</span>;

@@ -1247,6 +1247,41 @@ describe("AgentCanvasView", () => {
       await waitFor(() => expect(setManualPause).toHaveBeenCalledWith("p1", "a1", false));
     });
 
+    it("全部卡片都做完了：沒有東西可暫停，「全部暫停」不顯示；有排隊或執行中的卡就顯示", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([card({ id: "A", title: "A", status: "done", outcome: "success", agent_id: "a1" })]);
+      view();
+      await screen.findByTestId("agent-a1");
+      expect(screen.queryByTestId("ac-pause-all")).toBeNull();
+
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "A", status: "done", outcome: "success", agent_id: "a1" }),
+        card({ id: "B", title: "B", status: "queued", agent_id: "a1" }),
+      ]);
+      act(() => tasksUpdated?.());
+      expect(await screen.findByTestId("ac-pause-all")).toBeTruthy();
+    });
+
+    it("排隊的卡在等別位工程師的前置：寫「等待前置模組完成」，不是「等待全域名額」", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "a2", name: "B" })]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "D", title: "D 前置", status: "running", agent_id: "a2" }),
+        card({ id: "Q", title: "Q 後續", status: "queued", agent_id: "a1", depends_on: JSON.stringify(["D"]) }),
+      ]);
+      view();
+      const node = await screen.findByTestId("agent-a1");
+      expect(within(node).getByText("排隊中，等待前置模組完成")).toBeTruthy();
+      expect(within(node).queryByText("排隊中，等待全域名額")).toBeNull();
+    });
+
+    it("排隊的卡沒有前置在等：維持「等待全域名額」", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent()]);
+      vi.mocked(listTasks).mockResolvedValue([card({ id: "Q", title: "Q", status: "queued", agent_id: "a1" })]);
+      view();
+      const node = await screen.findByTestId("agent-a1");
+      expect(within(node).getByText("排隊中，等待全域名額")).toBeTruthy();
+    });
+
     it("頂列「全部暫停」暫停整個專案，再按一次繼續", async () => {
       vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "a2", name: "B" })]);
       vi.mocked(listTasks).mockResolvedValue([]);
