@@ -505,12 +505,18 @@ async fn prepare_for_merge(client: &crate::vcs::git::GitClient) -> Result<(), St
 
 /// 工程師卡開工前，把協調者最後一次成功合併的結果合進來（通常是快轉）：一輪合併完、
 /// 同一個專案開新一輪時，工程師要從整合後的版本開始，而不是自己的舊分支。
-/// 回傳有沒有合進新東西。衝突：還原、回 Err（派工失敗、工程師暫停）。
+/// 回傳有沒有合進新東西。衝突：比照 `premerge_prerequisites`，合併停在原地、回報衝突檔案，
+/// 由工程師的 Claude 開工時先解決（不是還原後讓派工失敗）。
+pub(crate) struct IntegrationSync {
+    pub changed: bool,
+    pub conflict: Option<PremergeConflict>,
+}
+
 pub(crate) async fn sync_with_integration(
     pool: &sqlx::SqlitePool,
     task: &TaskRow,
     worktree: &std::path::Path,
-) -> Result<bool, String> {
+) -> Result<IntegrationSync, String> {
     let integrated: Option<String> = sqlx::query_scalar(
         "SELECT end_sha FROM tasks WHERE card_kind = 'merge' AND outcome = 'success' AND end_sha IS NOT NULL
          ORDER BY finished_at DESC LIMIT 1",
@@ -518,23 +524,23 @@ pub(crate) async fn sync_with_integration(
     .fetch_optional(pool)
     .await
     .map_err(|e| e.to_string())?;
-    let Some(sha) = integrated else { return Ok(false) };
+    let Some(sha) = integrated else { return Ok(IntegrationSync { changed: false, conflict: None }) };
     let _ = task;
     let client = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
     prepare_for_merge(&client).await?;
     let before = client.head_sha().await?;
     if let Err(e) = client.merge_rev(&sha, "Merge 整合結果（上一輪合併）").await {
         let files = client.conflicted_files().await.unwrap_or_default();
-        if client.is_merge_in_progress().await {
-            let _ = client.merge_abort().await;
+        if files.is_empty() {
+            if client.is_merge_in_progress().await {
+                let _ = client.merge_abort().await;
+            }
+            return Err(format!("開工前合併上一輪的整合結果失敗：{e}"));
         }
-        return Err(if files.is_empty() {
-            format!("開工前合併上一輪的整合結果失敗：{e}")
-        } else {
-            format!("開工前合併上一輪的整合結果有衝突：{}。請在工作資料夾解決後按重試", files.join("、"))
-        });
+        let conflict = PremergeConflict { title: "上一輪的整合結果".to_string(), files, pending: Vec::new() };
+        return Ok(IntegrationSync { changed: false, conflict: Some(conflict) });
     }
-    Ok(client.head_sha().await? != before)
+    Ok(IntegrationSync { changed: client.head_sha().await? != before, conflict: None })
 }
 
 /// 開工前合併前置的結果。
@@ -1065,10 +1071,24 @@ impl Dispatcher for RealDispatcher {
             // 先跟上上一輪的整合結果、再合別位工程師的前置；之後才記 start_sha，
             // 審查範圍只含這張卡自己的改動。
             // 接著做的卡片跳過：半成品還沒 commit，同步與合併會動到它，start_sha 也記過了。
+            let mut sync_conflict: Option<PremergeConflict> = None;
             if !resume && (task.card_kind == crate::tasks::workflow::KIND_WORK || task.card_kind == crate::tasks::workflow::KIND_FIX) {
-                sync_with_integration(&project.pool, task, &wt).await?;
+                sync_conflict = sync_with_integration(&project.pool, task, &wt).await?.conflict;
             }
-            let premerge = if resume { Premerge { merged: Vec::new(), conflict: None } } else { premerge_prerequisites(&project.pool, task, &wt).await? };
+            let premerge = if resume {
+                Premerge { merged: Vec::new(), conflict: None }
+            } else if let Some(mut conflict) = sync_conflict {
+                // 整合結果衝突停著時 git 不接受別的合併：前置先列進提示，等工程師解完再合。
+                conflict.pending = crate::tasks::workflow::premerge_plan(&project.pool, task)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .map(|(_, title, sha)| (title, sha))
+                    .collect();
+                Premerge { merged: Vec::new(), conflict: Some(conflict) }
+            } else {
+                premerge_prerequisites(&project.pool, task, &wt).await?
+            };
             let merged = premerge.merged;
             if !merged.is_empty() {
                 let json = serde_json::to_string(&merged).unwrap_or_default();
@@ -3893,7 +3913,7 @@ mod agent_dispatch_tests {
         let card = store::get_task(&pool, &card).await.unwrap().unwrap();
 
         // 還沒有任何合併：什麼都不做。
-        assert!(!sync_with_integration(&pool, &card, &x_wt).await.unwrap());
+        assert!(!sync_with_integration(&pool, &card, &x_wt).await.unwrap().changed);
 
         // 協調者合併出的整合結果：多了別人的檔案。
         StdCommand::new("git").args(["checkout", "-q", "-b", "integration"]).current_dir(repo.path()).status().unwrap();
@@ -3906,10 +3926,42 @@ mod agent_dispatch_tests {
             .await
             .unwrap();
 
-        assert!(sync_with_integration(&pool, &card, &x_wt).await.unwrap());
+        assert!(sync_with_integration(&pool, &card, &x_wt).await.unwrap().changed);
         assert!(x_wt.join("other.txt").exists());
         // 已經包含：不再合。
-        assert!(!sync_with_integration(&pool, &card, &x_wt).await.unwrap());
+        assert!(!sync_with_integration(&pool, &card, &x_wt).await.unwrap().changed);
+    }
+
+    /// 上一輪的整合結果跟工程師自己的內容衝突：比照前置合併，留給工程師解，不還原後失敗。
+    #[tokio::test]
+    async fn a_conflict_with_the_integration_result_is_left_for_the_coder_to_resolve() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let pool = mem_pool().await;
+        let x = coder(&pool, repo.path(), "X").await;
+        let x_wt = prepare_agent_worktree(&pool, storage.path(), &x).await.unwrap();
+        commit_file(&x_wt, "a.txt", "X 自己的版本\n");
+        let card = store::create_task(&pool, "第二輪", "", &repo.path().to_string_lossy(), true, false).await.unwrap();
+        agents::assign_task(&pool, &card, Some(&x.id)).await.unwrap();
+        let card = store::get_task(&pool, &card).await.unwrap().unwrap();
+        StdCommand::new("git").args(["checkout", "-q", "-b", "integration"]).current_dir(repo.path()).status().unwrap();
+        let integrated = commit_file(repo.path(), "a.txt", "整合結果的版本\n");
+        let merge = store::create_task(&pool, "合併", "", &repo.path().to_string_lossy(), true, false).await.unwrap();
+        sqlx::query("UPDATE tasks SET card_kind = 'merge', status = 'done', outcome = 'success', end_sha = ?, finished_at = 1 WHERE id = ?")
+            .bind(&integrated)
+            .bind(&merge)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let sync = sync_with_integration(&pool, &card, &x_wt).await.unwrap();
+
+        let conflict = sync.conflict.expect("衝突要回報，不能是 Err");
+        assert_eq!(conflict.files, vec!["a.txt".to_string()]);
+        let merging = StdCommand::new("git").args(["rev-parse", "-q", "--verify", "MERGE_HEAD"]).current_dir(&x_wt).status().unwrap();
+        assert!(merging.success(), "合併要停在原地");
+        assert!(premerge_conflict_note(&conflict).contains("整合結果"));
     }
 
     #[tokio::test]
