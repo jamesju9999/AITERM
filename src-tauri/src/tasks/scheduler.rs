@@ -860,6 +860,8 @@ struct TaskFinishedEvent {
 #[async_trait::async_trait]
 pub trait Dispatcher: Send + Sync {
     async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String>;
+    /// 排程器自己改了卡片狀態（例如派工失敗標成 failed）之後呼叫：正式版通知畫面重讀。
+    fn changed(&self) {}
 }
 
 /// The production dispatcher: spawn a visible `claude` tab, type the prompt,
@@ -941,6 +943,10 @@ impl RealDispatcher {
 
 #[async_trait::async_trait]
 impl Dispatcher for RealDispatcher {
+    fn changed(&self) {
+        let _ = self.app.emit("tasks-updated", ());
+    }
+
     async fn dispatch(&self, project: &ProjectHandle, task: &TaskRow) -> Result<(), String> {
         // 派工會同時進行（見 drain_once），但準備階段的 git 操作（建 worktree、開工前合併）
         // 一次一個：同一個 repo 的多個 worktree 共用 .git，同時寫會撞到 git 的鎖檔。
@@ -1682,6 +1688,7 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
             if let Err(e) = dispatcher.dispatch(project, &next).await {
                 eprintln!("dispatch {} failed: {e}", next.id);
                 let _ = store::finish_task(&project.pool, &next.id, "failed", Some(&e), None).await;
+                dispatcher.changed();
             }
         }
     }
@@ -1800,6 +1807,7 @@ pub async fn drain_once(reg: &ProjectRegistry, dispatcher: &dyn Dispatcher, max_
                         if let Some(aid) = &head.agent_id {
                             let _ = crate::tasks::agents::set_paused(&project.pool, aid, Some(&head.id)).await;
                         }
+                        dispatcher.changed();
                     }
                 }));
                 dispatched = true;
@@ -2695,6 +2703,37 @@ mod loop_tests {
         assert_eq!(titles(&all, "queued"), vec!["B"], "暫停後 B 不能被接著派出去");
         let agent = crate::tasks::agents::get_agent(&project.pool, &c1).await.unwrap().unwrap();
         assert_eq!(agent.paused_task_id.as_deref(), Some(a.id.as_str()));
+    }
+
+    /// 派工失敗要通知畫面重讀（不然看板停在失敗之前，使用者看不到「重試」鈕；實測抓到）。
+    #[tokio::test]
+    async fn a_failed_dispatch_tells_the_ui_to_refresh() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct FailsAndCounts(AtomicUsize);
+        #[async_trait::async_trait]
+        impl Dispatcher for FailsAndCounts {
+            async fn dispatch(&self, _p: &ProjectHandle, _t: &TaskRow) -> Result<(), String> {
+                Err("boom".into())
+            }
+            fn changed(&self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        // Agent 卡：派工失敗 → 暫停 Agent，畫面要刷新。
+        let (reg, project, _parent) = one_project_registry().await;
+        let c1 = agent_in(&project, "Coder1").await;
+        card_for(&project, "A", &c1, false).await;
+        let d = FailsAndCounts(AtomicUsize::new(0));
+        drain_once(&reg, &d, 5).await;
+        assert!(d.0.load(Ordering::SeqCst) >= 1, "Agent 卡派工失敗沒有通知畫面");
+
+        // 互動卡（走另一條路徑）也一樣。
+        let (reg2, project2, _parent2) = one_project_registry().await;
+        let id = store::create_task(&project2.pool, "I", "", "/r", true, true).await.unwrap();
+        store::move_task(&project2.pool, &id, store::STATUS_QUEUED, 1.0).await.unwrap();
+        let d2 = FailsAndCounts(AtomicUsize::new(0));
+        drain_once(&reg2, &d2, 5).await;
+        assert!(d2.0.load(Ordering::SeqCst) >= 1, "互動卡派工失敗沒有通知畫面");
     }
 
     #[tokio::test]
