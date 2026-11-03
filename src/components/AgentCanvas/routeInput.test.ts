@@ -70,6 +70,14 @@ describe("routeInput", () => {
   it("系統提示要求拿不準時選完整流程", () => {
     expect(buildRouteSystem()).toContain("拿不準 fast 還是 requirement 時選 requirement");
   });
+
+  // 實測：「幫我啟動應用程式」這類要 Agent 執行操作的要求被當成新需求，走了規格審查、合併、驗收整套。
+  it("tells the router that run-something requests are not new requirements", () => {
+    const sys = buildRouteSystem();
+    expect(sys).toContain("啟動應用程式");
+    expect(sys).toContain("執行一個操作");
+    expect(sys).toContain("不要選 requirement");
+  });
 });
 
 describe("dispatchInput", () => {
