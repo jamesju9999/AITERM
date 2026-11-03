@@ -109,7 +109,7 @@ pub async fn watch(
     thresholds: Thresholds,
     mode: WatchMode,
 ) -> TaskOutcome {
-    watch_with_quota(pty, tab_id, control, baselines, thresholds, mode, &|| false, &|| false).await
+    watch_with_quota(pty, tab_id, control, baselines, thresholds, mode, &|| false, &|| false, &|| false).await
 }
 
 /// 同 `watch`，另外問 `waiting_for_quota`：派出去的 claude 撞到用量上限、
@@ -126,6 +126,9 @@ pub async fn watch_with_quota(
     waiting_for_quota: &(dyn Fn() -> bool + Send + Sync),
     // 等決策（`ask_human` 還沒回答）：這段期間印的完成標記不算結案。
     holding_marker: &(dyn Fn() -> bool + Send + Sync),
+    // 使用者在分頁裡接手對話了（自動卡才會問；一旦為 true 就不會再變回 false）：之後比照互動卡，
+    // bell／完成標記／安靜逾時都不算結案，只剩離開碼、取消與「標記完成」。
+    user_took_over: &(dyn Fn() -> bool + Send + Sync),
 ) -> TaskOutcome {
     let start = tokio::time::Instant::now();
     let exit_baseline = pty.last_exit_code(tab_id);
@@ -148,6 +151,12 @@ pub async fn watch_with_quota(
             baselines.bell = bell;
         }
         if holding_marker() {
+            baselines.marker = marker;
+        }
+        let took_over = mode == WatchMode::Auto && user_took_over();
+        if took_over {
+            // 接手前後的 bell／標記都吸收掉，之後也不能拿來當完成。
+            baselines.bell = bell;
             baselines.marker = marker;
         }
 
@@ -173,7 +182,7 @@ pub async fn watch_with_quota(
         // 5. stuck — Auto mode only.
         let ran_ms = start.elapsed().as_millis() as u64;
         let quiet_ms = pty.ms_since_output(tab_id).unwrap_or(0);
-        if mode == WatchMode::Auto && !waiting && ran_ms >= thresholds.min_run_ms && quiet_ms >= thresholds.quiet_stuck_ms {
+        if mode == WatchMode::Auto && !waiting && !took_over && ran_ms >= thresholds.min_run_ms && quiet_ms >= thresholds.quiet_stuck_ms {
             return TaskOutcome::Failed(stuck_message(thresholds.quiet_stuck_ms));
         }
 
@@ -332,7 +341,7 @@ mod tests {
         let not_waiting = || false;
         let held = || holding.load(std::sync::atomic::Ordering::SeqCst);
         let watched = async {
-            let o = watch_with_quota(&pty, &tab, rx, base, test_thresholds(), WatchMode::Auto, &not_waiting, &held).await;
+            let o = watch_with_quota(&pty, &tab, rx, base, test_thresholds(), WatchMode::Auto, &not_waiting, &held, &|| false).await;
             (o, std::time::Instant::now())
         };
         let ((outcome, finished_at), _) = tokio::join!(watched, driver);
@@ -522,7 +531,7 @@ mod tests {
         let base = baselines_now(&pty, &tab);
 
         let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
-        let watch_fut = watch_with_quota(&pty, &tab, rx, base, test_thresholds(), WatchMode::Auto, &is_waiting, &|| false);
+        let watch_fut = watch_with_quota(&pty, &tab, rx, base, test_thresholds(), WatchMode::Auto, &is_waiting, &|| false, &|| false);
         tokio::pin!(watch_fut);
 
         pty.write(&tab, b"printf '\\a'\n").unwrap();
@@ -549,7 +558,7 @@ mod tests {
         settle_exit_code(&pty, &tab).await;
         let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
         let thresholds = Thresholds { quiet_stuck_ms: 200, poll_ms: 50, min_run_ms: 100 };
-        let watch_fut = watch_with_quota(&pty, &tab, rx, baselines_now(&pty, &tab), thresholds, WatchMode::Auto, &|| true, &|| false);
+        let watch_fut = watch_with_quota(&pty, &tab, rx, baselines_now(&pty, &tab), thresholds, WatchMode::Auto, &|| true, &|| false, &|| false);
         tokio::pin!(watch_fut);
         assert!(
             tokio::time::timeout(Duration::from_millis(1_000), &mut watch_fut).await.is_err(),
@@ -557,5 +566,69 @@ mod tests {
         );
         tx.send(WatchControl::Cancel).unwrap();
         assert!(matches!(watch_fut.await, TaskOutcome::Cancelled));
+    }
+
+    /// 使用者在分頁裡接手對話：bell（每回完一輪就響）不再算完成，已經發生的也不能事後算數。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn once_the_user_takes_over_a_bell_is_not_completion() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        settle_exit_code(&pty, &tab).await;
+        let took_over = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let t = took_over.clone();
+        let user_took_over = move || t.load(std::sync::atomic::Ordering::SeqCst);
+        let base = baselines_now(&pty, &tab);
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        let watch_fut = watch_with_quota(&pty, &tab, rx, base, test_thresholds(), WatchMode::Auto, &|| false, &|| false, &user_took_over);
+        tokio::pin!(watch_fut);
+
+        // 使用者先接手，之後 Claude 回完一輪（bell）。
+        took_over.store(true, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        pty.write(&tab, b"printf '\\a'\n").unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1_500), &mut watch_fut).await.is_err(),
+            "使用者接手後，bell 被當成完成"
+        );
+        assert!(pty.bell_count(&tab).unwrap_or(0) > base.bell, "測試前提：bell 真的有送出");
+        tx.send(WatchControl::Cancel).unwrap();
+        assert!(matches!(watch_fut.await, TaskOutcome::Cancelled));
+    }
+
+    /// 使用者接手後想一陣子沒動，不能被判「疑似卡住」。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn silence_after_the_user_took_over_is_not_stuck() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        settle_exit_code(&pty, &tab).await;
+        let (tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        let thresholds = Thresholds { quiet_stuck_ms: 200, poll_ms: 50, min_run_ms: 100 };
+        let watch_fut = watch_with_quota(&pty, &tab, rx, baselines_now(&pty, &tab), thresholds, WatchMode::Auto, &|| false, &|| false, &|| true);
+        tokio::pin!(watch_fut);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1_000), &mut watch_fut).await.is_err(),
+            "使用者接手後的安靜被判成卡住"
+        );
+        tx.send(WatchControl::Cancel).unwrap();
+        assert!(matches!(watch_fut.await, TaskOutcome::Cancelled));
+    }
+
+    /// 接手不影響硬訊號：Claude 行程以失敗離開，照常結案（用非 0 離開碼：0→0 本來就看不出變化）。
+    #[tokio::test]
+    #[cfg_attr(windows, ignore = "real-ConPTY test, broken on Windows CI — tracked separately")]
+    async fn a_failing_exit_still_finishes_a_card_the_user_took_over() {
+        let pty = PtyManager::new();
+        let tab = pty.create_with_callback(size(), |_| {}).unwrap();
+        settle_exit_code(&pty, &tab).await;
+        let (_tx, rx) = tokio::sync::oneshot::channel::<WatchControl>();
+        let base = baselines_now(&pty, &tab);
+        let watch_fut = watch_with_quota(&pty, &tab, rx, base, test_thresholds(), WatchMode::Auto, &|| false, &|| false, &|| true);
+        tokio::pin!(watch_fut);
+        pty.write(&tab, b"false\n").unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(5), &mut watch_fut).await.expect("離開碼要結案");
+        assert!(matches!(outcome, TaskOutcome::Failed(_)), "{outcome:?}");
     }
 }

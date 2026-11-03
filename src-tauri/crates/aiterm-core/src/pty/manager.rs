@@ -12,6 +12,8 @@ use super::shell::{default_shell, ShellSpec};
 #[derive(Default)]
 pub struct PtyManager {
     sessions: Mutex<HashMap<String, Arc<PtySession>>>,
+    /// 每個 session 使用者（不是程式）送出的對話行數，見 `user_input`。
+    user_input: Mutex<HashMap<String, super::user_input::UserInputTracker>>,
 }
 
 /// True when `elevated` already holds a channel in the `Connected` state.
@@ -86,6 +88,16 @@ impl PtyManager {
         self.get(id)?.write(data)
     }
 
+    /// 記錄使用者從前端送進這個 session 的輸入（程式自己寫的不要走這裡）。
+    pub fn note_user_input(&self, id: &str, data: &[u8]) {
+        self.user_input.lock().entry(id.to_string()).or_default().feed(data);
+    }
+
+    /// 使用者在這個 session 送出了幾行夠長的對話（沒有就是 0）。
+    pub fn user_input_lines(&self, id: &str) -> u64 {
+        self.user_input.lock().get(id).map(|t| t.lines()).unwrap_or(0)
+    }
+
     pub fn resize(&self, id: &str, size: PtySize) -> PtyResult<()> {
         self.get(id)?.resize(size)
     }
@@ -96,6 +108,7 @@ impl PtyManager {
             .lock()
             .remove(id)
             .ok_or_else(|| PtyError::SessionNotFound(id.to_string()))?;
+        self.user_input.lock().remove(id);
         session.kill()?;
         // Dropping the last Arc below will join the reader thread.
         drop(session);
@@ -257,6 +270,16 @@ impl PtyManager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn user_input_lines_count_only_what_the_user_noted() {
+        let m = PtyManager::new();
+        assert_eq!(m.user_input_lines("s1"), 0);
+        m.note_user_input("s1", "請幫我看一下這裡\r".as_bytes());
+        m.note_user_input("s1", b"1\r");
+        assert_eq!(m.user_input_lines("s1"), 1);
+        assert_eq!(m.user_input_lines("other"), 0, "別的 session 不受影響");
+    }
+
     use super::*;
     use std::io::{Read, Write};
     use std::sync::mpsc;

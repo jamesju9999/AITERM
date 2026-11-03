@@ -880,6 +880,37 @@ pub trait Dispatcher: Send + Sync {
     fn changed(&self) {}
 }
 
+/// 使用者有沒有在這張自動卡的分頁裡接手對話：夠長的整行輸入比派工當下多，就是接手了，而且不會再變回來。
+pub(crate) struct TakeOverLatch {
+    base_lines: u64,
+    took: std::sync::atomic::AtomicBool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum TakeOver {
+    No,
+    /// 剛剛才接手：呼叫端要把卡片改成互動卡（只會回傳一次）。
+    JustNow,
+    Already,
+}
+
+impl TakeOverLatch {
+    pub(crate) fn new(base_lines: u64) -> Self {
+        Self { base_lines, took: std::sync::atomic::AtomicBool::new(false) }
+    }
+
+    pub(crate) fn observe(&self, lines: u64) -> TakeOver {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.took.load(SeqCst) {
+            return TakeOver::Already;
+        }
+        if lines <= self.base_lines {
+            return TakeOver::No;
+        }
+        if self.took.swap(true, SeqCst) { TakeOver::Already } else { TakeOver::JustNow }
+    }
+}
+
 /// The production dispatcher: spawn a visible `claude` tab, type the prompt,
 /// mark the card running, then spawn a `monitor::watch` task that finishes
 /// the card and re-pokes the scheduler when it ends.
@@ -1370,6 +1401,32 @@ impl Dispatcher for RealDispatcher {
                 let task_id = task_id.clone();
                 move || quota.is_holding_marker(&task_id)
             };
+            // 使用者在分頁裡接手對話（送出夠長的整行輸入）：這張自動卡改成互動卡——
+            // 之後不靠 bell／逾時結案，畫面也改顯示「互動卡：做完請按『標記完成』」。Codex 有自己的收尾機制，不適用。
+            let user_took_over = {
+                let (pty, pool, app) = (pty.clone(), pool.clone(), app.clone());
+                let (tab_id, task_id) = (tab_id.clone(), task_id.clone());
+                let latch = TakeOverLatch::new(pty.user_input_lines(&tab_id));
+                move || {
+                    if codex {
+                        return false;
+                    }
+                    match latch.observe(pty.user_input_lines(&tab_id)) {
+                        TakeOver::No => false,
+                        TakeOver::Already => true,
+                        TakeOver::JustNow => {
+                            let (pool, app, task_id) = (pool.clone(), app.clone(), task_id.clone());
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(e) = store::set_interactive(&pool, &task_id, true).await {
+                                    eprintln!("set_interactive {task_id}: {e}");
+                                }
+                                let _ = app.emit("tasks-updated", ());
+                            });
+                            true
+                        }
+                    }
+                }
+            };
             // Codex（TUI）：做完不會自己退出，由看守在這一輪結束時送 `/exit`，再直接通知 watch 做完了
             // （結束碼在 Windows 上判斷不了，見 dispatch::watch_codex_tui）。非 0 的結束碼仍由 watch 收成失敗。
             let codex_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1391,7 +1448,7 @@ impl Dispatcher for RealDispatcher {
                 });
             }
             let outcome = monitor::watch_with_quota(
-                &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode, &waiting, &holding,
+                &pty, &tab_id, cancel_rx, baselines, thresholds, watch_mode, &waiting, &holding, &user_took_over,
             ).await;
             codex_stop.store(true, std::sync::atomic::Ordering::Relaxed);
             quota.unregister(&task_id);
@@ -4387,5 +4444,27 @@ mod agent_dispatch_tests {
         let again = prepare_review_worktree(storage.path(), &reviewer.id, &card).await.unwrap();
         assert_eq!(again, first);
         assert!(!again.join("scribble.txt").exists(), "重試要從乾淨的受審版本開始");
+    }
+}
+
+#[cfg(test)]
+mod take_over_tests {
+    use super::*;
+
+    #[test]
+    fn the_latch_trips_once_when_the_user_sends_more_lines_than_at_dispatch() {
+        let l = TakeOverLatch::new(2);
+        assert_eq!(l.observe(2), TakeOver::No, "派工當下的行數不算接手");
+        assert_eq!(l.observe(3), TakeOver::JustNow);
+        assert_eq!(l.observe(3), TakeOver::Already, "只通知一次");
+        assert_eq!(l.observe(2), TakeOver::Already, "不會變回沒接手");
+    }
+
+    #[test]
+    fn the_latch_stays_off_without_input() {
+        let l = TakeOverLatch::new(0);
+        for _ in 0..5 {
+            assert_eq!(l.observe(0), TakeOver::No);
+        }
     }
 }
