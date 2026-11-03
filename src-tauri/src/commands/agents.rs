@@ -560,16 +560,7 @@ pub async fn agents_method_discussion_start(
     full.push_str(&crate::tasks::references::prompt_note(&refs));
     let settings = dir.join("claude-settings.json");
     std::fs::write(&settings, crate::tasks::method_discussion::settings_json(&refs)).map_err(|e| e.to_string())?;
-    let extra = [
-        crate::tasks::quota::settings_flag(&settings),
-        crate::tasks::references::add_dir_args(&refs),
-        // 決定檔所在資料夾也要能寫：它在程式庫之外
-        crate::tasks::quota::path_flag("--add-dir", &dir),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(" ");
+    let extra = crate::tasks::method_discussion::extra_args(&settings, &refs, &dir)?;
     let session_id = uuid::Uuid::new_v4().to_string();
     let (tab_id, _) = crate::tasks::dispatch::spawn_and_run(
         &app,

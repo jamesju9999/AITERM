@@ -42,6 +42,20 @@ pub fn read_decision(project_path: &Path, id: &str) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
+/// 啟動討論 Claude 的額外參數：設定檔、每個參考資料夾、決定檔資料夾。
+/// 路徑含 `" $ ` %` 時引號包不住，回傳錯誤；不能靜默丟掉（少了 `--settings` 唯讀規則就消失，
+/// 少了 `--add-dir` AI 寫決定檔會卡在權限詢問）。
+pub fn extra_args(settings: &Path, refs: &[Reference], dir: &Path) -> Result<String, String> {
+    use crate::tasks::quota::path_flag;
+    let bad = |p: &str| format!("路徑含無法安全傳給 Claude 的字元（引號、$、`、%）：{p}。請改用不含這些字元的資料夾。");
+    let mut flags = vec![path_flag("--settings", settings).ok_or_else(|| bad(&settings.display().to_string()))?];
+    for r in refs {
+        flags.push(path_flag("--add-dir", Path::new(&r.path)).ok_or_else(|| bad(&r.path))?);
+    }
+    flags.push(path_flag("--add-dir", dir).ok_or_else(|| bad(&dir.display().to_string()))?);
+    Ok(flags.join(" "))
+}
+
 /// 討論 session 的設定檔：禁止用內建工具編輯參考資料夾（跟派工同一條規則）。
 pub fn settings_json(refs: &[Reference]) -> String {
     crate::tasks::references::settings_with_deny("{}", &crate::tasks::references::deny_edit_rules(refs))
@@ -50,6 +64,25 @@ pub fn settings_json(refs: &[Reference]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extra_args_refuse_paths_that_cannot_be_quoted_instead_of_dropping_them() {
+        let refs = vec![Reference { path: "/data/ref$x".into(), note: String::new() }];
+        let err = extra_args(Path::new("/p/s.json"), &refs, Path::new("/p/d")).unwrap_err();
+        assert!(err.contains("ref$x"), "{err}");
+        let err = extra_args(Path::new("/p/s$.json"), &[], Path::new("/p/d")).unwrap_err();
+        assert!(err.contains("s$.json"), "{err}");
+        let err = extra_args(Path::new("/p/s.json"), &[], Path::new("/p/d`")).unwrap_err();
+        assert!(err.contains("d`"), "{err}");
+    }
+
+    #[test]
+    fn extra_args_carry_settings_and_every_dir() {
+        let refs = vec![Reference { path: "/data/ref".into(), note: String::new() }];
+        let args = extra_args(Path::new("/p/s.json"), &refs, Path::new("/p/d")).unwrap();
+        assert_eq!(args, "--settings \"/p/s.json\" --add-dir \"/data/ref\" --add-dir \"/p/d\"");
+    }
+
 
     #[test]
     fn an_oversized_decision_file_is_ignored() {
