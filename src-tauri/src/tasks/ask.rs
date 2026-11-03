@@ -12,6 +12,9 @@ pub const ALLOWED_TOOL: &str = "mcp__aiterm__ask_human";
 /// 寫進專案記事本的工具，見 `tasks::notes`。
 pub const REMEMBER_TOOL: &str = "remember";
 pub const REMEMBER_ALLOWED: &str = "mcp__aiterm__remember";
+/// 把一句話送給另一位正在執行的 Agent，見 `tasks::tell`。
+pub const TELL_TOOL: &str = "tell_agent";
+pub const TELL_ALLOWED: &str = "mcp__aiterm__tell_agent";
 
 /// 一則 JSON-RPC 訊息要怎麼處理。
 #[derive(Debug, PartialEq)]
@@ -24,6 +27,8 @@ pub enum Rpc {
     Ask { id: Value, question: NewQuestion },
     /// 呼叫 `remember`：由接收器寫進專案記事本。
     Remember { id: Value, note: String },
+    /// 呼叫 `tell_agent`：由接收器送進對方正在執行的對話。
+    Tell { id: Value, to: String, message: String },
     /// 資料庫技能的工具（只有裝了技能的卡才會出現）：由接收器檢查權限、執行、記錄。
     Db { id: Value, call: DbCall },
 }
@@ -97,6 +102,23 @@ pub fn remember_tool_definition() -> Value {
     })
 }
 
+pub fn tell_tool_definition() -> Value {
+    json!({
+        "name": TELL_TOOL,
+        "description": "把一句話即時送給另一位正在執行的 Agent（用名稱指定，例如「工程師2」），像在同一個 session 裡插話。\
+適合要當場協調的事：你改了他會用到的介面或名稱、發現他正在做的方向會跟你衝突。對方沒有在執行時會失敗，\
+那就改用 remember 記進專案記事本。一句話講完，不要貼大段內容；對方不需要回覆。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "to": { "type": "string", "description": "對方的名稱，例如「工程師2」" },
+                "message": { "type": "string", "description": "要說的話，一兩句" }
+            },
+            "required": ["to", "message"]
+        }
+    })
+}
+
 pub fn tool_definition() -> Value {
     json!({
         "name": TOOL_NAME,
@@ -152,7 +174,7 @@ pub fn classify_with(msg: &Value, db: bool) -> Rpc {
         // 新版協定的探測：回空結果，Claude Code 就改走 initialize（實測）。
         "server/discover" | "ping" => Rpc::Respond(ok(&id, json!({}))),
         "tools/list" => {
-            let mut tools = vec![tool_definition(), remember_tool_definition()];
+            let mut tools = vec![tool_definition(), remember_tool_definition(), tell_tool_definition()];
             if db {
                 tools.extend(db_tool_definitions());
             }
@@ -172,6 +194,13 @@ pub fn classify_with(msg: &Value, db: bool) -> Rpc {
                 return match str_arg(params.get("arguments").unwrap_or(&Value::Null), "note") {
                     Some(note) => Rpc::Remember { id, note },
                     None => Rpc::Respond(tool_result(&id, "remember 需要 note（要記的事）", true)),
+                };
+            }
+            if name == TELL_TOOL {
+                let args = params.get("arguments").unwrap_or(&Value::Null);
+                return match (str_arg(args, "to"), str_arg(args, "message")) {
+                    (Some(to), Some(message)) => Rpc::Tell { id, to, message },
+                    _ => Rpc::Respond(tool_result(&id, "tell_agent 需要 to（對方名稱）與 message（要說的話）", true)),
                 };
             }
             if name != TOOL_NAME {
@@ -270,7 +299,7 @@ pub fn mcp_config_json_for(ask_url: Option<&str>, browser_out: Option<&std::path
 
 /// `--allowedTools` 的值；兩個都沒有就是 `None`。
 pub fn allowed_tools(ask: bool, browser: bool) -> Option<String> {
-    let tools: Vec<&str> = [(ask, ALLOWED_TOOL), (ask, REMEMBER_ALLOWED), (browser, BROWSER_TOOLS)].iter().filter(|(on, _)| *on).map(|(_, t)| *t).collect();
+    let tools: Vec<&str> = [(ask, ALLOWED_TOOL), (ask, REMEMBER_ALLOWED), (ask, TELL_ALLOWED), (browser, BROWSER_TOOLS)].iter().filter(|(on, _)| *on).map(|(_, t)| *t).collect();
     (!tools.is_empty()).then(|| tools.join(" "))
 }
 
@@ -284,8 +313,8 @@ mod tests {
             let Rpc::Respond(v) = classify_with(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), db) else { panic!() };
             v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>()
         };
-        assert_eq!(list(false), vec!["ask_human", "remember"]);
-        assert_eq!(list(true), vec!["ask_human", "remember", "db_list_connections", "db_list_schemas", "db_list_tables", "db_table_schema", "db_query"]);
+        assert_eq!(list(false), vec!["ask_human", "remember", "tell_agent"]);
+        assert_eq!(list(true), vec!["ask_human", "remember", "tell_agent", "db_list_connections", "db_list_schemas", "db_list_tables", "db_table_schema", "db_query"]);
     }
 
     #[test]
@@ -334,8 +363,11 @@ mod tests {
 
     #[test]
     fn allowed_tools_for_each_combination() {
-        assert_eq!(allowed_tools(true, false).as_deref(), Some("mcp__aiterm__ask_human mcp__aiterm__remember"));
-        assert_eq!(allowed_tools(true, true).as_deref(), Some("mcp__aiterm__ask_human mcp__aiterm__remember mcp__playwright"));
+        assert_eq!(allowed_tools(true, false).as_deref(), Some("mcp__aiterm__ask_human mcp__aiterm__remember mcp__aiterm__tell_agent"));
+        assert_eq!(
+            allowed_tools(true, true).as_deref(),
+            Some("mcp__aiterm__ask_human mcp__aiterm__remember mcp__aiterm__tell_agent mcp__playwright")
+        );
         assert_eq!(allowed_tools(false, true).as_deref(), Some("mcp__playwright"));
         assert_eq!(allowed_tools(false, false), None);
     }
@@ -387,6 +419,20 @@ mod tests {
         let Rpc::Respond(bad) = call(json!({"note":"  "})) else { panic!() };
         assert_eq!(bad["result"]["isError"], true);
         assert!(REMEMBER_ALLOWED.ends_with(REMEMBER_TOOL) && REMEMBER_ALLOWED.contains("aiterm"));
+    }
+
+    #[test]
+    fn tell_agent_needs_both_a_target_and_a_message() {
+        let call = |args: Value| classify(&json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"tell_agent","arguments":args}}));
+        match call(json!({"to":" 工程師2 ","message":" 我改名了 "})) {
+            Rpc::Tell { id, to, message } => assert_eq!((id, to.as_str(), message.as_str()), (json!(8), "工程師2", "我改名了")),
+            other => panic!("{other:?}"),
+        }
+        for bad in [json!({"to":"工程師2"}), json!({"message":"x"}), json!({"to":" ","message":"x"})] {
+            let Rpc::Respond(r) = call(bad) else { panic!() };
+            assert_eq!(r["result"]["isError"], true);
+        }
+        assert!(TELL_ALLOWED.ends_with(TELL_TOOL) && TELL_ALLOWED.contains("aiterm"));
     }
 
     #[test]

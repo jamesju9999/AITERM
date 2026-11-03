@@ -2073,6 +2073,14 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
         }
         // Agent 的資料庫技能：在 AITerm 已設定的連線上執行（帳密不經過 Agent）。
         quota.set_db_backend(real_db_backend(app.clone()));
+        // Agent 之間的即時傳訊（tell_agent）：直接打進對方的分頁，跟使用者「補充一句」同一條管道。
+        {
+            let pty = pty.clone();
+            quota.set_on_tell(Box::new(move |tab_id, text| {
+                let pty = pty.clone();
+                Box::pin(async move { crate::tasks::dispatch::write_then_submit(&pty, &tab_id, &text).await })
+            }));
+        }
         // 答案要能從收件匣與 Telegram 送回來：讓指令拿得到這份狀態（解除等決策）。
         app.manage(quota.clone());
         spawn_question_reminders(app.clone());

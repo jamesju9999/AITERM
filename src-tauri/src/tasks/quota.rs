@@ -173,6 +173,8 @@ struct Entry {
     refs: Vec<String>,
     /// 上次因為讀參考資料通知畫面的時間。讀檔很頻繁，每次都通知畫面會一直重抓。
     last_ref_notify: Option<Instant>,
+    /// 上次用 `tell_agent` 送訊息的時間，用來限速。
+    last_tell: Option<Instant>,
 }
 
 /// 讀參考資料時最多多久通知畫面一次。要比畫面上線停留的時間（5 秒）短，連續讀的時候線才不會斷。
@@ -197,6 +199,9 @@ pub struct DbOutput {
     pub rows: Option<i64>,
 }
 
+/// 把一行字打進某個分頁並送出（正式環境接 `dispatch::write_then_submit`；測試換成假的）。
+pub type TellSender = Box<dyn Fn(String, String) -> futures_util::future::BoxFuture<'static, Result<(), String>> + Send + Sync>;
+
 /// 實際查資料庫的地方（正式環境接 `mcp_server::db_ops`；測試換成假的）。
 pub struct DbBackend {
     pub connections: Box<dyn Fn() -> Vec<DbConnInfo> + Send + Sync>,
@@ -211,6 +216,7 @@ pub struct QuotaState {
     on_reply_wait: OnceLock<Box<dyn Fn(&ReplyLabel) + Send + Sync>>,
     on_question: OnceLock<Box<dyn Fn(&ReplyLabel, &crate::tasks::questions::QuestionRow) + Send + Sync>>,
     db_backend: OnceLock<DbBackend>,
+    on_tell: OnceLock<TellSender>,
     reply_grace: Duration,
 }
 
@@ -227,6 +233,7 @@ impl QuotaState {
             on_reply_wait: OnceLock::new(),
             on_question: OnceLock::new(),
             db_backend: OnceLock::new(),
+            on_tell: OnceLock::new(),
             reply_grace,
         })
     }
@@ -270,6 +277,65 @@ impl QuotaState {
     }
 
     /// `ask_human`：建立問題、進入等決策、通知。回傳要回給 Claude 的文字與是否是錯誤。
+    /// `tell_agent`：把一句話送進另一位正在執行的 Agent 的對話。
+    async fn tell(&self, from_task: &str, to: &str, message: &str) -> (String, bool) {
+        let message = match crate::tasks::tell::clean(message) {
+            Ok(m) => m,
+            Err(e) => return (e, true),
+        };
+        let Some((pool, label)) = self.entries.lock().get(from_task).map(|e| (e.pool.clone(), e.label.clone())) else {
+            return ("這張卡已經結束，不能再傳訊。".into(), true);
+        };
+        let Some(send) = self.on_tell.get() else {
+            return ("AITerm 的傳訊功能還沒準備好。".into(), true);
+        };
+        let Ok(agents) = crate::tasks::agents::list_agents(&pool).await else {
+            return ("讀不到 Agent 名單。".into(), true);
+        };
+        let target = match crate::tasks::tell::resolve_target(&agents, to, label.agent_id.as_deref()) {
+            Ok(t) => t.clone(),
+            Err(e) => return (e, true),
+        };
+        let sender_name = agents.iter().find(|a| Some(a.id.as_str()) == label.agent_id.as_deref()).map(|a| a.name.clone()).unwrap_or_default();
+        // 限速、找對方正在跑的分頁：同一把鎖裡做完，限速才不會被同時兩個呼叫繞過。
+        let tab_id = {
+            let mut entries = self.entries.lock();
+            let too_soon = entries
+                .get(from_task)
+                .and_then(|e| e.last_tell)
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(crate::tasks::tell::MIN_INTERVAL_SECS));
+            if too_soon {
+                return (format!("傳太頻繁了，請隔 {} 秒再傳；對方不需要回覆，一次把話說完。", crate::tasks::tell::MIN_INTERVAL_SECS), true);
+            }
+            let tab = entries
+                .iter()
+                .find(|(id, e)| {
+                    id.as_str() != from_task
+                        && e.label.agent_id.as_deref() == Some(target.id.as_str())
+                        && !e.asking
+                        && !e.blocking_ask
+                        && e.wait.is_none()
+                })
+                .map(|(_, e)| e.tab_id.clone());
+            if tab.is_some() {
+                if let Some(e) = entries.get_mut(from_task) {
+                    e.last_tell = Some(Instant::now());
+                }
+            }
+            tab
+        };
+        let Some(tab_id) = tab_id else {
+            return (
+                format!("「{}」現在沒有在執行的卡片（或正在等人回答／等額度），訊息沒有送出。這件事請改用 remember 記進專案記事本，他之後開工會看到。", target.name),
+                true,
+            );
+        };
+        match send(tab_id, crate::tasks::tell::wire_text(&sender_name, &message)).await {
+            Ok(()) => (format!("已送給「{}」。", target.name), false),
+            Err(e) => (format!("送不出去：{e}"), true),
+        }
+    }
+
     /// `remember`：寫進專案記事本，署名這張卡的 Agent。
     async fn remember(&self, task_id: &str, note: &str) -> (String, bool) {
         let Some((pool, label)) = self.entries.lock().get(task_id).map(|e| (e.pool.clone(), e.label.clone())) else {
@@ -351,8 +417,14 @@ impl QuotaState {
                 skills: Vec::new(),
                 refs: Vec::new(),
                 last_ref_notify: None,
+                last_tell: None,
             },
         );
+    }
+
+    /// `tell_agent` 實際送字的地方。
+    pub fn set_on_tell(&self, f: TellSender) {
+        let _ = self.on_tell.set(f);
     }
 
     /// 資料庫實際執行的地方。
@@ -795,6 +867,10 @@ async fn start_server(state: Arc<QuotaState>) -> Result<(u16, String), String> {
                 let (text, is_error) = state.ask(&task_id, &question).await;
                 axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
             }
+            crate::tasks::ask::Rpc::Tell { id, to, message } => {
+                let (text, is_error) = state.tell(&task_id, &to, &message).await;
+                axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
+            }
             crate::tasks::ask::Rpc::Remember { id, note } => {
                 let (text, is_error) = state.remember(&task_id, &note).await;
                 axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
@@ -999,6 +1075,61 @@ mod tests {
         let too_long = call(serde_json::json!({"note": "字".repeat(crate::tasks::notes::NOTE_MAX_CHARS + 1)})).await;
         assert_eq!(too_long["result"]["isError"], true);
         assert_eq!(crate::tasks::notes::list_notes(&pool).await.unwrap().len(), 1);
+    }
+
+    /// `tell_agent`：只送給「另一位、正在執行、沒在等人」的 Agent；送字走 on_tell，並限速。
+    #[tokio::test]
+    async fn tell_agent_reaches_only_a_running_other_agent_and_is_rate_limited() {
+        let pool = mem_pool().await;
+        let mk = |name: &'static str| crate::tasks::agents::NewAgent { kind: "coder", name, role: "", prompt_prefix: "", project_dir: "/r", canvas_x: 0.0, canvas_y: 0.0 };
+        let a1 = crate::tasks::agents::create_agent(&pool, &mk("工程師1")).await.unwrap();
+        let a2 = crate::tasks::agents::create_agent(&pool, &mk("工程師2")).await.unwrap();
+        let _a3 = crate::tasks::agents::create_agent(&pool, &mk("工程師3")).await.unwrap();
+        let t1 = store::create_task(&pool, "t1", "", "/r", true, false).await.unwrap();
+        let t2 = store::create_task(&pool, "t2", "", "/r", true, false).await.unwrap();
+        let state = QuotaState::new();
+        let sent = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        {
+            let sent = sent.clone();
+            state.set_on_tell(Box::new(move |tab, text| {
+                let sent = sent.clone();
+                Box::pin(async move {
+                    sent.lock().push((tab, text));
+                    Ok(())
+                })
+            }));
+        }
+        state.register(&t1, "tab-1", pool.clone(), ReplyLabel { agent_id: Some(a1.clone()), ..label() });
+        state.register(&t2, "tab-2", pool.clone(), ReplyLabel { agent_id: Some(a2.clone()), ..label() });
+
+        let (text, err) = state.tell(&t1, "工程師3", "你好").await;
+        assert!(err && text.contains("沒有在執行") && text.contains("remember"), "{text}");
+        let (text, err) = state.tell(&t1, "工程師1", "自言自語").await;
+        assert!(err && text.contains("自己"), "{text}");
+        let (text, err) = state.tell(&t1, "老王", "你好").await;
+        assert!(err && text.contains("找不到"), "{text}");
+        assert!(sent.lock().is_empty(), "失敗的都不能送出");
+
+        state.set_asking(&t2, true);
+        let (text, err) = state.tell(&t1, "工程師2", "你在等人回答時不該被插話").await;
+        assert!(err && text.contains("沒有在執行"), "{text}");
+        state.set_asking(&t2, false);
+
+        let (text, err) = state.tell(&t1, "工程師2", "formatTime\n改名成 fmt").await;
+        assert!(!err, "{text}");
+        {
+            let sent = sent.lock();
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0].0, "tab-2");
+            assert!(sent[0].1.contains("工程師1") && sent[0].1.contains("formatTime 改名成 fmt") && !sent[0].1.contains('\n'));
+        }
+        let (text, err) = state.tell(&t1, "工程師2", "再補一句").await;
+        assert!(err && text.contains("太頻繁"), "{text}");
+        assert_eq!(sent.lock().len(), 1, "被限速的不能送出");
+        // 對方回覆不受這邊的限速影響（各算各的）。
+        let (text, err) = state.tell(&t2, "工程師1", "收到").await;
+        assert!(!err, "{text}");
+        assert_eq!(sent.lock()[1].0, "tab-1");
     }
 
     /// PostToolUse 讀了參考資料夾裡的檔案 → 累計到那張卡那個資料夾；畫面的通知有節流。

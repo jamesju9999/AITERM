@@ -17,6 +17,7 @@ pub mod workflow;
 pub mod path_refresh;
 pub mod repo_check;
 pub mod quota;
+pub mod tell;
 pub mod questions;
 pub mod ask;
 pub mod usage;
