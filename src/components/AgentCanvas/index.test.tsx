@@ -89,6 +89,8 @@ vi.mock("../../ipc/projects", () => ({
   listProjects: vi.fn().mockResolvedValue([
     { id: "p1", name: "HTBKTW", description: "", path: "/p", status: "ok", counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null },
   ]),
+  createProject: vi.fn().mockResolvedValue("p-new"),
+  openProject: vi.fn().mockResolvedValue("p-open"),
   usedDirs: vi.fn().mockResolvedValue(["/repo/htbktw"]),
   usedLabels: vi.fn().mockResolvedValue([]),
 }));
@@ -153,7 +155,7 @@ import {
 import { codexInfo, continueChat, createTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, readTranscript, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
-import { listProjects } from "../../ipc/projects";
+import { createProject, listProjects, openProject } from "../../ipc/projects";
 import { invokeAiComplete } from "../../ipc/ai";
 import { listProviders } from "../../ipc/provider";
 import { createFormation, formationsState, listRetiredAgents, requestFormationSwitch, switchFormation, type FormationsState } from "../../ipc/formations";
@@ -2447,5 +2449,88 @@ describe("專案簡介的 AI 潤飾", () => {
     expect(await within(dlg).findByText(/network down/)).toBeTruthy();
     expect(box.value).toBe("原本的");
     expect(within(dlg).queryByTestId("brief-refine-undo")).toBeNull();
+  });
+
+  describe("在協作頁新增／開啟專案", () => {
+    const proj = (id: string, name: string) => ({
+      id, name, description: "", path: `/${id}`, status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null,
+    });
+
+    it("「＋」開新增專案對話框；建好後重讀清單並切到新專案", async () => {
+      vi.mocked(listProjects).mockResolvedValueOnce([proj("p1", "HTBKTW")]);
+      vi.mocked(listAgents).mockResolvedValue([]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      localStorage.setItem("aiterm_last_project_parent", "/parent");
+      view();
+      await screen.findByTestId("ac-proj-new");
+
+      // 建好之後清單多了新專案。
+      vi.mocked(listProjects).mockResolvedValue([proj("p1", "HTBKTW"), proj("p-new", "新專案")]);
+      fireEvent.click(screen.getByTestId("ac-proj-new"));
+      fireEvent.change(await screen.findByTestId("project-create-name"), { target: { value: "新專案" } });
+      fireEvent.click(screen.getByTestId("project-create-submit"));
+
+      await waitFor(() => expect(createProject).toHaveBeenCalledWith(expect.objectContaining({ name: "新專案", parentDir: "/parent" })));
+      await waitFor(() => expect((screen.getByLabelText(/專案|Project/) as HTMLSelectElement).value).toBe("p-new"));
+      expect(screen.queryByTestId("project-create-name")).toBeNull();
+    });
+
+    it("「開啟」選 .aitprj 檔後重讀清單並切到那個專案", async () => {
+      vi.mocked(listProjects).mockResolvedValueOnce([proj("p1", "HTBKTW")]);
+      vi.mocked(listAgents).mockResolvedValue([]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      vi.mocked(open).mockResolvedValueOnce("/x/舊專案.aitprj");
+      view();
+      await screen.findByTestId("ac-proj-open");
+
+      vi.mocked(listProjects).mockResolvedValue([proj("p1", "HTBKTW"), proj("p-open", "舊專案")]);
+      fireEvent.click(screen.getByTestId("ac-proj-open"));
+
+      await waitFor(() => expect(openProject).toHaveBeenCalledWith("/x/舊專案.aitprj"));
+      await waitFor(() => expect((screen.getByLabelText(/專案|Project/) as HTMLSelectElement).value).toBe("p-open"));
+    });
+
+    it("一個專案都沒有時，空畫面直接就能新增或開啟（不用先繞去工作看板）", async () => {
+      vi.mocked(listProjects).mockResolvedValueOnce([]);
+      vi.mocked(listAgents).mockResolvedValue([]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      localStorage.setItem("aiterm_last_project_parent", "/parent");
+      view();
+      await screen.findByTestId("ac-proj-open");
+
+      vi.mocked(listProjects).mockResolvedValue([proj("p-new", "第一個專案")]);
+      fireEvent.click(screen.getByTestId("ac-proj-new"));
+      fireEvent.change(await screen.findByTestId("project-create-name"), { target: { value: "第一個專案" } });
+      fireEvent.click(screen.getByTestId("project-create-submit"));
+
+      await waitFor(() => expect((screen.getByLabelText(/專案|Project/) as HTMLSelectElement).value).toBe("p-new"));
+    });
+
+    it("取消選檔不做任何事", async () => {
+      vi.mocked(listProjects).mockResolvedValueOnce([proj("p1", "HTBKTW")]);
+      vi.mocked(listAgents).mockResolvedValue([]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      vi.mocked(open).mockResolvedValueOnce(null);
+      vi.mocked(openProject).mockClear();
+      view();
+      fireEvent.click(await screen.findByTestId("ac-proj-open"));
+      await new Promise((r) => setTimeout(r, 30));
+      expect(openProject).not.toHaveBeenCalled();
+    });
+
+    it("開啟失敗（例如已經開著）顯示後端的原因，不切換", async () => {
+      vi.mocked(listProjects).mockResolvedValueOnce([proj("p1", "HTBKTW")]);
+      vi.mocked(listAgents).mockResolvedValue([]);
+      vi.mocked(listTasks).mockResolvedValue([]);
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      vi.mocked(open).mockResolvedValueOnce("/x/dup.aitprj");
+      vi.mocked(openProject).mockRejectedValueOnce("這個專案已經開著了");
+      view();
+      fireEvent.click(await screen.findByTestId("ac-proj-open"));
+      expect(await screen.findByText(/這個專案已經開著了/)).toBeTruthy();
+      expect((screen.getByLabelText(/專案|Project/) as HTMLSelectElement).value).toBe("p1");
+    });
   });
 });

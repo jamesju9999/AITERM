@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { KindIcon } from "./KindIcon";
 import { autoLayout } from "./autoLayout";
 import { createPortal } from "react-dom";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import {
@@ -69,7 +69,8 @@ import { parseDbSkill, parseSkillPaths, skillActivity, SKILL_LINGER_SECS, sqlPre
 import { ToolsBanner } from "./ToolsBanner";
 import { RepoMovedBanner, useMissingRepoDirs } from "./RepoMovedBanner";
 import { missingTools } from "./toolsCheck";
-import { listProjects, type ProjectInfo } from "../../ipc/projects";
+import { listProjects, openProject, type ProjectInfo } from "../../ipc/projects";
+import { ProjectCreateDialog } from "../TaskBoard/ProjectCreateDialog";
 import {
   getTaskBoardConfig,
   deleteTask,
@@ -369,6 +370,29 @@ export function AgentCanvasView({
       mounted.current = false;
     };
   }, []);
+
+  /** 在協作頁新增／開啟專案：成功後重讀清單並切到那個專案（跟下拉選單換專案同一套動作）。 */
+  const [creatingProject, setCreatingProject] = useState(false);
+  const switchToProject = async (id: string) => {
+    const ps = (await listProjects()).filter((p) => p.status === "ok");
+    if (!mounted.current) return;
+    setProjects(ps);
+    const picked = ps.find((p) => p.id === id);
+    if (!picked) return;
+    setProjectId(id);
+    storeProject(id);
+    onProjectChange?.(id, picked.name);
+    setMerge({});
+  };
+  const openExistingProject = async () => {
+    try {
+      const picked = await openDialog({ filters: [{ name: "AITerm 專案", extensions: ["aitprj"] }] });
+      if (typeof picked !== "string") return;
+      await switchToProject(await openProject(picked));
+    } catch (e) {
+      setToast(errText(e));
+    }
+  };
 
   const refresh = useCallback(async () => {
     if (!projectId) return;
@@ -1146,6 +1170,38 @@ export function AgentCanvasView({
 
   // ── 畫面 ───────────────────────────────────────────────────────────────
 
+  const projectButtons = (
+    <>
+        <button
+          type="button"
+          className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+          data-testid="ac-proj-new"
+          title={t.proj_new}
+          onClick={() => setCreatingProject(true)}
+        >
+          ＋ {t.proj_new}
+        </button>
+        <button
+          type="button"
+          className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+          data-testid="ac-proj-open"
+          title={t.proj_open_existing}
+          onClick={() => void openExistingProject()}
+        >
+          {t.proj_open_existing}
+        </button>
+    </>
+  );
+  const createProjectDialog = creatingProject ? (
+        <ProjectCreateDialog
+          onClose={() => setCreatingProject(false)}
+          onCreated={(id) => {
+            setCreatingProject(false);
+            void switchToProject(id).catch((e) => setToast(errText(e)));
+          }}
+        />
+      ) : null;
+
   if (projects !== null && projects.length === 0) {
     return (
       <div className="task-board agent-canvas" style={{ gridTemplateRows: "auto minmax(0, 1fr)" }}>
@@ -1155,7 +1211,11 @@ export function AgentCanvasView({
         ) : (
           <span />
         )}
-        <div className="ac-empty-state">{t.ac_no_projects}</div>
+        <div className="ac-empty-state">
+          <p>{t.ac_no_projects}</p>
+          <div className="ac-empty-actions">{projectButtons}</div>
+        </div>
+        {createProjectDialog}
       </div>
     );
   }
@@ -1190,6 +1250,7 @@ export function AgentCanvasView({
             ))}
           </select>
         </label>
+        {projectButtons}
         {sumLine && (
           <span className={`ac-summary ac-summary--${sumLine.tone}`} data-testid="ac-summary">
             {sumLine.text}
@@ -1747,6 +1808,7 @@ export function AgentCanvasView({
         />
       )}
 
+      {createProjectDialog}
       {toast && (
         <div className="ac-toast" role="status">
           {toast}
