@@ -480,6 +480,19 @@ pub(crate) async fn finalize_merge_card(
     }
 }
 
+/// 開工前合併的準備：上次沒解完的合併先還原；上一輪留下、沒 commit 的東西原樣 commit 保存。
+/// 不先處理的話 git 會因為「本地有改動會被覆蓋」直接拒絕合併，派工失敗、工程師暫停，
+/// 而畫面上沒有地方能處理工作資料夾。順序不能反：合併停著時 commit 會把衝突標記提交進去。
+async fn prepare_for_merge(client: &crate::vcs::git::GitClient) -> Result<(), String> {
+    if client.is_merge_in_progress().await {
+        let _ = client.merge_abort().await;
+    }
+    if client.has_uncommitted_changes().await? {
+        client.commit_all("WIP: 保留上一輪沒提交的內容（開工前自動提交，才能合併前置）").await?;
+    }
+    Ok(())
+}
+
 /// 工程師卡開工前，把協調者最後一次成功合併的結果合進來（通常是快轉）：一輪合併完、
 /// 同一個專案開新一輪時，工程師要從整合後的版本開始，而不是自己的舊分支。
 /// 回傳有沒有合進新東西。衝突：還原、回 Err（派工失敗、工程師暫停）。
@@ -498,6 +511,7 @@ pub(crate) async fn sync_with_integration(
     let Some(sha) = integrated else { return Ok(false) };
     let _ = task;
     let client = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
+    prepare_for_merge(&client).await?;
     let before = client.head_sha().await?;
     if let Err(e) = client.merge_rev(&sha, "Merge 整合結果（上一輪合併）").await {
         let files = client.conflicted_files().await.unwrap_or_default();
@@ -539,10 +553,8 @@ pub(crate) async fn premerge_prerequisites(
 ) -> Result<Premerge, String> {
     let plan = crate::tasks::workflow::premerge_plan(pool, task).await.map_err(|e| e.to_string())?;
     let client = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
-    // 上一次派工留下、沒人解完的衝突：重新派工從乾淨的狀態開始，不然 git 會拒絕任何新的合併。
-    if client.is_merge_in_progress().await {
-        let _ = client.merge_abort().await;
-    }
+    // 上一次派工留下的：沒人解完的衝突、沒 commit 的內容。從乾淨的狀態開始，不然 git 會拒絕任何新的合併。
+    prepare_for_merge(&client).await?;
     let mut merged = Vec::new();
     let mut plan = plan.into_iter();
     while let Some((id, title, sha)) = plan.next() {
@@ -3680,6 +3692,25 @@ mod agent_dispatch_tests {
         assert!(merging.success(), "合併要停在原地，不能還原");
         let note = premerge_conflict_note(&conflict);
         assert!(note.contains("A 模組") && note.contains("a.txt") && note.contains("git commit --no-edit"), "{note}");
+    }
+
+    /// 工作資料夾裡有上一輪留下、沒 commit 的東西：先原樣 commit 保存，再合併，不能讓 git 因此拒絕合併。
+    #[tokio::test]
+    async fn leftover_uncommitted_work_is_preserved_in_a_commit_before_merging() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, approved) = prerequisite_setup(repo.path(), storage.path(), "A 的成果\n").await;
+        // 殘留：改了已追蹤的檔案、又新增了檔案；其中 a.txt 跟前置會動到的是同一個檔案。
+        fs::write(y_wt.join("a.txt"), "Y 沒提交的改動\n").unwrap();
+        fs::write(y_wt.join("notes.md"), "殘留的新檔案\n").unwrap();
+
+        let pm = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap();
+
+        assert!(pm.conflict.is_some() || !pm.merged.is_empty(), "要嘛合進來、要嘛回報衝突，不能是 git 拒絕");
+        assert_eq!(fs::read_to_string(y_wt.join("notes.md")).unwrap(), "殘留的新檔案\n");
+        let log = StdCommand::new("git").args(["log", "--format=%s", "-n", "5"]).current_dir(&y_wt).output().unwrap();
+        assert!(String::from_utf8_lossy(&log.stdout).contains("WIP"), "殘留內容要有一筆 commit 保存");
+        let _ = approved;
     }
 
     /// 上次派工留下沒解完的合併：重新派工要先清掉，不然 git 拒絕任何新合併。
