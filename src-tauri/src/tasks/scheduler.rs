@@ -407,6 +407,17 @@ pub(crate) async fn finalize_agent_card(
         return outcome;
     }
     let client = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
+    // 開工前的合併衝突要工程師自己解掉；沒解完就 commit 會把衝突標記一起提交進去。
+    if client.is_merge_in_progress().await {
+        let files = client.conflicted_files().await.unwrap_or_default();
+        if !files.is_empty() {
+            pause().await;
+            return monitor::TaskOutcome::Failed(format!(
+                "合併衝突還沒解決：{}。請在工作資料夾解決後按重試",
+                files.join("、")
+            ));
+        }
+    }
     let commit = async {
         if client.has_uncommitted_changes().await? {
             client.commit_all(commit_message).await?;
@@ -502,31 +513,71 @@ pub(crate) async fn sync_with_integration(
     Ok(client.head_sha().await? != before)
 }
 
+/// 開工前合併前置的結果。
+pub(crate) struct Premerge {
+    /// 已經合進來的前置卡 id。
+    pub merged: Vec<String>,
+    /// 合到一半遇到衝突：合併停在工作資料夾裡（沒有還原），交給工程師解決。
+    pub conflict: Option<PremergeConflict>,
+}
+
+pub(crate) struct PremergeConflict {
+    pub title: String,
+    pub files: Vec<String>,
+    /// 衝突那一個之後還沒合的前置（標題、版本）。
+    pub pending: Vec<(String, String)>,
+}
+
 /// 開工前把別位工程師的前置（審過的版本）合進這張卡的工作資料夾。
-/// 回傳合進來的前置卡 id。衝突或其他失敗：還原合併、回 Err（派工失敗、工程師暫停）。
+/// 衝突：**不還原**，把合併停在原地、回報衝突檔案，由工程師的 Claude 在開工時先解決
+/// （人類開發者遇到衝突也是這樣做；畫面上沒有任何地方能解衝突）。
+/// 不是衝突的失敗（git 自己出錯）：還原合併、回 Err（派工失敗、工程師暫停）。
 pub(crate) async fn premerge_prerequisites(
     pool: &sqlx::SqlitePool,
     task: &TaskRow,
     worktree: &std::path::Path,
-) -> Result<Vec<String>, String> {
+) -> Result<Premerge, String> {
     let plan = crate::tasks::workflow::premerge_plan(pool, task).await.map_err(|e| e.to_string())?;
     let client = crate::vcs::git::GitClient::new(worktree.to_string_lossy().into_owned(), None);
+    // 上一次派工留下、沒人解完的衝突：重新派工從乾淨的狀態開始，不然 git 會拒絕任何新的合併。
+    if client.is_merge_in_progress().await {
+        let _ = client.merge_abort().await;
+    }
     let mut merged = Vec::new();
-    for (id, title, sha) in plan {
+    let mut plan = plan.into_iter();
+    while let Some((id, title, sha)) = plan.next() {
         if let Err(e) = client.merge_rev(&sha, &format!("Merge 前置：{title}")).await {
             let files = client.conflicted_files().await.unwrap_or_default();
-            if client.is_merge_in_progress().await {
-                let _ = client.merge_abort().await;
+            if files.is_empty() {
+                if client.is_merge_in_progress().await {
+                    let _ = client.merge_abort().await;
+                }
+                return Err(format!("開工前合併前置「{title}」失敗：{e}"));
             }
-            return Err(if files.is_empty() {
-                format!("開工前合併前置「{title}」失敗：{e}")
-            } else {
-                format!("開工前合併前置「{title}」有衝突：{}。請在工作資料夾解決後按重試", files.join("、"))
-            });
+            let pending = plan.map(|(_, t, s)| (t, s)).collect();
+            return Ok(Premerge { merged, conflict: Some(PremergeConflict { title, files, pending }) });
         }
         merged.push(id);
     }
-    Ok(merged)
+    Ok(Premerge { merged, conflict: None })
+}
+
+/// 提示詞後面附的段落：告訴工程師先把停在工作資料夾裡的合併衝突解掉再開工。
+pub(crate) fn premerge_conflict_note(c: &PremergeConflict) -> String {
+    let mut note = format!(
+        "\n\n【開工前必須先處理】工作資料夾正停在一個未完成的合併：前置「{}」與你的分支有衝突，衝突檔案：{}。\n\
+         請先執行 `git status` 查看，把衝突解決（兩邊的內容通常都要保留，不要直接丟掉其中一邊）、`git add` 之後執行 `git commit --no-edit` 完成合併。\
+         不要執行 `git merge --abort`。合併完成、確認沒有殘留的衝突標記之後，才開始下面的工作。",
+        c.title,
+        c.files.join("、"),
+    );
+    if !c.pending.is_empty() {
+        note.push_str("\n解完之後，還有這些前置要依序合進來（各執行一次 `git merge <版本>`，有衝突同樣先解決）：");
+        for (title, sha) in &c.pending {
+            note.push_str(&format!("\n- {title}：{sha}"));
+        }
+    }
+    note
 }
 
 /// Agent 卡片的自動 commit 訊息：模組、修正、整合各一種前綴，git log 才分得出來。
@@ -985,7 +1036,8 @@ impl Dispatcher for RealDispatcher {
             if !resume && (task.card_kind == crate::tasks::workflow::KIND_WORK || task.card_kind == crate::tasks::workflow::KIND_FIX) {
                 sync_with_integration(&project.pool, task, &wt).await?;
             }
-            let merged = if resume { Vec::new() } else { premerge_prerequisites(&project.pool, task, &wt).await? };
+            let premerge = if resume { Premerge { merged: Vec::new(), conflict: None } } else { premerge_prerequisites(&project.pool, task, &wt).await? };
+            let merged = premerge.merged;
             if !merged.is_empty() {
                 let json = serde_json::to_string(&merged).unwrap_or_default();
                 if let Err(e) = sqlx::query("UPDATE tasks SET premerged = ? WHERE id = ?")
@@ -1008,6 +1060,9 @@ impl Dispatcher for RealDispatcher {
                 }
             }
             prompt = agent_card_prompt(&project.pool, task, &agent.prompt_prefix, &prompt, can_ask).await;
+            if let Some(conflict) = &premerge.conflict {
+                prompt.push_str(&premerge_conflict_note(conflict));
+            }
             (wt, None)
         } else {
             let isolate = resolve_isolation(
@@ -3598,7 +3653,7 @@ mod agent_dispatch_tests {
         // X 之後又做了還沒審的東西：不能跟著合進來。
         commit_file(&x_wt, "unreviewed.txt", "還沒審\n");
 
-        let merged = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap();
+        let merged = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().merged;
 
         assert_eq!(merged, crate::tasks::workflow::deps_of(&card));
         assert_eq!(fs::read_to_string(y_wt.join("a.txt")).unwrap(), "A 的成果\n");
@@ -3607,19 +3662,80 @@ mod agent_dispatch_tests {
         assert!(ok.success());
     }
 
+    /// 衝突不還原：合併停在工作資料夾，由工程師的 Claude 解（畫面沒有地方能解衝突）。
     #[tokio::test]
-    async fn a_conflicting_prerequisite_is_rolled_back_and_reported() {
+    async fn a_conflicting_prerequisite_is_left_in_place_for_the_coder_to_resolve() {
         let repo = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
         let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "X 的版本\n").await;
-        let before = commit_file(&y_wt, "a.txt", "Y 的版本\n");
+        commit_file(&y_wt, "a.txt", "Y 的版本\n");
 
-        let err = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap_err();
+        let pm = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap();
 
-        assert!(err.contains("a.txt") && err.contains("A 模組"), "{err}");
-        assert_eq!(head(&y_wt), before, "衝突時要還原，不能停在合併一半");
+        let conflict = pm.conflict.expect("衝突要回報");
+        assert!(pm.merged.is_empty());
+        assert_eq!(conflict.title, "A 模組");
+        assert_eq!(conflict.files, vec!["a.txt".to_string()]);
         let merging = StdCommand::new("git").args(["rev-parse", "-q", "--verify", "MERGE_HEAD"]).current_dir(&y_wt).status().unwrap();
-        assert!(!merging.success());
+        assert!(merging.success(), "合併要停在原地，不能還原");
+        let note = premerge_conflict_note(&conflict);
+        assert!(note.contains("A 模組") && note.contains("a.txt") && note.contains("git commit --no-edit"), "{note}");
+    }
+
+    /// 上次派工留下沒解完的合併：重新派工要先清掉，不然 git 拒絕任何新合併。
+    #[tokio::test]
+    async fn a_stale_unfinished_merge_is_cleared_before_the_next_attempt() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "X 的版本\n").await;
+        commit_file(&y_wt, "a.txt", "Y 的版本\n");
+        assert!(premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().conflict.is_some());
+        // 工程師解到一半：檔案改好、`git add` 了，但沒 commit（合併還停著、已沒有衝突檔）。
+        fs::write(y_wt.join("a.txt"), "半成品\n").unwrap();
+        StdCommand::new("git").args(["add", "a.txt"]).current_dir(&y_wt).status().unwrap();
+
+        // 再來一次：從乾淨狀態重新合併、同樣回報衝突（而不是 git 的「還有未完成的合併」錯誤）。
+        let again = premerge_prerequisites(&pool, &card, &y_wt).await.unwrap();
+        assert_eq!(again.conflict.expect("仍是衝突").files, vec!["a.txt".to_string()]);
+    }
+
+    /// 工程師沒把衝突解完：結案不能把衝突標記 commit 進去。
+    #[tokio::test]
+    async fn finalize_refuses_to_commit_unresolved_conflict_markers() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "X 的版本\n").await;
+        commit_file(&y_wt, "a.txt", "Y 的版本\n");
+        assert!(premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().conflict.is_some());
+        let agent_id = card.agent_id.clone().unwrap();
+
+        let outcome = finalize_agent_card(&pool, &agent_id, &card.id, "m", &y_wt, monitor::TaskOutcome::Success).await;
+
+        match outcome {
+            monitor::TaskOutcome::Failed(msg) => assert!(msg.contains("a.txt"), "{msg}"),
+            _ => panic!("衝突沒解完不能算成功"),
+        }
+        let marker = fs::read_to_string(y_wt.join("a.txt")).unwrap();
+        assert!(marker.contains("<<<<<<<"), "檔案維持衝突狀態，沒被 commit 掉");
+        assert!(agents::get_agent(&pool, &agent_id).await.unwrap().unwrap().paused_task_id.is_some());
+    }
+
+    /// 工程師解完衝突並 commit 之後，結案照常記下 end_sha。
+    #[tokio::test]
+    async fn finalize_succeeds_once_the_coder_resolved_and_committed_the_merge() {
+        let repo = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "X 的版本\n").await;
+        commit_file(&y_wt, "a.txt", "Y 的版本\n");
+        assert!(premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().conflict.is_some());
+        fs::write(y_wt.join("a.txt"), "X 的版本\nY 的版本\n").unwrap();
+        StdCommand::new("git").args(["add", "a.txt"]).current_dir(&y_wt).status().unwrap();
+        StdCommand::new("git").args(["commit", "-q", "--no-edit"]).current_dir(&y_wt).status().unwrap();
+        let agent_id = card.agent_id.clone().unwrap();
+
+        let outcome = finalize_agent_card(&pool, &agent_id, &card.id, "m", &y_wt, monitor::TaskOutcome::Success).await;
+
+        assert!(matches!(outcome, monitor::TaskOutcome::Success));
     }
 
     /// 一輪合併完，工程師開新卡時要從整合結果開始（不然會在舊版上做）。
@@ -3662,7 +3778,7 @@ mod agent_dispatch_tests {
         let (pool, card, _x_wt, y_wt, _) = prerequisite_setup(repo.path(), storage.path(), "A\n").await;
         let dep = &crate::tasks::workflow::deps_of(&card)[0];
         sqlx::query("UPDATE tasks SET agent_id = ? WHERE id = ?").bind(&card.agent_id).bind(dep).execute(&pool).await.unwrap();
-        assert!(premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().is_empty());
+        assert!(premerge_prerequisites(&pool, &card, &y_wt).await.unwrap().merged.is_empty());
         assert_eq!(fs::read_to_string(y_wt.join("a.txt")).unwrap(), "hello\n", "a.txt 維持初始版本");
     }
 
