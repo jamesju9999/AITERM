@@ -30,6 +30,7 @@ vi.mock("../../ipc/tasks", () => ({
   markTaskDone: vi.fn().mockResolvedValue(undefined),
   stopTask: vi.fn().mockResolvedValue(undefined),
   continueChat: vi.fn().mockResolvedValue("tab-cc"),
+  nudgeTask: vi.fn().mockResolvedValue(undefined),
   deleteTask: vi.fn().mockResolvedValue(undefined),
   codexInfo: vi.fn().mockResolvedValue({ models: [], login: null, error: null }),
 }));
@@ -152,7 +153,7 @@ import {
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
-import { codexInfo, continueChat, createTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, readTranscript, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { codexInfo, continueChat, createTask, nudgeTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, readTranscript, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { createProject, listProjects, openProject } from "../../ipc/projects";
@@ -1330,6 +1331,61 @@ describe("AgentCanvasView", () => {
       view();
       fireEvent.click(await screen.findByTestId("chip-continue-A"));
       expect(await screen.findByText(/這位工程師正在做別的卡/)).toBeTruthy();
+    });
+
+    describe("執行中補充一句", () => {
+      const runningCard = (over: Partial<TaskWithAttachments> = {}) =>
+        card({ id: "R1", title: "R1 任務", status: "running", agent_id: "a1", tab_id: "t1", dispatched_at: 1, ...over });
+
+      it("執行中的卡有「補充」輸入：送出後呼叫後端、清空輸入並提示", async () => {
+        vi.mocked(listAgents).mockResolvedValue([agent()]);
+        vi.mocked(listTasks).mockResolvedValue([runningCard()]);
+        view();
+        const input = (await screen.findByTestId("nudge-input-a1")) as HTMLInputElement;
+        fireEvent.change(input, { target: { value: "  請改用繁體中文  " } });
+        fireEvent.click(screen.getByTestId("nudge-send-a1"));
+        await waitFor(() => expect(nudgeTask).toHaveBeenCalledWith("p1", "R1", "請改用繁體中文"));
+        await waitFor(() => expect(input.value).toBe(""));
+      });
+
+      it("Enter 送出、輸入組字（IME）中的 Enter 不送出；空白不能送", async () => {
+        vi.mocked(listAgents).mockResolvedValue([agent()]);
+        vi.mocked(listTasks).mockResolvedValue([runningCard()]);
+        vi.mocked(nudgeTask).mockClear();
+        view();
+        const input = await screen.findByTestId("nudge-input-a1");
+        expect((screen.getByTestId("nudge-send-a1") as HTMLButtonElement).disabled).toBe(true);
+        fireEvent.change(input, { target: { value: "好" } });
+        fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+        expect(nudgeTask).not.toHaveBeenCalled();
+        fireEvent.keyDown(input, { key: "Enter" });
+        await waitFor(() => expect(nudgeTask).toHaveBeenCalledWith("p1", "R1", "好"));
+      });
+
+      it("送出失敗時顯示後端的原因並保留輸入，方便再試", async () => {
+        vi.mocked(listAgents).mockResolvedValue([agent()]);
+        vi.mocked(listTasks).mockResolvedValue([runningCard()]);
+        vi.mocked(nudgeTask).mockRejectedValueOnce("這張卡不在執行中");
+        view();
+        const input = (await screen.findByTestId("nudge-input-a1")) as HTMLInputElement;
+        fireEvent.change(input, { target: { value: "再來一句" } });
+        fireEvent.click(screen.getByTestId("nudge-send-a1"));
+        expect(await screen.findByText(/這張卡不在執行中/)).toBeTruthy();
+        expect(input.value).toBe("再來一句");
+      });
+
+      it("沒有在執行的 Agent、還沒開好分頁的卡、等決策的卡都不顯示", async () => {
+        vi.mocked(listAgents).mockResolvedValue([agent()]);
+        vi.mocked(listTasks).mockResolvedValue([card({ id: "D", title: "D", status: "done", outcome: "success", agent_id: "a1" })]);
+        view();
+        await screen.findByTestId("agent-a1");
+        expect(screen.queryByTestId("nudge-input-a1")).toBeNull();
+
+        vi.mocked(listTasks).mockResolvedValue([runningCard({ tab_id: null })]);
+        act(() => tasksUpdated?.());
+        await waitFor(() => expect(screen.getByTestId("agent-a1").textContent).toContain("R1"));
+        expect(screen.queryByTestId("nudge-input-a1")).toBeNull();
+      });
     });
 
     it("頂列「全部暫停」暫停整個專案，再按一次繼續", async () => {

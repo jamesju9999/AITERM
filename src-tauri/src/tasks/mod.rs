@@ -34,6 +34,7 @@ pub mod repo_snapshot;
 pub mod formations;
 pub mod continue_chat;
 pub mod method_discussion;
+pub mod nudge;
 
 use std::path::{Path, PathBuf};
 

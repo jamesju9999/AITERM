@@ -82,6 +82,7 @@ import {
   markTaskDone,
   stopTask,
   continueChat,
+  nudgeTask,
   onTasksUpdated,
   type MergeOutcome,
   type TaskWithAttachments,
@@ -923,6 +924,18 @@ export function AgentCanvasView({
     }
   };
 
+  // 執行中的卡「補充一句」：失敗時顯示後端說明的原因，並把例外丟回輸入框（它會保留輸入）。
+  const nudgeRunning = async (taskId: string, message: string) => {
+    if (!projectId) return;
+    try {
+      await nudgeTask(projectId, taskId, message);
+      setToast(t.ac_nudge_sent);
+    } catch (e) {
+      setToast(errText(e));
+      throw e;
+    }
+  };
+
   const openTab = (tabId: string) => {
     window.dispatchEvent(new CustomEvent("aiterm:focus-tab", { detail: { tabId } }));
   };
@@ -1644,6 +1657,7 @@ export function AgentCanvasView({
                       onReportBug={(moduleId) => setReportFor((r) => ({ moduleId, nonce: (r?.nonce ?? 0) + 1 }))}
                       onOpenTab={openTab}
                       onContinueChat={(moduleId) => void continueModuleChat(moduleId)}
+                      onNudge={nudgeRunning}
                       onMerge={() => doMerge(a)}
                       onAbortMerge={() => doAbortMerge(a)}
                       onRelease={(moduleId) => projectId && void run(() => overrideModule(projectId, moduleId))}
