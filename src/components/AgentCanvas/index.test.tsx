@@ -31,6 +31,7 @@ vi.mock("../../ipc/tasks", () => ({
   stopTask: vi.fn().mockResolvedValue(undefined),
   continueChat: vi.fn().mockResolvedValue("tab-cc"),
   nudgeTask: vi.fn().mockResolvedValue(undefined),
+  listCardMessages: vi.fn().mockResolvedValue([]),
   deleteTask: vi.fn().mockResolvedValue(undefined),
   codexInfo: vi.fn().mockResolvedValue({ models: [], login: null, error: null }),
 }));
@@ -153,7 +154,7 @@ import {
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
-import { codexInfo, continueChat, createTask, nudgeTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, readTranscript, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { codexInfo, continueChat, createTask, listCardMessages, nudgeTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, readTranscript, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { createProject, listProjects, openProject } from "../../ipc/projects";
@@ -246,6 +247,7 @@ beforeEach(() => {
   vi.mocked(missingSkills).mockResolvedValue([]);
   vi.mocked(listSkillUses).mockResolvedValue([]);
   vi.mocked(listReferenceReads).mockResolvedValue([]);
+  vi.mocked(listCardMessages).mockResolvedValue([]);
   vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "agents" });
   vi.mocked(formationsState).mockResolvedValue(formations());
   vi.mocked(listRetiredAgents).mockResolvedValue([]);
@@ -441,6 +443,35 @@ describe("AgentCanvasView", () => {
     const log = document.querySelector(".ac-log") as HTMLElement;
     expect(log.textContent).toContain("Coder Agent1 讀取參考資料夾 HTBTW_Source（12 次）");
     expect(log.textContent).toContain("工程師2 讀取參考資料夾 HTBTW_Source（4 次）");
+  });
+
+  it("活動記錄：記下你對卡片補充過的話，以及 Agent 之間傳過的訊息", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "a2", name: "工程師2", canvas_y: 240 })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listCardMessages).mockResolvedValue([
+      { id: 2, at: now, kind: "tell", task_id: "t2", from_agent: "a1", to_agent: "a2", text: "formatTime 改名成 fmt" },
+      { id: 1, at: now - 30, kind: "nudge", task_id: "t1", from_agent: null, to_agent: "a1", text: "順便把 README 也更新" },
+    ]);
+    view();
+    await waitFor(() => expect(document.querySelector(".ac-log")?.textContent).toContain("formatTime 改名成 fmt"));
+    const log = (document.querySelector(".ac-log") as HTMLElement).textContent ?? "";
+    expect(log).toContain("Coder Agent1 對 工程師2 說：「formatTime 改名成 fmt」");
+    expect(log).toContain("你對 Coder Agent1 補充：「順便把 README 也更新」");
+  });
+
+  it("活動記錄：很長的補充只顯示開頭", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listCardMessages).mockResolvedValue([
+      { id: 1, at: now, kind: "nudge", task_id: "t1", from_agent: null, to_agent: "a1", text: "字".repeat(300) },
+    ]);
+    view();
+    await waitFor(() => expect(document.querySelector(".ac-log")?.textContent).toContain("你對 Coder Agent1 補充"));
+    const log = (document.querySelector(".ac-log") as HTMLElement).textContent ?? "";
+    expect(log).toContain("…");
+    expect(log).not.toContain("字".repeat(120));
   });
 
   it("自訂技能：拖到工程師上，勾選程式庫與自己的技能，也能從資料夾加入，存檔", async () => {
@@ -1346,6 +1377,21 @@ describe("AgentCanvasView", () => {
         fireEvent.click(screen.getByTestId("nudge-send-a1"));
         await waitFor(() => expect(nudgeTask).toHaveBeenCalledWith("p1", "R1", "請改用繁體中文"));
         await waitFor(() => expect(input.value).toBe(""));
+      });
+
+      it("送出後重抓訊息紀錄，活動記錄馬上看得到剛補充的那句", async () => {
+        vi.mocked(listAgents).mockResolvedValue([agent()]);
+        vi.mocked(listTasks).mockResolvedValue([runningCard()]);
+        view();
+        const input = (await screen.findByTestId("nudge-input-a1")) as HTMLInputElement;
+        vi.mocked(listCardMessages).mockClear();
+        vi.mocked(listCardMessages).mockResolvedValue([
+          { id: 1, at: Math.floor(Date.now() / 1000), kind: "nudge", task_id: "R1", from_agent: null, to_agent: "a1", text: "請改用繁體中文" },
+        ]);
+        fireEvent.change(input, { target: { value: "請改用繁體中文" } });
+        fireEvent.click(screen.getByTestId("nudge-send-a1"));
+        await waitFor(() => expect(listCardMessages).toHaveBeenCalled());
+        await waitFor(() => expect(document.querySelector(".ac-log")?.textContent).toContain("你對 Coder Agent1 補充：「請改用繁體中文」"));
       });
 
       it("Enter 送出、輸入組字（IME）中的 Enter 不送出；空白不能送", async () => {

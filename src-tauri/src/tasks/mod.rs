@@ -34,6 +34,7 @@ pub mod custom_skills;
 pub mod repo_snapshot;
 pub mod formations;
 pub mod continue_chat;
+pub mod messages;
 pub mod method_discussion;
 pub mod notes;
 pub mod nudge;
@@ -301,6 +302,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
     notes::init_schema(pool).await?;
+    messages::init_schema(pool).await?;
     Ok(())
 }
 

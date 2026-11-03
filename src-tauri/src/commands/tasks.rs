@@ -325,7 +325,18 @@ pub async fn tasks_nudge(
     crate::tasks::dispatch::write_then_submit(&pty, &tab_id, &text).await?;
     // 比照使用者在分頁裡打字：夠長的整行輸入會讓監看把這張卡轉成互動卡。
     pty.note_user_input(&tab_id, format!("{text}\r").as_bytes());
+    // 留一筆讓活動記錄查得到；寫不進去不影響這句話已送達。
+    if let Err(e) = crate::tasks::messages::record(&p.pool, crate::tasks::messages::KIND_NUDGE, &id, None, task.agent_id.as_deref(), &message).await {
+        eprintln!("record nudge for {id}: {e}");
+    }
     Ok(())
+}
+
+/// 最近的補充一句與 Agent 之間的傳訊（活動記錄用）。
+#[tauri::command]
+pub async fn tasks_list_messages(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Vec<crate::tasks::messages::MessageRow>, String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::messages::recent(&p.pool, 60).await.map_err(|e| e.to_string())
 }
 
 /// 已完成的卡片「接著談」：用原本的 Claude session 重開分頁接回對話。回傳分頁 id。
