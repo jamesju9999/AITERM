@@ -49,6 +49,21 @@ pub fn create_with_app(
     create_with_app_env(manager, app, size, cwd, bridge_env, Vec::new())
 }
 
+/// 一個新分頁的環境變數：要加的、要從繼承來的環境裡拿掉的。
+fn spawn_env(bridge_env: Option<(u16, String)>, extra_env: Vec<(String, String)>) -> (Vec<(String, String)>, Vec<String>) {
+    let (mut envs, mut removals): (Vec<(String, String)>, Vec<String>) = match bridge_env {
+        Some((port, token)) => (
+            crate::bridge::env::bridge_envs(port, &token),
+            crate::bridge::env::ENV_TO_REMOVE.iter().map(|s| s.to_string()).collect(),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
+    envs.extend(extra_env);
+    // AITerm 若是從 Claude Code 會話裡啟動的，這個標記會被繼承，分頁裡的 claude 就不存對話檔。
+    removals.push("CLAUDE_CODE_CHILD_SESSION".to_string());
+    (envs, removals)
+}
+
 /// 同 `create_with_app`，另外帶上 `extra_env`（例如派給 Codex 的卡片需要的 `OMLX_API_KEY`）。
 pub fn create_with_app_env(
     manager: &PtyManager,
@@ -58,14 +73,7 @@ pub fn create_with_app_env(
     bridge_env: Option<(u16, String)>,
     extra_env: Vec<(String, String)>,
 ) -> PtyResult<String> {
-    let (mut envs, env_removals) = match bridge_env {
-        Some((port, token)) => (
-            crate::bridge::env::bridge_envs(port, &token),
-            crate::bridge::env::ENV_TO_REMOVE.iter().map(|s| s.to_string()).collect(),
-        ),
-        None => (Vec::new(), Vec::new()),
-    };
-    envs.extend(extra_env);
+    let (mut envs, env_removals) = spawn_env(bridge_env, extra_env);
 
     let id = uuid::Uuid::new_v4().to_string();
     // 手動在這個分頁跑的 claude 會透過 shell 整合腳本的 `claude` 函式讀到這個設定檔，
@@ -146,4 +154,28 @@ pub fn elevate_with_app(
     Err(aiterm_core::pty::error::PtyError::Internal(
         "elevation not supported on this platform".into(),
     ))
+}
+
+#[cfg(test)]
+mod spawn_env_tests {
+    use super::*;
+
+    /// 從 Claude Code 會話裡啟動 AITerm 時，這個標記會被子行程繼承，裡面再跑的 claude 因此不存對話檔
+    /// （派工卡找不到 session 日誌、token 用量算成 0）。一律移除。
+    #[test]
+    fn the_child_session_marker_is_always_removed() {
+        let (_, removals) = spawn_env(None, Vec::new());
+        assert!(removals.iter().any(|k| k == "CLAUDE_CODE_CHILD_SESSION"), "{removals:?}");
+        let (_, with_bridge) = spawn_env(Some((8317, "tok".into())), Vec::new());
+        assert!(with_bridge.iter().any(|k| k == "CLAUDE_CODE_CHILD_SESSION"), "{with_bridge:?}");
+    }
+
+    #[test]
+    fn bridge_removals_and_extra_env_are_kept() {
+        let (envs, removals) = spawn_env(Some((8317, "tok".into())), vec![("OMLX_API_KEY".into(), "k".into())]);
+        assert!(envs.iter().any(|(k, v)| k == "OMLX_API_KEY" && v == "k"));
+        for k in crate::bridge::env::ENV_TO_REMOVE {
+            assert!(removals.iter().any(|r| r == k), "缺少 {k}");
+        }
+    }
 }
