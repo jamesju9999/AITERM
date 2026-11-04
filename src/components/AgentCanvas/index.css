@@ -469,6 +469,8 @@
 .ac-chip--fix { border-color: rgba(249, 115, 22, 0.55); color: #fdba74; }
 .ac-chip--review { border-color: rgba(234, 179, 8, 0.45); color: #fde68a; }
 .ac-chip--release { cursor: pointer; }
+/* 等選擇的模組用注意色，但點它不會有動作（要選在桌布上的選擇列），不要顯示成可點。 */
+.ac-chip--choice { cursor: default; }
 .ac-chip--release:hover { background: rgba(239, 68, 68, 0.15); }
 .ac-quota-wait {
   font-size: 11px;

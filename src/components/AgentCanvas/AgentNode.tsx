@@ -85,6 +85,7 @@ export function AgentNode({
   usage = {},
   onVerifyReport,
   onAcceptVerify,
+  fixChoiceModules,
 }: {
   agent: AgentRow;
   /** 這個專案所有未封存的卡片（節點自己挑出跟它有關的）。 */
@@ -145,6 +146,8 @@ export function AgentNode({
   onVerifyReport?: (taskId: string) => void;
   /** 驗收者：放行沒通過的驗收。 */
   onAcceptVerify?: (taskId: string) => void;
+  /** 正在等使用者選修正方式的模組 id。只覆寫畫面上的標籤；模組狀態仍照 deriveModuleState（與後端同規則）。 */
+  fixChoiceModules?: ReadonlySet<string>;
 }) {
   const { t } = useLocale();
   const icon = roleIcon(agent.kind, agent.role) ?? agent.kind;
@@ -528,13 +531,21 @@ export function AgentNode({
           <div className="ac-chips">
             {moduleStates.length === 0 && <span className="ac-dropzone">{t.ac_drop_here}</span>}
             {moduleStates.map(({ m, s }) => {
-              const { cls, icon: stateIcon } = MODULE_CHIP[s];
+              // 「等待修正」其實是在等人選怎麼修時，要講清楚並用注意色，免得使用者以為只是排隊。
+              const awaitingChoice = s === "fix_queued" && !!fixChoiceModules?.has(m.id);
+              const { cls, icon: stateIcon } = awaitingChoice
+                ? { cls: "ac-chip--bad ac-chip--choice", icon: "❓" }
+                : MODULE_CHIP[s];
               const draggable = s === "queued";
               const releasable = s === "attention" || s === "review_failed";
               // 排隊中但還在等別位工程師的前置審過：排程器會先跳過它。
               const waiting = waitingPrerequisites(m, tasks, hasReviewer);
               const icon = waiting.length ? "⛓" : stateIcon;
-              const label = waiting.length ? t.ac_waiting_prereqs(waiting.map((d) => d.title).join("、")) : msLabel[s];
+              const label = waiting.length
+                ? t.ac_waiting_prereqs(waiting.map((d) => d.title).join("、"))
+                : awaitingChoice
+                  ? t.ac_ms_fix_choice
+                  : msLabel[s];
               const mUsage = sumUsage(moduleCards(m.id, tasks), usage);
               return (
                 <span

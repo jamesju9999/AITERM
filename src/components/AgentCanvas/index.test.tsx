@@ -293,6 +293,46 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(screen.queryByTestId("fixchoice-bar")).toBeNull());
   });
 
+  it("模組在「等你選修正方式」時，節點上的狀態標籤也講清楚；選好之後恢復「等待修正」", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 400 })]);
+    // 審查退回、修正卡排隊中：模組狀態是 fix_queued（Rust 與 deriveModuleState 同規則，不新增變體）。
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1" }),
+      card({ id: "RV", title: "審 A", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "A", review_of: "A", verdict: "fail" }),
+      card({ id: "FX", title: "修 A", status: "queued", agent_id: "a1", card_kind: "fix", module_id: "A", review_of: "RV" }),
+    ]);
+    const waiting = { module_id: "A", module_title: "A 登入", fix_id: "FX", round: 1, can_resume: true, remembered: null };
+    vi.mocked(listFixChoices).mockResolvedValue([waiting]);
+    view();
+    const chip = await screen.findByTestId("chip-A");
+    await waitFor(() => expect(chip.title).toContain("等你選怎麼修"));
+    expect(chip.title).not.toContain("等待修正");
+    expect(chip).toHaveAttribute("data-state", "fix_queued");
+
+    vi.mocked(listFixChoices).mockResolvedValue([]);
+    fireEvent.click(screen.getByTestId("fixchoice-resume"));
+    await waitFor(() => expect(screen.getByTestId("chip-A").title).toContain("等待修正"));
+    expect(screen.getByTestId("chip-A").title).not.toContain("等你選怎麼修");
+  });
+
+  it("不在待選清單裡的修正排隊模組仍顯示「等待修正」", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 400 })]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1" }),
+      card({ id: "B", title: "B 登出", status: "done", outcome: "success", agent_id: "a1" }),
+      card({ id: "RV", title: "審 A", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "A", review_of: "A", verdict: "fail" }),
+      card({ id: "FX", title: "修 A", status: "queued", agent_id: "a1", card_kind: "fix", module_id: "A", review_of: "RV" }),
+      card({ id: "RV2", title: "審 B", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "B", review_of: "B", verdict: "fail" }),
+      card({ id: "FX2", title: "修 B", status: "queued", agent_id: "a1", card_kind: "fix", module_id: "B", review_of: "RV2" }),
+    ]);
+    // 只有 B 在等選擇：A 要維持「等待修正」，才證明是依模組 id 覆寫而不是整批改。
+    vi.mocked(listFixChoices).mockResolvedValue([{ module_id: "B", module_title: "B 登出", fix_id: "FX2", round: 1, can_resume: true, remembered: null }]);
+    view();
+    await waitFor(() => expect(screen.getByTestId("chip-B").title).toContain("等你選怎麼修"));
+    expect(screen.getByTestId("chip-A").title).toContain("等待修正");
+    expect(screen.getByTestId("chip-A").title).not.toContain("等你選怎麼修");
+  });
+
   it("沒有等選擇的修正卡時不出現選擇列", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);

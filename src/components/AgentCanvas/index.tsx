@@ -286,6 +286,7 @@ export function AgentCanvasView({
   }, [allSkillPathsKey]);
   const messages = useMemo(() => (messagesOf?.projectId === projectId ? messagesOf.rows : []), [messagesOf, projectId]);
   const fixChoices = useMemo(() => (fixChoicesOf?.projectId === projectId ? fixChoicesOf.rows : []), [fixChoicesOf, projectId]);
+  const fixChoiceModules = useMemo(() => new Set(fixChoices.map((f) => f.module_id)), [fixChoices]);
   const refReads = useMemo(() => (refReadsOf?.projectId === projectId ? refReadsOf.rows : []), [refReadsOf, projectId]);
   /** 團隊編制（見 FormationMenu）。 */
   const [formsOf, setFormsOf] = useState<{ projectId: string; state: FormationsState } | null>(null);
@@ -1671,6 +1672,7 @@ export function AgentCanvasView({
                       }
                       onVerifyReport={setVerifyFor}
                       onAcceptVerify={(id) => projectId && void run(() => acceptVerification(projectId, id))}
+                      fixChoiceModules={fixChoiceModules}
                       status={deriveAgentStatus(
                         a,
                         cardsOf(a.id),
