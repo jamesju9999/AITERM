@@ -85,6 +85,8 @@ export function AgentNode({
   usage = {},
   onVerifyReport,
   onAcceptVerify,
+  fixChoiceModules,
+  zoom = 1,
 }: {
   agent: AgentRow;
   /** 這個專案所有未封存的卡片（節點自己挑出跟它有關的）。 */
@@ -145,6 +147,10 @@ export function AgentNode({
   onVerifyReport?: (taskId: string) => void;
   /** 驗收者：放行沒通過的驗收。 */
   onAcceptVerify?: (taskId: string) => void;
+  /** 正在等使用者選修正方式的模組 id。只覆寫畫面上的標籤；模組狀態仍照 deriveModuleState（與後端同規則）。 */
+  fixChoiceModules?: ReadonlySet<string>;
+  /** 桌布縮放比例；縮得很小時補充框改用不受縮放影響的浮出框。 */
+  zoom?: number;
 }) {
   const { t } = useLocale();
   const icon = roleIcon(agent.kind, agent.role) ?? agent.kind;
@@ -217,6 +223,16 @@ export function AgentNode({
       ? mine.filter((c) => c.card_kind === "verify" && c.status === "done").sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))[0]
       : undefined;
 
+  // 審核者／驗收者／協調者：最近一張已結案、有對話記錄的審核／驗收／合併卡，可以接回那段對話追問
+  // 「為什麼這樣判」。正在跑的時候不給（合併卡的工作資料夾正被佔用；其餘也沒必要）。
+  const talkKind = { reviewer: "review", verifier: "verify", orchestrator: "merge" }[agent.kind as string];
+  const talkCard =
+    talkKind && onContinueChat && !running
+      ? mine
+          .filter((c) => c.card_kind === talkKind && c.status === "done" && !!c.session_id)
+          .sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))[0]
+      : undefined;
+
   const runningLine = () => {
     if (!running) return null;
     let title = localizedCardTitle(running, t);
@@ -256,7 +272,7 @@ export function AgentNode({
         {snip && <div className="ac-snip">{snip}</div>}
         <div className="ac-now-sub">{t.ac_elapsed(formatElapsed(nowSecs - (running.dispatched_at ?? nowSecs)))}</div>
         {onNudge && running.tab_id && !question && !running.quota_wait_at && (
-          <NudgeBox agentId={agent.id} onSend={(message) => onNudge(running.id, message)} />
+          <NudgeBox agentId={agent.id} zoom={zoom} onSend={(message) => onNudge(running.id, message)} />
         )}
         {question ? (
           <button className="ac-reply-wait ac-ask" onClick={() => onOpenQuestion?.(question.id)}>
@@ -518,13 +534,21 @@ export function AgentNode({
           <div className="ac-chips">
             {moduleStates.length === 0 && <span className="ac-dropzone">{t.ac_drop_here}</span>}
             {moduleStates.map(({ m, s }) => {
-              const { cls, icon: stateIcon } = MODULE_CHIP[s];
+              // 「等待修正」其實是在等人選怎麼修時，要講清楚並用注意色，免得使用者以為只是排隊。
+              const awaitingChoice = s === "fix_queued" && !!fixChoiceModules?.has(m.id);
+              const { cls, icon: stateIcon } = awaitingChoice
+                ? { cls: "ac-chip--bad ac-chip--choice", icon: "❓" }
+                : MODULE_CHIP[s];
               const draggable = s === "queued";
               const releasable = s === "attention" || s === "review_failed";
               // 排隊中但還在等別位工程師的前置審過：排程器會先跳過它。
               const waiting = waitingPrerequisites(m, tasks, hasReviewer);
               const icon = waiting.length ? "⛓" : stateIcon;
-              const label = waiting.length ? t.ac_waiting_prereqs(waiting.map((d) => d.title).join("、")) : msLabel[s];
+              const label = waiting.length
+                ? t.ac_waiting_prereqs(waiting.map((d) => d.title).join("、"))
+                : awaitingChoice
+                  ? t.ac_ms_fix_choice
+                  : msLabel[s];
               const mUsage = sumUsage(moduleCards(m.id, tasks), usage);
               return (
                 <span
@@ -599,6 +623,19 @@ export function AgentNode({
                 {tokensText(mineUsage)}
               </span>
             )}
+          </div>
+        )}
+        {talkCard && (
+          <div className="ac-talk">
+            <button
+              type="button"
+              className="ac-link"
+              data-testid={`agent-continue-${agent.id}`}
+              title={t.ac_continue_chat_card_tip}
+              onClick={() => onContinueChat?.(talkCard.id)}
+            >
+              💬 {t.ac_continue_chat}
+            </button>
           </div>
         )}
         {canMerge && (

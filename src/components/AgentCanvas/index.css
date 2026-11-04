@@ -338,6 +338,7 @@
 .ac-attention-actions { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
 
 .ac-merge { display: flex; gap: 6px; margin-top: 8px; }
+.ac-talk { margin-top: 8px; }
 .ac-merge-msg { margin-top: 6px; font-size: 11px; color: #86efac; }
 .ac-merge-msg--bad { color: #fca5a5; }
 
@@ -356,6 +357,11 @@
 .ac-log-line--bad { color: #fca5a5; }
 .ac-log-time { color: var(--text-muted); margin-right: 8px; }
 .ac-log-empty { color: var(--text-muted); }
+.ac-log-filter { display: flex; gap: 4px; padding: 2px 14px 4px; }
+.ac-log-filter-btn { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); cursor: pointer; }
+.ac-log-filter-btn.is-on { color: var(--text-primary); border-color: var(--accent, currentColor); font-weight: 600; }
+/* 訊息列：💬 標記＋字重，不只靠顏色；亮暗主題都用主要文字色，比其他列更醒目。 */
+.ac-log-line--msg { color: var(--text-primary); font-weight: 600; }
 /* 角色色點：跟卡片圖示同色，一眼看出是誰做的。 */
 .ac-log-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; background: #93c5fd; }
 .ac-log-dot--reviewer { background: #fde68a; }
@@ -468,6 +474,8 @@
 .ac-chip--fix { border-color: rgba(249, 115, 22, 0.55); color: #fdba74; }
 .ac-chip--review { border-color: rgba(234, 179, 8, 0.45); color: #fde68a; }
 .ac-chip--release { cursor: pointer; }
+/* 等選擇的模組用注意色，但點它不會有動作（要選在桌布上的選擇列），不要顯示成可點。 */
+.ac-chip--choice { cursor: default; }
 .ac-chip--release:hover { background: rgba(239, 68, 68, 0.15); }
 .ac-quota-wait {
   font-size: 11px;
@@ -974,6 +982,10 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-nudge { display: flex; gap: 6px; margin-top: 6px; }
 .ac-nudge-input { flex: 1; min-width: 0; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--ac-edge); background: var(--bg-primary); color: var(--text-primary); font: inherit; font-size: 12px; }
 .ac-nudge-input:disabled { opacity: 0.6; }
+/* 精簡模式（縮放 < 75%）：只有一顆按鈕，輸入框在 body 底下的浮出框，不受桌布縮放影響。 */
+.ac-nudge--compact { display: block; }
+.ac-nudge-pop { z-index: 1000; display: flex; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35); }
+.ac-nudge-pop .ac-nudge-input { font-size: 13px; padding: 5px 8px; border-color: var(--border-color); }
 
 .ac-notes { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--aiterm-border, rgba(255, 255, 255, 0.12)); }
 .ac-notes-title { margin: 0 0 4px; font-size: 13px; }

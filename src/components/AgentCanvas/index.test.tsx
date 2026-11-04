@@ -293,6 +293,46 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(screen.queryByTestId("fixchoice-bar")).toBeNull());
   });
 
+  it("模組在「等你選修正方式」時，節點上的狀態標籤也講清楚；選好之後恢復「等待修正」", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 400 })]);
+    // 審查退回、修正卡排隊中：模組狀態是 fix_queued（Rust 與 deriveModuleState 同規則，不新增變體）。
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1" }),
+      card({ id: "RV", title: "審 A", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "A", review_of: "A", verdict: "fail" }),
+      card({ id: "FX", title: "修 A", status: "queued", agent_id: "a1", card_kind: "fix", module_id: "A", review_of: "RV" }),
+    ]);
+    const waiting = { module_id: "A", module_title: "A 登入", fix_id: "FX", round: 1, can_resume: true, remembered: null };
+    vi.mocked(listFixChoices).mockResolvedValue([waiting]);
+    view();
+    const chip = await screen.findByTestId("chip-A");
+    await waitFor(() => expect(chip.title).toContain("等你選怎麼修"));
+    expect(chip.title).not.toContain("等待修正");
+    expect(chip).toHaveAttribute("data-state", "fix_queued");
+
+    vi.mocked(listFixChoices).mockResolvedValue([]);
+    fireEvent.click(screen.getByTestId("fixchoice-resume"));
+    await waitFor(() => expect(screen.getByTestId("chip-A").title).toContain("等待修正"));
+    expect(screen.getByTestId("chip-A").title).not.toContain("等你選怎麼修");
+  });
+
+  it("不在待選清單裡的修正排隊模組仍顯示「等待修正」", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 400 })]);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1" }),
+      card({ id: "B", title: "B 登出", status: "done", outcome: "success", agent_id: "a1" }),
+      card({ id: "RV", title: "審 A", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "A", review_of: "A", verdict: "fail" }),
+      card({ id: "FX", title: "修 A", status: "queued", agent_id: "a1", card_kind: "fix", module_id: "A", review_of: "RV" }),
+      card({ id: "RV2", title: "審 B", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "B", review_of: "B", verdict: "fail" }),
+      card({ id: "FX2", title: "修 B", status: "queued", agent_id: "a1", card_kind: "fix", module_id: "B", review_of: "RV2" }),
+    ]);
+    // 只有 B 在等選擇：A 要維持「等待修正」，才證明是依模組 id 覆寫而不是整批改。
+    vi.mocked(listFixChoices).mockResolvedValue([{ module_id: "B", module_title: "B 登出", fix_id: "FX2", round: 1, can_resume: true, remembered: null }]);
+    view();
+    await waitFor(() => expect(screen.getByTestId("chip-B").title).toContain("等你選怎麼修"));
+    expect(screen.getByTestId("chip-A").title).toContain("等待修正");
+    expect(screen.getByTestId("chip-A").title).not.toContain("等你選怎麼修");
+  });
+
   it("沒有等選擇的修正卡時不出現選擇列", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);
@@ -487,6 +527,73 @@ describe("AgentCanvasView", () => {
     const log = (document.querySelector(".ac-log") as HTMLElement).textContent ?? "";
     expect(log).toContain("Coder Agent1 對 工程師2 說：「formatTime 改名成 fmt」");
     expect(log).toContain("你對 Coder Agent1 補充：「順便把 README 也更新」");
+  });
+
+  describe("活動記錄的「全部｜訊息」切換", () => {
+    const now = () => Math.floor(Date.now() / 1000);
+    const setup = (cards: TaskWithAttachments[] = []) => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "a2", name: "工程師2", canvas_y: 240 })]);
+      vi.mocked(listTasks).mockResolvedValue(cards);
+      vi.mocked(listCardMessages).mockResolvedValue([
+        { id: 2, at: now(), kind: "tell", task_id: "t2", from_agent: "a1", to_agent: "a2", text: "formatTime 改名成 fmt" },
+        { id: 1, at: now() - 30, kind: "nudge", task_id: "t1", from_agent: null, to_agent: "a1", text: "順便把 README 也更新" },
+      ]);
+    };
+    const logText = () => (document.querySelector(".ac-log") as HTMLElement).textContent ?? "";
+
+    it("切到「訊息」只剩補充與傳訊，切回「全部」恢復", async () => {
+      setup([card({ id: "A", title: "A 登入", status: "running", agent_id: "a1", dispatched_at: now() - 60 })]);
+      view();
+      await waitFor(() => expect(logText()).toContain("formatTime 改名成 fmt"));
+      expect(logText()).toContain("開始");
+      expect(screen.getByTestId("log-filter-all")).toHaveAttribute("aria-pressed", "true");
+
+      fireEvent.click(screen.getByTestId("log-filter-msg"));
+      expect(screen.getByTestId("log-filter-msg")).toHaveAttribute("aria-pressed", "true");
+      expect(logText()).toContain("formatTime 改名成 fmt");
+      expect(logText()).toContain("順便把 README 也更新");
+      expect(logText()).not.toContain("A 登入");
+
+      fireEvent.click(screen.getByTestId("log-filter-all"));
+      expect(logText()).toContain("A 登入");
+      expect(logText()).toContain("formatTime 改名成 fmt");
+    });
+
+    it("訊息列在「全部」裡也有 💬 標記，卡片事件沒有", async () => {
+      setup([card({ id: "A", title: "A 登入", status: "running", agent_id: "a1", dispatched_at: now() - 60 })]);
+      view();
+      await waitFor(() => expect(logText()).toContain("formatTime 改名成 fmt"));
+      const lines = Array.from(document.querySelectorAll(".ac-log-line"));
+      const msgLines = lines.filter((l) => l.textContent?.includes("formatTime") || l.textContent?.includes("README"));
+      const cardLine = lines.find((l) => l.textContent?.includes("A 登入"));
+      expect(msgLines).toHaveLength(2);
+      for (const l of msgLines) expect(l.textContent).toContain("💬");
+      expect(cardLine?.textContent).not.toContain("💬");
+    });
+
+    it("訊息被一堆卡片事件擠出前 40 筆時，「訊息」仍找得到它", async () => {
+      // 30 張卡 × 開始＋完成 = 60 筆比訊息新，訊息在「全部」的前 40 筆之外。
+      const cards = Array.from({ length: 30 }, (_, i) =>
+        card({ id: `C${i}`, title: `卡${i}`, status: "done", outcome: "success", agent_id: "a1", dispatched_at: now() + 10, finished_at: now() + 20 }),
+      );
+      setup(cards);
+      view();
+      await screen.findByTestId("log-filter-msg");
+      await waitFor(() => expect(logText()).toContain("卡0"));
+      expect(logText()).not.toContain("formatTime 改名成 fmt");
+      fireEvent.click(screen.getByTestId("log-filter-msg"));
+      expect(logText()).toContain("formatTime 改名成 fmt");
+    });
+
+    it("沒有訊息時「訊息」顯示空狀態", async () => {
+      setup([card({ id: "A", title: "A 登入", status: "running", agent_id: "a1", dispatched_at: now() - 60 })]);
+      vi.mocked(listCardMessages).mockResolvedValue([]);
+      view();
+      await waitFor(() => expect(logText()).toContain("A 登入"));
+      fireEvent.click(screen.getByTestId("log-filter-msg"));
+      expect(logText()).toContain("還沒有訊息");
+      expect(logText()).not.toContain("A 登入");
+    });
   });
 
   it("活動記錄：很長的補充只顯示開頭", async () => {
@@ -1382,6 +1489,40 @@ describe("AgentCanvasView", () => {
       expect(btn.compareDocumentPosition(titleNode as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
+    it("審核者／驗收者／協調者節點：最近一張已完成、有對話記錄的審核／驗收／合併卡也能「接著談」", async () => {
+      vi.mocked(listAgents).mockResolvedValue([
+        agent(),
+        agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 400 }),
+        agent({ id: "o1", kind: "orchestrator", name: "O", canvas_x: 800 }),
+        agent({ id: "v1", kind: "verifier", name: "V", canvas_x: 1200 }),
+      ]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "A", status: "done", outcome: "success", agent_id: "a1", session_id: "s-a" }),
+        card({ id: "RV", title: "審 A", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "A", review_of: "A", verdict: "pass", session_id: "s-rv", finished_at: 5 }),
+        card({ id: "MG", title: "合併", status: "done", outcome: "success", agent_id: "o1", card_kind: "merge", session_id: "s-mg", finished_at: 6 }),
+        card({ id: "VF", title: "驗收", status: "done", outcome: "success", agent_id: "v1", card_kind: "verify", verdict: "pass", session_id: "s-vf", finished_at: 7 }),
+      ]);
+      view();
+      await screen.findByTestId("agent-r1");
+      // 三顆按鈕各自接回自己那張卡（不是模組卡）。
+      for (const [agentId, cardId] of [["r1", "RV"], ["o1", "MG"], ["v1", "VF"]]) {
+        const node = screen.getByTestId(`agent-${agentId}`);
+        fireEvent.click(within(node).getByTestId(`agent-continue-${agentId}`));
+        await waitFor(() => expect(continueChat).toHaveBeenCalledWith("p1", cardId));
+      }
+    });
+
+    it("審核者最近一張審核卡沒有對話記錄、或還在跑，就沒有「接著談」", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 400 })]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "A", status: "done", outcome: "success", agent_id: "a1" }),
+        card({ id: "RV", title: "審 A", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "A", review_of: "A", session_id: null, finished_at: 5 }),
+      ]);
+      view();
+      await screen.findByTestId("agent-r1");
+      expect(screen.queryByTestId("agent-continue-r1")).toBeNull();
+    });
+
     it("接著談失敗時顯示後端說明的原因", async () => {
       vi.mocked(listAgents).mockResolvedValue([agent()]);
       vi.mocked(listTasks).mockResolvedValue([
@@ -1396,6 +1537,23 @@ describe("AgentCanvasView", () => {
     describe("執行中補充一句", () => {
       const runningCard = (over: Partial<TaskWithAttachments> = {}) =>
         card({ id: "R1", title: "R1 任務", status: "running", agent_id: "a1", tab_id: "t1", dispatched_at: 1, ...over });
+
+      it("桌布縮到 75% 以下：節點上只剩「補充」鈕，按下去在浮出框裡送出（zoom 有一路傳到補充框）", async () => {
+        vi.mocked(listAgents).mockResolvedValue([agent()]);
+        vi.mocked(listTasks).mockResolvedValue([runningCard()]);
+        view();
+        await screen.findByTestId("nudge-input-a1");
+        const zoomOut = screen.getByRole("button", { name: /縮小|Zoom out/ });
+        fireEvent.click(zoomOut); // 83%
+        expect(screen.getByTestId("nudge-input-a1")).toBeInTheDocument();
+        fireEvent.click(zoomOut); // 69%
+        expect(screen.getByTestId("ac-zoom-pct")).toHaveTextContent("69%");
+        expect(screen.queryByTestId("nudge-input-a1")).toBeNull();
+        fireEvent.click(screen.getByTestId("nudge-open-a1"));
+        fireEvent.change(screen.getByTestId("nudge-input-a1"), { target: { value: "縮小也能補充" } });
+        fireEvent.click(screen.getByTestId("nudge-send-a1"));
+        await waitFor(() => expect(nudgeTask).toHaveBeenCalledWith("p1", "R1", "縮小也能補充"));
+      });
 
       it("執行中的卡有「補充」輸入：送出後呼叫後端、清空輸入並提示", async () => {
         vi.mocked(listAgents).mockResolvedValue([agent()]);

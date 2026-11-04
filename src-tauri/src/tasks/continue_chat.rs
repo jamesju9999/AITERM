@@ -31,8 +31,12 @@ pub fn plan(task: &TaskRow, facts: &Facts) -> Result<ContinuePlan, String> {
     if task.status != "done" {
         return Err("這張卡還沒結束，請直接到它的分頁裡對話。".into());
     }
-    if task.card_kind != crate::tasks::workflow::KIND_WORK && task.card_kind != crate::tasks::workflow::KIND_FIX {
-        return Err("只有模組卡與修正卡可以接著談。".into());
+    use crate::tasks::workflow::{KIND_FIX, KIND_MERGE, KIND_PLAN, KIND_REVIEW, KIND_VERIFY, KIND_WORK};
+    // 審核／驗收／拆解卡的工作資料夾是用完即刪的 detached worktree，卡結案後已不存在；
+    // 它們也不佔用 Agent 的工作資料夾。接回對話只需要 session，換到程式庫根開即可。
+    let throwaway = [KIND_REVIEW, KIND_VERIFY, KIND_PLAN].contains(&task.card_kind.as_str());
+    if !throwaway && ![KIND_WORK, KIND_FIX, KIND_MERGE].contains(&task.card_kind.as_str()) {
+        return Err("只有模組卡、修正卡、合併卡與審核／驗收／拆解卡可以接著談。".into());
     }
     if task.cli.as_deref().is_some_and(|c| !c.eq_ignore_ascii_case("claude")) {
         return Err("這張卡不是用 Claude Code 跑的，沒辦法接回對話。".into());
@@ -46,10 +50,11 @@ pub fn plan(task: &TaskRow, facts: &Facts) -> Result<ContinuePlan, String> {
     if !facts.session_log_exists {
         return Err("找不到這張卡當時的對話檔（可能被清掉了），沒辦法接回對話。".into());
     }
-    if facts.agent_has_running_card {
+    if !throwaway && facts.agent_has_running_card {
         return Err("這位工程師正在做別的卡，同一個工作資料夾不能同時開兩個 Claude。請等它做完，或先停止那張卡。".into());
     }
     let dir = match (&task.worktree_path, facts.agent_worktree) {
+        _ if throwaway => PathBuf::from(&task.project_dir),
         (Some(p), _) if !p.is_empty() => PathBuf::from(p),
         (_, Some(wt)) if task.agent_id.is_some() => wt.to_path_buf(),
         _ => PathBuf::from(&task.project_dir),
@@ -103,13 +108,52 @@ mod tests {
     }
 
     #[test]
+    fn a_merge_card_continues_in_the_agents_worktree_and_needs_the_agent_free() {
+        let proj = tempfile::tempdir().unwrap();
+        let wt = tempfile::tempdir().unwrap();
+        let card = TaskRow { card_kind: "merge".into(), agent_id: Some("orc".into()), ..done_card(proj.path()) };
+        assert_eq!(plan(&card, &facts(Some(wt.path()))).unwrap().dir, wt.path());
+        let busy = Facts { agent_has_running_card: true, ..facts(Some(wt.path())) };
+        assert!(plan(&card, &busy).unwrap_err().contains("同時開兩個"));
+    }
+
+    #[test]
+    fn review_verify_and_plan_cards_continue_in_the_repo_root_even_when_the_agent_is_busy() {
+        // 它們的工作資料夾是用完即刪的 detached worktree：記錄的路徑早就不在了，不能回頭用。
+        let proj = tempfile::tempdir().unwrap();
+        let wt = tempfile::tempdir().unwrap();
+        for kind in ["review", "verify", "plan"] {
+            let card = TaskRow {
+                card_kind: kind.into(),
+                agent_id: Some("rev".into()),
+                worktree_path: Some("/no/such/dir/xyz".into()),
+                ..done_card(proj.path())
+            };
+            let busy = Facts { agent_has_running_card: true, ..facts(Some(wt.path())) };
+            let p = plan(&card, &busy).unwrap_or_else(|e| panic!("{kind} 應該能接著談：{e}"));
+            assert_eq!(p.dir, proj.path(), "{kind} 要用程式庫根");
+            assert_eq!(p.session_id, "sess-1");
+        }
+    }
+
+    #[test]
+    fn a_throwaway_card_still_obeys_the_other_refusals() {
+        let proj = tempfile::tempdir().unwrap();
+        let card = TaskRow { card_kind: "review".into(), ..done_card(proj.path()) };
+        assert!(plan(&TaskRow { session_id: None, ..card.clone() }, &facts(None)).unwrap_err().contains("對話編號"));
+        assert!(plan(&TaskRow { status: "running".into(), ..card.clone() }, &facts(None)).unwrap_err().contains("還沒結束"));
+        let gone = TaskRow { project_dir: "/no/such/dir/xyz".into(), ..card };
+        assert!(plan(&gone, &facts(None)).unwrap_err().contains("已經不在了"));
+    }
+
+    #[test]
     fn each_refusal_says_why() {
         let d = tempfile::tempdir().unwrap();
         let ok = done_card(d.path());
         let err = |card: TaskRow, f: Facts| plan(&card, &f).unwrap_err();
 
         assert!(err(TaskRow { status: "running".into(), ..done_card(d.path()) }, facts(None)).contains("還沒結束"));
-        assert!(err(TaskRow { card_kind: "review".into(), ..done_card(d.path()) }, facts(None)).contains("模組卡與修正卡"));
+        assert!(err(TaskRow { card_kind: "ask".into(), ..done_card(d.path()) }, facts(None)).contains("可以接著談"));
         assert!(err(TaskRow { cli: Some("codex".into()), ..done_card(d.path()) }, facts(None)).contains("不是用 Claude"));
         assert!(err(TaskRow { session_id: None, ..done_card(d.path()) }, facts(None)).contains("對話編號"));
         assert!(err(TaskRow { session_id: Some(String::new()), ..done_card(d.path()) }, facts(None)).contains("對話編號"));

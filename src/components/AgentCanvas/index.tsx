@@ -286,6 +286,7 @@ export function AgentCanvasView({
   }, [allSkillPathsKey]);
   const messages = useMemo(() => (messagesOf?.projectId === projectId ? messagesOf.rows : []), [messagesOf, projectId]);
   const fixChoices = useMemo(() => (fixChoicesOf?.projectId === projectId ? fixChoicesOf.rows : []), [fixChoicesOf, projectId]);
+  const fixChoiceModules = useMemo(() => new Set(fixChoices.map((f) => f.module_id)), [fixChoices]);
   const refReads = useMemo(() => (refReadsOf?.projectId === projectId ? refReadsOf.rows : []), [refReadsOf, projectId]);
   /** 團隊編制（見 FormationMenu）。 */
   const [formsOf, setFormsOf] = useState<{ projectId: string; state: FormationsState } | null>(null);
@@ -665,8 +666,8 @@ export function AgentCanvasView({
     [agents, retired],
   );
 
-  const activity = useMemo(() => {
-    const ev: { at: number; text: string; kind: "start" | "ok" | "bad" | "dispatch"; role?: AgentKind }[] = [];
+  const activityAll = useMemo(() => {
+    const ev: { at: number; text: string; kind: "start" | "ok" | "bad" | "dispatch"; role?: AgentKind; msg?: true }[] = [];
     const titleOf = (id: string) => tasks.find((x) => x.id === id)?.title;
     for (const c of tasks) {
       if (!c.agent_id) continue;
@@ -713,9 +714,9 @@ export function AgentCanvasView({
     for (const m of messages) {
       const to = m.to_agent ? agentName(m.to_agent) : "";
       if (m.kind === "tell" && m.from_agent) {
-        ev.push({ at: m.at, text: t.ac_log_tell(agentName(m.from_agent), to, clip(m.text)), kind: "dispatch", role: agentKind(m.from_agent) });
+        ev.push({ at: m.at, text: t.ac_log_tell(agentName(m.from_agent), to, clip(m.text)), kind: "dispatch", role: agentKind(m.from_agent), msg: true });
       } else {
-        ev.push({ at: m.at, text: t.ac_log_nudge(to, clip(m.text)), kind: "dispatch", role: agentKind(m.to_agent) });
+        ev.push({ at: m.at, text: t.ac_log_nudge(to, clip(m.text)), kind: "dispatch", role: agentKind(m.to_agent), msg: true });
       }
     }
     // 資料庫技能的查詢：活動記錄顯示完整 SQL。
@@ -739,8 +740,14 @@ export function AgentCanvasView({
     for (const l of forms?.log ?? []) {
       ev.push({ at: l.at, text: t.ac_log_formation(l.from_name, l.to_name), kind: "dispatch" });
     }
-    return ev.sort((a, b) => b.at - a.at).slice(0, 40);
+    // 不在這裡截斷：「訊息」檢視要從全部事件裡挑，先截 40 筆的話訊息會被後面的卡片事件擠掉。
+    return ev.sort((a, b) => b.at - a.at);
   }, [tasks, agentName, agentKind, dbQueries, skillUsesOf, refReads, messages, projectId, forms, t]);
+
+  // 活動記錄只留最新 40 筆；「訊息」只看補充與傳訊（各自取最新 40 筆）。
+  const [logFilter, setLogFilter] = useState<"all" | "msg">("all");
+  const activity = useMemo(() => activityAll.slice(0, 40), [activityAll]);
+  const shownLog = useMemo(() => (logFilter === "msg" ? activityAll.filter((e) => e.msg).slice(0, 40) : activity), [logFilter, activityAll, activity]);
 
   // ── 拖曳 ───────────────────────────────────────────────────────────────
 
@@ -1671,6 +1678,8 @@ export function AgentCanvasView({
                       }
                       onVerifyReport={setVerifyFor}
                       onAcceptVerify={(id) => projectId && void run(() => acceptVerification(projectId, id))}
+                      fixChoiceModules={fixChoiceModules}
+                      zoom={zoom}
                       status={deriveAgentStatus(
                         a,
                         cardsOf(a.id),
@@ -1805,16 +1814,39 @@ export function AgentCanvasView({
           )}
         </button>
         {!layout.logCollapsed && (
-          <div className="ac-log-lines">
-            {activity.length === 0 && <div className="ac-log-empty">{t.ac_log_empty}</div>}
-            {activity.map((ev, i) => (
-              <div key={i} className={`ac-log-line ac-log-line--${ev.kind}`}>
-                <span className="ac-log-time">{new Date(ev.at * 1000).toLocaleTimeString()}</span>
-                {ev.role && <span className={`ac-log-dot ac-log-dot--${ev.role}`} aria-hidden />}
-                {ev.text}
-              </div>
-            ))}
-          </div>
+          <>
+            {/* 切換鈕不能放進標題列：標題本身是個按鈕（收合／展開），按鈕裡不能再放按鈕。 */}
+            <div className="ac-log-filter" role="group" aria-label={t.ac_log_title}>
+              {(["all", "msg"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`ac-log-filter-btn${logFilter === k ? " is-on" : ""}`}
+                  data-testid={`log-filter-${k}`}
+                  aria-pressed={logFilter === k}
+                  onClick={() => setLogFilter(k)}
+                >
+                  {k === "all" ? t.ac_log_filter_all : t.ac_log_filter_msg}
+                </button>
+              ))}
+            </div>
+            <div className="ac-log-lines">
+              {shownLog.length === 0 && <div className="ac-log-empty">{logFilter === "msg" ? t.ac_log_msg_empty : t.ac_log_empty}</div>}
+              {shownLog.map((ev, i) => (
+                <div key={i} className={`ac-log-line ac-log-line--${ev.kind}${ev.msg ? " ac-log-line--msg" : ""}`}>
+                  <span className="ac-log-time">{new Date(ev.at * 1000).toLocaleTimeString()}</span>
+                  {ev.role && <span className={`ac-log-dot ac-log-dot--${ev.role}`} aria-hidden />}
+                  {/* 不只靠顏色：訊息列前面固定有 💬，螢幕閱讀器念「訊息」。 */}
+                  {ev.msg && (
+                    <span role="img" aria-label={t.ac_log_filter_msg} className="ac-log-msg-mark">
+                      💬{" "}
+                    </span>
+                  )}
+                  {ev.text}
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 
