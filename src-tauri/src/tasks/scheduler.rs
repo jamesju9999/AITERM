@@ -791,7 +791,18 @@ pub(crate) async fn finalize_verify_card(
             .map_err(|e| format!("找不到 {}：{e}", path.display()))
             .and_then(|t| crate::tasks::workflow::parse_verify_json(&t))
         {
-            Ok(report) => {
+            Ok(mut report) => {
+                // 驗收者偶爾對少數模組編了假 id：對回去，並寫回檔案——之後退回修正、畫面顯示讀的都是這份。
+                if crate::tasks::workflow::repair_module_ids(pool, &mut report).await.unwrap_or(0) > 0 {
+                    match serde_json::to_string_pretty(&report) {
+                        Ok(json) => {
+                            if let Err(e) = std::fs::write(&path, json) {
+                                eprintln!("write repaired verify.json {task_id}: {e}");
+                            }
+                        }
+                        Err(e) => eprintln!("serialize repaired verify.json {task_id}: {e}"),
+                    }
+                }
                 // 報告說通過但漏了模組：改判「需處理」。查不到模組清單時不擋（照報告）。
                 let uncovered = if report.verdict == "pass" {
                     crate::tasks::workflow::uncovered_modules(pool, &report).await.unwrap_or_default()
@@ -4541,6 +4552,37 @@ mod agent_dispatch_tests {
         assert!(!wt.exists(), "驗收目錄要清掉");
         #[cfg(unix)]
         assert!(!server.wait().unwrap().success(), "留下來的伺服器要被結束");
+    }
+
+    /// 實機：驗收者替 convert.js 編了假 module_id，報告每條都通過卻被判「沒涵蓋」。
+    /// 結案時對回真的 id（判定照報告 pass），並寫回檔案，之後退回修正、畫面顯示讀到的才是對的。
+    #[tokio::test]
+    async fn a_verify_card_with_an_invented_module_id_is_repaired_and_still_passes() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let coder = agent_for(&pool, repo.path()).await;
+        let module = store::create_task(&pool, "實作 convert.js 調度器（含測試）", "做 X", &repo.path().to_string_lossy(), true, false).await.unwrap();
+        agents::assign_task(&pool, &module, Some(&coder.id)).await.unwrap();
+        store::dispatch_for_test(&pool, &module, "tab").await;
+        store::finish_task(&pool, &module, "success", None, None).await.unwrap();
+        let card = review_card(&pool, repo.path(), &head(repo.path())).await;
+        let wt = prepare_review_worktree(storage.path(), &coder.id, &card).await.unwrap();
+        let json = crate::tasks::workflow::verify_json_path(storage.path(), &card.id);
+        fs::write(
+            &json,
+            r#"{"verdict":"pass","items":[{"criterion":"convert.js 調度器：先驗單位","status":"pass","module_id":"convert-module-id-placeholder","evidence":["node --test 通過"]}]}"#,
+        )
+        .unwrap();
+
+        let out = finalize_verify_card(&pool, storage.path(), &coder.id, &card.id, &repo.path().to_string_lossy(), &wt, monitor::TaskOutcome::Success).await;
+
+        assert!(matches!(out, monitor::TaskOutcome::Success));
+        let row = store::get_task(&pool, &card.id).await.unwrap().unwrap();
+        assert_eq!(row.verdict.as_deref(), Some("pass"), "修好 id 之後模組有被涵蓋：{:?}", row.review_reasons);
+        let saved = fs::read_to_string(&json).unwrap();
+        assert!(saved.contains(&module) && !saved.contains("placeholder"), "要把修好的 id 寫回檔案：{saved}");
     }
 
     #[tokio::test]

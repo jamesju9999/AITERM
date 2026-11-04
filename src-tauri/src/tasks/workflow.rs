@@ -928,6 +928,55 @@ pub async fn uncovered_modules(pool: &SqlitePool, report: &VerifyReport) -> Resu
         .collect())
 }
 
+/// 條目的 `module_id` 不是任何模組的 id 時，盡量對回正確的模組：驗收者偶爾會對少數模組自己編 id
+/// （實機：七個模組裡兩個填了 `…-module-id-placeholder`），報告其實都通過，卻被判「沒涵蓋」連續三輪。
+/// 依序試：id 前綴（至少 6 碼、只對到一個模組）、條目文字裡提到的檔名（取自模組標題，只對到一個模組）。
+/// 有歧義或沒線索就維持原樣——猜錯比不猜更糟（會把別的模組算成已驗收）。回傳修正了幾條。
+pub fn repair_ids(report: &mut VerifyReport, modules: &[&TaskRow]) -> usize {
+    let ids: HashSet<&str> = modules.iter().map(|m| m.id.as_str()).collect();
+    // 模組標題裡長得像檔名的字（convert.js、errors.js…）。
+    let files: Vec<(&TaskRow, Vec<String>)> = modules
+        .iter()
+        .map(|m| {
+            let toks = m
+                .title
+                .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/')))
+                .filter(|t| t.len() > 2 && t.contains('.') && !t.starts_with('.') && !t.ends_with('.'))
+                .map(|t| t.to_ascii_lowercase())
+                .collect();
+            (*m, toks)
+        })
+        .collect();
+    let unique = |mut hits: Vec<&TaskRow>| (hits.len() == 1).then(|| hits.remove(0).id.clone());
+    let mut fixed = 0;
+    for item in &mut report.items {
+        let Some(given) = item.module_id.as_deref() else { continue };
+        if ids.contains(given) {
+            continue;
+        }
+        let given_lc = given.to_ascii_lowercase();
+        let by_prefix = (given_lc.len() >= 6)
+            .then(|| unique(modules.iter().copied().filter(|m| m.id.to_ascii_lowercase().starts_with(&given_lc)).collect()))
+            .flatten();
+        let text = format!("{given_lc} {}", item.criterion.to_ascii_lowercase());
+        let found = by_prefix.or_else(|| {
+            unique(files.iter().filter(|(_, toks)| toks.iter().any(|t| text.contains(t.as_str()))).map(|(m, _)| *m).collect())
+        });
+        if let Some(id) = found {
+            item.module_id = Some(id);
+            fixed += 1;
+        }
+    }
+    fixed
+}
+
+/// `repair_ids` 用目前專案的工程師模組。
+pub async fn repair_module_ids(pool: &SqlitePool, report: &mut VerifyReport) -> Result<usize, sqlx::Error> {
+    let all_agents = agents::list_agents(pool).await?;
+    let tasks = store::list_tasks(pool).await?;
+    Ok(repair_ids(report, &coder_modules(&all_agents, &tasks)))
+}
+
 /// 標成 `pass` 卻沒附任何證據（截圖、指令輸出）的條件。沒有證據就無從分辨是真的驗過，還是只讀了程式碼就說通過；
 /// `manual`（明講沒驗並寫了原因）與 `fail`（有重現步驟）不要求證據。
 pub fn unproven_items(report: &VerifyReport) -> Vec<String> {
@@ -974,7 +1023,7 @@ pub fn verify_body(modules: &[&TaskRow], spec_text: &str, json_path: &Path, evid
         "你是驗收者。目前目錄是各工程師的成果合併之後的版本。請確認它真的能用：\
          實際建置、執行、操作，照驗收條件逐條確認。\n\
          - 不要修改、commit 或 push 任何檔案；安裝相依套件、建置產生的檔案沒關係。\n\
-         - 你只做判定，不修 bug。\n\n模組清單（module_id 用方括號裡的 id）：\n",
+         - 你只做判定，不修 bug。\n\n模組清單（module_id 要把方括號裡的 id 原樣整串貼上，不要縮短、不要自己編；不屬於任何一個模組的整合類條目就省略 module_id）：\n",
     );
     for m in modules {
         s.push_str(&format!("- [{}] {}\n  需求：{}\n", m.id, m.title, take_chars(&m.body, 2000).replace('\n', "\n  ")));
@@ -3343,6 +3392,72 @@ pub(crate) mod tests {
         assert_eq!(uncovered_modules(&pool, &report).await.unwrap(), vec!["D 設定".to_string()], "manual 是明講沒驗，算涵蓋；沒條目才算漏");
         let all_covered = report_of("pass", vec![item_for(Some(&a), "pass"), item_for(Some(&b), "pass"), item_for(Some(&_d), "pass")]);
         assert!(uncovered_modules(&pool, &all_covered).await.unwrap().is_empty());
+    }
+
+    fn item_with(module: Option<&str>, criterion: &str) -> VerifyItem {
+        VerifyItem { criterion: criterion.into(), ..item_for(module, "pass") }
+    }
+
+    /// 實機（單位換算）：驗收者對 convert.js、format.js 兩個模組編了假 id，其他五個都填對，
+    /// 系統因此連判三輪「沒涵蓋」，但報告的每一條其實都通過。
+    #[tokio::test]
+    async fn invented_module_ids_are_mapped_back_by_the_file_named_in_the_item() {
+        let pool = mem_pool().await;
+        let c = agent(&pool, "coder", "C1").await;
+        let conv = done_module(&pool, &c, "實作 convert.js 調度器（含測試）", "e1").await;
+        let fmt = done_module(&pool, &c, "實作 format.js（含測試）", "e2").await;
+        let mut report = report_of(
+            "pass",
+            vec![
+                item_with(Some("c0nvert-module-id-placeholder"), "convert.js 調度器：先驗單位、同類、分派"),
+                item_with(Some("format-module-id-placeholder"), "format.js formatNumber 10 位有效數字"),
+                item_with(None, "主要入口可用"),
+            ],
+        );
+        assert_eq!(repair_module_ids(&pool, &mut report).await.unwrap(), 2);
+        assert_eq!(report.items[0].module_id.as_deref(), Some(conv.as_str()));
+        assert_eq!(report.items[1].module_id.as_deref(), Some(fmt.as_str()));
+        assert_eq!(report.items[2].module_id, None, "本來就沒指定模組的整合條目不動");
+        assert!(uncovered_modules(&pool, &report).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_shortened_id_is_mapped_back_by_its_prefix() {
+        let pool = mem_pool().await;
+        let c = agent(&pool, "coder", "C1").await;
+        let a = done_module(&pool, &c, "A 登入", "e1").await;
+        let _b = done_module(&pool, &c, "B 報表", "e2").await;
+        let mut report = report_of("pass", vec![item_with(Some(&a[..8]), "登入流程")]);
+        assert_eq!(repair_module_ids(&pool, &mut report).await.unwrap(), 1);
+        assert_eq!(report.items[0].module_id.as_deref(), Some(a.as_str()));
+    }
+
+    /// 猜錯比不猜更糟：條目同時提到兩個模組的檔案、或根本沒線索時，維持原樣讓系統照舊判「沒涵蓋」。
+    #[tokio::test]
+    async fn ambiguous_or_clueless_items_are_left_alone_and_valid_ids_are_never_touched() {
+        let pool = mem_pool().await;
+        let c = agent(&pool, "coder", "C1").await;
+        let a = done_module(&pool, &c, "實作 length.js（含測試）", "e1").await;
+        let _b = done_module(&pool, &c, "實作 weight.js（含測試）", "e2").await;
+        let mut report = report_of(
+            "pass",
+            vec![
+                item_with(Some("bogus"), "length.js 與 weight.js 都要驗"),
+                item_with(Some("bogus2"), "完全沒有線索的條件"),
+                item_with(Some(&a), "weight.js 的行為"),
+            ],
+        );
+        assert_eq!(repair_module_ids(&pool, &mut report).await.unwrap(), 0);
+        assert_eq!(report.items[0].module_id.as_deref(), Some("bogus"));
+        assert_eq!(report.items[1].module_id.as_deref(), Some("bogus2"));
+        assert_eq!(report.items[2].module_id.as_deref(), Some(a.as_str()), "id 本身有效就不重新推測");
+    }
+
+    #[test]
+    fn the_verify_prompt_says_to_copy_the_module_id_verbatim() {
+        let m = TaskRow { title: "計時器".into(), body: "按開始倒數".into(), ..test_row("m1") };
+        let body = verify_body(&[&m], "", Path::new("/j"), Path::new("/e"));
+        assert!(body.contains("原樣") && body.contains("不要自己編"), "{body}");
     }
 
     #[test]
