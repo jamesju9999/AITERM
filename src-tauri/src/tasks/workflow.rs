@@ -1956,8 +1956,11 @@ pub(crate) mod tests {
         after_card_finished(&pool, Path::new("/p"), &m).await.unwrap();
         // 就算先前（對同模組）記過接回，自動卡的模組也不理它。
         crate::tasks::fix_choice::set_mode(&pool, &m, Some("resume")).await.unwrap();
+        // 對話檔其實在：若自動卡也被當成「可接回」，修正卡就會變互動，測試才分得出來。
+        sqlx::query("UPDATE tasks SET session_id = 'sess-auto' WHERE id = ?").bind(&m).execute(&pool).await.unwrap();
+        let root = log_root("sess-auto");
 
-        fail_queued_review(&pool, None).await;
+        fail_queued_review(&pool, Some(root.path())).await;
 
         let fix = queued_fix(&all(&pool).await);
         assert!(!fix.interactive && fix.session_id.is_none());
