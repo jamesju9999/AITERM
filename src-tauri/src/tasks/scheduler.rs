@@ -793,7 +793,14 @@ pub(crate) async fn finalize_verify_card(
         {
             Ok(mut report) => {
                 // 驗收者偶爾對少數模組編了假 id：對回去，並寫回檔案——之後退回修正、畫面顯示讀的都是這份。
-                if crate::tasks::workflow::repair_module_ids(pool, &mut report).await.unwrap_or(0) > 0 {
+                let repaired = crate::tasks::workflow::repair_module_ids(pool, &mut report).await.unwrap_or(0);
+                if repaired > 0 {
+                    // 留下紀錄（驗收報告的備註看得到）：事後才分辨得出 id 是驗收者填對的還是系統對回的。
+                    let note = format!("系統已自動對回 {repaired} 條條目的 module_id（驗收者填的不是模組的 id，依 id 前綴或條目裡的檔名對回）。");
+                    report.notes = Some(match report.notes.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                        Some(n) => format!("{n}\n{note}"),
+                        None => note,
+                    });
                     match serde_json::to_string_pretty(&report) {
                         Ok(json) => {
                             if let Err(e) = std::fs::write(&path, json) {
@@ -4583,6 +4590,34 @@ mod agent_dispatch_tests {
         assert_eq!(row.verdict.as_deref(), Some("pass"), "修好 id 之後模組有被涵蓋：{:?}", row.review_reasons);
         let saved = fs::read_to_string(&json).unwrap();
         assert!(saved.contains(&module) && !saved.contains("placeholder"), "要把修好的 id 寫回檔案：{saved}");
+        // 留下紀錄：事後才分辨得出這份報告的 id 是驗收者填對的，還是系統修的。
+        let back = crate::tasks::workflow::parse_verify_json(&saved).unwrap();
+        assert!(back.notes.as_deref().is_some_and(|n| n.contains("自動對回") && n.contains("1")), "{:?}", back.notes);
+    }
+
+    /// 驗收者本來就填對時，不留「自動對回」的紀錄，免得每份報告都有雜訊。
+    #[tokio::test]
+    async fn a_verify_report_with_correct_ids_gets_no_repair_note() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let storage = tempfile::tempdir().unwrap();
+        let pool = mem_pool().await;
+        let coder = agent_for(&pool, repo.path()).await;
+        let module = store::create_task(&pool, "實作 convert.js 調度器（含測試）", "做 X", &repo.path().to_string_lossy(), true, false).await.unwrap();
+        agents::assign_task(&pool, &module, Some(&coder.id)).await.unwrap();
+        store::dispatch_for_test(&pool, &module, "tab").await;
+        store::finish_task(&pool, &module, "success", None, None).await.unwrap();
+        let card = review_card(&pool, repo.path(), &head(repo.path())).await;
+        let wt = prepare_review_worktree(storage.path(), &coder.id, &card).await.unwrap();
+        let json = crate::tasks::workflow::verify_json_path(storage.path(), &card.id);
+        let original = format!(
+            r#"{{"verdict":"pass","notes":"原本的備註","items":[{{"criterion":"convert.js","status":"pass","module_id":"{module}","evidence":["ok"]}}]}}"#
+        );
+        fs::write(&json, &original).unwrap();
+
+        finalize_verify_card(&pool, storage.path(), &coder.id, &card.id, &repo.path().to_string_lossy(), &wt, monitor::TaskOutcome::Success).await;
+
+        assert_eq!(fs::read_to_string(&json).unwrap(), original, "沒有修復就不動檔案");
     }
 
     #[tokio::test]
