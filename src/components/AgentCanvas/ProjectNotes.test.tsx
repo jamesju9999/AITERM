@@ -34,6 +34,11 @@ describe("專案記事本", () => {
     expect(screen.getByText("別動 legacy/")).toBeInTheDocument();
   });
 
+  it("有一行小字說明最多留 50 則、超過清掉最舊的", async () => {
+    renderNotes();
+    expect(await screen.findByTestId("notes-limit")).toHaveTextContent("最多保留最新 50 則，超過會自動清掉最舊的");
+  });
+
   it("沒有筆記時說明這是什麼", async () => {
     renderNotes();
     expect(await screen.findByTestId("notes-empty")).toBeInTheDocument();

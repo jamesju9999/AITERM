@@ -59,6 +59,9 @@ export function ProjectNotes({ projectId }: { projectId: string }) {
     <section className="ac-notes" aria-label={t.ac_notes_title}>
       <h4 className="ac-notes-title">{t.ac_notes_title}</h4>
       <p className="ac-dialog-desc">{t.ac_notes_desc}</p>
+      <p className="task-field-hint" data-testid="notes-limit">
+        {t.ac_notes_limit}
+      </p>
       {notes !== null && notes.length === 0 && (
         <p className="task-field-hint" data-testid="notes-empty">
           {t.ac_notes_empty}

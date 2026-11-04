@@ -9,6 +9,8 @@ use sqlx::SqlitePool;
 pub const NOTE_MAX_CHARS: usize = 500;
 /// 放進提示時的上限（字元）。超過時留最新的，舊的丟掉。
 pub const NOTES_PROMPT_LIMIT: usize = 4000;
+/// 資料庫裡最多留幾則；超過就清掉最舊的，不然只有注入時被截斷、列會永遠增加。
+pub const MAX_NOTES: usize = 50;
 
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
 pub struct NoteRow {
@@ -62,6 +64,12 @@ pub async fn add_note(pool: &SqlitePool, author: &str, text: &str) -> Result<Not
         .await
         .map_err(|e| e.to_string())?
         .last_insert_rowid();
+    // 只在真的新增之後清（重複的在上面就回傳了）；id 遞增，所以最大的 MAX_NOTES 個就是最新的。
+    sqlx::query("DELETE FROM project_notes WHERE id NOT IN (SELECT id FROM project_notes ORDER BY id DESC LIMIT ?)")
+        .bind(MAX_NOTES as i64)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
     sqlx::query_as::<_, NoteRow>("SELECT * FROM project_notes WHERE id = ?").bind(id).fetch_one(pool).await.map_err(|e| e.to_string())
 }
 
@@ -147,6 +155,32 @@ mod tests {
         let again = add_note(&pool, "工程師2", "用  pnpm").await.unwrap();
         assert_eq!(again.id, first.id);
         assert_eq!(list_notes(&pool).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_51st_note_pushes_out_the_oldest_and_keeps_max_notes() {
+        let pool = pool().await;
+        for i in 1..=MAX_NOTES + 1 {
+            add_note(&pool, "a", &format!("第 {i} 則")).await.unwrap();
+        }
+        let all = list_notes(&pool).await.unwrap();
+        assert_eq!(all.len(), MAX_NOTES);
+        assert!(!all.iter().any(|n| n.text == "第 1 則"), "最舊的要被清掉");
+        assert_eq!(all[0].text, "第 2 則", "順序仍是舊的在前");
+        assert_eq!(all.last().unwrap().text, format!("第 {} 則", MAX_NOTES + 1));
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_does_not_count_as_new_and_deletes_nothing() {
+        let pool = pool().await;
+        for i in 1..=MAX_NOTES {
+            add_note(&pool, "a", &format!("第 {i} 則")).await.unwrap();
+        }
+        // 已滿 50 則時再寫一則重複的：不是新增，最舊那則不能被誤刪。
+        add_note(&pool, "b", "第 7 則").await.unwrap();
+        let all = list_notes(&pool).await.unwrap();
+        assert_eq!(all.len(), MAX_NOTES);
+        assert_eq!(all[0].text, "第 1 則");
     }
 
     fn note(id: i64, text: &str) -> NoteRow {
