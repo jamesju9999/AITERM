@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
@@ -41,6 +41,15 @@ export function ProjectCreateDialog({
   };
 
   const ready = name.trim().length > 0 && parent.length > 0 && !busy;
+
+  // 建立中不關：關掉對話框也停不下已經送出的建立。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
 
   return (
     <div className="task-dialog-backdrop">
