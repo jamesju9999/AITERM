@@ -38,9 +38,14 @@ pub fn resolve_target<'a>(agents: &'a [AgentRow], name: &str, sender_id: Option<
 }
 
 /// 實際打進對方對話的那一行：標明來源，並說明不必特地回覆（免得兩邊一來一往）。
-pub fn wire_text(sender_name: &str, message: &str) -> String {
+/// `reply`：對方的回答會影響你的工作時才要求回覆；回覆走同一個 `tell_agent`。
+pub fn wire_text(sender_name: &str, message: &str, reply: bool) -> String {
     let from = if sender_name.trim().is_empty() { "另一位 Agent" } else { sender_name.trim() };
-    format!("【來自 {from} 的訊息，供你參考，手邊這步照做，不用特地回覆】{message}")
+    if reply {
+        format!("【來自 {from} 的提問，請回覆：用 tell_agent 把答案一兩句傳給「{from}」，再繼續手邊的工作】{message}")
+    } else {
+        format!("【來自 {from} 的訊息，供你參考，手邊這步照做，不用特地回覆】{message}")
+    }
 }
 
 #[cfg(test)]
@@ -88,9 +93,17 @@ mod tests {
 
     #[test]
     fn the_wire_text_names_the_sender_and_says_no_reply_is_needed() {
-        let s = wire_text("工程師1", "formatTime 改名成 fmt");
+        let s = wire_text("工程師1", "formatTime 改名成 fmt", false);
         assert!(s.contains("工程師1") && s.contains("formatTime 改名成 fmt") && s.contains("不用特地回覆"));
-        assert!(wire_text("", "x").contains("另一位 Agent"));
+        assert!(wire_text("", "x", false).contains("另一位 Agent"));
         assert!(!s.contains('\n'), "要是一行，才會被當成一則訊息送出");
+    }
+
+    #[test]
+    fn asking_for_a_reply_names_who_to_answer_and_how() {
+        let s = wire_text("工程師1", "你的 API 回傳 id 是字串還數字？", true);
+        assert!(s.contains("工程師1") && s.contains("tell_agent") && s.contains("請回覆"), "{s}");
+        assert!(!s.contains("不用特地回覆"), "{s}");
+        assert!(!s.contains('\n'));
     }
 }
