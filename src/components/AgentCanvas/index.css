@@ -979,3 +979,12 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-note-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ac-note-add { display: flex; gap: 8px; }
 .ac-note-add .task-field-input { flex: 1; min-width: 0; }
+
+/* 互動卡被退回後等使用者選修正方式（FixChoiceBar）。沿用記事本的邊線與字級。 */
+.ac-fixchoice { display: flex; flex-direction: column; gap: 8px; margin: 8px 12px; }
+.ac-fixchoice-row { padding: 8px 10px; border: 1px solid var(--aiterm-border, rgba(255, 255, 255, 0.12)); border-radius: 6px; background: var(--aiterm-surface, rgba(255, 255, 255, 0.04)); }
+.ac-fixchoice-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.ac-fixchoice-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ac-fixchoice-remember { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; opacity: 0.85; }
+.ac-fixchoice-note { margin-top: 6px; font-size: 11px; opacity: 0.6; }
+.ac-fixchoice-error { margin-top: 6px; font-size: 12px; color: var(--aiterm-danger, #e5534b); }

@@ -32,6 +32,8 @@ vi.mock("../../ipc/tasks", () => ({
   continueChat: vi.fn().mockResolvedValue("tab-cc"),
   nudgeTask: vi.fn().mockResolvedValue(undefined),
   listCardMessages: vi.fn().mockResolvedValue([]),
+  listFixChoices: vi.fn().mockResolvedValue([]),
+  chooseFix: vi.fn().mockResolvedValue(undefined),
   deleteTask: vi.fn().mockResolvedValue(undefined),
   codexInfo: vi.fn().mockResolvedValue({ models: [], login: null, error: null }),
 }));
@@ -154,7 +156,7 @@ import {
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
-import { codexInfo, continueChat, createTask, listCardMessages, nudgeTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, readTranscript, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { chooseFix, codexInfo, continueChat, createTask, listCardMessages, listFixChoices, nudgeTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, readTranscript, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { createProject, listProjects, openProject } from "../../ipc/projects";
@@ -248,6 +250,9 @@ beforeEach(() => {
   vi.mocked(listSkillUses).mockResolvedValue([]);
   vi.mocked(listReferenceReads).mockResolvedValue([]);
   vi.mocked(listCardMessages).mockResolvedValue([]);
+  // clearAllMocks 不會還原實作：上一個測試塞進去的待選清單不能漏到下一個。
+  vi.mocked(listFixChoices).mockResolvedValue([]);
+  vi.mocked(chooseFix).mockResolvedValue(undefined);
   vi.mocked(projectRepo).mockResolvedValue({ path: "/repo/htbktw", source: "agents" });
   vi.mocked(formationsState).mockResolvedValue(formations());
   vi.mocked(listRetiredAgents).mockResolvedValue([]);
@@ -272,6 +277,30 @@ beforeEach(() => {
 const openMore = () => fireEvent.click(screen.getByRole("button", { name: /更多|More/ }));
 
 describe("AgentCanvasView", () => {
+  it("互動卡被退回後：桌布上出現修正方式選擇列，選了就送去後端並重新整理", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    const waiting = { module_id: "m1", module_title: "A 登入", fix_id: "f1", round: 1, can_resume: true, remembered: null };
+    vi.mocked(listFixChoices).mockResolvedValue([waiting]);
+    view();
+    expect(await screen.findByText("《A 登入》被審核者退回（第 1 輪），怎麼修？")).toBeInTheDocument();
+    expect(listFixChoices).toHaveBeenCalledWith("p1");
+
+    // 後端選完之後清單就空了；畫面要跟著收起來。
+    vi.mocked(listFixChoices).mockResolvedValue([]);
+    fireEvent.click(screen.getByTestId("fixchoice-resume"));
+    await waitFor(() => expect(chooseFix).toHaveBeenCalledWith("p1", "m1", "resume", true));
+    await waitFor(() => expect(screen.queryByTestId("fixchoice-bar")).toBeNull());
+  });
+
+  it("沒有等選擇的修正卡時不出現選擇列", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    await screen.findByTestId("agent-a1");
+    expect(screen.queryByTestId("fixchoice-bar")).toBeNull();
+  });
+
   it("把資料庫技能拖到工程師上：選連線與權限後存檔", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);
