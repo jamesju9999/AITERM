@@ -338,6 +338,7 @@
 .ac-attention-actions { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
 
 .ac-merge { display: flex; gap: 6px; margin-top: 8px; }
+.ac-talk { margin-top: 8px; }
 .ac-merge-msg { margin-top: 6px; font-size: 11px; color: #86efac; }
 .ac-merge-msg--bad { color: #fca5a5; }
 

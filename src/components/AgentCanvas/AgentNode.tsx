@@ -217,6 +217,16 @@ export function AgentNode({
       ? mine.filter((c) => c.card_kind === "verify" && c.status === "done").sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))[0]
       : undefined;
 
+  // 審核者／驗收者／協調者：最近一張已結案、有對話記錄的審核／驗收／合併卡，可以接回那段對話追問
+  // 「為什麼這樣判」。正在跑的時候不給（合併卡的工作資料夾正被佔用；其餘也沒必要）。
+  const talkKind = { reviewer: "review", verifier: "verify", orchestrator: "merge" }[agent.kind as string];
+  const talkCard =
+    talkKind && onContinueChat && !running
+      ? mine
+          .filter((c) => c.card_kind === talkKind && c.status === "done" && !!c.session_id)
+          .sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0))[0]
+      : undefined;
+
   const runningLine = () => {
     if (!running) return null;
     let title = localizedCardTitle(running, t);
@@ -599,6 +609,19 @@ export function AgentNode({
                 {tokensText(mineUsage)}
               </span>
             )}
+          </div>
+        )}
+        {talkCard && (
+          <div className="ac-talk">
+            <button
+              type="button"
+              className="ac-link"
+              data-testid={`agent-continue-${agent.id}`}
+              title={t.ac_continue_chat_card_tip}
+              onClick={() => onContinueChat?.(talkCard.id)}
+            >
+              💬 {t.ac_continue_chat}
+            </button>
           </div>
         )}
         {canMerge && (

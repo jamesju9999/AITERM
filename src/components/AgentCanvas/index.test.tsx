@@ -1382,6 +1382,40 @@ describe("AgentCanvasView", () => {
       expect(btn.compareDocumentPosition(titleNode as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
+    it("審核者／驗收者／協調者節點：最近一張已完成、有對話記錄的審核／驗收／合併卡也能「接著談」", async () => {
+      vi.mocked(listAgents).mockResolvedValue([
+        agent(),
+        agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 400 }),
+        agent({ id: "o1", kind: "orchestrator", name: "O", canvas_x: 800 }),
+        agent({ id: "v1", kind: "verifier", name: "V", canvas_x: 1200 }),
+      ]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "A", status: "done", outcome: "success", agent_id: "a1", session_id: "s-a" }),
+        card({ id: "RV", title: "審 A", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "A", review_of: "A", verdict: "pass", session_id: "s-rv", finished_at: 5 }),
+        card({ id: "MG", title: "合併", status: "done", outcome: "success", agent_id: "o1", card_kind: "merge", session_id: "s-mg", finished_at: 6 }),
+        card({ id: "VF", title: "驗收", status: "done", outcome: "success", agent_id: "v1", card_kind: "verify", verdict: "pass", session_id: "s-vf", finished_at: 7 }),
+      ]);
+      view();
+      await screen.findByTestId("agent-r1");
+      // 三顆按鈕各自接回自己那張卡（不是模組卡）。
+      for (const [agentId, cardId] of [["r1", "RV"], ["o1", "MG"], ["v1", "VF"]]) {
+        const node = screen.getByTestId(`agent-${agentId}`);
+        fireEvent.click(within(node).getByTestId(`agent-continue-${agentId}`));
+        await waitFor(() => expect(continueChat).toHaveBeenCalledWith("p1", cardId));
+      }
+    });
+
+    it("審核者最近一張審核卡沒有對話記錄、或還在跑，就沒有「接著談」", async () => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 400 })]);
+      vi.mocked(listTasks).mockResolvedValue([
+        card({ id: "A", title: "A", status: "done", outcome: "success", agent_id: "a1" }),
+        card({ id: "RV", title: "審 A", status: "done", outcome: "success", agent_id: "r1", card_kind: "review", module_id: "A", review_of: "A", session_id: null, finished_at: 5 }),
+      ]);
+      view();
+      await screen.findByTestId("agent-r1");
+      expect(screen.queryByTestId("agent-continue-r1")).toBeNull();
+    });
+
     it("接著談失敗時顯示後端說明的原因", async () => {
       vi.mocked(listAgents).mockResolvedValue([agent()]);
       vi.mocked(listTasks).mockResolvedValue([
