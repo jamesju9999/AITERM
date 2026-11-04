@@ -119,6 +119,7 @@ import { TokenBudgetChip } from "./TokenBudgetChip";
 import { ProjectBriefDialog } from "./ProjectBriefDialog";
 import { CommandBar } from "./CommandBar";
 import { RequirementStart } from "./RequirementStart";
+import { useCanvasPan } from "./useCanvasPan";
 import { StartNotice } from "./StartNotice";
 import type { StartResult } from "./startFromRequirement";
 import { GuideChecklist } from "./guide/GuideChecklist";
@@ -330,6 +331,7 @@ export function AgentCanvasView({
   const [hover, setHover] = useState<DropTarget | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const onCanvasPan = useCanvasPan(canvasRef);
   const mounted = useRef(true);
   const [zoom, setZoom] = useState(1);
   /** 事件處理器與拖曳用的最新縮放值（避免閉包拿到舊值）。 */
@@ -1569,7 +1571,7 @@ export function AgentCanvasView({
               onReset={() => updateGuide(resetProgress)}
             />
           )}
-          <section className={`ac-canvas${hover?.kind === "canvas" && ghost?.kind === "pool" ? " ac-canvas--drop" : ""}`} data-drop="canvas" ref={canvasRef}>
+          <section className={`ac-canvas${hover?.kind === "canvas" && ghost?.kind === "pool" ? " ac-canvas--drop" : ""}`} data-drop="canvas" ref={canvasRef} onMouseDown={onCanvasPan}>
             {agents.length === 0 && (
               <div className="ac-canvas-empty">
                 <div className="ac-canvas-empty-body">

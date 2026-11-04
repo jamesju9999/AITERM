@@ -145,6 +145,10 @@
 .ac-canvas:hover::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.16); }
 .ac-canvas::-webkit-scrollbar-corner { background: transparent; }
 .ac-canvas--drop { box-shadow: inset 0 0 0 2px var(--accent); }
+/* 在空白處可以按住拖曳平移：游標提示是抓手，拖曳中是握住，且不選取文字。 */
+.ac-canvas, .ac-sizer, .ac-world { cursor: grab; }
+.ac-canvas .ac-world > * { cursor: auto; }
+.ac-canvas--panning, .ac-canvas--panning * { cursor: grabbing !important; user-select: none; }
 .ac-canvas-empty {
   position: absolute;
   inset: 0;
