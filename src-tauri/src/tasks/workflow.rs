@@ -331,8 +331,13 @@ pub fn plan_body(
          - 整合類任務（例如把各模組組裝起來）要列出它要組裝的所有模組。\n\
          - 被依賴的任務排在前面；彼此獨立的任務不要寫 depends_on，才能平行做。\n\
          系統會把有相依的任務排給同一位工程師，或等前置審查通過、合併進來之後才開工。\n\
+         \n介面約定（interfaces）：任務之間會互相呼叫或共用的東西，先在這裡一次定死，每張任務都會附上這段。\n\
+         - 寫模組之間的函式簽名、資料格式（欄位名稱與型別）、檔案或目錄的分工、共用的名稱與常數。\n\
+         - 只寫跨任務要對得上的部分，每個任務內部的實作細節不要寫；{ilimit} 字以內。\n\
+         - 任務只有一個、或彼此完全獨立時可以省略。\n\
          \n完成後把結果寫成 JSON 檔到：{path}\n\
-         格式：{{\"tasks\": [{{\"title\": \"…\", \"body\": \"…\"}}, {{\"title\": \"…\", \"body\": \"…\", \"depends_on\": [0]}}]}}\n",
+         格式：{{\"interfaces\": \"…\", \"tasks\": [{{\"title\": \"…\", \"body\": \"…\"}}, {{\"title\": \"…\", \"body\": \"…\", \"depends_on\": [0]}}]}}\n",
+        ilimit = INTERFACES_LIMIT,
         max = MAX_PLAN_TASKS,
         path = json_path.display(),
     ));
@@ -352,6 +357,25 @@ pub struct PlanTask {
 #[derive(serde::Deserialize)]
 struct PlanFile {
     tasks: Vec<PlanTask>,
+    #[serde(default)]
+    interfaces: Option<String>,
+}
+
+/// 介面約定的字數上限；超過就截斷（太長會把每張卡的內文洗掉）。
+pub const INTERFACES_LIMIT: usize = 1500;
+
+/// tasks.json 的「介面約定」：沒有或只有空白就是 `None`。
+pub fn parse_plan_interfaces(text: &str) -> Option<String> {
+    let f: PlanFile = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    let t = f.interfaces?.trim().to_string();
+    if t.is_empty() {
+        return None;
+    }
+    if t.chars().count() > INTERFACES_LIMIT {
+        let cut: String = t.chars().take(INTERFACES_LIMIT).collect();
+        return Some(format!("{cut}…（太長，已截斷）"));
+    }
+    Some(t)
 }
 
 /// tasks.json：1 到 `MAX_PLAN_TASKS` 張、每張標題非空。
@@ -570,10 +594,9 @@ async fn dispatch_plan(
     let mut events = Vec::new();
     let Some(mid) = plan.module_id.as_deref() else { return Ok(events) };
     let Some(module) = store::get_task(pool, mid).await? else { return Ok(events) };
-    let tasks = match std::fs::read_to_string(tasks_json_path(project_path, &plan.id))
-        .map_err(|e| e.to_string())
-        .and_then(|t| parse_plan_json(&t))
-    {
+    let plan_text = std::fs::read_to_string(tasks_json_path(project_path, &plan.id)).map_err(|e| e.to_string());
+    let interfaces = plan_text.as_deref().ok().and_then(parse_plan_interfaces);
+    let tasks = match plan_text.and_then(|t| parse_plan_json(&t)) {
         Ok(t) => t,
         Err(e) => {
             // finalize 已經驗證過；走到這裡代表檔案在中間被動過。不建卡、提醒使用者。
@@ -602,8 +625,9 @@ async fn dispatch_plan(
     // 第 i 個任務建出來的卡 id：相依的索引靠它換成 id。
     let mut created: Vec<String> = Vec::new();
     for t in tasks {
+        let contract = interfaces.as_deref().map(|i| format!("\n\n## 介面約定（各任務共同遵守，不要自行更改）\n{i}")).unwrap_or_default();
         let body = format!(
-            "{}\n\n（這是從規格「{}」拆出來的任務；規格文件也一併附在下面。）{}",
+            "{}{contract}\n\n（這是從規格「{}」拆出來的任務；規格文件也一併附在下面。）{}",
             t.body, module.title, appendix
         );
         let deps: Vec<&String> = t.depends_on.iter().filter_map(|&i| created.get(i)).collect();
@@ -2836,6 +2860,51 @@ pub(crate) mod tests {
         let body = plan_body(&module, Some("s"), Some("e"), &[("工程師2".into(), "r".into())], Path::new("/t/tasks.json"));
         assert!(body.contains("depends_on"), "{body}");
         assert!(body.contains("整合"), "要提醒整合類任務列出所有要組裝的模組：{body}");
+    }
+
+    #[test]
+    fn the_plan_prompt_asks_for_an_interface_contract() {
+        let body = plan_body(&test_row("M"), Some("s"), Some("e"), &[("工程師2".into(), "r".into())], Path::new("/t/tasks.json"));
+        assert!(body.contains("interfaces"), "{body}");
+        assert!(body.contains("函式簽名") && body.contains("資料格式"), "要說明約定寫什麼：{body}");
+    }
+
+    #[test]
+    fn the_interface_contract_is_read_trimmed_and_capped() {
+        assert_eq!(parse_plan_interfaces(r#"{"tasks":[{"title":"A"}]}"#), None);
+        assert_eq!(parse_plan_interfaces(r#"{"interfaces":"  ","tasks":[{"title":"A"}]}"#), None);
+        assert_eq!(parse_plan_interfaces(r#"{"interfaces":" add(a,b)->n ","tasks":[{"title":"A"}]}"#).as_deref(), Some("add(a,b)->n"));
+        let long = format!(r#"{{"interfaces":"{}","tasks":[{{"title":"A"}}]}}"#, "字".repeat(INTERFACES_LIMIT + 50));
+        assert!(parse_plan_interfaces(&long).unwrap().chars().count() <= INTERFACES_LIMIT + 40);
+        assert_eq!(parse_plan_json(r#"{"interfaces":"x","tasks":[{"title":"A"}]}"#).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn every_split_card_carries_the_interface_contract() {
+        let pool = mem_pool().await;
+        let w = spec_writer(&pool).await;
+        agent(&pool, "coder", "C1").await;
+        agent(&pool, "coder", "C2").await;
+        agent(&pool, "orchestrator", "O").await;
+        let project = tempfile::tempdir().unwrap();
+        let cards = split_spec(
+            &pool,
+            &w,
+            project.path(),
+            r#"{"interfaces":"store.get(id) -> Item | null","tasks":[{"title":"資料層","body":"做資料層"},{"title":"畫面","body":"做畫面","depends_on":[0]}]}"#,
+        )
+        .await;
+        assert_eq!(cards.len(), 2);
+        for c in &cards {
+            assert!(c.body.contains("介面約定") && c.body.contains("store.get(id) -> Item | null"), "{}", c.body);
+        }
+        let pool2 = mem_pool().await;
+        let w2 = spec_writer(&pool2).await;
+        agent(&pool2, "coder", "C1").await;
+        agent(&pool2, "orchestrator", "O").await;
+        let p2 = tempfile::tempdir().unwrap();
+        let plain = split_spec(&pool2, &w2, p2.path(), r#"{"tasks":[{"title":"A","body":"a"}]}"#).await;
+        assert!(!plain[0].body.contains("介面約定"), "{}", plain[0].body);
     }
 
     #[test]

@@ -28,7 +28,7 @@ pub enum Rpc {
     /// 呼叫 `remember`：由接收器寫進專案記事本。
     Remember { id: Value, note: String },
     /// 呼叫 `tell_agent`：由接收器送進對方正在執行的對話。
-    Tell { id: Value, to: String, message: String },
+    Tell { id: Value, to: String, message: String, reply: bool },
     /// 資料庫技能的工具（只有裝了技能的卡才會出現）：由接收器檢查權限、執行、記錄。
     Db { id: Value, call: DbCall },
 }
@@ -107,12 +107,13 @@ pub fn tell_tool_definition() -> Value {
         "name": TELL_TOOL,
         "description": "把一句話即時送給另一位正在執行的 Agent（用名稱指定，例如「工程師2」），像在同一個 session 裡插話。\
 適合要當場協調的事：你改了他會用到的介面或名稱、發現他正在做的方向會跟你衝突。對方沒有在執行時會失敗，\
-那就改用 remember 記進專案記事本。一句話講完，不要貼大段內容；對方不需要回覆。",
+那就改用 remember 記進專案記事本。一句話講完，不要貼大段內容；預設對方不需要回覆，要問對方問題時才設 reply=true，然後繼續做你手邊不受影響的部分。",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "to": { "type": "string", "description": "對方的名稱，例如「工程師2」" },
-                "message": { "type": "string", "description": "要說的話，一兩句" }
+                "message": { "type": "string", "description": "要說的話，一兩句" },
+                "reply": { "type": "boolean", "description": "對方的答案會影響你接下來怎麼做時設為 true（例如問介面細節）；對方會用 tell_agent 回答，答案會像新訊息出現在你的對話裡。通知型的話不要設。" }
             },
             "required": ["to", "message"]
         }
@@ -199,7 +200,7 @@ pub fn classify_with(msg: &Value, db: bool) -> Rpc {
             if name == TELL_TOOL {
                 let args = params.get("arguments").unwrap_or(&Value::Null);
                 return match (str_arg(args, "to"), str_arg(args, "message")) {
-                    (Some(to), Some(message)) => Rpc::Tell { id, to, message },
+                    (Some(to), Some(message)) => Rpc::Tell { id, to, message, reply: args.get("reply").and_then(Value::as_bool).unwrap_or(false) },
                     _ => Rpc::Respond(tool_result(&id, "tell_agent 需要 to（對方名稱）與 message（要說的話）", true)),
                 };
             }
@@ -425,7 +426,11 @@ mod tests {
     fn tell_agent_needs_both_a_target_and_a_message() {
         let call = |args: Value| classify(&json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"tell_agent","arguments":args}}));
         match call(json!({"to":" 工程師2 ","message":" 我改名了 "})) {
-            Rpc::Tell { id, to, message } => assert_eq!((id, to.as_str(), message.as_str()), (json!(8), "工程師2", "我改名了")),
+            Rpc::Tell { id, to, message, reply } => assert_eq!((id, to.as_str(), message.as_str(), reply), (json!(8), "工程師2", "我改名了", false)),
+            other => panic!("{other:?}"),
+        }
+        match call(json!({"to":"工程師2","message":"id 是字串嗎","reply":true})) {
+            Rpc::Tell { reply, .. } => assert!(reply, "reply:true 要帶下去"),
             other => panic!("{other:?}"),
         }
         for bad in [json!({"to":"工程師2"}), json!({"message":"x"}), json!({"to":" ","message":"x"})] {

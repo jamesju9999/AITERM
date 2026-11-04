@@ -279,6 +279,10 @@ impl QuotaState {
     /// `ask_human`：建立問題、進入等決策、通知。回傳要回給 Claude 的文字與是否是錯誤。
     /// `tell_agent`：把一句話送進另一位正在執行的 Agent 的對話。
     async fn tell(&self, from_task: &str, to: &str, message: &str) -> (String, bool) {
+        self.tell_with(from_task, to, message, false).await
+    }
+
+    async fn tell_with(&self, from_task: &str, to: &str, message: &str, reply: bool) -> (String, bool) {
         let message = match crate::tasks::tell::clean(message) {
             Ok(m) => m,
             Err(e) => return (e, true),
@@ -330,7 +334,7 @@ impl QuotaState {
                 true,
             );
         };
-        match send(tab_id, crate::tasks::tell::wire_text(&sender_name, &message)).await {
+        match send(tab_id, crate::tasks::tell::wire_text(&sender_name, &message, reply)).await {
             Ok(()) => {
                 // 留一筆讓活動記錄查得到；寫不進去不影響這句話已送達。
                 if let Err(e) = crate::tasks::messages::record(
@@ -885,8 +889,8 @@ async fn start_server(state: Arc<QuotaState>) -> Result<(u16, String), String> {
                 let (text, is_error) = state.ask(&task_id, &question).await;
                 axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
             }
-            crate::tasks::ask::Rpc::Tell { id, to, message } => {
-                let (text, is_error) = state.tell(&task_id, &to, &message).await;
+            crate::tasks::ask::Rpc::Tell { id, to, message, reply } => {
+                let (text, is_error) = state.tell_with(&task_id, &to, &message, reply).await;
                 axum::Json(crate::tasks::ask::tool_result(&id, &text, is_error)).into_response()
             }
             crate::tasks::ask::Rpc::Remember { id, note } => {

@@ -186,7 +186,8 @@ pub fn with_role_prefix(prefix: &str, prompt: &str) -> String {
 
 /// 非互動的 Agent 卡：旁邊通常沒有人，停下來問問題就會讓整條流程停住（Pomodoro 實機）。
 pub const AUTONOMY_NOTE: &str = "（這是自動派工，旁邊沒有人會即時回答。遇到不確定的地方，採用最合理的做法，\
-把假設寫進文件或交件說明的「待確認事項」，然後直接把工作做完，不要停下來詢問。）";
+把假設寫進文件或交件說明的「待確認事項」，然後直接把工作做完，不要停下來詢問。交件說明除了做了什麼，\
+也寫你做的重要決定與理由，審核的人與下一位接手的人才看得懂為什麼這樣做。）";
 
 /// 派工指令的 `--model <name>`。名稱只接受英數與 `._-[]:`——指令是打進使用者的
 /// shell 的，其他字元在各 shell 的意義不同，不安全就不加（沿用預設模型）。
@@ -206,12 +207,13 @@ pub fn join_args<const N: usize>(parts: [Option<String>; N]) -> Option<String> {
 
 /// 掛上 `ask_human` 時的版本：需要人決定的事用工具問。
 pub const AUTONOMY_NOTE_ASK: &str = "（這是自動派工，旁邊沒有人會即時回答。需要人做決定時（需求不清、取捨會影響成果），\
-用 ask_human 工具提問，送出後結束這一輪回覆等答案，不要自己先決定；小細節自己採合理做法，記在文件或交件說明的「待確認事項」。）";
+用 ask_human 工具提問，送出後結束這一輪回覆等答案，不要自己先決定；小細節自己採合理做法，記在文件或交件說明的「待確認事項」；交件說明也寫重要決定與理由。）";
 
 /// 提醒有 MCP 工具的自動卡：做完前想想有沒有「別張卡也該知道」的事，有就記進專案記事本。
-/// 不強迫：沒有就不記，免得記事本被填滿無用的流水帳。
-pub const REMEMBER_NOTE: &str = "（做完前想一下：有沒有「別張卡也該知道」的事——專案慣例、踩過的坑、已定案的決定？\
-有就用 remember 工具各記一則（一兩句、寫結論）；沒有就不用記。要當場通知另一位正在執行的 Agent 才用 tell_agent。）";
+/// 決定要當下記（做到一半被截斷就永遠沒記到）；沒有就不記，免得記事本被填滿無用的流水帳。
+pub const REMEMBER_NOTE: &str = "（做的過程中，只要定下「別張卡也該知道」的事——專案慣例、共用的名稱或介面、踩過的坑、已定案的決定——\
+當下就用 remember 記一則（一兩句、寫結論與理由），不要留到最後；做完前再想一次有沒有漏的。沒有就不用記。\
+要當場通知另一位正在執行的 Agent 用 tell_agent；要問對方的答案才影響你怎麼做時，設 reply=true 問他，答案會傳回你的對話。）";
 
 /// 這張卡要不要用 Codex 做：非互動卡片才行；Agent 卡看 Agent 的設定，一般卡片看卡片自己的。
 pub(crate) fn uses_codex(task: &TaskRow, agent: Option<&crate::tasks::agents::AgentRow>) -> bool {
@@ -3718,6 +3720,14 @@ mod agent_dispatch_tests {
         assert!(!agent_prompt("你是工程師", "做 A", true, true).contains("remember"));
         // Codex 的卡拿不到這組工具說明，提了只會讓小模型困惑。
         assert!(!codex_autonomy(&ask).contains("remember"));
+    }
+
+    #[test]
+    fn autonomous_cards_are_asked_to_record_decisions_when_made_and_to_explain_why_in_the_handoff() {
+        // 影響別張卡的決定要「當下」記，不是留到最後（做到一半被截斷就永遠沒記到）。
+        assert!(REMEMBER_NOTE.contains("當下") && REMEMBER_NOTE.contains("理由"), "{REMEMBER_NOTE}");
+        // 沒有 MCP 工具的自動卡也要在交件說明寫決定與理由，下游與審核者才看得懂意圖。
+        assert!(AUTONOMY_NOTE.contains("理由") && AUTONOMY_NOTE_ASK.contains("理由"));
     }
 
     #[test]
