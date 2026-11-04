@@ -989,6 +989,8 @@ button.ac-log-title:hover { color: var(--text-primary); }
 
 .ac-notes { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--aiterm-border, rgba(255, 255, 255, 0.12)); }
 .ac-notes-title { margin: 0 0 4px; font-size: 13px; }
+/* .ac-dialog-desc 的負上邊界是為「直排＋間距」的對話框設計的（見上面的說明）；記事本是一般區塊，沒有那個間距，不歸零說明會疊在標題上。 */
+.ac-notes .ac-dialog-desc { margin: 0 0 4px; }
 .ac-notes-list { list-style: none; margin: 6px 0; padding: 0; max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .ac-note { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
 .ac-note-author { flex: none; opacity: 0.6; }
