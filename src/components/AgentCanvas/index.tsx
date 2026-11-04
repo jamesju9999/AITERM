@@ -1291,7 +1291,7 @@ export function AgentCanvasView({
     <div
       className="task-board agent-canvas"
       style={{
-        gridTemplateRows: `auto ${missing.length ? "auto " : ""}${movedDirs.length ? "auto " : ""}auto minmax(0, 1fr) ${layout.logCollapsed ? "auto" : `${layout.logHeight}px`}`,
+        gridTemplateRows: `auto ${missing.length ? "auto " : ""}${movedDirs.length ? "auto " : ""}${fixChoices.length ? "auto " : ""}auto minmax(0, 1fr) ${layout.logCollapsed ? "auto" : `${layout.logHeight}px`}`,
       }}
     >
       <div className="ac-top">

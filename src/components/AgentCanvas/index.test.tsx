@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -291,6 +291,22 @@ describe("AgentCanvasView", () => {
     fireEvent.click(screen.getByTestId("fixchoice-resume"));
     await waitFor(() => expect(chooseFix).toHaveBeenCalledWith("p1", "m1", "resume", true));
     await waitFor(() => expect(screen.queryByTestId("fixchoice-bar")).toBeNull());
+  });
+
+  /** 實機：選擇列是格線的一個子元素，格線列數沒算它，畫布就被擠到最下面、上面一大片空白。 */
+  it("有修正方式選擇列時，版面的格線要多一列給它，不然畫布會被擠錯位置", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    const rows = () => (document.querySelector(".agent-canvas") as HTMLElement).style.gridTemplateRows.trim().split(/\s+(?![^()]*\))/).length;
+    view();
+    await screen.findByTestId("ac-world");
+    const without = rows();
+
+    vi.mocked(listFixChoices).mockResolvedValue([{ module_id: "m1", module_title: "A 登入", fix_id: "f1", round: 1, can_resume: true, remembered: null }]);
+    cleanup();
+    view();
+    await screen.findByTestId("fixchoice-bar");
+    expect(rows()).toBe(without + 1);
   });
 
   it("模組在「等你選修正方式」時，節點上的狀態標籤也講清楚；選好之後恢復「等待修正」", async () => {
