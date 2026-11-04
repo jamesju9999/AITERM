@@ -115,6 +115,16 @@ export function CommandBar({
 
   const busy = phase.kind === "routing" || phase.kind === "working";
 
+  /** 換了就記住：跟專案簡介、需求先行共用同一個記憶，下次不用重選。 */
+  const pickProvider = (id: string) => {
+    setProviderId(id);
+    try {
+      localStorage.setItem(REFINE_PROVIDER_KEY, id);
+    } catch {
+      // 記不住只是下次要重選，不影響這次
+    }
+  };
+
   useEffect(() => {
     if (!report) return;
     setRelatedId(report.moduleId);
@@ -422,7 +432,7 @@ export function CommandBar({
         />
         {providers.length > 0 && (
           <span className="ac-cmd-model">
-            <ModelPickerButton providers={providers} selectedId={providerId ?? ""} onChange={setProviderId} disabled={busy} />
+            <ModelPickerButton providers={providers} selectedId={providerId ?? ""} onChange={pickProvider} disabled={busy} />
           </span>
         )}
         <button

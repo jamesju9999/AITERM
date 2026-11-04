@@ -13,10 +13,10 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...a: unknown[]) => openDia
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { ProjectCreateDialog } from "./ProjectCreateDialog";
 
-const mount = (onCreated = vi.fn()) =>
+const mount = (onCreated = vi.fn(), onClose = vi.fn()) =>
   render(
     <LocaleProvider>
-      <ProjectCreateDialog onClose={vi.fn()} onCreated={onCreated} />
+      <ProjectCreateDialog onClose={onClose} onCreated={onCreated} />
     </LocaleProvider>,
   );
 
@@ -25,6 +25,13 @@ describe("ProjectCreateDialog", () => {
     vi.clearAllMocks();
     localStorage.clear();
     createProject.mockResolvedValue("new-id");
+  });
+
+  it("按 Esc 關閉對話框（焦點在輸入框裡也一樣）", async () => {
+    const onClose = vi.fn();
+    mount(vi.fn(), onClose);
+    await userEvent.type(screen.getByTestId("project-create-name"), "abc{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("名稱為空時無法送出", async () => {

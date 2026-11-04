@@ -9,7 +9,11 @@ vi.mock("../../ipc/ai", () => ({ invokeAiComplete: vi.fn() }));
 vi.mock("../../ipc/agents", () => ({ askAgent: vi.fn(), assignAgent: vi.fn(), createAgent: vi.fn(), getReferences: vi.fn() }));
 vi.mock("../../ipc/tasks", () => ({ createTask: vi.fn(), getProjectBrief: vi.fn(), setProjectBrief: vi.fn() }));
 vi.mock("../../ipc/provider", () => ({ listProviders: vi.fn() }));
-vi.mock("../ModelPickerButton", () => ({ ModelPickerButton: () => null }));
+vi.mock("../ModelPickerButton", () => ({
+  ModelPickerButton: ({ selectedId, onChange }: { selectedId: string; onChange: (id: string) => void }) => (
+    <button data-testid="model-pick" data-selected={selectedId} onClick={() => onChange("pv2")} />
+  ),
+}));
 
 import { listProviders } from "../../ipc/provider";
 import { CommandBar } from "./CommandBar";
@@ -55,6 +59,31 @@ const type = (text: string) => {
 beforeEach(() => {
   attach.mockClear();
   vi.mocked(listProviders).mockResolvedValue([{ id: "pv", name: "P", provider_type: "openai", model: "m", is_default: true } as never]);
+});
+
+describe("CommandBar 供應商選擇", () => {
+  const two = [
+    { id: "pv", name: "P", provider_type: "openai", model: "m", is_default: true },
+    { id: "pv2", name: "P2", provider_type: "openai", model: "m", is_default: false },
+  ] as never;
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(listProviders).mockResolvedValue(two);
+  });
+
+  it("換了供應商會記住，下次打開就是它（跟簡介、需求先行共用同一個記憶）", async () => {
+    const d = deps(ai('{"kind":"fast","reason":"r"}'));
+    const first = view(d);
+    await act(async () => {});
+    expect(screen.getByTestId("model-pick").dataset.selected).toBe("pv");
+    fireEvent.click(screen.getByTestId("model-pick"));
+    expect(localStorage.getItem("aiterm_refine_provider")).toBe("pv2");
+    first.unmount();
+    view(d);
+    await act(async () => {});
+    expect(screen.getByTestId("model-pick").dataset.selected).toBe("pv2");
+  });
 });
 
 describe("CommandBar 輸入法確認候選字的 Enter（WKWebView：compositionend 先於 keydown）", () => {
