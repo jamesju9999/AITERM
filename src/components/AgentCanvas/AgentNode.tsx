@@ -86,6 +86,7 @@ export function AgentNode({
   onVerifyReport,
   onAcceptVerify,
   fixChoiceModules,
+  zoom = 1,
 }: {
   agent: AgentRow;
   /** 這個專案所有未封存的卡片（節點自己挑出跟它有關的）。 */
@@ -148,6 +149,8 @@ export function AgentNode({
   onAcceptVerify?: (taskId: string) => void;
   /** 正在等使用者選修正方式的模組 id。只覆寫畫面上的標籤；模組狀態仍照 deriveModuleState（與後端同規則）。 */
   fixChoiceModules?: ReadonlySet<string>;
+  /** 桌布縮放比例；縮得很小時補充框改用不受縮放影響的浮出框。 */
+  zoom?: number;
 }) {
   const { t } = useLocale();
   const icon = roleIcon(agent.kind, agent.role) ?? agent.kind;
@@ -269,7 +272,7 @@ export function AgentNode({
         {snip && <div className="ac-snip">{snip}</div>}
         <div className="ac-now-sub">{t.ac_elapsed(formatElapsed(nowSecs - (running.dispatched_at ?? nowSecs)))}</div>
         {onNudge && running.tab_id && !question && !running.quota_wait_at && (
-          <NudgeBox agentId={agent.id} onSend={(message) => onNudge(running.id, message)} />
+          <NudgeBox agentId={agent.id} zoom={zoom} onSend={(message) => onNudge(running.id, message)} />
         )}
         {question ? (
           <button className="ac-reply-wait ac-ask" onClick={() => onOpenQuestion?.(question.id)}>

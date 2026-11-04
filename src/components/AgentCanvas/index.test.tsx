@@ -1538,6 +1538,23 @@ describe("AgentCanvasView", () => {
       const runningCard = (over: Partial<TaskWithAttachments> = {}) =>
         card({ id: "R1", title: "R1 任務", status: "running", agent_id: "a1", tab_id: "t1", dispatched_at: 1, ...over });
 
+      it("桌布縮到 75% 以下：節點上只剩「補充」鈕，按下去在浮出框裡送出（zoom 有一路傳到補充框）", async () => {
+        vi.mocked(listAgents).mockResolvedValue([agent()]);
+        vi.mocked(listTasks).mockResolvedValue([runningCard()]);
+        view();
+        await screen.findByTestId("nudge-input-a1");
+        const zoomOut = screen.getByRole("button", { name: /縮小|Zoom out/ });
+        fireEvent.click(zoomOut); // 83%
+        expect(screen.getByTestId("nudge-input-a1")).toBeInTheDocument();
+        fireEvent.click(zoomOut); // 69%
+        expect(screen.getByTestId("ac-zoom-pct")).toHaveTextContent("69%");
+        expect(screen.queryByTestId("nudge-input-a1")).toBeNull();
+        fireEvent.click(screen.getByTestId("nudge-open-a1"));
+        fireEvent.change(screen.getByTestId("nudge-input-a1"), { target: { value: "縮小也能補充" } });
+        fireEvent.click(screen.getByTestId("nudge-send-a1"));
+        await waitFor(() => expect(nudgeTask).toHaveBeenCalledWith("p1", "R1", "縮小也能補充"));
+      });
+
       it("執行中的卡有「補充」輸入：送出後呼叫後端、清空輸入並提示", async () => {
         vi.mocked(listAgents).mockResolvedValue([agent()]);
         vi.mocked(listTasks).mockResolvedValue([runningCard()]);

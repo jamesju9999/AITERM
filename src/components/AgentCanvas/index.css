@@ -982,6 +982,10 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-nudge { display: flex; gap: 6px; margin-top: 6px; }
 .ac-nudge-input { flex: 1; min-width: 0; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--ac-edge); background: var(--bg-primary); color: var(--text-primary); font: inherit; font-size: 12px; }
 .ac-nudge-input:disabled { opacity: 0.6; }
+/* 精簡模式（縮放 < 75%）：只有一顆按鈕，輸入框在 body 底下的浮出框，不受桌布縮放影響。 */
+.ac-nudge--compact { display: block; }
+.ac-nudge-pop { z-index: 1000; display: flex; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35); }
+.ac-nudge-pop .ac-nudge-input { font-size: 13px; padding: 5px 8px; border-color: var(--border-color); }
 
 .ac-notes { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--aiterm-border, rgba(255, 255, 255, 0.12)); }
 .ac-notes-title { margin: 0 0 4px; font-size: 13px; }

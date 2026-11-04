@@ -1679,6 +1679,7 @@ export function AgentCanvasView({
                       onVerifyReport={setVerifyFor}
                       onAcceptVerify={(id) => projectId && void run(() => acceptVerification(projectId, id))}
                       fixChoiceModules={fixChoiceModules}
+                      zoom={zoom}
                       status={deriveAgentStatus(
                         a,
                         cardsOf(a.id),
