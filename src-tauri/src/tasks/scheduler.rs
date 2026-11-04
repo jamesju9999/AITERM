@@ -612,6 +612,19 @@ pub(crate) async fn premerge_prerequisites(
 }
 
 /// 提示詞後面附的段落：告訴工程師先把停在工作資料夾裡的合併衝突解掉再開工。
+/// 開工前已合進別位工程師的成果時，提醒先確認「合進來之後」專案還能建置、既有測試還過：
+/// 介面對不上的錯誤要在第一個接點就爆出來，而不是等全部做完整合時才發現。
+pub(crate) fn premerge_check_note(merged: usize) -> String {
+    if merged == 0 {
+        return String::new();
+    }
+    format!(
+        "\n\n【開工前先確認】已經把 {merged} 張前置卡的成果合進你的工作資料夾。動手前先跑一次專案原有的建置與測試，\
+確認合進來之後還是好的；如果是上游的東西壞了或介面跟約定對不上，不要自己繞過去、也不要改上游的檔案，\
+用 remember 記下來（或用 tell_agent 通知負責的人）再繼續你能做的部分。"
+    )
+}
+
 pub(crate) fn premerge_conflict_note(c: &PremergeConflict) -> String {
     let mut note = format!(
         "\n\n【開工前必須先處理】工作資料夾正停在一個未完成的合併：前置「{}」與你的分支有衝突，衝突檔案：{}。\n\
@@ -1138,6 +1151,7 @@ impl Dispatcher for RealDispatcher {
                 premerge_prerequisites(&project.pool, task, &wt).await?
             };
             let merged = premerge.merged;
+            let merged_count = merged.len();
             if !merged.is_empty() {
                 let json = serde_json::to_string(&merged).unwrap_or_default();
                 if let Err(e) = sqlx::query("UPDATE tasks SET premerged = ? WHERE id = ?")
@@ -1163,6 +1177,7 @@ impl Dispatcher for RealDispatcher {
             if let Some(conflict) = &premerge.conflict {
                 prompt.push_str(&premerge_conflict_note(conflict));
             }
+            prompt.push_str(&premerge_check_note(merged_count));
             (wt, None)
         } else {
             let isolate = resolve_isolation(
@@ -3878,6 +3893,15 @@ mod agent_dispatch_tests {
             .unwrap();
         let card = store::get_task(&pool, &card).await.unwrap().unwrap();
         (pool, card, x_wt, y_wt, approved)
+    }
+
+    #[tokio::test]
+    async fn the_premerge_check_note_is_only_for_cards_that_actually_pulled_in_upstream_work() {
+        assert_eq!(premerge_check_note(0), "");
+        let n = premerge_check_note(2);
+        assert!(n.contains("2") && n.contains("建置") && n.contains("測試"), "{n}");
+        // 壞掉要回報，不是自己繞過去或改上游的檔案
+        assert!(n.contains("remember") || n.contains("tell_agent"), "{n}");
     }
 
     #[tokio::test]
