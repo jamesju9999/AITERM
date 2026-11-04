@@ -127,6 +127,37 @@ pub async fn tasks_delete_note(project_id: String, id: i64, reg: State<'_, Proje
     crate::tasks::notes::delete_note(&p.pool, id).await.map_err(|e| e.to_string())
 }
 
+/// 互動卡被審核者退回後，還在等使用者選「新開／接回原對話」的修正卡。
+#[tauri::command]
+pub async fn tasks_list_fix_choices(
+    project_id: String,
+    reg: State<'_, ProjectRegistry>,
+) -> Result<Vec<crate::tasks::fix_choice::FixChoiceItem>, String> {
+    let p = project(&reg, &project_id)?;
+    let root = crate::tasks::session_log::claude_projects_root();
+    crate::tasks::fix_choice::list_pending(&p.pool, root.as_deref()).await
+}
+
+/// 套用選擇、解除擋住。`remember` 預設記在模組上；選接回但接不回會回錯，不默默退回新開。
+#[tauri::command]
+pub async fn tasks_choose_fix(
+    project_id: String,
+    module_id: String,
+    mode: String,
+    remember: Option<bool>,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+    scheduler: State<'_, SchedulerHandle>,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    let root = crate::tasks::session_log::claude_projects_root();
+    crate::tasks::fix_choice::choose(&p.pool, &module_id, &mode, remember.unwrap_or(true), root.as_deref()).await?;
+    emit_updated(&app);
+    // 解除擋住後修正卡就能派了。
+    scheduler.poke();
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct TaskWithAttachments {
     #[serde(flatten)]
