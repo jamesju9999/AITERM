@@ -529,6 +529,73 @@ describe("AgentCanvasView", () => {
     expect(log).toContain("你對 Coder Agent1 補充：「順便把 README 也更新」");
   });
 
+  describe("活動記錄的「全部｜訊息」切換", () => {
+    const now = () => Math.floor(Date.now() / 1000);
+    const setup = (cards: TaskWithAttachments[] = []) => {
+      vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "a2", name: "工程師2", canvas_y: 240 })]);
+      vi.mocked(listTasks).mockResolvedValue(cards);
+      vi.mocked(listCardMessages).mockResolvedValue([
+        { id: 2, at: now(), kind: "tell", task_id: "t2", from_agent: "a1", to_agent: "a2", text: "formatTime 改名成 fmt" },
+        { id: 1, at: now() - 30, kind: "nudge", task_id: "t1", from_agent: null, to_agent: "a1", text: "順便把 README 也更新" },
+      ]);
+    };
+    const logText = () => (document.querySelector(".ac-log") as HTMLElement).textContent ?? "";
+
+    it("切到「訊息」只剩補充與傳訊，切回「全部」恢復", async () => {
+      setup([card({ id: "A", title: "A 登入", status: "running", agent_id: "a1", dispatched_at: now() - 60 })]);
+      view();
+      await waitFor(() => expect(logText()).toContain("formatTime 改名成 fmt"));
+      expect(logText()).toContain("開始");
+      expect(screen.getByTestId("log-filter-all")).toHaveAttribute("aria-pressed", "true");
+
+      fireEvent.click(screen.getByTestId("log-filter-msg"));
+      expect(screen.getByTestId("log-filter-msg")).toHaveAttribute("aria-pressed", "true");
+      expect(logText()).toContain("formatTime 改名成 fmt");
+      expect(logText()).toContain("順便把 README 也更新");
+      expect(logText()).not.toContain("A 登入");
+
+      fireEvent.click(screen.getByTestId("log-filter-all"));
+      expect(logText()).toContain("A 登入");
+      expect(logText()).toContain("formatTime 改名成 fmt");
+    });
+
+    it("訊息列在「全部」裡也有 💬 標記，卡片事件沒有", async () => {
+      setup([card({ id: "A", title: "A 登入", status: "running", agent_id: "a1", dispatched_at: now() - 60 })]);
+      view();
+      await waitFor(() => expect(logText()).toContain("formatTime 改名成 fmt"));
+      const lines = Array.from(document.querySelectorAll(".ac-log-line"));
+      const msgLines = lines.filter((l) => l.textContent?.includes("formatTime") || l.textContent?.includes("README"));
+      const cardLine = lines.find((l) => l.textContent?.includes("A 登入"));
+      expect(msgLines).toHaveLength(2);
+      for (const l of msgLines) expect(l.textContent).toContain("💬");
+      expect(cardLine?.textContent).not.toContain("💬");
+    });
+
+    it("訊息被一堆卡片事件擠出前 40 筆時，「訊息」仍找得到它", async () => {
+      // 30 張卡 × 開始＋完成 = 60 筆比訊息新，訊息在「全部」的前 40 筆之外。
+      const cards = Array.from({ length: 30 }, (_, i) =>
+        card({ id: `C${i}`, title: `卡${i}`, status: "done", outcome: "success", agent_id: "a1", dispatched_at: now() + 10, finished_at: now() + 20 }),
+      );
+      setup(cards);
+      view();
+      await screen.findByTestId("log-filter-msg");
+      await waitFor(() => expect(logText()).toContain("卡0"));
+      expect(logText()).not.toContain("formatTime 改名成 fmt");
+      fireEvent.click(screen.getByTestId("log-filter-msg"));
+      expect(logText()).toContain("formatTime 改名成 fmt");
+    });
+
+    it("沒有訊息時「訊息」顯示空狀態", async () => {
+      setup([card({ id: "A", title: "A 登入", status: "running", agent_id: "a1", dispatched_at: now() - 60 })]);
+      vi.mocked(listCardMessages).mockResolvedValue([]);
+      view();
+      await waitFor(() => expect(logText()).toContain("A 登入"));
+      fireEvent.click(screen.getByTestId("log-filter-msg"));
+      expect(logText()).toContain("還沒有訊息");
+      expect(logText()).not.toContain("A 登入");
+    });
+  });
+
   it("活動記錄：很長的補充只顯示開頭", async () => {
     const now = Math.floor(Date.now() / 1000);
     vi.mocked(listAgents).mockResolvedValue([agent()]);

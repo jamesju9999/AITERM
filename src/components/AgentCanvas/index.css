@@ -357,6 +357,11 @@
 .ac-log-line--bad { color: #fca5a5; }
 .ac-log-time { color: var(--text-muted); margin-right: 8px; }
 .ac-log-empty { color: var(--text-muted); }
+.ac-log-filter { display: flex; gap: 4px; padding: 2px 14px 4px; }
+.ac-log-filter-btn { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); cursor: pointer; }
+.ac-log-filter-btn.is-on { color: var(--text-primary); border-color: var(--accent, currentColor); font-weight: 600; }
+/* 訊息列：💬 標記＋字重，不只靠顏色；亮暗主題都用主要文字色，比其他列更醒目。 */
+.ac-log-line--msg { color: var(--text-primary); font-weight: 600; }
 /* 角色色點：跟卡片圖示同色，一眼看出是誰做的。 */
 .ac-log-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; background: #93c5fd; }
 .ac-log-dot--reviewer { background: #fde68a; }
