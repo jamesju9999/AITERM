@@ -159,6 +159,23 @@ export interface ProjectNote {
   created_at: string;
 }
 export const listProjectNotes = (projectId: string): Promise<ProjectNote[]> => invoke("tasks_list_notes", { projectId });
+/** 互動卡被審核者退回後，還在等使用者選「新開／接回原對話」的修正卡。 */
+export interface FixChoiceItem {
+  module_id: string;
+  module_title: string;
+  fix_id: string;
+  /** 這個模組第幾次被退回。 */
+  round: number;
+  /** 原本的對話檔還在，才接得回。 */
+  can_resume: boolean;
+  /** 這個模組上次記住的選擇；沒記過是 null。 */
+  remembered: FixMode | null;
+}
+export type FixMode = "fresh" | "resume";
+export const listFixChoices = (projectId: string): Promise<FixChoiceItem[]> => invoke("tasks_list_fix_choices", { projectId });
+/** `remember` 為真才記在模組上，之後同模組退回直接照選。選接回但接不回會 reject。 */
+export const chooseFix = (projectId: string, moduleId: string, mode: FixMode, remember: boolean): Promise<void> =>
+  invoke("tasks_choose_fix", { projectId, moduleId, mode, remember });
 export interface CardMessage {
   id: number;
   /** Unix 秒。 */

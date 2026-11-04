@@ -215,6 +215,14 @@ pub const REMEMBER_NOTE: &str = "（做的過程中，只要定下「別張卡�
 當下就用 remember 記一則（一兩句、寫結論與理由），不要留到最後；做完前再想一次有沒有漏的。沒有就不用記。\
 要當場通知另一位正在執行的 Agent 用 tell_agent；要問對方的答案才影響你怎麼做時，設 reply=true 問他，答案會傳回你的對話。）";
 
+/// CLI 要不要用 `--resume` 接回原本的對話。重啟中斷接著做（`restart_resume`）一定接；
+/// 另外，使用者選了「接回原對話」的修正卡（`fix_resume`）也接，但它跟重啟不同：
+/// 提示詞要用修正卡內文、也要照常記 start_sha（審查範圍靠它），所以派工的其他地方
+/// 仍看 `restart_resume`，只有決定 session id 與啟動指令時才看這個。
+pub(crate) fn cli_reattach(restart_resume: bool, codex: bool, fix_resume: bool, session_id: Option<&str>) -> bool {
+    restart_resume || (fix_resume && !codex && session_id.is_some())
+}
+
 /// 這張卡要不要用 Codex 做：非互動卡片才行；Agent 卡看 Agent 的設定，一般卡片看卡片自己的。
 pub(crate) fn uses_codex(task: &TaskRow, agent: Option<&crate::tasks::agents::AgentRow>) -> bool {
     !task.interactive
@@ -1052,9 +1060,15 @@ impl Dispatcher for RealDispatcher {
             && task.session_id.is_some()
             && (codex || dispatch::looks_like_claude(&claude_cmd));
         let codex_resume = if codex && resume { task.session_id.clone() } else { None };
+        // 選了「接回原對話」的修正卡：CLI 接回原 session，但不算 `resume`（見 cli_reattach）。
+        let fix_resume = !resume
+            && task.card_kind == crate::tasks::workflow::KIND_FIX
+            && dispatch::looks_like_claude(&claude_cmd)
+            && crate::tasks::fix_choice::is_resume_fix(&project.pool, &task.id).await.unwrap_or(false);
+        let reattach = cli_reattach(resume, codex, fix_resume, task.session_id.as_deref());
         let session_id = if codex {
             None
-        } else if resume {
+        } else if reattach {
             task.session_id.clone()
         } else {
             dispatch::looks_like_claude(&claude_cmd).then(|| uuid::Uuid::new_v4().to_string())
@@ -1349,7 +1363,7 @@ impl Dispatcher for RealDispatcher {
                     !task.interactive,
                     bridge_env,
                     extra_args.as_deref(),
-                    resume,
+                    reattach,
                     on_spawned,
                 )
                 .await
@@ -2296,6 +2310,17 @@ mod tests {
         let queued = vec![agent_row("a1", Some("A"), 1.0, false), agent_row("u1", None, 2.0, false)];
         let paused = ["A".to_string()].into_iter().collect();
         assert_eq!(ids(&candidate_heads(&queued, &[], &paused, &Default::default())), vec!["u1"]);
+    }
+
+    #[test]
+    fn a_resumed_fix_card_reattaches_the_cli_but_is_not_a_restart_resume() {
+        // 重啟中斷接著做：CLI 接回。
+        assert!(cli_reattach(true, false, false, Some("s")));
+        // 選了「接回原對話」的修正卡：CLI 接回，但呼叫端的 `resume`（換提示詞、不記 start_sha）仍是 false。
+        assert!(cli_reattach(false, false, true, Some("s")));
+        assert!(!cli_reattach(false, false, false, Some("s")), "一般新卡不接");
+        assert!(!cli_reattach(false, false, true, None), "沒有 session 就接不了");
+        assert!(!cli_reattach(false, true, true, Some("s")), "Codex 沒有 claude --resume");
     }
 
     #[test]

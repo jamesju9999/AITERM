@@ -686,7 +686,7 @@ pub fn deps_of(card: &TaskRow) -> Vec<String> {
 
 /// 還不能開工的 queued 卡：有別位工程師的前置還沒通過審查（含手動放行）。
 /// 同一位工程師的前置不擋——佇列順序本來就保證前置先做。找不到的前置（被刪、
-/// 被封存）不擋。
+/// 被封存）不擋。另外，等使用者選擇修正方式的修正卡也擋住。
 pub async fn blocked_cards(pool: &SqlitePool) -> Result<HashSet<String>, sqlx::Error> {
     let tasks = store::list_tasks(pool).await?;
     let has_reviewer = agents::list_agents(pool).await?.iter().any(|a| a.kind == "reviewer");
@@ -703,6 +703,11 @@ pub async fn blocked_cards(pool: &SqlitePool) -> Result<HashSet<String>, sqlx::E
         if waiting {
             out.insert(t.id.clone());
         }
+    }
+    // 互動卡被退回、等使用者選「新開／接回」的修正卡（見 fix_choice）。
+    let pending = crate::tasks::fix_choice::pending_fix_ids(pool).await?;
+    for t in tasks.iter().filter(|t| t.status == STATUS_QUEUED && pending.contains(&t.id)) {
+        out.insert(t.id.clone());
     }
     Ok(out)
 }
@@ -1111,6 +1116,17 @@ pub async fn after_card_finished(
     project_path: &Path,
     task_id: &str,
 ) -> Result<Vec<WorkflowEvent>, sqlx::Error> {
+    after_card_finished_with_root(pool, project_path, task_id, crate::tasks::session_log::claude_projects_root().as_deref()).await
+}
+
+/// `projects_root` 是 Claude 放對話檔的地方（`~/.claude/projects`），只用來判斷修正卡能不能
+/// 接回原對話；獨立成參數是為了測試不必碰真正的家目錄。
+pub async fn after_card_finished_with_root(
+    pool: &SqlitePool,
+    project_path: &Path,
+    task_id: &str,
+    projects_root: Option<&Path>,
+) -> Result<Vec<WorkflowEvent>, sqlx::Error> {
     let mut events = Vec::new();
     let Some(task) = store::get_task(pool, task_id).await? else {
         return Ok(events);
@@ -1233,7 +1249,7 @@ pub async fn after_card_finished(
                 };
                 let title = format!("修正：{}（第 {fails} 輪）", module.title);
                 let body = fix_body(&module, &task, fails);
-                insert_card(
+                let fix_id = insert_card(
                     pool,
                     &NewCard {
                         title: &title,
@@ -1250,6 +1266,7 @@ pub async fn after_card_finished(
                     },
                 )
                 .await?;
+                apply_fix_decision(pool, &module, &fix_id, fails, projects_root).await?;
             }
         }
         _ => {}
@@ -1257,6 +1274,32 @@ pub async fn after_card_finished(
 
     maybe_enqueue_merge(pool).await?;
     Ok(events)
+}
+
+/// 互動卡的模組被退回：依使用者記過的選擇決定修正卡怎麼建（見 `fix_choice`）。
+/// 自動卡的模組、記的是新開，什麼都不做（修正卡維持自動、非互動、新對話）。
+async fn apply_fix_decision(
+    pool: &SqlitePool,
+    module: &TaskRow,
+    fix_id: &str,
+    fails: usize,
+    projects_root: Option<&Path>,
+) -> Result<(), sqlx::Error> {
+    use crate::tasks::fix_choice;
+    let mode = fix_choice::get(pool, &module.id).await?.and_then(|r| r.mode);
+    match fix_choice::decide(module.interactive, mode.as_deref(), fails) {
+        fix_choice::Decision::Fresh => {}
+        fix_choice::Decision::Ask => fix_choice::set_pending(pool, &module.id, Some(fix_id)).await?,
+        fix_choice::Decision::Resume => {
+            let tasks = store::list_tasks(pool).await?;
+            // 接不回（對話檔被清掉）就退回新開：卡不能因為記住的選擇做不到而卡死不派工。
+            if let Some(sid) = fix_choice::resume_session_id(&tasks, &module.id).filter(|s| fix_choice::session_resumable(projects_root, s)) {
+                sqlx::query("UPDATE tasks SET interactive = 1, session_id = ? WHERE id = ?").bind(&sid).bind(fix_id).execute(pool).await?;
+                fix_choice::set_resume_fix(pool, &module.id, fix_id).await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 專案裡指派給工程師的模組（work 卡）。
@@ -1853,6 +1896,161 @@ pub(crate) mod tests {
         let chain: Vec<TaskRow> = tasks.iter().filter(|t| t.module_id.as_deref() == Some(m.as_str())).cloned().collect();
         let module = tasks.iter().find(|t| t.id == m).unwrap();
         assert_eq!(module_state(module, &chain, true), ModuleState::FixQueued);
+    }
+
+    /// 互動卡的模組（使用者自己在對話裡做的）＋一張排隊中的審查卡；回傳 (coder, module, review)。
+    async fn interactive_module_under_review(pool: &SqlitePool, session: &str) -> (String, String, String) {
+        let c = agent(pool, "coder", "C1").await;
+        agent(pool, "reviewer", "R").await;
+        let m = done_module(pool, &c, "A 登入", "e1").await;
+        sqlx::query("UPDATE tasks SET interactive = 1, session_id = ? WHERE id = ?").bind(session).bind(&m).execute(pool).await.unwrap();
+        after_card_finished(pool, Path::new("/p"), &m).await.unwrap();
+        let review = of_kind(&all(pool).await, KIND_REVIEW)[0].id.clone();
+        (c, m, review)
+    }
+
+    fn log_root(sid: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("-proj")).unwrap();
+        std::fs::write(d.path().join("-proj").join(format!("{sid}.jsonl")), "{}").unwrap();
+        d
+    }
+
+    /// 把排隊中的審查卡判 fail 並走完退回流程。
+    async fn fail_queued_review(pool: &SqlitePool, root: Option<&Path>) {
+        let review = of_kind(&all(pool).await, KIND_REVIEW).into_iter().find(|t| t.status == STATUS_QUEUED).unwrap().id.clone();
+        finish_review(pool, &review, "fail").await;
+        after_card_finished_with_root(pool, Path::new("/p"), &review, root).await.unwrap();
+    }
+
+    fn queued_fix(tasks: &[TaskRow]) -> TaskRow {
+        of_kind(tasks, KIND_FIX).into_iter().find(|t| t.status == STATUS_QUEUED).unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn a_failed_interactive_module_holds_its_fix_card_until_the_user_chooses() {
+        let pool = mem_pool().await;
+        let (c, m, _review) = interactive_module_under_review(&pool, "sess-1").await;
+        // 同一位工程師後面還有別張卡：被擋的修正卡不能連它一起擋住。
+        let next = store::create_task(&pool, "B", "", "/repo", true, false).await.unwrap();
+        agents::assign_task(&pool, &next, Some(&c)).await.unwrap();
+
+        fail_queued_review(&pool, None).await;
+
+        let tasks = all(&pool).await;
+        let fix = queued_fix(&tasks);
+        assert!(!fix.interactive, "選擇之前維持現狀");
+        let row = crate::tasks::fix_choice::get(&pool, &m).await.unwrap().unwrap();
+        assert_eq!(row.pending_fix_id.as_deref(), Some(fix.id.as_str()));
+        let blocked = blocked_cards(&pool).await.unwrap();
+        assert!(blocked.contains(&fix.id), "等選擇的修正卡不能被派工");
+        assert!(!blocked.contains(&next), "只擋修正卡本身");
+    }
+
+    #[tokio::test]
+    async fn a_failed_automatic_module_behaves_exactly_as_before() {
+        let pool = mem_pool().await;
+        let c = agent(&pool, "coder", "C1").await;
+        agent(&pool, "reviewer", "R").await;
+        let m = done_module(&pool, &c, "A", "e1").await;
+        after_card_finished(&pool, Path::new("/p"), &m).await.unwrap();
+        // 就算先前（對同模組）記過接回，自動卡的模組也不理它。
+        crate::tasks::fix_choice::set_mode(&pool, &m, Some("resume")).await.unwrap();
+        // 對話檔其實在：若自動卡也被當成「可接回」，修正卡就會變互動，測試才分得出來。
+        sqlx::query("UPDATE tasks SET session_id = 'sess-auto' WHERE id = ?").bind(&m).execute(&pool).await.unwrap();
+        let root = log_root("sess-auto");
+
+        fail_queued_review(&pool, Some(root.path())).await;
+
+        let fix = queued_fix(&all(&pool).await);
+        assert!(!fix.interactive && fix.session_id.is_none());
+        assert!(crate::tasks::fix_choice::pending_fix_ids(&pool).await.unwrap().is_empty());
+        assert!(blocked_cards(&pool).await.unwrap().is_empty());
+        assert!(!crate::tasks::fix_choice::is_resume_fix(&pool, &fix.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_remembered_fresh_choice_creates_the_automatic_fix_without_asking() {
+        let pool = mem_pool().await;
+        let (_c, m, _r) = interactive_module_under_review(&pool, "sess-1").await;
+        crate::tasks::fix_choice::set_mode(&pool, &m, Some("fresh")).await.unwrap();
+
+        fail_queued_review(&pool, None).await;
+
+        let fix = queued_fix(&all(&pool).await);
+        assert!(!fix.interactive);
+        assert!(crate::tasks::fix_choice::pending_fix_ids(&pool).await.unwrap().is_empty());
+        assert!(blocked_cards(&pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_remembered_resume_choice_creates_an_interactive_fix_on_the_original_session() {
+        let pool = mem_pool().await;
+        let (_c, m, _r) = interactive_module_under_review(&pool, "sess-1").await;
+        crate::tasks::fix_choice::set_mode(&pool, &m, Some("resume")).await.unwrap();
+        let root = log_root("sess-1");
+
+        fail_queued_review(&pool, Some(root.path())).await;
+
+        let fix = queued_fix(&all(&pool).await);
+        assert!(fix.interactive);
+        assert_eq!(fix.session_id.as_deref(), Some("sess-1"));
+        assert!(fix.body.contains("理由"), "提示詞仍是審核意見");
+        assert!(crate::tasks::fix_choice::is_resume_fix(&pool, &fix.id).await.unwrap());
+        assert!(blocked_cards(&pool).await.unwrap().is_empty(), "已經選好，不擋");
+    }
+
+    #[tokio::test]
+    async fn a_remembered_resume_choice_is_asked_again_in_the_second_round() {
+        let pool = mem_pool().await;
+        let (_c, m, _r) = interactive_module_under_review(&pool, "sess-1").await;
+        crate::tasks::fix_choice::set_mode(&pool, &m, Some("resume")).await.unwrap();
+        let root = log_root("sess-1");
+        fail_queued_review(&pool, Some(root.path())).await;
+        let fix1 = queued_fix(&all(&pool).await);
+        finish_fix(&pool, &fix1.id, "e2").await;
+        after_card_finished_with_root(&pool, Path::new("/p"), &fix1.id, Some(root.path())).await.unwrap();
+
+        fail_queued_review(&pool, Some(root.path())).await;
+
+        let fix2 = queued_fix(&all(&pool).await);
+        assert!(!fix2.interactive, "重問期間不先改成互動");
+        let row = crate::tasks::fix_choice::get(&pool, &m).await.unwrap().unwrap();
+        assert_eq!(row.pending_fix_id.as_deref(), Some(fix2.id.as_str()));
+        assert!(blocked_cards(&pool).await.unwrap().contains(&fix2.id));
+    }
+
+    #[tokio::test]
+    async fn a_remembered_resume_falls_back_to_a_fresh_fix_when_the_session_log_is_gone() {
+        let pool = mem_pool().await;
+        let (_c, m, _r) = interactive_module_under_review(&pool, "sess-gone").await;
+        crate::tasks::fix_choice::set_mode(&pool, &m, Some("resume")).await.unwrap();
+        let empty = tempfile::tempdir().unwrap();
+
+        fail_queued_review(&pool, Some(empty.path())).await;
+
+        let fix = queued_fix(&all(&pool).await);
+        assert!(!fix.interactive && fix.session_id.is_none());
+        assert!(!crate::tasks::fix_choice::is_resume_fix(&pool, &fix.id).await.unwrap());
+        assert!(blocked_cards(&pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn finishing_a_resumed_interactive_fix_queues_the_review() {
+        let pool = mem_pool().await;
+        let (_c, m, _r) = interactive_module_under_review(&pool, "sess-1").await;
+        let root = log_root("sess-1");
+        fail_queued_review(&pool, Some(root.path())).await;
+        let fix = queued_fix(&all(&pool).await);
+        crate::tasks::fix_choice::choose(&pool, &m, "resume", true, Some(root.path())).await.unwrap();
+        assert!(store::get_task(&pool, &fix.id).await.unwrap().unwrap().interactive);
+
+        finish_fix(&pool, &fix.id, "e2").await;
+        after_card_finished_with_root(&pool, Path::new("/p"), &fix.id, Some(root.path())).await.unwrap();
+
+        let tasks = all(&pool).await;
+        let again = of_kind(&tasks, KIND_REVIEW).into_iter().find(|t| t.status == STATUS_QUEUED).expect("要建再審查卡");
+        assert_eq!(again.review_of.as_deref(), Some(fix.id.as_str()));
     }
 
     #[tokio::test]

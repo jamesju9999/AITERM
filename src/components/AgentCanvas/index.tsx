@@ -67,6 +67,7 @@ import { CustomSkillsDialog } from "./CustomSkillsDialog";
 import { RoleIcon } from "./RoleIcon";
 import { parseDbSkill, parseSkillPaths, skillActivity, SKILL_LINGER_SECS, sqlPreview } from "./dbSkill";
 import { ToolsBanner } from "./ToolsBanner";
+import { FixChoiceBar } from "./FixChoiceBar";
 import { RepoMovedBanner, useMissingRepoDirs } from "./RepoMovedBanner";
 import { missingTools } from "./toolsCheck";
 import { listProjects, openProject, type ProjectInfo } from "../../ipc/projects";
@@ -84,6 +85,10 @@ import {
   continueChat,
   nudgeTask,
   listCardMessages,
+  listFixChoices,
+  chooseFix,
+  type FixChoiceItem,
+  type FixMode,
   type CardMessage,
   onTasksUpdated,
   type MergeOutcome,
@@ -263,6 +268,8 @@ export function AgentCanvasView({
   const [skillUsesOf, setSkillUsesOf] = useState<{ projectId: string; rows: SkillUseRow[] } | null>(null);
   /** 讀了參考資料的記錄（讀取中的線、活動記錄）。 */
   const [messagesOf, setMessagesOf] = useState<{ projectId: string; rows: CardMessage[] } | null>(null);
+  /** 互動卡被退回、等使用者選修正方式的模組；記著是哪個專案的。 */
+  const [fixChoicesOf, setFixChoicesOf] = useState<{ projectId: string; rows: FixChoiceItem[] } | null>(null);
   const [refReadsOf, setRefReadsOf] = useState<{ projectId: string; rows: ReferenceReadRow[] } | null>(null);
   // 檔案系統的事不會推送過來，所以在技能清單（或儲存後的畫面）變動時重查一次。
   const allSkillPathsKey = agents.flatMap((a) => parseSkillPaths(a.custom_skills)).join("\n");
@@ -277,6 +284,7 @@ export function AgentCanvasView({
     };
   }, [allSkillPathsKey]);
   const messages = useMemo(() => (messagesOf?.projectId === projectId ? messagesOf.rows : []), [messagesOf, projectId]);
+  const fixChoices = useMemo(() => (fixChoicesOf?.projectId === projectId ? fixChoicesOf.rows : []), [fixChoicesOf, projectId]);
   const refReads = useMemo(() => (refReadsOf?.projectId === projectId ? refReadsOf.rows : []), [refReadsOf, projectId]);
   /** 團隊編制（見 FormationMenu）。 */
   const [formsOf, setFormsOf] = useState<{ projectId: string; state: FormationsState } | null>(null);
@@ -438,6 +446,9 @@ export function AgentCanvasView({
         .catch(() => {});
       listCardMessages(projectId)
         .then((rows) => alive && setMessagesOf({ projectId, rows }))
+        .catch(() => {});
+      listFixChoices(projectId)
+        .then((rows) => alive && setFixChoicesOf({ projectId, rows }))
         .catch(() => {});
       formationsState(projectId, formDefaultName.current)
         .then((state) => alive && setFormsOf({ projectId, state }))
@@ -960,6 +971,16 @@ export function AgentCanvasView({
     }
   };
 
+  // 選修正方式：後端會發 tasks-updated 讓畫面重載；這裡也立刻重查，選擇列才不會多停一拍。
+  const chooseFixMode = async (moduleId: string, mode: FixMode, remember: boolean) => {
+    if (!projectId) return;
+    await chooseFix(projectId, moduleId, mode, remember);
+    listFixChoices(projectId)
+      .then((rows) => setFixChoicesOf({ projectId, rows }))
+      .catch(() => {});
+    void refresh();
+  };
+
   const openTab = (tabId: string) => {
     window.dispatchEvent(new CustomEvent("aiterm:focus-tab", { detail: { tabId } }));
   };
@@ -1393,6 +1414,8 @@ export function AgentCanvasView({
       {tools && missing.length > 0 && (
         <ToolsBanner check={tools} missing={missing} busy={toolsBusy} onRecheck={() => void recheckTools()} />
       )}
+
+      <FixChoiceBar items={fixChoices} onChoose={chooseFixMode} />
 
       {projectId && movedDirs.length > 0 && <RepoMovedBanner projectId={projectId} agents={agents} dirs={movedDirs} onDone={() => void refresh()} />}
 
