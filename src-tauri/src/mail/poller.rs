@@ -859,12 +859,17 @@ async fn sync_and_persist(
             // 問題收集：只看標頭判斷，符合才入 intake.db；不影響下面郵件分頁的處理。
             crate::intake::on_mail(app, &account.id, &raw.raw).await;
 
-            let mut classification = classify_message(provider.clone(), &parsed.sender, &parsed.subject, &parsed.body_text)
-                .await
-                .unwrap_or_else(|e| {
-                    log::warn!("mail classification failed for uid={}: {e}", raw.uid);
-                    Default::default()
-                });
+            // 問題收集專用的帳號不顯示在信箱分頁，逐封呼叫 LLM 分類只是白花額度。
+            let mut classification = if crate::intake::owns_account(app, &account.id).await {
+                Default::default()
+            } else {
+                classify_message(provider.clone(), &parsed.sender, &parsed.subject, &parsed.body_text)
+                    .await
+                    .unwrap_or_else(|e| {
+                        log::warn!("mail classification failed for uid={}: {e}", raw.uid);
+                        Default::default()
+                    })
+            };
             // The prompt asks the model to never mark promotional mail as
             // important too, but LLMs don't reliably honor soft constraints —
             // enforce it here so a misclassification can't trigger a spurious

@@ -29,7 +29,7 @@ import {
 import "./index.css";
 import { displayTabTitle } from "../../lib/tabTitle";
 
-export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base" | "mail" | "remote-terminal" | "agent-canvas" | "architecture";
+export type TabType = "terminal" | "database" | "design" | "cross-db" | "vcs" | "doc-converter" | "api-docs" | "loop-studio" | "code-assistant" | "knowledge-base" | "mail" | "remote-terminal" | "agent-canvas" | "architecture" | "intake";
 
 import type { MilestoneState } from "../../lib/milestones";
 
@@ -150,6 +150,7 @@ function getTabIcon(type: TabType, claudeBridge?: Tab["claudeBridge"], spawnedBy
     case "code-assistant": return <CodeIcon size={18} />;
     case "knowledge-base": return <LibraryIcon size={18} />;
     case "mail": return <MailIcon size={18} />;
+    case "intake": return <MailIcon size={18} />;
     case "remote-terminal": return <EyeIcon size={18} />;
     case "agent-canvas": return <WorkflowIcon size={18} />;
     case "architecture": return <LayersIcon size={18} />;

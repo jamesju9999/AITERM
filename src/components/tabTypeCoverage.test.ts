@@ -86,3 +86,20 @@ describe("architecture tab type coverage", () => {
     expect(terminalAppSrc).toContain("ArchitectureView");
   });
 });
+
+describe("intake tab type coverage", () => {
+  it("is a member of the TabType union", () => {
+    expect(tabBarSrc).toMatch(/export type TabType =[^;]*"intake"/s);
+  });
+
+  it("has an icon in the tab bar", () => {
+    const iconFn = tabBarSrc.slice(tabBarSrc.indexOf("function getTabIcon"));
+    expect(iconFn).toContain('case "intake"');
+  });
+
+  it("gets a title and a render branch", () => {
+    expect(terminalAppSrc).toContain('type === "intake") title = t.intake_tab');
+    expect(terminalAppSrc).toContain('tab.type === "intake"');
+    expect(terminalAppSrc).toContain("<IntakeView");
+  });
+});

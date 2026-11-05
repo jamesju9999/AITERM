@@ -26,7 +26,8 @@ import {
   ZapIcon,
   SparklesIcon,
   ClipboardListIcon,
-  MonitorIcon
+  MonitorIcon,
+  MailIcon,
 } from "../Icons";
 import "./SettingsView.css";
 
@@ -81,22 +82,13 @@ export function SettingsView() {
         >
           <BranchIcon size={16} /> {t.vcs_connections}
         </button>
-        {/*
-          The Mail entry is hidden from the sidebar while the feature is not
-          being shipped to users. The tab, its page and the render branch below
-          are all still wired up, exactly like the Enterprise entry — restoring
-          it means putting this button back, plus the matching item in
-          NewTabPicker, and re-adding the MailIcon import above. Nothing
-          else was removed. See the hand-off notes in
-          docs/superpowers/specs/2026-08-04-ai-mail-assistant-design.md.
-
-          <button
-            className={`sidebar-item ${tab === "mail" ? "sidebar-item--active" : ""}`}
-            onClick={() => setTab("mail")}
-          >
-            <MailIcon size={16} /> {t.mail_accounts_settings_title}
-          </button>
-        */}
+        {/* 問題收集（Intake）需要郵件帳號，所以帳號設定頁重新開放；信箱分頁本身仍隱藏。 */}
+        <button
+          className={`sidebar-item ${tab === "mail" ? "sidebar-item--active" : ""}`}
+          onClick={() => setTab("mail")}
+        >
+          <MailIcon size={16} /> {t.mail_accounts_settings_title}
+        </button>
         <button
           className={`sidebar-item ${tab === "mcp" ? "sidebar-item--active" : ""}`}
           onClick={() => setTab("mcp")}

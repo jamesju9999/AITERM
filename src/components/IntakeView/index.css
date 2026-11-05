@@ -1,0 +1,26 @@
+.intake { display: flex; flex-direction: column; height: 100%; padding: 12px 16px; gap: 8px; overflow: hidden; }
+.intake__bar { display: flex; align-items: center; gap: 8px; }
+.intake__title { margin: 0; flex: 1; font-size: 16px; }
+.intake__error { color: var(--danger, #f87171); font-size: 13px; }
+.intake__body { display: grid; grid-template-columns: minmax(240px, 1fr) 2fr; gap: 12px; min-height: 0; flex: 1; }
+.intake__list { list-style: none; margin: 0; padding: 0; overflow: auto; border-right: 1px solid var(--border, #334155); }
+.intake__row { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; width: 100%; text-align: left; padding: 8px; background: none; border: 0; border-bottom: 1px solid var(--border, #334155); color: inherit; cursor: pointer; }
+.intake__row--active { background: color-mix(in srgb, var(--accent, #22d3ee) 14%, transparent); }
+.intake__subject { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.intake__sender { grid-column: 2; font-size: 12px; opacity: 0.7; }
+.intake__badge { font-size: 11px; padding: 1px 6px; border-radius: 8px; border: 1px solid currentColor; align-self: start; }
+.intake__badge--pending, .intake__badge--draft { color: #fbbf24; }
+.intake__badge--running, .intake__badge--queued { color: #22d3ee; }
+.intake__badge--done { color: #4ade80; }
+.intake__badge--rejected { color: #94a3b8; }
+.intake__detail { overflow: auto; }
+.intake__meta { font-size: 12px; opacity: 0.7; }
+.intake__text { white-space: pre-wrap; word-break: break-word; font: inherit; padding: 8px; border: 1px solid var(--border, #334155); border-radius: 6px; }
+.intake__draft { width: 100%; box-sizing: border-box; font: inherit; }
+.intake__actions { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.intake__empty { opacity: 0.6; padding: 12px; list-style: none; }
+.intake__settings { overflow: auto; display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+.intake__field { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.intake__senders { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.intake__senders li { display: flex; gap: 8px; align-items: center; }
+@media (max-width: 720px) { .intake__body { grid-template-columns: 1fr; } }

@@ -46,6 +46,7 @@ import { AiPanel } from "./AiPanel";
 import { ProviderPalette } from "./ProviderPalette";
 import { QuotaBadge } from "./QuotaBadge";
 import { SharePanel } from "./SharePanel";
+import { IntakeToggle } from "./IntakeToggle";
 import { ShellWarningBadge } from "./ShellWarningBadge";
 import { ElevationBadge } from "./ElevationBadge";
 import { useProviderQuota } from "../hooks/useProviderQuota";
@@ -2146,6 +2147,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           <ShellWarningBadge identity={shellIdentity} />
           <ElevationBadge elevated={elevated} />
           {sessionId && <SharePanel sessionId={sessionId} />}
+          {sessionId && <IntakeToggle sessionId={sessionId} />}
           <button
             className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
             title={t.term_bookmark_tooltip}

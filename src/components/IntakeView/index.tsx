@@ -1,0 +1,338 @@
+import { useCallback, useEffect, useState } from "react";
+import {
+  intakeApprove,
+  intakeDeleteSender,
+  intakeDropped,
+  intakeGetConfig,
+  intakeList,
+  intakeReject,
+  intakeSendReply,
+  intakeSenders,
+  intakeSetConfig,
+  intakeUpdateDraft,
+  intakeUpsertSender,
+  type IntakeConfig,
+  type IntakeItem,
+  type IntakeSender,
+  type IntakeStatus,
+  type Level,
+} from "../../ipc/intake";
+import { mailListAccounts, type MailAccount } from "../../ipc/mail";
+import { useIntakeChanged } from "../../hooks/useIntakeChanged";
+import { useLocale } from "../../contexts/LocaleContext";
+import "./index.css";
+
+const STATUSES: IntakeStatus[] = ["pending", "queued", "running", "draft", "done", "rejected"];
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+export function IntakeView() {
+  const { t } = useLocale();
+  const [items, setItems] = useState<IntakeItem[]>([]);
+  const [filter, setFilter] = useState<IntakeStatus | "all">("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = useCallback(() => {
+    intakeList(filter === "all" ? undefined : filter)
+      .then(setItems)
+      .catch((e) => setError(errText(e)));
+  }, [filter]);
+
+  useEffect(reload, [reload]);
+  useIntakeChanged(reload);
+
+  const selected = items.find((i) => i.id === selectedId) ?? null;
+
+  async function run(fn: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(errText(e));
+    }
+    reload();
+  }
+
+  return (
+    <div className="intake">
+      <div className="intake__bar">
+        <h2 className="intake__title">{t.intake_tab}</h2>
+        <select
+          aria-label={t.intake_filter_label}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value as IntakeStatus | "all")}
+        >
+          <option value="all">{t.intake_filter_all}</option>
+          {STATUSES.map((s) => (
+            <option key={s} value={s}>
+              {t[`intake_status_${s}` as const]}
+            </option>
+          ))}
+        </select>
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setShowSettings((v) => !v)}>
+          {t.intake_settings}
+        </button>
+      </div>
+      {error && <div className="intake__error" role="alert">{error}</div>}
+
+      {showSettings ? (
+        <SettingsPanel onError={setError} />
+      ) : (
+        <div className="intake__body">
+          <ul className="intake__list" aria-label={t.intake_tab}>
+            {items.length === 0 && <li className="intake__empty">{t.intake_empty}</li>}
+            {items.map((i) => (
+              <li key={i.id}>
+                <button
+                  className={`intake__row ${i.id === selectedId ? "intake__row--active" : ""}`}
+                  onClick={() => setSelectedId(i.id)}
+                >
+                  <span className={`intake__badge intake__badge--${i.status}`}>{t[`intake_status_${i.status}` as const]}</span>
+                  <span className="intake__subject">{i.subject || t.intake_no_subject}</span>
+                  <span className="intake__sender">{i.sender}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="intake__detail">
+            {selected ? <Detail key={selected.id} item={selected} run={run} /> : <p className="intake__empty">{t.intake_pick}</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void> }) {
+  const { t } = useLocale();
+  const [draft, setDraft] = useState(item.reply_draft ?? "");
+  return (
+    <div>
+      <h3>{item.subject || t.intake_no_subject}</h3>
+      <p className="intake__meta">
+        {item.sender} · {item.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external} · {item.source}
+      </p>
+      {item.error && <p className="intake__error">{item.error}</p>}
+      <pre className="intake__text">{item.body}</pre>
+      <div className="intake__actions">
+        {item.status === "pending" && (
+          <>
+            <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={() => void run(() => intakeApprove(item.id))}>
+              {t.intake_action_approve}
+            </button>
+            <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void run(() => intakeReject(item.id))}>
+              {t.intake_action_reject}
+            </button>
+          </>
+        )}
+        {item.status === "queued" && (
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void run(() => intakeReject(item.id))}>
+            {t.intake_action_reject}
+          </button>
+        )}
+      </div>
+      {(item.status === "draft" || item.status === "done") && item.reply_draft !== null && (
+        <section>
+          <h4>{t.intake_reply}</h4>
+          <textarea
+            className="intake__draft"
+            value={draft}
+            readOnly={item.status === "done"}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={10}
+          />
+          {item.status === "draft" && (
+            <div className="intake__actions">
+              <button
+                className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
+                onClick={() =>
+                  void run(async () => {
+                    await intakeUpdateDraft(item.id, draft);
+                    await intakeSendReply(item.id);
+                  })
+                }
+              >
+                {t.intake_action_send}
+              </button>
+              <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void run(() => intakeUpdateDraft(item.id, draft))}>
+                {t.intake_action_save_draft}
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
+  const { t } = useLocale();
+  const [cfg, setCfg] = useState<IntakeConfig | null>(null);
+  const [accounts, setAccounts] = useState<MailAccount[]>([]);
+  const [senders, setSenders] = useState<IntakeSender[]>([]);
+  const [dropped, setDropped] = useState<[string, number][]>([]);
+  const [newAddr, setNewAddr] = useState("");
+  const [newLevel, setNewLevel] = useState<Level>("internal");
+  const [saved, setSaved] = useState(false);
+
+  const loadSenders = useCallback(() => {
+    intakeSenders().then(setSenders).catch((e) => onError(errText(e)));
+    intakeDropped().then(setDropped).catch(() => {});
+  }, [onError]);
+
+  useEffect(() => {
+    intakeGetConfig().then(setCfg).catch((e) => onError(errText(e)));
+    mailListAccounts().then(setAccounts).catch(() => {});
+    loadSenders();
+  }, [loadSenders, onError]);
+
+  if (!cfg) return null;
+  const set = <K extends keyof IntakeConfig>(k: K, v: IntakeConfig[K]) => {
+    setSaved(false);
+    setCfg({ ...cfg, [k]: v });
+  };
+
+  async function save() {
+    try {
+      await intakeSetConfig(cfg!);
+      setSaved(true);
+      onError(null);
+    } catch (e) {
+      onError(errText(e));
+    }
+  }
+
+  async function addSender() {
+    try {
+      await intakeUpsertSender({ address: newAddr.trim(), level: newLevel, skip_auth: false });
+      setNewAddr("");
+      onError(null);
+      loadSenders();
+    } catch (e) {
+      onError(errText(e));
+    }
+  }
+
+  const needsAlias = cfg.mode === "alias" || cfg.mode === "alias_or_tag";
+  const needsTag = cfg.mode === "subject_tag" || cfg.mode === "alias_or_tag";
+
+  return (
+    <div className="intake__settings">
+      <label className="intake__field">
+        <input type="checkbox" checked={cfg.enabled} onChange={(e) => set("enabled", e.target.checked)} />
+        {t.intake_set_enabled}
+      </label>
+      <label className="intake__field">
+        {t.intake_set_account}
+        <select value={cfg.account_id} onChange={(e) => set("account_id", e.target.value)}>
+          <option value="">—</option>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>{a.email}</option>
+          ))}
+        </select>
+      </label>
+      <label className="intake__field">
+        {t.intake_set_mode}
+        <select value={cfg.mode} onChange={(e) => set("mode", e.target.value as IntakeConfig["mode"])}>
+          <option value="alias_or_tag">{t.intake_mode_alias_or_tag}</option>
+          <option value="alias">{t.intake_mode_alias}</option>
+          <option value="subject_tag">{t.intake_mode_subject_tag}</option>
+          <option value="dedicated">{t.intake_mode_dedicated}</option>
+        </select>
+      </label>
+      {needsAlias && (
+        <label className="intake__field">
+          {t.intake_set_alias}
+          <input value={cfg.alias} placeholder="you+aiterm@gmail.com" onChange={(e) => set("alias", e.target.value)} />
+        </label>
+      )}
+      {needsTag && (
+        <label className="intake__field">
+          {t.intake_set_tag}
+          <input value={cfg.tag} placeholder="[AITerm]" onChange={(e) => set("tag", e.target.value)} />
+        </label>
+      )}
+      <label className="intake__field">
+        {t.intake_set_auth_server}
+        <input value={cfg.auth_server} onChange={(e) => set("auth_server", e.target.value)} />
+      </label>
+      {(["internal", "external"] as const).map((lv) => (
+        <div key={lv} className="intake__field">
+          <span>{lv === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
+          <select
+            aria-label={`${lv}-dispatch`}
+            value={cfg[`dispatch_${lv}`]}
+            onChange={(e) => set(`dispatch_${lv}`, e.target.value as "auto" | "manual")}
+          >
+            <option value="auto">{t.intake_dispatch_auto}</option>
+            <option value="manual">{t.intake_dispatch_manual}</option>
+          </select>
+          <label>
+            <input
+              type="checkbox"
+              checked={cfg[`reply_${lv}_auto`]}
+              onChange={(e) => set(`reply_${lv}_auto`, e.target.checked)}
+            />
+            {t.intake_reply_auto}
+          </label>
+        </div>
+      ))}
+      <label className="intake__field">
+        {t.intake_set_rate}
+        <input
+          type="number"
+          min={0}
+          value={cfg.rate_limit_per_hour}
+          onChange={(e) => set("rate_limit_per_hour", Math.max(0, Number(e.target.value) || 0))}
+        />
+      </label>
+      <div className="intake__actions">
+        <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={() => void save()}>
+          {t.intake_set_save}
+        </button>
+        {saved && <span>{t.intake_set_saved}</span>}
+      </div>
+
+      <h4>{t.intake_senders}</h4>
+      <ul className="intake__senders">
+        {senders.map((s) => (
+          <li key={s.address}>
+            {s.address} · {s.level === "internal" ? t.intake_level_internal : t.intake_level_external}
+            {s.level === "external" && (
+              <label>
+                <input
+                  type="checkbox"
+                  checked={s.skip_auth}
+                  onChange={(e) => void intakeUpsertSender({ ...s, skip_auth: e.target.checked }).then(loadSenders)}
+                />
+                {t.intake_skip_auth}
+              </label>
+            )}
+            <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void intakeDeleteSender(s.address).then(loadSenders)}>
+              {t.intake_remove}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="intake__field">
+        <input aria-label={t.intake_sender_address} value={newAddr} placeholder="name@example.com" onChange={(e) => setNewAddr(e.target.value)} />
+        <select aria-label={t.intake_sender_level} value={newLevel} onChange={(e) => setNewLevel(e.target.value as Level)}>
+          <option value="internal">{t.intake_level_internal}</option>
+          <option value="external">{t.intake_level_external}</option>
+        </select>
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={!newAddr.includes("@")} onClick={() => void addSender()}>
+          {t.intake_add}
+        </button>
+      </div>
+      {dropped.length > 0 && (
+        <p className="intake__meta">
+          {t.intake_dropped}：{dropped.map(([r, n]) => `${r} ${n}`).join("、")}
+        </p>
+      )}
+    </div>
+  );
+}

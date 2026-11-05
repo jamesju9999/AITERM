@@ -51,3 +51,11 @@ pub async fn on_mail(app: &tauri::AppHandle, account_id: &str, raw: &[u8]) {
         Err(e) => log::warn!("intake: ingest failed for account {account_id}: {e}"),
     }
 }
+
+/// 這個郵件帳號目前是不是問題收集專用的（已啟用且被選為收信帳號）。
+pub async fn owns_account(app: &tauri::AppHandle, account_id: &str) -> bool {
+    use tauri::Manager;
+    let Some(db) = app.try_state::<IntakeDb>() else { return false };
+    let cfg = config::load(&db.pool).await;
+    cfg.enabled && cfg.account_id == account_id
+}

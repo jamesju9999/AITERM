@@ -1,0 +1,4 @@
+.aiterm-intake-toggle--on {
+  border-color: var(--accent, #22d3ee);
+  color: var(--accent, #22d3ee);
+}

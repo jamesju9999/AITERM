@@ -85,6 +85,7 @@ const TAB_CATALOG_META: readonly TabCatalogMeta[] = [
   // in SettingsView, and re-adding the MailIcon import above. See the notes in
   // docs/superpowers/specs/2026-08-04-ai-mail-assistant-design.md.
   { id: "mail",           type: "mail",           icon: <MailIcon size={18} />,      labelKey: "mail_tab",           descKey: "new_mail_desc",           color: "#f87171", hidden: true },
+  { id: "intake",         type: "intake",         icon: <MailIcon size={18} />,      labelKey: "intake_tab",         descKey: "new_intake_desc",         color: "#fb7185" },
   { id: "remote-terminal", type: "remote-terminal", icon: <EyeIcon size={18} />,      labelKey: "remote_terminal_tab", descKey: "new_remote_terminal_desc", color: "#2dd4bf" },
   { id: "agent-canvas",   type: "agent-canvas",   icon: <WorkflowIcon size={18} />,  labelKey: "agent_canvas_tab",   descKey: "new_agent_canvas_desc",   color: "#e879f9" },
   { id: "architecture",   type: "architecture",   icon: <LayersIcon size={18} />,    labelKey: "arch_tab",           descKey: "new_arch_desc",           color: "#34d399" },
