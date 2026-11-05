@@ -67,7 +67,9 @@ pending ──拒絕──> rejected
 1. 只讀標頭判斷（`From`、`To`、`Delivered-To`、`Subject`、`Authentication-Results`、`Message-ID`）。
 2. 辨識模式符合才繼續；`dedicated` 模式視為全符合。
 3. `From` 必須在白名單，否則直接丟棄，**不入庫、不抓內文**，只累計「已丟棄」計數供設定頁顯示。
-4. `external` 寄件者另需 `Authentication-Results` 顯示 SPF 或 DKIM 通過。
+4. `external` 寄件者另需驗證通過：讀**自己信箱服務商**加的 `Authentication-Results`（取最上面一筆，且 authserv-id 為該信箱主機；信件夾帶的同名標頭不採信），`spf=pass` 或 `dkim=pass` 任一即可，且通過驗證的網域須與 `From` 網域對齊。AITerm 不自行做 DNS／簽章驗證。
+   - 收信端沒提供該標頭 → 外部一律不收，設定頁提示；內部預設不放寬（可選）。
+   - 單一外部地址可勾「略過驗證」，須顯示風險提示。
 5. 以 `Message-ID` 去重。
 6. 通過後才抓內文入庫，狀態 `pending`。
 
