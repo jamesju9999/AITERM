@@ -28,6 +28,10 @@ pub struct Config {
     pub reply_internal_auto: bool,
     pub reply_external_auto: bool,
     pub rate_limit_per_hour: u32,
+    /// 「要改程式」的問題完成後在終端機目錄執行的測試指令（空＝不跑）。
+    pub verify_command: String,
+    /// 測試指令的逾時秒數。
+    pub verify_timeout_secs: u64,
 }
 
 impl Default for Config {
@@ -45,6 +49,8 @@ impl Default for Config {
             reply_internal_auto: true,
             reply_external_auto: false,
             rate_limit_per_hour: 10,
+            verify_command: String::new(),
+            verify_timeout_secs: 600,
         }
     }
 }

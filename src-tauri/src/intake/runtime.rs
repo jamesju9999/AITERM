@@ -1,5 +1,6 @@
 //! 執行層：把登記表、佇列與實際的終端機分頁、郵件帳號接起來。
-use super::{config, dispatcher, filter, rules, smtp, store, IntakeDb, CHANGED_EVENT};
+use super::{classify, config, dispatcher, filter, rules, smtp, store, verify, IntakeDb, CHANGED_EVENT};
+use crate::ai::router::AiRouter;
 use crate::claude_activity::ClaudeActivity;
 use crate::config::ConfigStore;
 use crate::pty::PtyManager;
@@ -10,6 +11,8 @@ use tauri::{AppHandle, Emitter, Manager};
 
 pub struct IntakeRuntime {
     pub registry: dispatcher::Registry,
+    /// 派送迴圈與「開始接收」指令都會呼叫 `tick`；不序列化的話兩邊可能同時看到同一個閒置分頁。
+    tick_lock: tokio::sync::Mutex<()>,
 }
 
 fn changed(app: &AppHandle) {
@@ -18,7 +21,7 @@ fn changed(app: &AppHandle) {
 
 /// 在 `setup` 裡呼叫一次：掛 hook 觀察者並啟動派送迴圈。
 pub fn install(app: &AppHandle, activity: &Arc<ClaudeActivity>) {
-    let rt = Arc::new(IntakeRuntime { registry: dispatcher::Registry::default() });
+    let rt = Arc::new(IntakeRuntime { registry: dispatcher::Registry::default(), tick_lock: tokio::sync::Mutex::new(()) });
     app.manage(rt.clone());
 
     let (h, r) = (app.clone(), rt.clone());
@@ -30,9 +33,11 @@ pub fn install(app: &AppHandle, activity: &Arc<ClaudeActivity>) {
         }
         "turn-end" => {
             if let Some(item_id) = r.registry.on_turn_end(sid) {
-                let (h, body) = (h.clone(), body.clone());
+                // 驗證（跑測試）可能要好幾分鐘：先把分頁標成忙碌，免得下一題在測試還在跑時就開始改檔。
+                r.registry.assign(sid, &item_id);
+                let (h, body, tab) = (h.clone(), body.clone(), sid.to_string());
                 tauri::async_runtime::spawn(async move {
-                    complete(&h, &item_id, dispatcher::answer_from_stop(&body)).await;
+                    complete(&h, &tab, &item_id, dispatcher::answer_from_stop(&body)).await;
                 });
             }
         }
@@ -57,6 +62,7 @@ pub async fn tick(app: &AppHandle) {
     ) else {
         return;
     };
+    let _guard = rt.tick_lock.lock().await;
     let mut touched = false;
     for tab in rt.registry.tabs() {
         if pty.size(&tab).is_none() {
@@ -77,6 +83,7 @@ pub async fn tick(app: &AppHandle) {
         };
         rt.registry.assign(&tab, &item.id);
         touched = true;
+        prepare(app, &db.pool, &pty, &item, &tab).await;
         if let Err(e) = crate::tasks::dispatch::write_then_submit(&pty, &tab, &dispatcher::build_prompt(&item)).await {
             rt.registry.release(&tab);
             store::fail(&db.pool, &item.id, &format!("無法送進終端機：{e}")).await.ok();
@@ -87,29 +94,73 @@ pub async fn tick(app: &AppHandle) {
     }
 }
 
-/// Agent 這一輪結束：存回覆，必要時自動寄出。
-pub async fn complete(app: &AppHandle, item_id: &str, answer: Option<String>) {
+/// 派工前：初篩分類；「要改程式」的記下 git HEAD 供事後驗證。任何失敗都退成「要改程式」。
+async fn prepare(app: &AppHandle, pool: &sqlx::SqlitePool, pty: &PtyManager, item: &store::IntakeItem, tab: &str) {
+    let kind = match app.try_state::<AiRouter>() {
+        Some(router) => match router.resolve().await {
+            Ok(provider) => tokio::time::timeout(Duration::from_secs(30), classify::classify(provider, &item.subject, &item.body))
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or(classify::Kind::CodeChange),
+            Err(_) => classify::Kind::CodeChange,
+        },
+        None => classify::Kind::CodeChange,
+    };
+    let head = if kind == classify::Kind::CodeChange {
+        match pty.get_cwd(tab) {
+            Some(cwd) => verify::head(&cwd).await,
+            None => None,
+        }
+    } else {
+        None
+    };
+    store::set_kind(pool, &item.id, kind.as_str(), head.as_deref()).await.ok();
+}
+
+/// Agent 這一輪結束：（要改程式的）驗證、存回覆，必要時自動寄出，最後釋放分頁。
+pub async fn complete(app: &AppHandle, tab: &str, item_id: &str, answer: Option<String>) {
+    finish_item(app, tab, item_id, answer).await;
+    if let Some(rt) = app.try_state::<Arc<IntakeRuntime>>() {
+        rt.registry.release(tab);
+    }
+    changed(app);
+}
+
+async fn finish_item(app: &AppHandle, tab: &str, item_id: &str, answer: Option<String>) {
     let Some(db) = app.try_state::<IntakeDb>() else { return };
     let Some(answer) = answer else {
         store::fail(&db.pool, item_id, "無法取得 Agent 的回答").await.ok();
-        changed(app);
         return;
     };
-    let reply = filter::redact(&answer);
+    let cfg = config::load(&db.pool).await;
+    let Ok(Some(item)) = store::get_item(&db.pool, item_id).await else { return };
+
+    let mut reply = filter::redact(&answer);
+    let mut verified_ok = true;
+    if item.kind.as_deref() == Some(classify::Kind::CodeChange.as_str()) {
+        let cwd = app.try_state::<Arc<PtyManager>>().and_then(|p| p.get_cwd(tab)).unwrap_or_default();
+        let report = verify::verify(&cwd, item.snapshot_head.as_deref(), &cfg.verify_command, Duration::from_secs(cfg.verify_timeout_secs.max(1))).await;
+        verified_ok = report.passed();
+        store::set_verification(&db.pool, item_id, &report.text(), verified_ok).await.ok();
+        reply = format!("{reply}\n\n{}", filter::redact(&report.text()));
+    }
+
     // 一律先存成草稿；是否自動寄出另外判斷，寄失敗時草稿還在。
     if !matches!(store::finish(&db.pool, item_id, &reply, false).await, Ok(true)) {
         return;
     }
-    let cfg = config::load(&db.pool).await;
-    if let Ok(Some(item)) = store::get_item(&db.pool, item_id).await {
-        let auto = if item.sender_level == "internal" { cfg.reply_internal_auto } else { cfg.reply_external_auto };
+    let auto = if item.sender_level == "internal" { cfg.reply_internal_auto } else { cfg.reply_external_auto };
+    if !verified_ok {
+        // 驗證沒過就不自動寄：把「沒修好」原樣回給提問的人之前，先讓人看過。
         if auto {
-            if let Err(e) = send_reply(app, item_id).await {
-                store::set_error(&db.pool, item_id, &format!("自動寄出失敗：{e}")).await.ok();
-            }
+            store::set_error(&db.pool, item_id, "驗證未通過，已保留為草稿，請確認後再寄出").await.ok();
+        }
+    } else if auto {
+        if let Err(e) = send_reply(app, item_id).await {
+            store::set_error(&db.pool, item_id, &format!("自動寄出失敗：{e}")).await.ok();
         }
     }
-    changed(app);
 }
 
 /// 寄出草稿（`draft → done`）。

@@ -28,6 +28,13 @@ pub struct IntakeItem {
     pub error: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// `question`／`code_change`；尚未分類為 `None`。
+    pub kind: Option<String>,
+    /// 派工前的 git HEAD，驗證時用來算「這次改了什麼」。
+    pub snapshot_head: Option<String>,
+    /// 驗證結果的文字報告（也會附在回信裡）。
+    pub verification: Option<String>,
+    pub verified: Option<bool>,
 }
 
 pub struct NewItem<'a> {
@@ -80,6 +87,25 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ] {
         sqlx::query(q).execute(pool).await?;
     }
+    // 第 2 期新增的欄位。CREATE 是 IF NOT EXISTS，舊資料庫不會自動長出來，逐欄補。
+    let have: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('intake_items')").fetch_all(pool).await?;
+    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER")] {
+        if !have.iter().any(|c| c == col) {
+            sqlx::query(&format!("ALTER TABLE intake_items ADD COLUMN {col} {ty}")).execute(pool).await?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn set_kind(pool: &SqlitePool, id: &str, kind: &str, snapshot_head: Option<&str>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE intake_items SET kind = ?, snapshot_head = ?, updated_at = ? WHERE id = ?")
+        .bind(kind).bind(snapshot_head).bind(now()).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn set_verification(pool: &SqlitePool, id: &str, report: &str, passed: bool) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE intake_items SET verification = ?, verified = ?, updated_at = ? WHERE id = ?")
+        .bind(report).bind(passed).bind(now()).bind(id).execute(pool).await?;
     Ok(())
 }
 
@@ -330,6 +356,22 @@ mod tests {
         claim_next(&p, "t").await.unwrap();
         assert_eq!(recover_interrupted(&p).await.unwrap(), 1);
         assert_eq!(list_items(&p, Some(PENDING)).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn old_database_gains_phase2_columns_and_keeps_rows() {
+        let p = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE intake_items (id TEXT PRIMARY KEY NOT NULL, source TEXT NOT NULL, sender TEXT NOT NULL, sender_level TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, message_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, tab_id TEXT, reply_draft TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+            .execute(&p).await.unwrap();
+        sqlx::query("INSERT INTO intake_items VALUES ('o','email','a@b.c','external','s','b','m','pending',NULL,NULL,NULL,1,1)").execute(&p).await.unwrap();
+        init_schema(&p).await.unwrap();
+        init_schema(&p).await.unwrap(); // 冪等
+        let it = get_item(&p, "o").await.unwrap().unwrap();
+        assert_eq!((it.kind, it.verified), (None, None));
+        set_kind(&p, "o", "code_change", Some("abc")).await.unwrap();
+        set_verification(&p, "o", "報告", true).await.unwrap();
+        let it = get_item(&p, "o").await.unwrap().unwrap();
+        assert_eq!((it.kind.as_deref(), it.snapshot_head.as_deref(), it.verified), (Some("code_change"), Some("abc"), Some(true)));
     }
 
     #[tokio::test]

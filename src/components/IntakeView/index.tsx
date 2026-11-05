@@ -116,8 +116,19 @@ function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unkno
       <p className="intake__meta">
         {item.sender} · {item.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external} · {item.source}
       </p>
+      {item.kind && (
+        <p className="intake__meta">{item.kind === "code_change" ? t.intake_kind_code_change : t.intake_kind_question}</p>
+      )}
       {item.error && <p className="intake__error">{item.error}</p>}
       <pre className="intake__text">{item.body}</pre>
+      {item.verification && (
+        <section>
+          <h4 className={item.verified ? "intake__ok" : "intake__error"}>
+            {item.verified ? t.intake_verify_passed : t.intake_verify_failed}
+          </h4>
+          <pre className="intake__text">{item.verification}</pre>
+        </section>
+      )}
       <div className="intake__actions">
         {item.status === "pending" && (
           <>
@@ -288,6 +299,23 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
           min={0}
           value={cfg.rate_limit_per_hour}
           onChange={(e) => set("rate_limit_per_hour", Math.max(0, Number(e.target.value) || 0))}
+        />
+      </label>
+      <label className="intake__field">
+        {t.intake_set_verify_command}
+        <input
+          value={cfg.verify_command}
+          placeholder="npm test"
+          onChange={(e) => set("verify_command", e.target.value)}
+        />
+      </label>
+      <label className="intake__field">
+        {t.intake_set_verify_timeout}
+        <input
+          type="number"
+          min={1}
+          value={cfg.verify_timeout_secs}
+          onChange={(e) => set("verify_timeout_secs", Math.max(1, Number(e.target.value) || 1))}
         />
       </label>
       <div className="intake__actions">

@@ -28,7 +28,8 @@ const t = translations["zh-TW"];
 function item(over: Partial<IntakeItem>): IntakeItem {
   return {
     id: "1", source: "email", sender: "bob@corp.com", sender_level: "external", subject: "壞掉了", body: "請修",
-    message_id: "m", status: "pending", tab_id: null, reply_draft: null, error: null, created_at: 0, updated_at: 0, ...over,
+    message_id: "m", status: "pending", tab_id: null, reply_draft: null, error: null, created_at: 0, updated_at: 0,
+    kind: null, snapshot_head: null, verification: null, verified: null, ...over,
   };
 }
 const wrap = () => render(<LocaleProvider><IntakeView /></LocaleProvider>);
@@ -87,12 +88,25 @@ describe("IntakeView", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("SMTP 認證失敗");
   });
 
+  it("shows the verification report, and marks a failed one as failed", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([
+      item({ status: "draft", reply_draft: "r", kind: "code_change", verified: false, verification: "測試未通過：npm test" }),
+    ]);
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    expect(await screen.findByText("測試未通過：npm test")).toBeInTheDocument();
+    expect(screen.getByText(t.intake_verify_failed)).toBeInTheDocument();
+    expect(screen.queryByText(t.intake_verify_passed)).toBeNull();
+    expect(screen.getByText(t.intake_kind_code_change)).toBeInTheDocument();
+  });
+
   it("settings: adds an allowlist sender only with a valid address and saves config", async () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([]);
     vi.mocked(ipc.intakeGetConfig).mockResolvedValue({
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
+      verify_command: "", verify_timeout_secs: 600,
     });
     wrap();
     fireEvent.click(await screen.findByText(t.intake_settings));
@@ -106,8 +120,11 @@ describe("IntakeView", () => {
       expect(ipc.intakeUpsertSender).toHaveBeenCalledWith({ address: "bob@corp.com", level: "internal", skip_auth: false }),
     );
     fireEvent.click(screen.getByLabelText(t.intake_set_enabled));
+    fireEvent.change(screen.getByLabelText(t.intake_set_verify_command), { target: { value: "npm test" } });
     fireEvent.click(screen.getByText(t.intake_set_save));
-    await waitFor(() => expect(ipc.intakeSetConfig).toHaveBeenCalledWith(expect.objectContaining({ enabled: true })));
+    await waitFor(() =>
+      expect(ipc.intakeSetConfig).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, verify_command: "npm test" })),
+    );
     expect(screen.getByText(/not_allowed 3/)).toBeInTheDocument();
   });
 });

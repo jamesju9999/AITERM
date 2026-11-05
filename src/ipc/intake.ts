@@ -20,6 +20,10 @@ export interface IntakeItem {
   error: string | null;
   created_at: number;
   updated_at: number;
+  kind: "question" | "code_change" | null;
+  snapshot_head: string | null;
+  verification: string | null;
+  verified: boolean | null;
 }
 
 export interface IntakeConfig {
@@ -35,6 +39,8 @@ export interface IntakeConfig {
   reply_internal_auto: boolean;
   reply_external_auto: boolean;
   rate_limit_per_hour: number;
+  verify_command: string;
+  verify_timeout_secs: number;
 }
 
 export interface IntakeSender {
