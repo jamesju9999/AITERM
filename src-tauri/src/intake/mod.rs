@@ -4,6 +4,7 @@ pub mod config;
 pub mod filter;
 pub mod mail_source;
 pub mod rules;
+pub mod smtp;
 pub mod store;
 
 use sqlx::sqlite::SqliteConnectOptions;
