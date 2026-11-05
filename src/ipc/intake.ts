@@ -42,6 +42,8 @@ export interface IntakeConfig {
   verify_command: string;
   verify_timeout_secs: number;
   telegram_enabled: boolean;
+  web_mode: "off" | "local" | "lan";
+  web_port: number;
 }
 
 export interface IntakeSender {

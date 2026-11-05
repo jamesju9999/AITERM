@@ -44,6 +44,12 @@ pub fn install(app: &AppHandle, activity: &Arc<ClaudeActivity>) {
         _ => {}
     }));
 
+    app.manage(Arc::new(super::web::WebServer::default()));
+    let h = app.clone();
+    tauri::async_runtime::spawn(async move {
+        super::web::restart(&h).await;
+    });
+
     let h = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
@@ -163,6 +169,32 @@ async fn finish_item(app: &AppHandle, tab: &str, item_id: &str, answer: Option<S
     }
 }
 
+/// 收集用郵件帳號與它的密碼。
+fn mail_creds(app: &AppHandle, account_id: &str) -> Result<(crate::config::types::MailAccountConfig, String), String> {
+    let account = app
+        .state::<Arc<ConfigStore>>()
+        .get()
+        .mail_accounts
+        .into_iter()
+        .find(|a| a.id == account_id)
+        .ok_or("找不到收集用的郵件帳號")?;
+    let password = app
+        .state::<Arc<SecretStore>>()
+        .get(&crate::mail::poller::mail_secret_key(&account.id))
+        .map_err(|e| e.to_string())?
+        .ok_or("這個帳號沒有儲存密碼")?;
+    Ok((account, password))
+}
+
+/// 用收集帳號寄一封一般信（網頁表單的驗證碼）。
+pub async fn send_plain_mail(app: &AppHandle, to: &str, subject: &str, body: &str) -> Result<(), String> {
+    let db = app.try_state::<IntakeDb>().ok_or("intake 未就緒")?;
+    let cfg = config::load(&db.pool).await;
+    let (account, password) = mail_creds(app, &cfg.account_id)?;
+    let msg = smtp::build_plain(&account.email, to, subject, body)?;
+    smtp::send(&account.smtp_host, account.smtp_port, &account.username, &password, msg).await
+}
+
 /// 寄出草稿（`draft → done`）。
 pub async fn send_reply(app: &AppHandle, item_id: &str) -> Result<(), String> {
     let db = app.try_state::<IntakeDb>().ok_or("intake 未就緒")?;
@@ -186,20 +218,11 @@ pub async fn send_reply(app: &AppHandle, item_id: &str) -> Result<(), String> {
         changed(app);
         return Ok(());
     }
+    // 信件與網頁表單都以電子郵件回覆。
     let cfg = config::load(&db.pool).await;
-    let account = app
-        .state::<Arc<ConfigStore>>()
-        .get()
-        .mail_accounts
-        .into_iter()
-        .find(|a| a.id == cfg.account_id)
-        .ok_or("找不到收集用的郵件帳號")?;
-    let password = app
-        .state::<Arc<SecretStore>>()
-        .get(&crate::mail::poller::mail_secret_key(&account.id))
-        .map_err(|e| e.to_string())?
-        .ok_or("這個帳號沒有儲存密碼")?;
-    let orig_id = if item.message_id.starts_with("nomid:") { "" } else { item.message_id.as_str() };
+    let (account, password) = mail_creds(app, &cfg.account_id)?;
+    // 只有真的來自信件的項目才有可以串信的 Message-ID（網頁表單與無 ID 的信沒有）。
+    let orig_id = if item.source == "email" && !item.message_id.starts_with("nomid:") { item.message_id.as_str() } else { "" };
     let msg = smtp::build_reply(&smtp::Outgoing {
         from: &account.email,
         to: &item.sender,

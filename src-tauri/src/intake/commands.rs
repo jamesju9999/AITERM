@@ -22,8 +22,11 @@ pub async fn intake_get_config(db: State<'_, IntakeDb>) -> Result<Config, String
 }
 
 #[tauri::command]
-pub async fn intake_set_config(db: State<'_, IntakeDb>, config: Config) -> Result<(), String> {
-    config::save(&db.pool, &config).await.map_err(e)
+pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, config: Config) -> Result<(), String> {
+    config::save(&db.pool, &config).await.map_err(e)?;
+    // 網頁表單的開關／埠號可能變了。
+    super::web::restart(&app).await;
+    Ok(())
 }
 
 #[tauri::command]

@@ -18,6 +18,13 @@ pub fn reply_subject(orig: &str) -> String {
     if t.len() >= 3 && t[..3].eq_ignore_ascii_case("re:") { t.to_string() } else { format!("Re: {t}") }
 }
 
+/// 一般信件（驗證碼等），不帶串信標頭、主旨原樣。
+pub fn build_plain(from: &str, to: &str, subject: &str, body: &str) -> Result<Message, String> {
+    let from: Mailbox = from.parse().map_err(|e| format!("寄件地址無效：{e}"))?;
+    let to: Mailbox = to.parse().map_err(|e| format!("收件地址無效：{e}"))?;
+    Message::builder().from(from).to(to).subject(subject).body(body.to_string()).map_err(|e| e.to_string())
+}
+
 pub fn build_reply(o: &Outgoing<'_>) -> Result<Message, String> {
     let from: Mailbox = o.from.parse().map_err(|e| format!("寄件地址無效：{e}"))?;
     let to: Mailbox = o.to.parse().map_err(|e| format!("收件地址無效：{e}"))?;
@@ -60,6 +67,14 @@ mod tests {
         assert!(raw.contains("References: <abc@corp>"), "{raw}");
         assert!(raw.contains("Subject: Re: q"), "{raw}");
         assert!(raw.contains("bob@corp.com"));
+    }
+
+    #[test]
+    fn plain_mail_keeps_subject_and_has_no_threading_headers() {
+        let m = build_plain("me@home.com", "bob@corp.com", "驗證碼", "123456").unwrap();
+        let raw = String::from_utf8(m.formatted()).unwrap();
+        assert!(raw.contains("bob@corp.com") && !raw.contains("In-Reply-To"), "{raw}");
+        assert!(build_plain("x", "bob@corp.com", "s", "b").is_err());
     }
 
     #[test]

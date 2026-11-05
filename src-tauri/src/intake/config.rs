@@ -11,6 +11,15 @@ pub enum DispatchMode {
     Manual,
 }
 
+/// 網頁表單的開放範圍。外網沒有獨立模式：`Lan` 綁 0.0.0.0，要從外網進來請自備反向代理／Tunnel。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebMode {
+    Off,
+    Local,
+    Lan,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -34,6 +43,8 @@ pub struct Config {
     pub verify_timeout_secs: u64,
     /// 是否接收 Telegram 來的問題（需先在設定裡設好機器人）。
     pub telegram_enabled: bool,
+    pub web_mode: WebMode,
+    pub web_port: u16,
 }
 
 impl Default for Config {
@@ -54,6 +65,8 @@ impl Default for Config {
             verify_command: String::new(),
             verify_timeout_secs: 600,
             telegram_enabled: false,
+            web_mode: WebMode::Off,
+            web_port: 8320,
         }
     }
 }

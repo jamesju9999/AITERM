@@ -13,6 +13,7 @@ pub mod smtp;
 pub mod telegram_source;
 pub mod store;
 pub mod verify;
+pub mod web;
 
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::SqlitePool;

@@ -106,7 +106,7 @@ describe("IntakeView", () => {
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320,
     });
     wrap();
     fireEvent.click(await screen.findByText(t.intake_settings));
@@ -126,6 +126,26 @@ describe("IntakeView", () => {
       expect(ipc.intakeSetConfig).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, verify_command: "npm test" })),
     );
     expect(screen.getByText(/not_allowed 3/)).toBeInTheDocument();
+  });
+
+  it("web form: LAN mode warns about exposure and the port only shows when enabled", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue({
+      enabled: true, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
+      internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
+      reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320,
+    });
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    const select = (await screen.findByLabelText(t.intake_set_web)) as HTMLSelectElement;
+    expect(screen.queryByLabelText(t.intake_set_web_port)).toBeNull();
+    expect(screen.queryByText(t.intake_web_lan_warning)).toBeNull();
+    fireEvent.change(select, { target: { value: "local" } });
+    expect(screen.getByLabelText(t.intake_set_web_port)).toBeInTheDocument();
+    expect(screen.queryByText(t.intake_web_lan_warning)).toBeNull();
+    fireEvent.change(select, { target: { value: "lan" } });
+    expect(screen.getByText(t.intake_web_lan_warning)).toBeInTheDocument();
   });
 
   it("accepts telegram chat ids in the allowlist but rejects malformed addresses", () => {

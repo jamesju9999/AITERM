@@ -250,6 +250,30 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
       </label>
       <p className="intake__meta">{t.intake_set_telegram_hint}</p>
       <label className="intake__field">
+        {t.intake_set_web}
+        <select value={cfg.web_mode} onChange={(e) => set("web_mode", e.target.value as IntakeConfig["web_mode"])}>
+          <option value="off">{t.intake_web_off}</option>
+          <option value="local">{t.intake_web_local}</option>
+          <option value="lan">{t.intake_web_lan}</option>
+        </select>
+        {cfg.web_mode !== "off" && (
+          <input
+            type="number"
+            aria-label={t.intake_set_web_port}
+            min={1024}
+            max={65535}
+            value={cfg.web_port}
+            onChange={(e) => set("web_port", Math.min(65535, Math.max(1024, Number(e.target.value) || 8320)))}
+          />
+        )}
+      </label>
+      {cfg.web_mode !== "off" && (
+        <p className="intake__meta">
+          {t.intake_web_url}：http://{cfg.web_mode === "lan" ? "<本機 IP>" : "127.0.0.1"}:{cfg.web_port}/
+        </p>
+      )}
+      {cfg.web_mode === "lan" && <p className="intake__error">{t.intake_web_lan_warning}</p>}
+      <label className="intake__field">
         {t.intake_set_account}
         <select value={cfg.account_id} onChange={(e) => set("account_id", e.target.value)}>
           <option value="">—</option>
