@@ -264,6 +264,39 @@ mod tests {
     }
 
     #[test]
+    fn settings_json_also_hooks_stop_for_intake() {
+        let v: serde_json::Value = serde_json::from_str(&settings_json("http://h/activity/s/sid")).unwrap();
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["url"], "http://h/activity/s/sid/turn-end");
+    }
+
+    #[tokio::test]
+    async fn observer_sees_prompt_and_turn_end_through_the_real_handler() {
+        let (a, _) = activity("observer");
+        let seen: Arc<StdMutex<Vec<(String, String, Value)>>> = Arc::default();
+        let sink = seen.clone();
+        a.set_observer(Arc::new(move |sid, kind, body| {
+            sink.lock().unwrap().push((sid.to_owned(), kind.to_owned(), body.clone()));
+        }));
+        let st = Arc::new(HandlerState { activity: a.clone(), secret: "k".into() });
+        let call = |kind: &str, body: Value, secret: &str| {
+            handle(
+                State(st.clone()),
+                AxPath((secret.to_owned(), "pty-1".to_owned(), kind.to_owned())),
+                axum::body::Bytes::from(body.to_string()),
+            )
+        };
+        assert_eq!(call("prompt", json!({"prompt": "[INTAKE#abcd1234] hi"}), "k").await, "{}");
+        call("turn-end", json!({"transcript_path": "/x"}), "k").await;
+        // 密鑰不對的請求（本機其他程式亂打）不可驚動觀察者。
+        call("turn-end", json!({}), "wrong").await;
+        let got = seen.lock().unwrap().clone();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got[0].1, "prompt");
+        assert_eq!(got[0].2["prompt"], "[INTAKE#abcd1234] hi");
+        assert_eq!((got[1].0.as_str(), got[1].1.as_str()), ("pty-1", "turn-end"));
+    }
+
+    #[test]
     fn prepare_writes_a_settings_file_and_returns_its_path_in_env() {
         let (a, _) = activity("prepare");
         let env = a.prepare("sess-1");
