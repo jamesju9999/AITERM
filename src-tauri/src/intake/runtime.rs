@@ -7,7 +7,7 @@ use crate::pty::PtyManager;
 use crate::secret::SecretStore;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 pub struct IntakeRuntime {
     pub registry: dispatcher::Registry,
@@ -15,12 +15,12 @@ pub struct IntakeRuntime {
     tick_lock: tokio::sync::Mutex<()>,
 }
 
-fn changed(app: &AppHandle) {
+fn changed<R: Runtime>(app: &AppHandle<R>) {
     let _ = app.emit(CHANGED_EVENT, ());
 }
 
 /// 在 `setup` 裡呼叫一次：掛 hook 觀察者並啟動派送迴圈。
-pub fn install(app: &AppHandle, activity: &Arc<ClaudeActivity>) {
+pub fn install<R: Runtime>(app: &AppHandle<R>, activity: &Arc<ClaudeActivity>) {
     let rt = Arc::new(IntakeRuntime { registry: dispatcher::Registry::default(), tick_lock: tokio::sync::Mutex::new(()) });
     app.manage(rt.clone());
 
@@ -60,7 +60,7 @@ pub fn install(app: &AppHandle, activity: &Arc<ClaudeActivity>) {
 }
 
 /// 一次掃描：清掉已關閉的分頁，再把可派的問題派給閒置分頁。
-pub async fn tick(app: &AppHandle) {
+pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
     let (Some(db), Some(rt), Some(pty)) = (
         app.try_state::<IntakeDb>(),
         app.try_state::<Arc<IntakeRuntime>>(),
@@ -104,7 +104,7 @@ pub async fn tick(app: &AppHandle) {
 }
 
 /// 派工前：初篩分類；「要改程式」的記下 git HEAD 供事後驗證。任何失敗都退成「要改程式」。
-async fn prepare(app: &AppHandle, pool: &sqlx::SqlitePool, pty: &PtyManager, item: &store::IntakeItem, tab: &str) {
+async fn prepare<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, pty: &PtyManager, item: &store::IntakeItem, tab: &str) {
     let kind = match app.try_state::<AiRouter>() {
         Some(router) => match router.resolve().await {
             Ok(provider) => tokio::time::timeout(Duration::from_secs(30), classify::classify(provider, &item.subject, &item.body))
@@ -118,7 +118,7 @@ async fn prepare(app: &AppHandle, pool: &sqlx::SqlitePool, pty: &PtyManager, ite
     };
     let head = if kind == classify::Kind::CodeChange {
         match pty.get_cwd(tab) {
-            Some(cwd) => verify::head(&cwd).await,
+            Some(cwd) => verify::snapshot(&cwd).await,
             None => None,
         }
     } else {
@@ -128,7 +128,7 @@ async fn prepare(app: &AppHandle, pool: &sqlx::SqlitePool, pty: &PtyManager, ite
 }
 
 /// Agent 這一輪結束：（要改程式的）驗證、存回覆，必要時自動寄出，最後釋放分頁。
-pub async fn complete(app: &AppHandle, tab: &str, item_id: &str, answer: Option<String>) {
+pub async fn complete<R: Runtime>(app: &AppHandle<R>, tab: &str, item_id: &str, answer: Option<String>) {
     finish_item(app, tab, item_id, answer).await;
     if let Some(rt) = app.try_state::<Arc<IntakeRuntime>>() {
         rt.registry.release(tab);
@@ -136,7 +136,7 @@ pub async fn complete(app: &AppHandle, tab: &str, item_id: &str, answer: Option<
     changed(app);
 }
 
-async fn finish_item(app: &AppHandle, tab: &str, item_id: &str, answer: Option<String>) {
+async fn finish_item<R: Runtime>(app: &AppHandle<R>, tab: &str, item_id: &str, answer: Option<String>) {
     let Some(db) = app.try_state::<IntakeDb>() else { return };
     let Some(answer) = answer else {
         store::fail(&db.pool, item_id, "無法取得 Agent 的回答").await.ok();
@@ -173,16 +173,18 @@ async fn finish_item(app: &AppHandle, tab: &str, item_id: &str, answer: Option<S
 }
 
 /// 收集用郵件帳號與它的密碼。
-fn mail_creds(app: &AppHandle, account_id: &str) -> Result<(crate::config::types::MailAccountConfig, String), String> {
+fn mail_creds<R: Runtime>(app: &AppHandle<R>, account_id: &str) -> Result<(crate::config::types::MailAccountConfig, String), String> {
     let account = app
-        .state::<Arc<ConfigStore>>()
+        .try_state::<Arc<ConfigStore>>()
+        .ok_or("設定尚未就緒")?
         .get()
         .mail_accounts
         .into_iter()
         .find(|a| a.id == account_id)
         .ok_or("找不到收集用的郵件帳號")?;
     let password = app
-        .state::<Arc<SecretStore>>()
+        .try_state::<Arc<SecretStore>>()
+        .ok_or("密鑰庫尚未就緒")?
         .get(&crate::mail::poller::mail_secret_key(&account.id))
         .map_err(|e| e.to_string())?
         .ok_or("這個帳號沒有儲存密碼")?;
@@ -190,7 +192,7 @@ fn mail_creds(app: &AppHandle, account_id: &str) -> Result<(crate::config::types
 }
 
 /// 用收集帳號寄一封一般信（網頁表單的驗證碼）。
-pub async fn send_plain_mail(app: &AppHandle, to: &str, subject: &str, body: &str) -> Result<(), String> {
+pub async fn send_plain_mail<R: Runtime>(app: &AppHandle<R>, to: &str, subject: &str, body: &str) -> Result<(), String> {
     let db = app.try_state::<IntakeDb>().ok_or("intake 未就緒")?;
     let cfg = config::load(&db.pool).await;
     let (account, password) = mail_creds(app, &cfg.account_id)?;
@@ -199,7 +201,7 @@ pub async fn send_plain_mail(app: &AppHandle, to: &str, subject: &str, body: &st
 }
 
 /// 寄出草稿（`draft → done`）。
-pub async fn send_reply(app: &AppHandle, item_id: &str) -> Result<(), String> {
+pub async fn send_reply<R: Runtime>(app: &AppHandle<R>, item_id: &str) -> Result<(), String> {
     let db = app.try_state::<IntakeDb>().ok_or("intake 未就緒")?;
     let item = store::get_item(&db.pool, item_id).await.map_err(|e| e.to_string())?.ok_or("找不到項目")?;
     if item.status != store::DRAFT {
@@ -212,7 +214,8 @@ pub async fn send_reply(app: &AppHandle, item_id: &str) -> Result<(), String> {
     if item.source == "telegram" {
         let (chat, reply_to) = super::telegram_source::reply_target(&item.sender, &item.message_id).ok_or("無法判斷要回覆的 Telegram 聊天室")?;
         let token = app
-            .state::<Arc<SecretStore>>()
+            .try_state::<Arc<SecretStore>>()
+            .ok_or("密鑰庫尚未就緒")?
             .get(crate::telegram::TELEGRAM_SECRET_ID)
             .map_err(|e| e.to_string())?
             .ok_or("尚未設定 Telegram 機器人")?;

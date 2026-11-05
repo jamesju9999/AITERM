@@ -267,7 +267,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 
 /// 伺服器需要的外部能力都從這裡注入：測試不必起一個完整的 Tauri 應用。
@@ -371,7 +371,7 @@ pub fn router(st: Arc<WebState>) -> Router {
 }
 
 /// 依目前設定（重新）啟動網頁表單伺服器。
-pub async fn restart(app: &AppHandle) {
+pub async fn restart<R: Runtime>(app: &AppHandle<R>) {
     let Some(server) = app.try_state::<Arc<WebServer>>() else { return };
     if let Some(h) = server.handle.lock().take() {
         h.abort();

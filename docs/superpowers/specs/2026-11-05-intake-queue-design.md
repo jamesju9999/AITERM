@@ -142,3 +142,5 @@ macOS／Windows／Linux 皆適用：SMTP 使用 `lettre`（rustls，與專案 TL
 8. 郵件輪詢對「問題收集專用帳號」略過逐封 LLM 分類（信箱分頁本來就隱藏，白花額度）。設定頁的郵件帳號入口已重新開放（問題收集需要帳號）。
 9. 郵件輪詢目前會在沒有設定 AI 供應商時整輪失敗（既有行為），問題收集因此也收不到信。
 10. **附圖**（2026-11-05 追加）：Email 附件、Telegram 圖片（含以檔案傳的圖）、網頁表單上傳（base64）都會存到 `AITERM/intake-attachments/<項目id>/`，表 `intake_attachments` 對應。只收 PNG/JPEG/GIF/WebP，**副檔名與 MIME 由檔案內容的魔術位元組決定**（SVG 不收）；每項最多 5 張、單張 10MB，超過或非圖片的略過並在內文註記數量。圖片在項目入庫前就存好，Agent 一定看得到；重複的信不留孤兒檔。Telegram 圖片在確認寄件者被允許之後才下載。派工提示列出每張圖的絕對路徑，要求 Agent 先用 Read 工具查看。前端詳情頁顯示縮圖（`intake_attachment_data` 只讀附圖目錄內的檔案）。僅有附圖、沒有文字也算有效問題。回信不帶附圖。
+11. **演練**（`src-tauri/src/intake/rehearsal/`，`#[ignore]`）：假 claude（`fake_claude.py`，讀 `--settings` 的 hook 網址）＋假信箱（.eml）＋真 PTY／真 shell 的 `claude` 包裝函式／真 hook 接收器／真 git repo，整條管線跑一遍：`cargo test --lib intake::rehearsal -- --ignored --nocapture`。使用者的 rc 會重設 PATH，所以要等 shell 起來後才把假 claude 放到 PATH 最前面（否則會跑到真的 claude）。**沒涵蓋** IMAP／SMTP／Telegram 的真實網路傳輸（IMAP 走系統信任的 TLS，假伺服器需要把自簽憑證加進 keychain，故不做）。
+12. **驗證改用內容指紋**（演練抓到）：原本以派工前的 `git HEAD` 為基準，前一題留下的未 commit 修改會被算到下一題。改成派工前後各算一次工作區 tree 指紋（暫時 index ＋ `write-tree`，不動真正的 index、不產生 commit、遵守 .gitignore），兩者的差才是這一題改的；Agent 自己 commit 也算得到。

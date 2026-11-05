@@ -11,20 +11,38 @@ async fn git(cwd: &Path, args: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-pub async fn head(cwd: &Path) -> Option<String> {
-    git(cwd, &["rev-parse", "HEAD"]).await.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+/// 目前工作區的內容指紋：把所有未被忽略的檔案（含未追蹤）寫進一個**暫時的** index 再 `write-tree`，
+/// 回傳 tree sha。不動使用者真正的 index、不產生 commit。
+///
+/// 用內容指紋而不是 HEAD：前一個問題留下的未 commit 修改、或 Agent 自己 commit 了，
+/// 都不會被算到這一題頭上——兩個指紋的差才是「這一題真正改了什麼」。
+pub async fn snapshot(cwd: &Path) -> Option<String> {
+    git(cwd, &["rev-parse", "--is-inside-work-tree"]).await?;
+    let idx = std::env::temp_dir().join(format!("aiterm-intake-index-{}", uuid::Uuid::new_v4()));
+    let run = |args: &'static [&'static str]| {
+        let idx = idx.clone();
+        let cwd = cwd.to_path_buf();
+        async move {
+            let out = Command::new("git").args(args).current_dir(&cwd).env("GIT_INDEX_FILE", &idx).stdin(Stdio::null()).output().await.ok()?;
+            out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        }
+    };
+    let tree = async {
+        run(&["add", "-A"]).await?;
+        run(&["write-tree"]).await.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    }
+    .await;
+    let _ = std::fs::remove_file(&idx);
+    tree
 }
 
-/// 自 `base` 以來變動的檔案（含已 commit、未 commit、未追蹤）。
+/// 自 `base`（先前的 `snapshot`）以來內容有變的檔案。
 pub async fn changed_files(cwd: &Path, base: &str) -> Vec<String> {
-    let mut set = std::collections::BTreeSet::new();
-    if let Some(d) = git(cwd, &["diff", "--name-only", base]).await {
-        set.extend(d.lines().map(str::to_string));
-    }
-    if let Some(u) = git(cwd, &["ls-files", "--others", "--exclude-standard"]).await {
-        set.extend(u.lines().map(str::to_string));
-    }
-    set.into_iter().filter(|l| !l.trim().is_empty()).collect()
+    let Some(now) = snapshot(cwd).await else { return vec![] };
+    git(cwd, &["diff-tree", "-r", "--name-only", base, &now])
+        .await
+        .map(|d| d.lines().map(str::to_string).filter(|l| !l.trim().is_empty()).collect())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +98,8 @@ pub struct Report {
     pub is_repo: bool,
     pub files: Vec<String>,
     pub tests: Option<TestRun>,
+    /// 使用者有沒有設定測試指令（沒設定與「沒變更所以略過」要分開說）。
+    pub test_command_set: bool,
 }
 
 impl Report {
@@ -105,7 +125,8 @@ impl Report {
             }
         }
         match &self.tests {
-            None => s.push_str("未設定測試指令，未執行自動測試。\n"),
+            None if !self.test_command_set => s.push_str("未設定測試指令，未執行自動測試。\n"),
+            None => {} // 有設定但沒有變更可測，上面已說明沒有變更
             Some(t) if t.passed => s.push_str(&format!("測試通過：{}\n", t.command)),
             Some(t) if t.timed_out => s.push_str(&format!("測試逾時：{}\n{}\n", t.command, t.tail)),
             Some(t) => s.push_str(&format!("測試未通過：{}\n{}\n", t.command, t.tail)),
@@ -115,12 +136,12 @@ impl Report {
 }
 
 pub async fn verify(cwd: &Path, base: Option<&str>, test_command: &str, timeout: Duration) -> Report {
-    let Some(base) = base else { return Report { is_repo: false, files: vec![], tests: None } };
+    let Some(base) = base else { return Report { is_repo: false, files: vec![], tests: None, test_command_set: !test_command.trim().is_empty() } };
     let files = changed_files(cwd, base).await;
     let cmd = test_command.trim();
     // 沒有任何變更時不必浪費時間跑測試：結論已經是「沒修」。
     let tests = if cmd.is_empty() || files.is_empty() { None } else { Some(run_command(cwd, cmd, timeout).await) };
-    Report { is_repo: true, files, tests }
+    Report { is_repo: true, files, tests, test_command_set: !cmd.is_empty() }
 }
 
 #[cfg(test)]
@@ -144,16 +165,17 @@ mod tests {
     #[tokio::test]
     async fn no_changes_is_not_a_pass_and_tests_are_skipped() {
         let d = repo();
-        let base = head(d.path()).await.unwrap();
+        let base = snapshot(d.path()).await.unwrap();
         let r = verify(d.path(), Some(&base), "exit 1", T).await;
         assert!(r.files.is_empty() && r.tests.is_none() && !r.passed());
         assert!(r.text().contains("沒有偵測到任何檔案變更"));
+        assert!(!r.text().contains("未設定測試指令"), "有設定測試指令時不可說「未設定」：{}", r.text());
     }
 
     #[tokio::test]
     async fn sees_modified_untracked_and_committed_changes() {
         let d = repo();
-        let base = head(d.path()).await.unwrap();
+        let base = snapshot(d.path()).await.unwrap();
         std::fs::write(d.path().join("a.txt"), "2").unwrap();
         std::fs::write(d.path().join("new.txt"), "n").unwrap();
         assert_eq!(changed_files(d.path(), &base).await, vec!["a.txt".to_string(), "new.txt".to_string()]);
@@ -165,9 +187,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_earlier_items_uncommitted_changes_are_not_blamed_on_the_next_item() {
+        let d = repo();
+        std::fs::write(d.path().join("from_item_1.txt"), "x").unwrap(); // 上一題留下的，沒 commit
+        let base = snapshot(d.path()).await.unwrap();
+        // 這一題什麼都沒改
+        assert!(changed_files(d.path(), &base).await.is_empty());
+        let r = verify(d.path(), Some(&base), "echo fine", T).await;
+        assert!(!r.passed(), "{}", r.text());
+        // 這一題改了一個檔：只算這一個
+        std::fs::write(d.path().join("from_item_2.txt"), "y").unwrap();
+        assert_eq!(changed_files(d.path(), &base).await, vec!["from_item_2.txt".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn snapshot_leaves_the_real_index_and_history_alone_and_respects_gitignore() {
+        let d = repo();
+        std::fs::write(d.path().join(".gitignore"), "ignored.log\n").unwrap();
+        let base = snapshot(d.path()).await.unwrap();
+        std::fs::write(d.path().join("ignored.log"), "noise").unwrap();
+        assert!(changed_files(d.path(), &base).await.is_empty(), "被忽略的檔案不算變更");
+        let status = git(d.path(), &["status", "--porcelain"]).await.unwrap();
+        assert!(status.contains(".gitignore") && status.contains("??"), "真正的 index 沒被動到，.gitignore 仍是未追蹤：{status}");
+        assert_eq!(git(d.path(), &["rev-list", "--count", "HEAD"]).await.unwrap().trim(), "1", "沒有產生 commit");
+    }
+
+    #[tokio::test]
     async fn passing_and_failing_tests_decide_the_verdict() {
         let d = repo();
-        let base = head(d.path()).await.unwrap();
+        let base = snapshot(d.path()).await.unwrap();
         std::fs::write(d.path().join("a.txt"), "2").unwrap();
         let ok = verify(d.path(), Some(&base), "echo fine", T).await;
         assert!(ok.passed(), "{}", ok.text());
@@ -191,7 +239,7 @@ mod tests {
     #[tokio::test]
     async fn outside_a_git_repo_is_reported_not_passed() {
         let d = tempfile::tempdir().unwrap();
-        assert_eq!(head(d.path()).await, None);
+        assert_eq!(snapshot(d.path()).await, None);
         let r = verify(d.path(), None, "echo x", T).await;
         assert!(!r.passed() && r.text().contains("不在 git 專案內"));
     }

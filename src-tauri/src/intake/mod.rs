@@ -8,6 +8,8 @@ pub mod dispatcher;
 pub mod filter;
 pub mod mail_source;
 pub mod queue;
+#[cfg(test)]
+mod rehearsal;
 pub mod rules;
 pub mod runtime;
 pub mod smtp;
@@ -42,7 +44,7 @@ impl IntakeDb {
 }
 
 /// 郵件輪詢每收到一封信就呼叫。未啟用或不是指定帳號時什麼都不做。
-pub async fn on_mail(app: &tauri::AppHandle, account_id: &str, raw: &[u8]) {
+pub async fn on_mail<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_id: &str, raw: &[u8]) {
     use tauri::{Emitter, Manager};
     let Some(db) = app.try_state::<IntakeDb>() else { return };
     let cfg = config::load(&db.pool).await;
@@ -59,7 +61,7 @@ pub async fn on_mail(app: &tauri::AppHandle, account_id: &str, raw: &[u8]) {
 }
 
 /// 這個郵件帳號目前是不是問題收集專用的（已啟用且被選為收信帳號）。
-pub async fn owns_account(app: &tauri::AppHandle, account_id: &str) -> bool {
+pub async fn owns_account<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_id: &str) -> bool {
     use tauri::Manager;
     let Some(db) = app.try_state::<IntakeDb>() else { return false };
     let cfg = config::load(&db.pool).await;
@@ -68,7 +70,7 @@ pub async fn owns_account(app: &tauri::AppHandle, account_id: &str) -> bool {
 
 /// Telegram 收到訊息時呼叫（見 `telegram::poll_updates`）。回傳 `true` 表示訊息已由問題收集處理，
 /// 呼叫端不要再當一般訊息轉送。
-pub async fn on_telegram(app: &tauri::AppHandle, chat_id: i64, message_id: i64, text: &str, is_owner: bool, photos: Vec<String>) -> bool {
+pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: i64, message_id: i64, text: &str, is_owner: bool, photos: Vec<String>) -> bool {
     use tauri::{Emitter, Manager};
     let Some(db) = app.try_state::<IntakeDb>() else { return false };
     let cfg = config::load(&db.pool).await;

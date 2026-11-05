@@ -118,6 +118,7 @@ anydoc = "0.1.9"
 
 [dev-dependencies]
 wiremock = "0.6"
+tauri = { version = "2.10.3", features = ["test"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
