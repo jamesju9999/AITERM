@@ -174,6 +174,18 @@ pub async fn send_reply(app: &AppHandle, item_id: &str) -> Result<(), String> {
     if body.trim().is_empty() {
         return Err("回覆內容是空的".into());
     }
+    if item.source == "telegram" {
+        let (chat, reply_to) = super::telegram_source::reply_target(&item.sender, &item.message_id).ok_or("無法判斷要回覆的 Telegram 聊天室")?;
+        let token = app
+            .state::<Arc<SecretStore>>()
+            .get(crate::telegram::TELEGRAM_SECRET_ID)
+            .map_err(|e| e.to_string())?
+            .ok_or("尚未設定 Telegram 機器人")?;
+        crate::telegram::send_to_chat(&token, chat, &filter::redact(&body), reply_to).await?;
+        store::mark_sent(&db.pool, item_id).await.map_err(|e| e.to_string())?;
+        changed(app);
+        return Ok(());
+    }
     let cfg = config::load(&db.pool).await;
     let account = app
         .state::<Arc<ConfigStore>>()

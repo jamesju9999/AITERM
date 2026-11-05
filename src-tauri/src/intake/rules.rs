@@ -69,6 +69,16 @@ pub fn normalize(addr: &str) -> String {
     a.trim().to_lowercase()
 }
 
+/// 白名單可以放電子郵件地址，或 Telegram 聊天室 `tg:<chat_id>`。
+pub fn valid_address(addr: &str) -> bool {
+    let a = normalize(addr);
+    if let Some(id) = a.strip_prefix("tg:") {
+        return id.parse::<i64>().is_ok();
+    }
+    let mut parts = a.split('@');
+    matches!((parts.next(), parts.next(), parts.next()), (Some(l), Some(d), None) if !l.is_empty() && d.contains('.'))
+}
+
 fn domain_of(addr: &str) -> &str {
     addr.rsplit('@').next().unwrap_or("")
 }
@@ -198,6 +208,16 @@ mod tests {
         assert!(!addressed_to_us(&settings(MatchMode::AliasOrTag), &h));
         assert!(addressed_to_us(&settings(MatchMode::AliasOrTag), &hdr("a@b.c", &[], "[AITerm] x", &[])));
         assert!(addressed_to_us(&settings(MatchMode::Dedicated), &h));
+    }
+
+    #[test]
+    fn allowlist_addresses_are_emails_or_telegram_chats() {
+        for ok in ["a@b.co", "Bob <bob@corp.com>", "tg:12345", "tg:-1001234"] {
+            assert!(valid_address(ok), "{ok}");
+        }
+        for bad in ["", "nope", "a@b", "@b.co", "a@@b.co", "tg:", "tg:abc", "a@b.co@c.d"] {
+            assert!(!valid_address(bad), "{bad}");
+        }
     }
 
     #[test]

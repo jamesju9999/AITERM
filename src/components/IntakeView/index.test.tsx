@@ -1,6 +1,6 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { IntakeView } from "./index";
+import { IntakeView, validAddress } from "./index";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { translations } from "../../lib/i18n";
 import type { IntakeItem } from "../../ipc/intake";
@@ -106,7 +106,7 @@ describe("IntakeView", () => {
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false,
     });
     wrap();
     fireEvent.click(await screen.findByText(t.intake_settings));
@@ -126,5 +126,10 @@ describe("IntakeView", () => {
       expect(ipc.intakeSetConfig).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, verify_command: "npm test" })),
     );
     expect(screen.getByText(/not_allowed 3/)).toBeInTheDocument();
+  });
+
+  it("accepts telegram chat ids in the allowlist but rejects malformed addresses", () => {
+    for (const ok of ["a@b.co", "tg:123", "TG:-100123"]) expect(validAddress(ok), ok).toBe(true);
+    for (const bad of ["", "tg:", "tg:abc", "a@b", "a b@c.de", "@c.de"]) expect(validAddress(bad), bad).toBe(false);
   });
 });

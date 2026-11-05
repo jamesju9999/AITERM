@@ -45,8 +45,8 @@ pub async fn intake_senders(db: State<'_, IntakeDb>) -> Result<Vec<SenderDto>, S
 
 #[tauri::command]
 pub async fn intake_upsert_sender(db: State<'_, IntakeDb>, sender: SenderDto) -> Result<(), String> {
-    if !sender.address.contains('@') {
-        return Err("請輸入有效的電子郵件地址".into());
+    if !super::rules::valid_address(&sender.address) {
+        return Err("請輸入有效的電子郵件地址，或 Telegram 聊天室 tg:<chat_id>".into());
     }
     store::upsert_sender(&db.pool, &Sender { address: sender.address, level: sender.level, skip_auth: sender.skip_auth }).await.map_err(e)
 }

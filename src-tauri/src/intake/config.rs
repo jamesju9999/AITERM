@@ -32,6 +32,8 @@ pub struct Config {
     pub verify_command: String,
     /// 測試指令的逾時秒數。
     pub verify_timeout_secs: u64,
+    /// 是否接收 Telegram 來的問題（需先在設定裡設好機器人）。
+    pub telegram_enabled: bool,
 }
 
 impl Default for Config {
@@ -51,6 +53,7 @@ impl Default for Config {
             rate_limit_per_hour: 10,
             verify_command: String::new(),
             verify_timeout_secs: 600,
+            telegram_enabled: false,
         }
     }
 }

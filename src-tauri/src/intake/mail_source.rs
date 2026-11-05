@@ -2,9 +2,10 @@
 //!
 //! 先只看標頭做判斷；通過才讀內文入庫。不符合的信不寫進 `intake.db`
 //! （郵件分頁自己的快取不受影響），只累計丟棄計數。
-use super::config::{Config, DispatchMode};
-use super::rules::{self, Decision, Headers, Level};
-use super::store::{self, NewItem};
+use super::config::Config;
+use super::queue::{self, drop_reason, Ingested};
+use super::rules::{self, Decision, Headers};
+use super::store;
 use mail_parser::{HeaderValue, MessageParser};
 use sqlx::SqlitePool;
 
@@ -44,22 +45,6 @@ pub fn parse(raw: &[u8]) -> Option<Parsed> {
     })
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum Ingested {
-    Queued(String),
-    Duplicate,
-    Dropped(&'static str),
-}
-
-fn drop_reason(d: &rules::Drop) -> &'static str {
-    match d {
-        rules::Drop::NotForUs => "not_for_us",
-        rules::Drop::NotAllowed => "not_allowed",
-        rules::Drop::AuthFailed => "auth_failed",
-        rules::Drop::NoAuthHeader => "no_auth_header",
-    }
-}
-
 pub async fn ingest(pool: &SqlitePool, cfg: &Config, raw: &[u8]) -> Result<Ingested, sqlx::Error> {
     let Some(p) = parse(raw) else { return Ok(Ingested::Dropped("unparsable")) };
     let senders = store::list_senders(pool).await?;
@@ -74,29 +59,13 @@ pub async fn ingest(pool: &SqlitePool, cfg: &Config, raw: &[u8]) -> Result<Inges
         }
     };
     let sender = rules::normalize(&p.headers.from);
-    let since = chrono::Utc::now().timestamp() - 3600;
-    if cfg.rate_limit_per_hour > 0 && store::count_from_sender_since(pool, &sender, since).await? >= cfg.rate_limit_per_hour as i64 {
-        store::bump_dropped(pool, "rate_limited").await?;
-        return Ok(Ingested::Dropped("rate_limited"));
-    }
     // 沒有 Message-ID 的信無法去重，用內容雜湊代替，避免重複輪詢造成重複項目。
     let mid = if p.message_id.is_empty() {
         format!("nomid:{}:{}", sender, fnv(raw))
     } else {
         p.message_id.clone()
     };
-    let mode = match level {
-        Level::Internal => cfg.dispatch_internal,
-        Level::External => cfg.dispatch_external,
-    };
-    let status = if mode == DispatchMode::Auto { store::QUEUED } else { store::PENDING };
-    let item = store::insert_item(pool, NewItem {
-        source: "email", sender: &sender, level, subject: &p.headers.subject, body: &p.body, message_id: &mid, status,
-    }).await?;
-    Ok(match item {
-        Some(i) => Ingested::Queued(i.id),
-        None => Ingested::Duplicate,
-    })
+    queue::enqueue(pool, cfg, level, "email", &sender, &p.headers.subject, &p.body, &mid).await
 }
 
 fn fnv(b: &[u8]) -> u64 {
@@ -106,7 +75,7 @@ fn fnv(b: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intake::rules::{MatchMode, Sender};
+    use crate::intake::rules::{Level, MatchMode, Sender};
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn pool() -> SqlitePool {

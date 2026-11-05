@@ -41,6 +41,7 @@ export interface IntakeConfig {
   rate_limit_per_hour: number;
   verify_command: string;
   verify_timeout_secs: number;
+  telegram_enabled: boolean;
 }
 
 export interface IntakeSender {

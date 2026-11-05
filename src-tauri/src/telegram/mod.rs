@@ -9,7 +9,7 @@ use crate::secret::SecretStore;
 pub mod questions;
 pub use questions::mark_question_closed;
 
-const TELEGRAM_SECRET_ID: &str = "telegram_bot_token";
+pub(crate) const TELEGRAM_SECRET_ID: &str = "telegram_bot_token";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TelegramConfigData {
@@ -161,6 +161,12 @@ async fn poll_updates(app: AppHandle, token: String, allowed_chat_id: i64) {
                                             }
                                         }
                                     }
+                                    // 問題收集：主人用 `/ask ` 開頭的訊息進佇列，不當一般對話轉送。
+                                    if let Some(text) = msg.text.as_deref() {
+                                        if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, true).await {
+                                            continue;
+                                        }
+                                    }
                                     if let Some(text) = msg.text {
                                         let payload = TelegramMessagePayload { text };
                                         if let Err(e) = app.emit("telegram-message-received", payload) {
@@ -168,6 +174,12 @@ async fn poll_updates(app: AppHandle, token: String, allowed_chat_id: i64) {
                                         }
                                     }
                                 } else {
+                                    // 白名單內的其他聊天室可以送問題進問題收集；其餘照舊只記警告。
+                                    if let Some(text) = msg.text.as_deref() {
+                                        if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, false).await {
+                                            continue;
+                                        }
+                                    }
                                     warn!("Received message from unauthorized chat ID: {} (allowed: {})", msg.chat.id, allowed_chat_id);
                                 }
                             }
@@ -246,5 +258,24 @@ pub async fn telegram_send_message(
         return Err(format!("Failed to send message: {}", res.status()));
     }
 
+    Ok(())
+}
+
+/// 回覆到指定聊天室（可選擇回覆某則訊息）。過長的內容會切成多則。
+pub async fn send_to_chat(token: &str, chat_id: i64, text: &str, reply_to: Option<i64>) -> Result<(), String> {
+    let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+    let client = reqwest::Client::new();
+    for (i, part) in crate::intake::telegram_source::split_message(text, 4000).into_iter().enumerate() {
+        let mut body = serde_json::json!({ "chat_id": chat_id, "text": part });
+        if i == 0 {
+            if let Some(id) = reply_to {
+                body["reply_parameters"] = serde_json::json!({ "message_id": id, "allow_sending_without_reply": true });
+            }
+        }
+        let res = client.post(&url).json(&body).send().await.map_err(|e| e.to_string())?;
+        if !res.status().is_success() {
+            return Err(format!("Telegram 回覆失敗：HTTP {}", res.status()));
+        }
+    }
     Ok(())
 }

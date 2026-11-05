@@ -6,9 +6,11 @@ pub mod config;
 pub mod dispatcher;
 pub mod filter;
 pub mod mail_source;
+pub mod queue;
 pub mod rules;
 pub mod runtime;
 pub mod smtp;
+pub mod telegram_source;
 pub mod store;
 pub mod verify;
 
@@ -46,7 +48,7 @@ pub async fn on_mail(app: &tauri::AppHandle, account_id: &str, raw: &[u8]) {
         return;
     }
     match mail_source::ingest(&db.pool, &cfg, raw).await {
-        Ok(mail_source::Ingested::Queued(_)) => {
+        Ok(queue::Ingested::Queued(_)) => {
             let _ = app.emit(CHANGED_EVENT, ());
         }
         Ok(_) => {}
@@ -60,4 +62,24 @@ pub async fn owns_account(app: &tauri::AppHandle, account_id: &str) -> bool {
     let Some(db) = app.try_state::<IntakeDb>() else { return false };
     let cfg = config::load(&db.pool).await;
     cfg.enabled && cfg.account_id == account_id
+}
+
+/// Telegram 收到訊息時呼叫（見 `telegram::poll_updates`）。回傳 `true` 表示訊息已由問題收集處理，
+/// 呼叫端不要再當一般訊息轉送。
+pub async fn on_telegram(app: &tauri::AppHandle, chat_id: i64, message_id: i64, text: &str, is_owner: bool) -> bool {
+    use tauri::{Emitter, Manager};
+    let Some(db) = app.try_state::<IntakeDb>() else { return false };
+    let cfg = config::load(&db.pool).await;
+    match telegram_source::ingest(&db.pool, &cfg, chat_id, message_id, text, is_owner).await {
+        Ok(queue::Ingested::Queued(_)) => {
+            let _ = app.emit(CHANGED_EVENT, ());
+            true
+        }
+        Ok(queue::Ingested::Duplicate) => true,
+        Ok(queue::Ingested::Dropped(reason)) => reason != "not_for_us",
+        Err(e) => {
+            log::warn!("intake: telegram ingest failed: {e}");
+            false
+        }
+    }
 }

@@ -24,6 +24,13 @@ import "./index.css";
 
 const STATUSES: IntakeStatus[] = ["pending", "queued", "running", "draft", "done", "rejected"];
 
+/** 白名單接受電子郵件地址，或 Telegram 聊天室 `tg:<chat_id>`（與後端 `valid_address` 一致）。 */
+export function validAddress(a: string): boolean {
+  const v = a.trim().toLowerCase();
+  if (v.startsWith("tg:")) return /^tg:-?\d+$/.test(v);
+  return /^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$/.test(v);
+}
+
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -238,6 +245,11 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
         {t.intake_set_enabled}
       </label>
       <label className="intake__field">
+        <input type="checkbox" checked={cfg.telegram_enabled} onChange={(e) => set("telegram_enabled", e.target.checked)} />
+        {t.intake_set_telegram}
+      </label>
+      <p className="intake__meta">{t.intake_set_telegram_hint}</p>
+      <label className="intake__field">
         {t.intake_set_account}
         <select value={cfg.account_id} onChange={(e) => set("account_id", e.target.value)}>
           <option value="">—</option>
@@ -347,12 +359,12 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
         ))}
       </ul>
       <div className="intake__field">
-        <input aria-label={t.intake_sender_address} value={newAddr} placeholder="name@example.com" onChange={(e) => setNewAddr(e.target.value)} />
+        <input aria-label={t.intake_sender_address} value={newAddr} placeholder="name@example.com / tg:123456" onChange={(e) => setNewAddr(e.target.value)} />
         <select aria-label={t.intake_sender_level} value={newLevel} onChange={(e) => setNewLevel(e.target.value as Level)}>
           <option value="internal">{t.intake_level_internal}</option>
           <option value="external">{t.intake_level_external}</option>
         </select>
-        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={!newAddr.includes("@")} onClick={() => void addSender()}>
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={!validAddress(newAddr)} onClick={() => void addSender()}>
           {t.intake_add}
         </button>
       </div>
