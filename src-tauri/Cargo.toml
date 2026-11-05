@@ -38,6 +38,7 @@ tauri-plugin-autostart = "2"
 
 # PTY + shell management
 portable-pty = "0.8"
+regex = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 anyhow = "1"
 thiserror = "1"

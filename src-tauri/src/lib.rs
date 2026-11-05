@@ -14,6 +14,7 @@ pub mod db;
 pub mod document_convert;
 pub mod enterprise;
 pub mod guard;
+pub mod intake;
 pub mod knowledge_base;
 pub mod launch;
 pub mod quit;
