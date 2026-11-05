@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { IntakeView, validAddress } from "./index";
+import { IntakeView } from "./index";
+import { validAddress } from "../../lib/intakeAddress";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { translations } from "../../lib/i18n";
 import type { IntakeItem } from "../../ipc/intake";
