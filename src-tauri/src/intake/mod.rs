@@ -2,3 +2,4 @@
 //! 設計：docs/superpowers/specs/2026-11-05-intake-queue-design.md
 pub mod filter;
 pub mod rules;
+pub mod store;
