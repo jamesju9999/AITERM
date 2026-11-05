@@ -219,7 +219,7 @@ pub fn run() {
     // 建表延遲，而且整段都發生在 tauri::Builder 建立之前——app 連「開始
     // 建立視窗」都還沒開始。改成同一個 block_on 裡用 tokio::join! 平行跑。
     // 工作看板的專案（搬遷＋開啟每個專案的 tasks.db）也一起併進來。
-    let (usage_store, design_db, loop_session_db, kb_db, mail_db, project_registry) =
+    let (usage_store, design_db, loop_session_db, kb_db, mail_db, intake_db, project_registry) =
         tauri::async_runtime::block_on(async {
             tokio::join!(
                 async {
@@ -235,6 +235,7 @@ pub fn run() {
                 LoopSessionDb::new(),
                 db::knowledge_base::KnowledgeBaseDb::new(),
                 MailDb::new(),
+                intake::IntakeDb::new(),
                 load_projects(config.clone()),
             )
         });
@@ -297,6 +298,7 @@ pub fn run() {
         .manage(loop_session_db)
         .manage(kb_db)
         .manage(mail_db)
+        .manage(intake_db)
         .manage(project_registry)
         .manage(tokio::sync::Mutex::new(MailState::new()))
         .manage(Db2SidecarState::new(sidecar_path))

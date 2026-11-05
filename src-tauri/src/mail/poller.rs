@@ -856,6 +856,9 @@ async fn sync_and_persist(
                 continue;
             };
 
+            // 問題收集：只看標頭判斷，符合才入 intake.db；不影響下面郵件分頁的處理。
+            crate::intake::on_mail(app, &account.id, &raw.raw).await;
+
             let mut classification = classify_message(provider.clone(), &parsed.sender, &parsed.subject, &parsed.body_text)
                 .await
                 .unwrap_or_else(|e| {
