@@ -28,6 +28,10 @@ const STALE_AFTER: Duration = Duration::from_secs(7 * 24 * 3600);
 /// 狀態變更時的通知：(session id, 完整快照)。正式版 emit Tauri 事件，測試收進 Vec。
 pub type Emitter = Arc<dyn Fn(&str, &Snapshot) + Send + Sync>;
 
+/// 原始 hook 事件的觀察者：(session id, 事件名稱如 `prompt`／`turn-end`, 原始酬載)。
+/// 問題收集靠它知道派出去的提問是否已送出、這一輪是否結束；不影響 Tree。
+pub type HookObserver = Arc<dyn Fn(&str, &str, &Value) + Send + Sync>;
+
 /// 交給 `claude --settings` 的設定檔內容；`base` 是 `http://127.0.0.1:<port>/activity/<secret>/<sid>`。
 pub fn settings_json(base: &str) -> String {
     let hook = |path: &str| serde_json::json!([{ "hooks": [{ "type": "http", "url": format!("{base}/{path}") }] }]);
@@ -40,6 +44,8 @@ pub fn settings_json(base: &str) -> String {
             "SubagentStop": hook("sub-stop"),
             "SessionEnd": hook("session-end"),
             "UserPromptSubmit": hook("prompt"),
+            // 問題收集用：一輪回覆結束。不進 Tree，只通知觀察者。
+            "Stop": hook("turn-end"),
         }
     })
     .to_string()
@@ -83,9 +89,21 @@ pub struct ClaudeActivity {
     sessions: Mutex<HashMap<String, Tree>>,
     /// 第一次 `prepare` 時才啟動接收器；啟動失敗＝`None`（分頁照開，只是沒有側欄）。
     server: OnceLock<Option<HookServer>>,
+    observer: OnceLock<HookObserver>,
 }
 
 impl ClaudeActivity {
+    /// 只能設定一次；之後的呼叫被忽略。
+    pub fn set_observer(&self, o: HookObserver) {
+        let _ = self.observer.set(o);
+    }
+
+    fn observe(&self, session_id: &str, kind: &str, body: &Value) {
+        if let Some(o) = self.observer.get() {
+            o(session_id, kind, body);
+        }
+    }
+
     pub fn new(dir: PathBuf, emit: Emitter) -> Arc<Self> {
         purge_stale(&dir);
         Arc::new(Self {
@@ -93,6 +111,7 @@ impl ClaudeActivity {
             emit,
             sessions: Mutex::new(HashMap::new()),
             server: OnceLock::new(),
+            observer: OnceLock::new(),
         })
     }
 
@@ -182,8 +201,9 @@ async fn handle(
 ) -> &'static str {
     // 只接受自己發出去的網址；本機其他程式猜不到密鑰。
     if secret == st.secret {
+        let json: Value = serde_json::from_slice(&body).unwrap_or_default();
+        st.activity.observe(&sid, &kind, &json);
         if let Some(kind) = Kind::parse(&kind) {
-            let json: Value = serde_json::from_slice(&body).unwrap_or_default();
             st.activity.ingest(&sid, kind, &json, now_ms());
             if kind == Kind::SubStop {
                 if let (Some(agent), Some(path)) = (
