@@ -194,7 +194,7 @@ export function TaskEditorDialog({
     }
   };
 
-  const onFiles = async (files: FileList | null) => {
+  const onFiles = async (files: FileList | File[] | null) => {
     if (!files) return;
     if (isEdit) {
       for (const f of Array.from(files)) {
@@ -205,6 +205,21 @@ export function TaskEditorDialog({
     } else {
       setPendingFiles((prev) => [...prev, ...Array.from(files)]);
     }
+  };
+
+  // 剪貼簿貼上：截圖等檔案直接當附件。純文字貼上不受影響（沒有 files 就放行）。
+  const onPasteFiles = (e: React.ClipboardEvent) => {
+    const files = e.clipboardData?.files;
+    if (!files || files.length === 0) return;
+    e.preventDefault();
+    const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+    const named = Array.from(files).map((f, i) => {
+      // 截圖一律叫 image.png，連貼兩張會撞名，所以補上時間戳記。
+      if (!/^image\.\w+$/i.test(f.name)) return f;
+      const ext = f.name.split(".").pop();
+      return new File([f], `pasted-${stamp}${i ? `-${i}` : ""}.${ext}`, { type: f.type });
+    });
+    void onFiles(named);
   };
 
   const save = async () => {
@@ -294,7 +309,7 @@ export function TaskEditorDialog({
 
   return (
     <div className="task-dialog-backdrop">
-      <div className="task-dialog" onClick={(e) => e.stopPropagation()}>
+      <div className="task-dialog" onClick={(e) => e.stopPropagation()} onPaste={onPasteFiles}>
         <h3 className="task-dialog-title">{isEdit ? t.board_edit_card : t.board_new_card}</h3>
 
         {!isEdit && bodyTemplates && bodyTemplates.length > 0 && (
