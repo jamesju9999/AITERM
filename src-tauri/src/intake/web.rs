@@ -3,6 +3,7 @@
 //! - `POST /api/code`：白名單內的信箱會收到 6 位數驗證碼。**不論信箱在不在白名單回應都一樣**，
 //!   外人無法藉此探測白名單。
 //! - `POST /api/submit`：信箱＋驗證碼＋問題。驗證碼 10 分鐘有效、單次使用、最多試 5 次。
+use super::attach::{self, Raw};
 use super::config::{Config, WebMode};
 use super::queue::{self, Ingested};
 use super::rules;
@@ -10,11 +11,13 @@ use super::store;
 use parking_lot::Mutex;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
+use std::path::Path;
 
 pub const CODE_TTL_SECS: i64 = 600;
 pub const MAX_ATTEMPTS: u32 = 5;
 pub const MAX_CODE_REQUESTS: usize = 3;
 pub const MAX_BODY_CHARS: usize = 20_000;
+pub const MAX_SUBMIT_BYTES: usize = 16 * 1024 * 1024;
 
 struct Entry {
     code: String,
@@ -93,12 +96,13 @@ pub enum Submit {
     Disabled,
 }
 
-pub async fn submit(pool: &SqlitePool, cfg: &Config, otps: &Otps, now: i64, email: &str, code: &str, subject: &str, body: &str) -> Result<Submit, sqlx::Error> {
+#[allow(clippy::too_many_arguments)]
+pub async fn submit(pool: &SqlitePool, cfg: &Config, otps: &Otps, now: i64, email: &str, code: &str, subject: &str, body: &str, attach_root: &Path, images: Vec<Raw>) -> Result<Submit, sqlx::Error> {
     if cfg.web_mode == WebMode::Off {
         return Ok(Submit::Disabled);
     }
     let body = body.trim();
-    if body.is_empty() {
+    if body.is_empty() && images.is_empty() {
         return Ok(Submit::Invalid("內容不可為空"));
     }
     if body.chars().count() > MAX_BODY_CHARS {
@@ -113,7 +117,8 @@ pub async fn submit(pool: &SqlitePool, cfg: &Config, otps: &Otps, now: i64, emai
     }
     let subject: String = subject.trim().chars().take(200).collect();
     let mid = format!("web:{}", uuid::Uuid::new_v4());
-    let r = queue::enqueue(pool, cfg, sender.level, "web", &addr, &subject, body, &mid).await?;
+    let body = if body.is_empty() { "（僅附圖）" } else { body };
+    let r = queue::enqueue(pool, cfg, sender.level, "web", &addr, &subject, body, &mid, attach_root, images).await?;
     Ok(match r {
         Ingested::Queued(_) | Ingested::Duplicate => Submit::Accepted,
         Ingested::Dropped("rate_limited") => Submit::Invalid("送出太頻繁，請稍後再試"),
@@ -131,7 +136,8 @@ input,textarea,button{font:inherit;width:100%;box-sizing:border-box;padding:.5re
 <input id="email" type="email" required autocomplete="email"><button>寄送驗證碼</button></form>
 <form id="f2" hidden><label for="code">收到的 6 位數驗證碼</label><input id="code" inputmode="numeric" maxlength="6" required>
 <label for="subject">主旨</label><input id="subject" maxlength="200">
-<label for="body">問題內容</label><textarea id="body" rows="8" required></textarea><button>送出</button></form>
+<label for="body">問題內容</label><textarea id="body" rows="8"></textarea>
+<label for="imgs">附圖（選填，最多 5 張，每張 10MB 內）</label><input id="imgs" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple><button>送出</button></form>
 <div id="msg" role="status"></div>
 <script>
 const $=id=>document.getElementById(id),m=(t,c)=>{$("msg").textContent=t;$("msg").className=c||""};
@@ -139,7 +145,10 @@ async function post(u,d){const r=await fetch(u,{method:"POST",headers:{"Content-
 let j={};try{j=await r.json()}catch(e){}return{ok:r.ok,j}}
 $("f1").onsubmit=async e=>{e.preventDefault();const r=await post("/api/code",{email:$("email").value});
 m(r.ok?"若此信箱已獲授權，驗證碼已寄出（10 分鐘內有效）。":(r.j.error||"失敗"),r.ok?"ok":"err");if(r.ok)$("f2").hidden=false};
-$("f2").onsubmit=async e=>{e.preventDefault();const r=await post("/api/submit",{email:$("email").value,code:$("code").value,subject:$("subject").value,body:$("body").value});
+const b64=f=>new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(String(r.result).split(",")[1]||"");r.onerror=no;r.readAsDataURL(f)});
+$("f2").onsubmit=async e=>{e.preventDefault();const fs=[...$("imgs").files].slice(0,5);
+const images=await Promise.all(fs.map(async f=>({name:f.name,data:await b64(f)})));
+const r=await post("/api/submit",{email:$("email").value,code:$("code").value,subject:$("subject").value,body:$("body").value,images});
 m(r.ok?"已收到，處理完成後會回信給你。":(r.j.error||"失敗"),r.ok?"ok":"err");if(r.ok){$("f2").reset()}};
 </script></body></html>"#;
 
@@ -202,6 +211,7 @@ mod tests {
     #[tokio::test]
     async fn only_allowlisted_addresses_get_a_code_and_strangers_are_counted() {
         let p = pool().await;
+        let tmp = tempfile::tempdir().unwrap();
         let o = Otps::default();
         let got = prepare_code(&p, &cfg(), &o, "Bob <BOB@corp.com>", 0).await.unwrap().unwrap();
         assert_eq!(got.0, "bob@corp.com");
@@ -215,29 +225,31 @@ mod tests {
     #[tokio::test]
     async fn submit_needs_the_right_code_and_lands_in_the_queue_with_the_senders_level() {
         let p = pool().await;
+        let tmp = tempfile::tempdir().unwrap();
         let o = Otps::default();
         let (addr, code) = prepare_code(&p, &cfg(), &o, "bob@corp.com", 0).await.unwrap().unwrap();
-        assert_eq!(submit(&p, &cfg(), &o, 1, &addr, "000000", "s", "內容").await.unwrap(), Submit::BadCode);
+        assert_eq!(submit(&p, &cfg(), &o, 1, &addr, "000000", "s", "內容", tmp.path(), vec![]).await.unwrap(), Submit::BadCode);
         assert!(store::list_items(&p, None).await.unwrap().is_empty());
-        assert_eq!(submit(&p, &cfg(), &o, 2, &addr, &code, "壞掉了", "請修").await.unwrap(), Submit::Accepted);
+        assert_eq!(submit(&p, &cfg(), &o, 2, &addr, &code, "壞掉了", "請修", tmp.path(), vec![]).await.unwrap(), Submit::Accepted);
         let it = &store::list_items(&p, None).await.unwrap()[0];
         assert_eq!((it.source.as_str(), it.sender.as_str(), it.sender_level.as_str(), it.status.as_str()), ("web", "bob@corp.com", "external", store::PENDING));
-        assert_eq!(submit(&p, &cfg(), &o, 3, &addr, &code, "s", "again").await.unwrap(), Submit::BadCode, "同一組碼不能再用");
+        assert_eq!(submit(&p, &cfg(), &o, 3, &addr, &code, "s", "again", tmp.path(), vec![]).await.unwrap(), Submit::BadCode, "同一組碼不能再用");
     }
 
     #[tokio::test]
     async fn submit_rejects_empty_oversized_and_unlisted_without_leaking_which() {
         let p = pool().await;
+        let tmp = tempfile::tempdir().unwrap();
         let o = Otps::default();
         let (addr, code) = prepare_code(&p, &cfg(), &o, "bob@corp.com", 0).await.unwrap().unwrap();
-        assert!(matches!(submit(&p, &cfg(), &o, 1, &addr, &code, "s", "   ").await.unwrap(), Submit::Invalid(_)));
+        assert!(matches!(submit(&p, &cfg(), &o, 1, &addr, &code, "s", "   ", tmp.path(), vec![]).await.unwrap(), Submit::Invalid(_)));
         let big = "字".repeat(MAX_BODY_CHARS + 1);
-        assert!(matches!(submit(&p, &cfg(), &o, 1, &addr, &code, "s", &big).await.unwrap(), Submit::Invalid(_)));
+        assert!(matches!(submit(&p, &cfg(), &o, 1, &addr, &code, "s", &big, tmp.path(), vec![]).await.unwrap(), Submit::Invalid(_)));
         // 內容無效時不應該消耗驗證碼
-        assert_eq!(submit(&p, &cfg(), &o, 2, &addr, &code, "s", "ok").await.unwrap(), Submit::Accepted);
-        assert_eq!(submit(&p, &cfg(), &o, 2, "evil@x.com", "123456", "s", "x").await.unwrap(), Submit::BadCode);
+        assert_eq!(submit(&p, &cfg(), &o, 2, &addr, &code, "s", "ok", tmp.path(), vec![]).await.unwrap(), Submit::Accepted);
+        assert_eq!(submit(&p, &cfg(), &o, 2, "evil@x.com", "123456", "s", "x", tmp.path(), vec![]).await.unwrap(), Submit::BadCode);
         let off = Config { web_mode: WebMode::Off, ..Config::default() };
-        assert_eq!(submit(&p, &off, &o, 2, &addr, &code, "s", "x").await.unwrap(), Submit::Disabled);
+        assert_eq!(submit(&p, &off, &o, 2, &addr, &code, "s", "x", tmp.path(), vec![]).await.unwrap(), Submit::Disabled);
     }
 
     #[test]
@@ -262,6 +274,8 @@ use tauri::{AppHandle, Manager};
 pub struct WebState {
     pub pool: SqlitePool,
     pub otps: Otps,
+    /// 附圖存放的根目錄。
+    pub attach_root: std::path::PathBuf,
     /// 佇列有新項目時通知前端。
     pub on_change: Box<dyn Fn() + Send + Sync>,
     /// 寄驗證碼：`(收件地址, 主旨, 內文)`，在背景執行。
@@ -284,7 +298,28 @@ struct SubmitReq {
     code: String,
     #[serde(default)]
     subject: String,
+    #[serde(default)]
     body: String,
+    /// 圖片以 base64 傳送；格式與大小由 `attach` 依內容驗證。
+    #[serde(default)]
+    images: Vec<ImageReq>,
+}
+
+#[derive(Deserialize)]
+struct ImageReq {
+    #[serde(default)]
+    name: String,
+    data: String,
+}
+
+/// base64 解不開的圖片留成空內容，之後會被當成「略過」計數，而不是讓整個請求失敗。
+fn decode_images(images: Vec<ImageReq>) -> Vec<Raw> {
+    use base64::Engine;
+    images
+        .into_iter()
+        .take(attach::MAX_FILES + 5)
+        .map(|i| Raw { name: i.name, bytes: base64::engine::general_purpose::STANDARD.decode(i.data.trim()).unwrap_or_default() })
+        .collect()
 }
 
 fn now() -> i64 {
@@ -311,7 +346,7 @@ async fn api_code(State(st): State<Arc<WebState>>, Json(req): Json<CodeReq>) -> 
 
 async fn api_submit(State(st): State<Arc<WebState>>, Json(req): Json<SubmitReq>) -> impl IntoResponse {
     let cfg = super::config::load(&st.pool).await;
-    match submit(&st.pool, &cfg, &st.otps, now(), &req.email, &req.code, &req.subject, &req.body).await {
+    match submit(&st.pool, &cfg, &st.otps, now(), &req.email, &req.code, &req.subject, &req.body, &st.attach_root, decode_images(req.images)).await {
         Ok(Submit::Accepted) => {
             (st.on_change)();
             json(StatusCode::OK, serde_json::json!({ "ok": true }))
@@ -329,9 +364,9 @@ async fn api_submit(State(st): State<Arc<WebState>>, Json(req): Json<SubmitReq>)
 pub fn router(st: Arc<WebState>) -> Router {
     Router::new()
         .route("/", get(page))
-        .route("/api/code", post(api_code))
-        .route("/api/submit", post(api_submit))
-        .layer(DefaultBodyLimit::max(96 * 1024))
+        // 要驗證碼的請求只有一個信箱，小上限；送出問題可能帶 5 張圖（base64 約 13MB）。
+        .route("/api/code", post(api_code).layer(DefaultBodyLimit::max(4 * 1024)))
+        .route("/api/submit", post(api_submit).layer(DefaultBodyLimit::max(MAX_SUBMIT_BYTES)))
         .with_state(st)
 }
 
@@ -360,6 +395,7 @@ pub async fn restart(app: &AppHandle) {
     let st = Arc::new(WebState {
         pool: db.pool.clone(),
         otps: Otps::default(),
+        attach_root: attach::root(),
         on_change: Box::new(move || {
             use tauri::Emitter;
             let _ = a1.emit(super::CHANGED_EVENT, ());
@@ -400,9 +436,11 @@ mod http_tests {
         let sent: Sent = Arc::default();
         let (s2, changes) = (sent.clone(), Arc::new(std::sync::atomic::AtomicUsize::new(0)));
         let c2 = changes.clone();
+        let root2 = std::env::temp_dir().join(format!("intake-web-test-{}", uuid::Uuid::new_v4()));
         let st = Arc::new(WebState {
             pool: pool.clone(),
             otps: Otps::default(),
+            attach_root: root2,
             on_change: Box::new(move || { c2.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }),
             send_mail: Box::new(move |to, sub, body| s2.lock().push((to, sub, body))),
         });
@@ -460,10 +498,34 @@ mod http_tests {
     #[tokio::test]
     async fn oversized_request_bodies_are_rejected_before_parsing() {
         let (r, pool, _, _) = app(WebMode::Local).await;
-        let huge = "x".repeat(200 * 1024);
+        let huge = "x".repeat(MAX_SUBMIT_BYTES + 1024);
         let (st, _) = post(&r, "/api/submit", serde_json::json!({"email":"bob@corp.com","code":"123456","body":huge})).await;
         assert_eq!(st, StatusCode::PAYLOAD_TOO_LARGE);
         assert!(store::list_items(&pool, None).await.unwrap().is_empty());
+        // 要驗證碼的端點只該收到一個信箱，上限小得多。
+        let (st, _) = post(&r, "/api/code", serde_json::json!({"email":"bob@corp.com","pad":"x".repeat(8 * 1024)})).await;
+        assert_eq!(st, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn images_in_a_submission_are_saved_and_attached() {
+        use base64::Engine;
+        let (r, pool, sent, _) = app(WebMode::Local).await;
+        post(&r, "/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
+        let body = sent.lock()[0].2.clone();
+        let chars: Vec<char> = body.chars().collect();
+        let code: String = chars.windows(6).find(|w| w.iter().all(|c| c.is_ascii_digit())).unwrap().iter().collect();
+        let png = [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 7, 7];
+        let ok = base64::engine::general_purpose::STANDARD.encode(png);
+        let (st, _) = post(&r, "/api/submit", serde_json::json!({
+            "email":"bob@corp.com","code":code,"subject":"s","body":"",
+            "images":[{"name":"畫面.png","data":ok},{"name":"bad.png","data":"!!!not base64!!!"},{"name":"x.txt","data":base64::engine::general_purpose::STANDARD.encode(b"hello")}]
+        })).await;
+        assert_eq!(st, StatusCode::OK);
+        let it = &store::list_items(&pool, None).await.unwrap()[0];
+        let atts = store::list_attachments(&pool, &it.id).await.unwrap();
+        assert_eq!(atts.len(), 1);
+        assert!(it.body.contains("僅附圖") && it.body.contains("2 個附件"), "{}", it.body);
     }
 
     #[tokio::test]

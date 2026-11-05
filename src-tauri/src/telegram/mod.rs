@@ -36,8 +36,47 @@ struct TelegramMessage {
     message_id: i64,
     chat: TelegramChat,
     text: Option<String>,
+    /// 圖片訊息的說明文字（問題內容寫在這裡）。
+    caption: Option<String>,
+    /// 同一張圖會有多種尺寸，取最大的。
+    photo: Option<Vec<TelegramPhoto>>,
+    /// 以「檔案」形式傳的圖片。
+    document: Option<TelegramDocument>,
     /// 使用者「回覆」某則訊息時，被回覆的那則（用來對應到 Agent 的問題）。
     reply_to_message: Option<Box<TelegramMessage>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramPhoto {
+    file_id: String,
+    file_size: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramDocument {
+    file_id: String,
+    mime_type: Option<String>,
+}
+
+impl TelegramMessage {
+    /// 訊息文字：一般訊息用 text，圖片訊息用 caption。
+    fn body_text(&self) -> Option<&str> {
+        self.text.as_deref().or(self.caption.as_deref())
+    }
+
+    /// 這則訊息帶的圖片檔 id（最大尺寸的 photo，或圖片類型的 document）。
+    fn image_file_ids(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if let Some(best) = self.photo.as_ref().and_then(|p| p.iter().max_by_key(|x| x.file_size.unwrap_or(0))) {
+            v.push(best.file_id.clone());
+        }
+        if let Some(d) = &self.document {
+            if d.mime_type.as_deref().is_some_and(|m| m.starts_with("image/")) {
+                v.push(d.file_id.clone());
+            }
+        }
+        v
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,9 +201,13 @@ async fn poll_updates(app: AppHandle, token: String, allowed_chat_id: i64) {
                                         }
                                     }
                                     // 問題收集：主人用 `/ask ` 開頭的訊息進佇列，不當一般對話轉送。
-                                    if let Some(text) = msg.text.as_deref() {
-                                        if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, true).await {
-                                            continue;
+                                    {
+                                        let photos = msg.image_file_ids();
+                                        if msg.body_text().is_some() || !photos.is_empty() {
+                                            let text = msg.body_text().unwrap_or("");
+                                            if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, true, photos).await {
+                                                continue;
+                                            }
                                         }
                                     }
                                     if let Some(text) = msg.text {
@@ -175,9 +218,13 @@ async fn poll_updates(app: AppHandle, token: String, allowed_chat_id: i64) {
                                     }
                                 } else {
                                     // 白名單內的其他聊天室可以送問題進問題收集；其餘照舊只記警告。
-                                    if let Some(text) = msg.text.as_deref() {
-                                        if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, false).await {
-                                            continue;
+                                    {
+                                        let photos = msg.image_file_ids();
+                                        if msg.body_text().is_some() || !photos.is_empty() {
+                                            let text = msg.body_text().unwrap_or("");
+                                            if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, false, photos).await {
+                                                continue;
+                                            }
                                         }
                                     }
                                     warn!("Received message from unauthorized chat ID: {} (allowed: {})", msg.chat.id, allowed_chat_id);
@@ -278,4 +325,35 @@ pub async fn send_to_chat(token: &str, chat_id: i64, text: &str, reply_to: Optio
         }
     }
     Ok(())
+}
+
+/// 下載 Telegram 上的檔案（先 getFile 取路徑，再下載）。超過 `max_bytes` 視為失敗。
+pub async fn download_file(token: &str, file_id: &str, max_bytes: usize) -> Result<crate::intake::attach::Raw, String> {
+    let client = reqwest::Client::new();
+    let info: serde_json::Value = client
+        .get(format!("https://api.telegram.org/bot{token}/getFile"))
+        .query(&[("file_id", file_id)])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    let path = info.pointer("/result/file_path").and_then(|v| v.as_str()).ok_or("getFile 沒有回傳 file_path")?.to_string();
+    if info.pointer("/result/file_size").and_then(|v| v.as_u64()).is_some_and(|n| n as usize > max_bytes) {
+        return Err("檔案太大".into());
+    }
+    let bytes = client
+        .get(format!("https://api.telegram.org/file/bot{token}/{path}"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > max_bytes {
+        return Err("檔案太大".into());
+    }
+    let name = path.rsplit('/').next().unwrap_or("image").to_string();
+    Ok(crate::intake::attach::Raw { name, bytes: bytes.to_vec() })
 }

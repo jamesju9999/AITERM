@@ -118,3 +118,58 @@ pub async fn intake_tab_stop(app: AppHandle, db: State<'_, IntakeDb>, rt: State<
 pub fn intake_tabs(rt: State<'_, Arc<IntakeRuntime>>) -> Vec<String> {
     rt.registry.tabs()
 }
+
+#[tauri::command]
+pub async fn intake_attachments(db: State<'_, IntakeDb>, item_id: String) -> Result<Vec<store::AttachmentRow>, String> {
+    store::list_attachments(&db.pool, &item_id).await.map_err(e)
+}
+
+/// 讀出附圖內容，回傳 `data:` URL 給前端顯示。只讀我們自己存放目錄底下的檔案。
+#[tauri::command]
+pub async fn intake_attachment_data(db: State<'_, IntakeDb>, id: String) -> Result<String, String> {
+    let row = store::get_attachment(&db.pool, &id).await.map_err(e)?.ok_or("找不到附圖")?;
+    data_url(&super::attach::root(), &row)
+}
+
+pub fn data_url(root: &std::path::Path, row: &store::AttachmentRow) -> Result<String, String> {
+    use base64::Engine;
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(&row.path).canonicalize().map_err(|e| e.to_string())?;
+    if !path.starts_with(&root) {
+        return Err("附圖路徑不在允許的目錄內".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    // 以內容判斷 MIME，不信資料庫裡的欄位。
+    let (mime, _) = super::attach::sniff(&bytes).ok_or("檔案內容不是支援的圖片")?;
+    Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(path: &std::path::Path) -> store::AttachmentRow {
+        store::AttachmentRow { id: "a".into(), item_id: "i".into(), filename: "f".into(), path: path.to_string_lossy().into(), mime: "image/png".into(), size: 1 }
+    }
+
+    #[test]
+    fn serves_images_under_the_root_and_refuses_anything_else() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let png = [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1];
+        let inside = root.path().join("i.png");
+        std::fs::write(&inside, png).unwrap();
+        assert!(data_url(root.path(), &row(&inside)).unwrap().starts_with("data:image/png;base64,"));
+
+        let elsewhere = outside.path().join("secret.png");
+        std::fs::write(&elsewhere, png).unwrap();
+        assert!(data_url(root.path(), &row(&elsewhere)).is_err(), "資料庫被竄改也不能讀到目錄外的檔案");
+
+        let sneaky = root.path().join("..").join(outside.path().file_name().unwrap()).join("secret.png");
+        assert!(data_url(root.path(), &row(&sneaky)).is_err(), "用 .. 繞出去也不行");
+
+        let text = root.path().join("n.png");
+        std::fs::write(&text, b"not an image").unwrap();
+        assert!(data_url(root.path(), &row(&text)).is_err(), "副檔名是 png 但內容不是圖片");
+    }
+}

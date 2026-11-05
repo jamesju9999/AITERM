@@ -3,11 +3,14 @@
 //! 身分由 Telegram 保證（chat id 無法偽造），所以不需要 SPF/DKIM 的對應物：
 //! - 機器人主人的聊天室：訊息以 `/ask ` 開頭才算問題（其餘照舊轉送給作用中的分頁），視為內部。
 //! - 其他聊天室：`tg:<chat_id>` 必須在白名單內，等級依白名單。
+use super::attach::Raw;
 use super::config::Config;
 use super::queue::{self, Ingested};
 use super::rules::{self, Level};
 use super::store;
 use sqlx::SqlitePool;
+use std::future::Future;
+use std::path::Path;
 
 pub const OWNER_PREFIX: &str = "/ask";
 
@@ -65,22 +68,32 @@ pub fn split_message(text: &str, max: usize) -> Vec<String> {
     out
 }
 
-pub async fn ingest(
+/// `has_files`：訊息帶了圖片。`fetch` 只有在確認寄件者被允許之後才會呼叫，
+/// 陌生人不能藉由傳圖讓我們去下載東西。
+#[allow(clippy::too_many_arguments)]
+pub async fn ingest<F, Fut>(
     pool: &SqlitePool,
     cfg: &Config,
     chat_id: i64,
     message_id: i64,
     text: &str,
     is_owner: bool,
-) -> Result<Ingested, sqlx::Error> {
+    attach_root: &Path,
+    has_files: bool,
+    fetch: F,
+) -> Result<Ingested, sqlx::Error>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Vec<Raw>>,
+{
     if !cfg.telegram_enabled {
         return Ok(Ingested::Dropped("not_for_us"));
     }
     let key = sender_key(chat_id);
     let (level, body) = if is_owner {
         match strip_owner_prefix(text) {
-            Some(b) if !b.is_empty() => (Level::Internal, b),
-            // 沒有前綴＝一般對話，留給原本的處理；只有 `/ask` 沒內容也不入列。
+            Some(b) if !b.is_empty() || has_files => (Level::Internal, b),
+            // 沒有前綴＝一般對話，留給原本的處理；只有 `/ask` 沒內容（也沒圖）不入列。
             _ => return Ok(Ingested::Dropped("not_for_us")),
         }
     } else {
@@ -93,11 +106,13 @@ pub async fn ingest(
             }
         }
     };
-    if body.is_empty() {
+    if body.is_empty() && !has_files {
         return Ok(Ingested::Dropped("not_for_us"));
     }
+    let files = if has_files { fetch().await } else { Vec::new() };
+    let body = if body.is_empty() { "（僅附圖）" } else { body };
     let mid = format!("tg:{chat_id}:{message_id}");
-    queue::enqueue(pool, cfg, level, "telegram", &key, &subject_of(body), body, &mid).await
+    queue::enqueue(pool, cfg, level, "telegram", &key, &subject_of(body), body, &mid, attach_root, files).await
 }
 
 #[cfg(test)]
@@ -150,9 +165,10 @@ mod tests {
     #[tokio::test]
     async fn owner_needs_prefix_and_becomes_internal() {
         let p = pool().await;
-        assert_eq!(ingest(&p, &cfg(), 1, 10, "普通聊天", true).await.unwrap(), Ingested::Dropped("not_for_us"));
-        assert_eq!(ingest(&p, &cfg(), 1, 11, "/ask", true).await.unwrap(), Ingested::Dropped("not_for_us"));
-        assert!(matches!(ingest(&p, &cfg(), 1, 12, "/ask 幫我看 log", true).await.unwrap(), Ingested::Queued(_)));
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(ingest(&p, &cfg(), 1, 10, "普通聊天", true, tmp.path(), false, || async { vec![] }).await.unwrap(), Ingested::Dropped("not_for_us"));
+        assert_eq!(ingest(&p, &cfg(), 1, 11, "/ask", true, tmp.path(), false, || async { vec![] }).await.unwrap(), Ingested::Dropped("not_for_us"));
+        assert!(matches!(ingest(&p, &cfg(), 1, 12, "/ask 幫我看 log", true, tmp.path(), false, || async { vec![] }).await.unwrap(), Ingested::Queued(_)));
         let it = &store::list_items(&p, None).await.unwrap()[0];
         assert_eq!((it.source.as_str(), it.sender.as_str(), it.sender_level.as_str(), it.body.as_str()), ("telegram", "tg:1", "internal", "幫我看 log"));
         assert_eq!(it.status, store::QUEUED, "內部預設自動派送");
@@ -161,21 +177,64 @@ mod tests {
     #[tokio::test]
     async fn strangers_are_dropped_and_counted_but_allowlisted_chats_pass() {
         let p = pool().await;
-        assert_eq!(ingest(&p, &cfg(), 99, 1, "我要入侵", false).await.unwrap(), Ingested::Dropped("not_allowed"));
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(ingest(&p, &cfg(), 99, 1, "我要入侵", false, tmp.path(), false, || async { vec![] }).await.unwrap(), Ingested::Dropped("not_allowed"));
         assert!(store::list_items(&p, None).await.unwrap().is_empty());
         assert_eq!(store::dropped_counts(&p).await.unwrap(), vec![("not_allowed".to_string(), 1)]);
         store::upsert_sender(&p, &Sender { address: "tg:99".into(), level: Level::External, skip_auth: false }).await.unwrap();
-        assert!(matches!(ingest(&p, &cfg(), 99, 2, "請問怎麼用", false).await.unwrap(), Ingested::Queued(_)));
+        assert!(matches!(ingest(&p, &cfg(), 99, 2, "請問怎麼用", false, tmp.path(), false, || async { vec![] }).await.unwrap(), Ingested::Queued(_)));
         let it = &store::list_items(&p, None).await.unwrap()[0];
         assert_eq!((it.sender_level.as_str(), it.status.as_str()), ("external", store::PENDING), "外部預設手動派送");
-        assert_eq!(ingest(&p, &cfg(), 99, 2, "請問怎麼用", false).await.unwrap(), Ingested::Duplicate);
+        assert_eq!(ingest(&p, &cfg(), 99, 2, "請問怎麼用", false, tmp.path(), false, || async { vec![] }).await.unwrap(), Ingested::Duplicate);
+    }
+
+    const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 9];
+
+    #[tokio::test]
+    async fn photos_are_downloaded_only_for_allowed_senders() {
+        let p = pool().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let called = std::sync::atomic::AtomicBool::new(false);
+        let r = ingest(&p, &cfg(), 99, 1, "", false, tmp.path(), true, || async {
+            called.store(true, std::sync::atomic::Ordering::SeqCst);
+            vec![Raw { name: "p.png".into(), bytes: PNG.to_vec() }]
+        })
+        .await
+        .unwrap();
+        assert_eq!(r, Ingested::Dropped("not_allowed"));
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst), "陌生人傳圖不可觸發下載");
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn owner_photo_with_ask_caption_is_saved_and_a_photo_alone_is_not_a_question() {
+        let p = pool().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let photo = || async { vec![Raw { name: "p.jpg".into(), bytes: PNG.to_vec() }] };
+        // 沒有 /ask 的圖片是主人的一般聊天，不入列。
+        assert_eq!(ingest(&p, &cfg(), 1, 1, "隨手拍", true, tmp.path(), true, photo).await.unwrap(), Ingested::Dropped("not_for_us"));
+        let Ingested::Queued(id) = ingest(&p, &cfg(), 1, 2, "/ask 這個畫面為什麼壞", true, tmp.path(), true, photo).await.unwrap() else { panic!() };
+        let atts = store::list_attachments(&p, &id).await.unwrap();
+        assert_eq!(atts.len(), 1);
+        assert!(atts[0].filename.ends_with(".png"), "副檔名依內容而非訊息裡的 p.jpg：{}", atts[0].filename);
+    }
+
+    #[tokio::test]
+    async fn allowlisted_chat_can_send_a_photo_with_no_caption() {
+        let p = pool().await;
+        let tmp = tempfile::tempdir().unwrap();
+        store::upsert_sender(&p, &Sender { address: "tg:7".into(), level: Level::External, skip_auth: false }).await.unwrap();
+        let Ingested::Queued(id) = ingest(&p, &cfg(), 7, 3, "", false, tmp.path(), true, || async { vec![Raw { name: "x".into(), bytes: PNG.to_vec() }] }).await.unwrap() else { panic!() };
+        assert_eq!(store::get_item(&p, &id).await.unwrap().unwrap().body, "（僅附圖）");
+        assert_eq!(store::list_attachments(&p, &id).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn disabled_means_nothing_is_stored_even_for_the_owner() {
         let p = pool().await;
+        let tmp = tempfile::tempdir().unwrap();
         let off = Config { telegram_enabled: false, ..Config::default() };
-        assert_eq!(ingest(&p, &off, 1, 1, "/ask hi", true).await.unwrap(), Ingested::Dropped("not_for_us"));
+        assert_eq!(ingest(&p, &off, 1, 1, "/ask hi", true, tmp.path(), false, || async { vec![] }).await.unwrap(), Ingested::Dropped("not_for_us"));
         assert!(store::list_items(&p, None).await.unwrap().is_empty());
     }
 }

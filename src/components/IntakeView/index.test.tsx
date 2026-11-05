@@ -21,6 +21,8 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeUpsertSender: vi.fn(() => Promise.resolve()),
   intakeDeleteSender: vi.fn(() => Promise.resolve(true)),
   intakeDropped: vi.fn(() => Promise.resolve([["not_allowed", 3]])),
+  intakeAttachments: vi.fn(() => Promise.resolve([])),
+  intakeAttachmentData: vi.fn(),
 }));
 import * as ipc from "../../ipc/intake";
 
@@ -37,6 +39,8 @@ const wrap = () => render(<LocaleProvider><IntakeView /></LocaleProvider>);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks 不會清掉 mockResolvedValue 設過的實作，上一個測試的附圖會漏進來。
+  vi.mocked(ipc.intakeAttachments).mockResolvedValue([]);
 });
 
 describe("IntakeView", () => {
@@ -87,6 +91,31 @@ describe("IntakeView", () => {
     fireEvent.click(await screen.findByText("壞掉了"));
     fireEvent.click(await screen.findByText(t.intake_action_send));
     expect(await screen.findByRole("alert")).toHaveTextContent("SMTP 認證失敗");
+  });
+
+  it("shows the images the sender attached, and says so when one cannot be loaded", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({})]);
+    vi.mocked(ipc.intakeAttachments).mockResolvedValue([
+      { id: "a1", item_id: "1", filename: "1-shot.png", path: "/x/1-shot.png", mime: "image/png", size: 10 },
+      { id: "a2", item_id: "1", filename: "2-bad.png", path: "/x/2-bad.png", mime: "image/png", size: 10 },
+    ]);
+    vi.mocked(ipc.intakeAttachmentData).mockImplementation((id) =>
+      id === "a1" ? Promise.resolve("data:image/png;base64,AAAA") : Promise.reject(new Error("gone")),
+    );
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    const img = (await screen.findByAltText("1-shot.png")) as HTMLImageElement;
+    expect(img.src).toBe("data:image/png;base64,AAAA");
+    expect(await screen.findByText(t.intake_attachment_failed)).toBeInTheDocument();
+    expect(screen.getByText(t.intake_attachments.replace("{n}", "2"))).toBeInTheDocument();
+  });
+
+  it("shows no image section for an item without attachments", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({})]);
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    await screen.findByText("請修");
+    expect(screen.queryByText(/附圖（/)).toBeNull();
   });
 
   it("shows the verification report, and marks a failed one as failed", async () => {

@@ -90,7 +90,10 @@ pub async fn tick(app: &AppHandle) {
         rt.registry.assign(&tab, &item.id);
         touched = true;
         prepare(app, &db.pool, &pty, &item, &tab).await;
-        if let Err(e) = crate::tasks::dispatch::write_then_submit(&pty, &tab, &dispatcher::build_prompt(&item)).await {
+        if let Err(e) = {
+            let images = store::list_attachments(&db.pool, &item.id).await.unwrap_or_default();
+            crate::tasks::dispatch::write_then_submit(&pty, &tab, &dispatcher::build_prompt(&item, &images)).await
+        } {
             rt.registry.release(&tab);
             store::fail(&db.pool, &item.id, &format!("無法送進終端機：{e}")).await.ok();
         }

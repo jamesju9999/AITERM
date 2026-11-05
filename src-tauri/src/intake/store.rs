@@ -38,6 +38,8 @@ pub struct IntakeItem {
 }
 
 pub struct NewItem<'a> {
+    /// 先決定好 id（附圖要先依 id 存檔）；`None` 就自動產生。
+    pub id: Option<&'a str>,
     pub source: &'a str,
     pub sender: &'a str,
     pub level: Level,
@@ -77,6 +79,15 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at INTEGER NOT NULL
         )",
         "CREATE INDEX IF NOT EXISTS idx_intake_status ON intake_items(status, created_at)",
+        "CREATE TABLE IF NOT EXISTS intake_attachments (
+            id TEXT PRIMARY KEY NOT NULL,
+            item_id TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            path TEXT NOT NULL,
+            mime TEXT NOT NULL,
+            size INTEGER NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_intake_att_item ON intake_attachments(item_id)",
         "CREATE TABLE IF NOT EXISTS intake_senders (
             address TEXT PRIMARY KEY NOT NULL,
             level TEXT NOT NULL,
@@ -111,7 +122,7 @@ pub async fn set_verification(pool: &SqlitePool, id: &str, report: &str, passed:
 
 /// 以 `message_id` 去重：已存在回 `None`。
 pub async fn insert_item(pool: &SqlitePool, n: NewItem<'_>) -> Result<Option<IntakeItem>, sqlx::Error> {
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = n.id.map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let t = now();
     let r = sqlx::query(
         "INSERT OR IGNORE INTO intake_items
@@ -220,6 +231,33 @@ pub async fn count_from_sender_since(pool: &SqlitePool, sender: &str, since: i64
         .bind(sender).bind(since).fetch_one(pool).await
 }
 
+// ---- 附圖 ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq, Eq)]
+pub struct AttachmentRow {
+    pub id: String,
+    pub item_id: String,
+    pub filename: String,
+    pub path: String,
+    pub mime: String,
+    pub size: i64,
+}
+
+pub async fn add_attachment(pool: &SqlitePool, item_id: &str, a: &super::attach::Saved) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO intake_attachments (id, item_id, filename, path, mime, size) VALUES (?,?,?,?,?,?)")
+        .bind(uuid::Uuid::new_v4().to_string()).bind(item_id).bind(&a.filename).bind(&a.path).bind(a.mime).bind(a.size)
+        .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn list_attachments(pool: &SqlitePool, item_id: &str) -> Result<Vec<AttachmentRow>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM intake_attachments WHERE item_id = ? ORDER BY filename").bind(item_id).fetch_all(pool).await
+}
+
+pub async fn get_attachment(pool: &SqlitePool, id: &str) -> Result<Option<AttachmentRow>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM intake_attachments WHERE id = ?").bind(id).fetch_optional(pool).await
+}
+
 // ---- 白名單 ----
 
 #[derive(Debug, Clone, FromRow)]
@@ -284,7 +322,7 @@ mod tests {
         p
     }
     fn new<'a>(mid: &'a str, status: &'a str) -> NewItem<'a> {
-        NewItem { source: "email", sender: "a@corp.com", level: Level::External, subject: "s", body: "b", message_id: mid, status }
+        NewItem { id: None, source: "email", sender: "a@corp.com", level: Level::External, subject: "s", body: "b", message_id: mid, status }
     }
 
     #[tokio::test]

@@ -1,5 +1,6 @@
 //! 問題收集（Intake）：外部問題進獨立佇列，循序派給終端機裡的 AI Agent。
 //! 設計：docs/superpowers/specs/2026-11-05-intake-queue-design.md
+pub mod attach;
 pub mod classify;
 pub mod commands;
 pub mod config;
@@ -48,7 +49,7 @@ pub async fn on_mail(app: &tauri::AppHandle, account_id: &str, raw: &[u8]) {
     if !cfg.enabled || cfg.account_id != account_id {
         return;
     }
-    match mail_source::ingest(&db.pool, &cfg, raw).await {
+    match mail_source::ingest(&db.pool, &cfg, raw, &attach::root()).await {
         Ok(queue::Ingested::Queued(_)) => {
             let _ = app.emit(CHANGED_EVENT, ());
         }
@@ -67,11 +68,29 @@ pub async fn owns_account(app: &tauri::AppHandle, account_id: &str) -> bool {
 
 /// Telegram 收到訊息時呼叫（見 `telegram::poll_updates`）。回傳 `true` 表示訊息已由問題收集處理，
 /// 呼叫端不要再當一般訊息轉送。
-pub async fn on_telegram(app: &tauri::AppHandle, chat_id: i64, message_id: i64, text: &str, is_owner: bool) -> bool {
+pub async fn on_telegram(app: &tauri::AppHandle, chat_id: i64, message_id: i64, text: &str, is_owner: bool, photos: Vec<String>) -> bool {
     use tauri::{Emitter, Manager};
     let Some(db) = app.try_state::<IntakeDb>() else { return false };
     let cfg = config::load(&db.pool).await;
-    match telegram_source::ingest(&db.pool, &cfg, chat_id, message_id, text, is_owner).await {
+    let fetch_app = app.clone();
+    let has_files = !photos.is_empty();
+    let fetch = move || async move {
+        let Some(token) = fetch_app
+            .try_state::<std::sync::Arc<crate::secret::SecretStore>>()
+            .and_then(|s| s.get(crate::telegram::TELEGRAM_SECRET_ID).ok().flatten())
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for id in photos.into_iter().take(attach::MAX_FILES) {
+            match crate::telegram::download_file(&token, &id, attach::MAX_BYTES).await {
+                Ok(raw) => out.push(raw),
+                Err(e) => log::warn!("intake: Telegram 圖片下載失敗：{e}"),
+            }
+        }
+        out
+    };
+    match telegram_source::ingest(&db.pool, &cfg, chat_id, message_id, text, is_owner, &attach::root(), has_files, fetch).await {
         Ok(queue::Ingested::Queued(_)) => {
             let _ = app.emit(CHANGED_EVENT, ());
             true

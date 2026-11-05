@@ -25,3 +25,6 @@
 .intake__senders li { display: flex; gap: 8px; align-items: center; }
 @media (max-width: 720px) { .intake__body { grid-template-columns: 1fr; } }
 .intake__ok { color: #4ade80; }
+.intake__images { display: flex; flex-wrap: wrap; gap: 8px; }
+.intake__thumb { max-width: 160px; max-height: 120px; object-fit: cover; border: 1px solid var(--border, #334155); border-radius: 6px; }
+.intake__thumb--empty { display: inline-flex; align-items: center; justify-content: center; width: 120px; height: 80px; font-size: 12px; opacity: 0.7; }

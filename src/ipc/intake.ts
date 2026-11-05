@@ -72,3 +72,15 @@ export const intakeTabs = () => invoke<string[]>("intake_tabs");
 export function onIntakeChanged(cb: () => void): Promise<UnlistenFn> {
   return listen(INTAKE_CHANGED_EVENT, cb);
 }
+
+export interface IntakeAttachment {
+  id: string;
+  item_id: string;
+  filename: string;
+  path: string;
+  mime: string;
+  size: number;
+}
+export const intakeAttachments = (itemId: string) => invoke<IntakeAttachment[]>("intake_attachments", { itemId });
+/** 回傳 `data:` URL。 */
+export const intakeAttachmentData = (id: string) => invoke<string>("intake_attachment_data", { id });

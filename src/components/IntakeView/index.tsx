@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   intakeApprove,
+  intakeAttachmentData,
+  intakeAttachments,
   intakeDeleteSender,
   intakeDropped,
   intakeGetConfig,
@@ -11,6 +13,7 @@ import {
   intakeSetConfig,
   intakeUpdateDraft,
   intakeUpsertSender,
+  type IntakeAttachment,
   type IntakeConfig,
   type IntakeItem,
   type IntakeSender,
@@ -108,6 +111,51 @@ export function IntakeView() {
   );
 }
 
+function Attachments({ itemId }: { itemId: string }) {
+  const { t } = useLocale();
+  const [atts, setAtts] = useState<IntakeAttachment[]>([]);
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  const [failed, setFailed] = useState<Record<string, true>>({});
+
+  useEffect(() => {
+    let alive = true;
+    intakeAttachments(itemId)
+      .then(async (list) => {
+        if (!alive) return;
+        setAtts(list);
+        for (const a of list) {
+          intakeAttachmentData(a.id)
+            .then((u) => alive && setUrls((m) => ({ ...m, [a.id]: u })))
+            .catch(() => alive && setFailed((m) => ({ ...m, [a.id]: true })));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [itemId]);
+
+  if (atts.length === 0) return null;
+  return (
+    <section>
+      <h4>{t.intake_attachments.replace("{n}", String(atts.length))}</h4>
+      <div className="intake__images">
+        {atts.map((a) =>
+          urls[a.id] ? (
+            <a key={a.id} href={urls[a.id]} target="_blank" rel="noreferrer" title={a.filename}>
+              <img src={urls[a.id]} alt={a.filename} className="intake__thumb" />
+            </a>
+          ) : (
+            <span key={a.id} className="intake__thumb intake__thumb--empty">
+              {failed[a.id] ? t.intake_attachment_failed : a.filename}
+            </span>
+          ),
+        )}
+      </div>
+    </section>
+  );
+}
+
 function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void> }) {
   const { t } = useLocale();
   const [draft, setDraft] = useState(item.reply_draft ?? "");
@@ -122,6 +170,7 @@ function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unkno
       )}
       {item.error && <p className="intake__error">{item.error}</p>}
       <pre className="intake__text">{item.body}</pre>
+      <Attachments itemId={item.id} />
       {item.verification && (
         <section>
           <h4 className={item.verified ? "intake__ok" : "intake__error"}>

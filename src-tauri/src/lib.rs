@@ -547,6 +547,8 @@ pub fn run() {
             intake::commands::intake_tab_start,
             intake::commands::intake_tab_stop,
             intake::commands::intake_tabs,
+            intake::commands::intake_attachments,
+            intake::commands::intake_attachment_data,
             pty_get_cwd,
             pty_get_recent_output,
             pty_get_shell_type,
