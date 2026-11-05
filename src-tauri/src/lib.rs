@@ -325,7 +325,9 @@ pub fn run() {
                 let emit: claude_activity::Emitter = Arc::new(move |sid, nodes| {
                     let _ = handle.emit(&format!("claude-activity://{sid}"), nodes);
                 });
-                app.manage(claude_activity::ClaudeActivity::new(dir, emit));
+                let activity = claude_activity::ClaudeActivity::new(dir, emit);
+                app.manage(activity.clone());
+                intake::runtime::install(app.handle(), &activity);
             }
             // macOS：Cmd+Q 換成會先問前端的自訂選單項目（見 quit.rs）。
             #[cfg(target_os = "macos")]
@@ -531,6 +533,20 @@ pub fn run() {
             pty_close,
             claude_activity::commands::claude_activity_snapshot,
             claude_activity::commands::claude_activity_tool_detail,
+            intake::commands::intake_get_config,
+            intake::commands::intake_set_config,
+            intake::commands::intake_list,
+            intake::commands::intake_senders,
+            intake::commands::intake_upsert_sender,
+            intake::commands::intake_delete_sender,
+            intake::commands::intake_dropped,
+            intake::commands::intake_approve,
+            intake::commands::intake_reject,
+            intake::commands::intake_update_draft,
+            intake::commands::intake_send_reply,
+            intake::commands::intake_tab_start,
+            intake::commands::intake_tab_stop,
+            intake::commands::intake_tabs,
             pty_get_cwd,
             pty_get_recent_output,
             pty_get_shell_type,

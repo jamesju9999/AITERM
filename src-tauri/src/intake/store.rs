@@ -170,6 +170,12 @@ pub async fn update_draft(pool: &SqlitePool, id: &str, draft: &str) -> Result<bo
     Ok(r.rows_affected() > 0)
 }
 
+/// 寄信失敗等：只記原因，不改狀態。
+pub async fn set_error(pool: &SqlitePool, id: &str, error: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE intake_items SET error = ?, updated_at = ? WHERE id = ?").bind(error).bind(now()).bind(id).execute(pool).await?;
+    Ok(())
+}
+
 /// 草稿寄出後：`draft → done`。
 pub async fn mark_sent(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
     transition(pool, id, &[DRAFT], DONE).await
