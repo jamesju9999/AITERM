@@ -8,8 +8,8 @@ export function flowSteps(item: Pick<IntakeItem, "status" | "kind" | "verified" 
   const s = item.status;
   const answered = s === "draft" || s === "done";
   const approve: FlowState = s === "pending" ? "current" : s === "rejected" ? "failed" : "done";
-  const run: FlowState = s === "queued" ? "current" : s === "running" || answered ? "done" : "todo";
-  const answer: FlowState = s === "running" ? "current" : answered ? "done" : "todo";
+  const run: FlowState = s === "queued" ? "current" : s === "running" || s === "on_board" || answered ? "done" : "todo";
+  const answer: FlowState = s === "running" || s === "on_board" ? "current" : answered ? "done" : "todo";
   let verify: FlowState = "todo";
   if (answered) {
     if (item.kind === "code_change" || item.verification) verify = item.verified === false ? "failed" : "done";

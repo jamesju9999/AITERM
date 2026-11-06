@@ -47,7 +47,7 @@ function savedProject(): string | null {
   }
 }
 
-const STATUSES: IntakeStatus[] = ["pending", "queued", "running", "draft", "done", "rejected"];
+const STATUSES: IntakeStatus[] = ["pending", "queued", "running", "on_board", "draft", "done", "rejected"];
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -479,6 +479,7 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
         </div>
       </header>
       {item.error && <div className="intake__banner">{item.error}</div>}
+      {item.board_task_id && <div className="intake__meta">{t.intake_on_board_note}（{item.board_task_id.slice(0, 8)}）</div>}
       <Recipients item={item} />
 
       <section className="intake__block">
@@ -802,6 +803,11 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       <div className="intake__col">
       <section className="intake__card">
         <h3 className="intake__card-title">{t.intake_sec_verify}</h3>
+      <label className="intake__field">
+        <input type="checkbox" checked={cfg.route_to_board} onChange={(e) => set("route_to_board", e.target.checked)} />
+        {t.intake_set_route_to_board}
+      </label>
+      <p className="intake__meta intake__hint">{t.intake_set_route_to_board_hint}</p>
       <label className="intake__field">
         {t.intake_set_verify_command}
         <input

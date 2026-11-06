@@ -45,6 +45,8 @@ pub struct Config {
     pub telegram_enabled: bool,
     pub web_mode: WebMode,
     pub web_port: u16,
+    /// 「要改程式」的問題建成看板卡片（需專案有程式庫路徑）；關掉就全部走終端機分頁。
+    pub route_to_board: bool,
 }
 
 impl Default for Config {
@@ -67,6 +69,7 @@ impl Default for Config {
             telegram_enabled: false,
             web_mode: WebMode::Off,
             web_port: 8320,
+            route_to_board: true,
         }
     }
 }

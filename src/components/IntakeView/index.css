@@ -20,7 +20,7 @@
 .intake__sender { font-size: 12px; color: var(--text-secondary, #888); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .intake__badge { font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; align-self: center; background: rgba(148, 163, 184, 0.15); color: #94a3b8; white-space: nowrap; }
 .intake__badge--pending, .intake__badge--draft { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
-.intake__badge--running, .intake__badge--queued { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
+.intake__badge--running, .intake__badge--queued, .intake__badge--on_board { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
 .intake__badge--done { background: rgba(16, 185, 129, 0.15); color: #34d399; }
 .intake__empty { color: var(--text-secondary, #888); padding: 32px 12px; list-style: none; text-align: center; font-size: 13px; }
 

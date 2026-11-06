@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type IntakeStatus = "pending" | "queued" | "running" | "draft" | "done" | "rejected";
+export type IntakeStatus = "pending" | "queued" | "running" | "on_board" | "draft" | "done" | "rejected";
 export type Level = "internal" | "external";
 export type MatchMode = "alias" | "subject_tag" | "alias_or_tag" | "dedicated";
 export type DispatchMode = "auto" | "manual";
@@ -28,6 +28,8 @@ export interface IntakeItem {
   project_id: string;
   to_addrs: string | null;
   cc_addrs: string | null;
+  /** 走看板時對應的卡片 id。 */
+  board_task_id: string | null;
 }
 
 export interface IntakeConfig {
@@ -48,6 +50,8 @@ export interface IntakeConfig {
   telegram_enabled: boolean;
   web_mode: "off" | "local" | "lan";
   web_port: number;
+  /** 「要改程式」的問題建成看板卡片（需專案有程式庫路徑）。 */
+  route_to_board: boolean;
 }
 
 export interface IntakeSender {

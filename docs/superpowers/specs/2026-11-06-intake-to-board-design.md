@@ -1,7 +1,7 @@
 # 問題收集接入工作看板 — 設計規格
 
 **日期：** 2026-11-06
-**狀態：** 使用者已核可設計，實作中（分支 `feat/intake-to-board`）
+**狀態：** 已實作（分支 `feat/intake-to-board`，未合併／未 push／未打 tag）；Rust 全套與前端測試通過，尚未用真實 Claude Code 在看板跑過一輪
 **前置：** `2026-11-05-intake-queue-design.md`、`2026-11-06-intake-per-project-design.md`（Intake 的 `project_id` 就是看板專案 id）
 **範圍：** 只做「Intake → 看板卡 → 完成後回信」。接 Agent 協作桌布是下一步，不在本期。
 
@@ -50,6 +50,7 @@ pending/queued ──分類為 code_change 且有 repo_dir──> on_board ─�
 
 ## 4. 邊界
 
+- 建卡失敗（例如卡片寫入出錯）：分類結果已存，項目留在原狀態，之後由終端機分頁領取，不會每 3 秒重問 AI。
 - 同一項目不重複建卡：`board_task_id` 與狀態轉換在同一個條件式更新裡認領（`status IN (pending, queued) AND board_task_id IS NULL`）；建卡失敗則不轉狀態，下次重試。
 - 建卡成功但轉狀態失敗 → 刪掉剛建的卡，避免孤兒卡。
 - 啟動時 `recover_interrupted` 只處理 `running`；`on_board` 不受影響，重啟後繼續輪詢。

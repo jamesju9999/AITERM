@@ -1,5 +1,5 @@
 //! 執行層：把登記表、佇列與實際的終端機分頁、郵件帳號接起來。
-use super::{classify, config, dispatcher, filter, rules, smtp, store, verify, IntakeDb, CHANGED_EVENT};
+use super::{board, classify, config, dispatcher, filter, rules, smtp, store, verify, IntakeDb, CHANGED_EVENT};
 use crate::ai::router::AiRouter;
 use crate::claude_activity::ClaudeActivity;
 use crate::config::ConfigStore;
@@ -121,6 +121,9 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
         store::fail(&db.pool, &id, "Claude Code 沒有收到提問，已退回待派送").await.ok();
         touched = true;
     }
+    if route_and_settle(app, &db.pool).await {
+        touched = true;
+    }
     for tab in rt.registry.idle_tabs() {
         // 絕不能把提問打進沒有 Claude Code 的分頁：那是 shell，會把問題內容當指令執行。
         if let Err(why) = can_type_prompt(&rt.registry, &pty, &tab) {
@@ -158,9 +161,9 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// 派工前：初篩分類；「要改程式」的記下 git HEAD 供事後驗證。任何失敗都退成「要改程式」。
-async fn prepare<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, pty: &PtyManager, item: &store::IntakeItem, tab: &str) {
-    let kind = match app.try_state::<AiRouter>() {
+/// 初篩分類，逾時或失敗一律當「要改程式」。
+async fn classify_item<R: Runtime>(app: &AppHandle<R>, item: &store::IntakeItem) -> classify::Kind {
+    match app.try_state::<AiRouter>() {
         Some(router) => match router.resolve().await {
             Ok(provider) => tokio::time::timeout(Duration::from_secs(30), classify::classify(provider, &item.subject, &item.body))
                 .await
@@ -170,6 +173,68 @@ async fn prepare<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, pty: &
             Err(_) => classify::Kind::CodeChange,
         },
         None => classify::Kind::CodeChange,
+    }
+}
+
+/// 看板：把「要改程式」的新問題建成卡片，並收回已做完的卡片。回傳有沒有任何變動。
+///
+/// 只處理專案已開啟、開關打開、且有程式庫路徑的；其他一律不碰，照舊走終端機分頁。
+async fn route_and_settle<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool) -> bool {
+    let Some(reg) = app.try_state::<crate::projects::ProjectRegistry>() else { return false };
+    let mut touched = false;
+    for handle in reg.all() {
+        let cfg = config::load(pool, &handle.id).await;
+        if !cfg.route_to_board {
+            continue;
+        }
+        let Ok(Some(repo)) = crate::tasks::formations::repo_path(&handle.pool).await else { continue };
+        let Ok(items) = store::list_unrouted(pool, &handle.id).await else { continue };
+        for item in items {
+            let kind = classify_item(app, &item).await;
+            if kind == classify::Kind::CodeChange {
+                // 分類要先存：建卡失敗時項目留在原狀態，之後由分頁領取也不必再分類。
+                store::set_kind(pool, &item.id, kind.as_str(), None).await.ok();
+                match board::route_item(pool, &handle, &item, &repo).await {
+                    Ok(_) => touched = true,
+                    Err(e) => log::warn!("intake: 建看板卡失敗：{e}"),
+                }
+            } else {
+                store::set_kind(pool, &item.id, kind.as_str(), None).await.ok();
+                touched = true;
+            }
+        }
+    }
+    let Ok(on_board) = store::list_on_board(pool).await else { return touched };
+    for item in on_board {
+        let Some(handle) = reg.get(&item.project_id) else { continue };
+        match board::settle(pool, &handle, &item).await {
+            Ok(board::Settled::Waiting) => {}
+            Ok(board::Settled::Returned) => touched = true,
+            Ok(board::Settled::Drafted { success }) => {
+                touched = true;
+                let cfg = config::load(pool, &item.project_id).await;
+                let auto = if item.sender_level == "internal" { cfg.reply_internal_auto } else { cfg.reply_external_auto };
+                if auto && success {
+                    if let Err(e) = send_reply(app, &item.id).await {
+                        store::set_error(pool, &item.id, &format!("自動寄出失敗：{e}")).await.ok();
+                    }
+                } else if auto {
+                    store::set_error(pool, &item.id, "看板卡片沒有成功，已保留為草稿，請確認後再寄出").await.ok();
+                }
+            }
+            Err(e) => log::warn!("intake: 收看板卡片失敗：{e}"),
+        }
+    }
+    touched
+}
+
+/// 派工前：初篩分類；「要改程式」的記下 git HEAD 供事後驗證。任何失敗都退成「要改程式」。
+async fn prepare<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, pty: &PtyManager, item: &store::IntakeItem, tab: &str) {
+    // 看板路由階段可能已經分類過了：不再問一次 AI。
+    let kind = match item.kind.as_deref() {
+        Some("question") => classify::Kind::Question,
+        Some(_) => classify::Kind::CodeChange,
+        None => classify_item(app, item).await,
     };
     let head = if kind == classify::Kind::CodeChange {
         match pty.get_cwd(tab) {
@@ -305,4 +370,79 @@ pub async fn send_reply<R: Runtime>(app: &AppHandle<R>, item_id: &str) -> Result
 
 pub fn level_of(item: &store::IntakeItem) -> rules::Level {
     if item.sender_level == "internal" { rules::Level::Internal } else { rules::Level::External }
+}
+
+#[cfg(test)]
+mod board_wiring_tests {
+    use super::*;
+    use crate::intake::rules::Level;
+    use crate::intake::{store::{insert_item, NewItem}, IntakeDb};
+    use crate::projects::ProjectRegistry;
+    use crate::tasks::store as tasks;
+
+    /// 整條接線：`tick` 把「要改程式」的問題建成卡片，卡片做完後下一次 `tick` 收回並存成回覆草稿。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tick_routes_a_code_change_to_the_board_and_settles_it_when_the_card_is_done() {
+        let app = tauri::test::mock_app();
+        let h = app.handle().clone();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        store::init_schema(&pool).await.unwrap();
+        h.manage(IntakeDb { pool: pool.clone() });
+        h.manage(Arc::new(IntakeRuntime { registry: dispatcher::Registry::default(), tick_lock: tokio::sync::Mutex::new(()) }));
+        h.manage(Arc::new(PtyManager::new()));
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let project = reg.create(parent.path(), "demo", "").await.unwrap();
+        h.manage(reg);
+        // 沒有程式庫路徑：不碰，留給終端機分頁。
+        let first = insert_item(&pool, NewItem { project_id: &project.id, id: None, source: "email", sender: "a@corp.com", level: Level::Internal, subject: "修登入", body: "請修", message_id: "m0", status: store::QUEUED }).await.unwrap().unwrap();
+        tick(&h).await;
+        assert_eq!(store::get_item(&pool, &first.id).await.unwrap().unwrap().status, store::QUEUED);
+
+        // 設好程式庫路徑後才建卡。
+        crate::tasks::repo_check::save_project_repo(&project.pool, "/work/repo").await.unwrap();
+        tick(&h).await;
+        let got = store::get_item(&pool, &first.id).await.unwrap().unwrap();
+        assert_eq!(got.status, store::ON_BOARD);
+        let card_id = got.board_task_id.clone().unwrap();
+        let card = tasks::get_task(&project.pool, &card_id).await.unwrap().unwrap();
+        assert_eq!((card.status.as_str(), card.project_dir.as_str()), ("queued", "/work/repo"));
+
+        // 卡片還沒做完：再 tick 不會動它，也不會建第二張。
+        tick(&h).await;
+        assert_eq!(tasks::list_tasks(&project.pool).await.unwrap().len(), 1);
+        assert_eq!(store::get_item(&pool, &first.id).await.unwrap().unwrap().status, store::ON_BOARD);
+
+        tasks::dispatch_for_test(&project.pool, &card_id, "tab").await;
+        tasks::set_summary(&project.pool, &card_id, "已修好").await.unwrap();
+        tasks::finish_task(&project.pool, &card_id, "success", None, None).await.unwrap();
+        tick(&h).await;
+        let done = store::get_item(&pool, &first.id).await.unwrap().unwrap();
+        // 內部自動寄出但測試環境沒有郵件帳號：寄不出去，草稿與錯誤原因都要留著。
+        assert_eq!(done.status, store::DRAFT);
+        assert!(done.reply_draft.unwrap().contains("已修好"));
+        assert!(done.error.is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn turning_the_switch_off_keeps_everything_on_the_terminal_path() {
+        let app = tauri::test::mock_app();
+        let h = app.handle().clone();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        store::init_schema(&pool).await.unwrap();
+        h.manage(IntakeDb { pool: pool.clone() });
+        h.manage(Arc::new(IntakeRuntime { registry: dispatcher::Registry::default(), tick_lock: tokio::sync::Mutex::new(()) }));
+        h.manage(Arc::new(PtyManager::new()));
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let project = reg.create(parent.path(), "demo", "").await.unwrap();
+        crate::tasks::repo_check::save_project_repo(&project.pool, "/work/repo").await.unwrap();
+        h.manage(reg);
+        config::save(&pool, &project.id, &config::Config { route_to_board: false, ..config::Config::default() }).await.unwrap();
+        let item = insert_item(&pool, NewItem { project_id: &project.id, id: None, source: "email", sender: "a@corp.com", level: Level::Internal, subject: "s", body: "b", message_id: "m", status: store::QUEUED }).await.unwrap().unwrap();
+        tick(&h).await;
+        let got = store::get_item(&pool, &item.id).await.unwrap().unwrap();
+        assert_eq!((got.status.as_str(), got.kind), (store::QUEUED, None));
+        assert!(tasks::list_tasks(&project.pool).await.unwrap().is_empty());
+    }
 }
