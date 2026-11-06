@@ -16,22 +16,159 @@ fn changed(app: &AppHandle) {
     let _ = app.emit(CHANGED_EVENT, ());
 }
 
-#[tauri::command]
-pub async fn intake_get_config(db: State<'_, IntakeDb>) -> Result<Config, String> {
-    Ok(config::load(&db.pool).await)
+/// 設定頁要的資料：該專案的設定，加上「是否存過」與「是不是 Telegram 預設專案」。
+#[derive(Serialize)]
+pub struct ConfigView {
+    pub config: Config,
+    pub saved: bool,
+    pub telegram_default: bool,
 }
 
 #[tauri::command]
-pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, config: Config) -> Result<(), String> {
-    config::save(&db.pool, &config).await.map_err(e)?;
-    // 網頁表單的開關／埠號可能變了。
-    super::web::restart(&app).await;
+pub async fn intake_get_config(db: State<'_, IntakeDb>, project_id: String) -> Result<ConfigView, String> {
+    let mut config = config::load(&db.pool, &project_id).await;
+    let global = config::load_global(&db.pool).await;
+    config.web_port = global.web_port; // 埠號是所有專案共用的
+    Ok(ConfigView {
+        saved: config::exists(&db.pool, &project_id).await,
+        telegram_default: !project_id.is_empty() && global.telegram_default_project == project_id,
+        config,
+    })
+}
+
+/// 儲存前檢查會不會讓同一封信有兩個歸屬（同一信箱下別名／主旨標籤相同、專用信箱被共用）。
+async fn check_conflicts(app: &AppHandle, pool: &sqlx::SqlitePool, project_id: &str, cfg: &Config) -> Result<(), String> {
+    let mut others = super::open_projects(app);
+    others.push((String::new(), "未歸屬".to_string()));
+    for (id, name) in others {
+        if id == project_id {
+            continue;
+        }
+        let other = config::load(pool, &id).await;
+        if let Some(field) = config::conflict(cfg, &other) {
+            let what = match field {
+                "dedicated" => "這個信箱已被設為另一個專案的專用信箱，同一個信箱不能同時給多個專案",
+                "alias" => "收件別名跟另一個專案相同",
+                _ => "主旨標籤跟另一個專案相同",
+            };
+            return Err(format!("與專案「{name}」衝突：{what}"));
+        }
+    }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn intake_list(db: State<'_, IntakeDb>, status: Option<String>) -> Result<Vec<IntakeItem>, String> {
-    store::list_items(&db.pool, status.as_deref()).await.map_err(e)
+pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, project_id: String, config: Config, telegram_default: bool) -> Result<(), String> {
+    check_conflicts(&app, &db.pool, &project_id, &config).await?;
+    let mut global = config::load_global(&db.pool).await;
+    global.web_port = config.web_port;
+    if telegram_default && !project_id.is_empty() {
+        global.telegram_default_project = project_id.clone();
+    } else if global.telegram_default_project == project_id {
+        global.telegram_default_project.clear();
+    }
+    config::save_global(&db.pool, &global).await.map_err(e)?;
+    config::save(&db.pool, &project_id, &config).await.map_err(e)?;
+    // 網頁表單的開關／埠號可能變了。
+    super::web::restart(&app).await;
+    changed(&app);
+    Ok(())
+}
+
+/// 「未歸屬」的舊設定與白名單複製到這個專案（不刪除舊的）。
+#[tauri::command]
+pub async fn intake_copy_legacy_config(app: AppHandle, db: State<'_, IntakeDb>, project_id: String) -> Result<(), String> {
+    if project_id.is_empty() {
+        return Err("請先選一個專案".into());
+    }
+    let mut cfg = config::load(&db.pool, "").await;
+    cfg.enabled = false; // 複製來的設定先停用，免得跟舊設定的別名／標籤衝突
+    config::save(&db.pool, &project_id, &cfg).await.map_err(e)?;
+    for s in store::list_senders(&db.pool, "").await.map_err(e)? {
+        store::upsert_sender(&db.pool, &project_id, &s).await.map_err(e)?;
+    }
+    changed(&app);
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct ProjectSummary {
+    pub id: String,
+    pub name: String,
+    /// 專案固定的程式庫目錄（看板設定的 `repo_dir`）；沒設定為 `None`。
+    pub repo_dir: Option<String>,
+    /// 需要你處理的題數（待派送＋待寄出草稿）與總數。
+    pub open_count: i64,
+    pub total: i64,
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct ProjectsView {
+    pub projects: Vec<ProjectSummary>,
+    /// 尚未歸屬的題數（升級前的舊資料）。為 0 就不顯示「未歸屬」。
+    pub unassigned: i64,
+}
+
+#[tauri::command]
+pub async fn intake_projects(app: AppHandle, db: State<'_, IntakeDb>, reg: State<'_, crate::projects::ProjectRegistry>) -> Result<ProjectsView, String> {
+    let counts = store::project_counts(&db.pool).await.map_err(e)?;
+    let count_of = |id: &str| counts.iter().find(|(p, _, _)| p == id).map(|(_, o, t)| (*o, *t)).unwrap_or((0, 0));
+    let mut handles = reg.all();
+    handles.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+
+    // 升級後只有一個專案：把舊資料直接歸給它，使用者不用做任何事。
+    let (legacy_open, legacy_total) = count_of("");
+    let _ = legacy_open;
+    if handles.len() == 1 && (legacy_total > 0 || config::exists(&db.pool, "").await) {
+        let id = handles[0].id.clone();
+        adopt(&db.pool, &id).await.map_err(e)?;
+        changed(&app);
+    }
+    let counts = store::project_counts(&db.pool).await.map_err(e)?;
+    let count_of = |id: &str| counts.iter().find(|(p, _, _)| p == id).map(|(_, o, t)| (*o, *t)).unwrap_or((0, 0));
+
+    let mut projects = Vec::new();
+    for h in handles {
+        let (open_count, total) = count_of(&h.id);
+        let repo_dir = crate::tasks::repo_check::saved_project_repo(&h.pool).await.ok().flatten();
+        projects.push(ProjectSummary { enabled: config::load(&db.pool, &h.id).await.enabled, id: h.id, name: h.name, repo_dir, open_count, total });
+    }
+    Ok(ProjectsView { projects, unassigned: count_of("").1 })
+}
+
+/// 舊設定（若新專案還沒有自己的）、白名單、題目與丟棄計數歸給專案。
+async fn adopt(pool: &sqlx::SqlitePool, project_id: &str) -> Result<(), sqlx::Error> {
+    if !config::exists(pool, project_id).await && config::exists(pool, "").await {
+        let cfg = config::load(pool, "").await;
+        config::save(pool, project_id, &cfg).await?;
+    }
+    store::adopt_legacy(pool, project_id).await?;
+    Ok(())
+}
+
+/// 把所有「未歸屬」的舊資料歸給這個專案。
+#[tauri::command]
+pub async fn intake_adopt_legacy(app: AppHandle, db: State<'_, IntakeDb>, project_id: String) -> Result<(), String> {
+    if project_id.is_empty() {
+        return Err("請先選一個專案".into());
+    }
+    adopt(&db.pool, &project_id).await.map_err(e)?;
+    changed(&app);
+    Ok(())
+}
+
+/// 把單一未歸屬的題目指派到專案。
+#[tauri::command]
+pub async fn intake_assign(app: AppHandle, db: State<'_, IntakeDb>, id: String, project_id: String) -> Result<bool, String> {
+    let r = store::assign_item(&db.pool, &id, &project_id).await.map_err(e)?;
+    changed(&app);
+    Ok(r)
+}
+
+#[tauri::command]
+pub async fn intake_list(db: State<'_, IntakeDb>, project_id: String, status: Option<String>) -> Result<Vec<IntakeItem>, String> {
+    store::list_items(&db.pool, &project_id, status.as_deref()).await.map_err(e)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,26 +179,26 @@ pub struct SenderDto {
 }
 
 #[tauri::command]
-pub async fn intake_senders(db: State<'_, IntakeDb>) -> Result<Vec<SenderDto>, String> {
-    Ok(store::list_senders(&db.pool).await.map_err(e)?.into_iter().map(|s| SenderDto { address: s.address, level: s.level, skip_auth: s.skip_auth }).collect())
+pub async fn intake_senders(db: State<'_, IntakeDb>, project_id: String) -> Result<Vec<SenderDto>, String> {
+    Ok(store::list_senders(&db.pool, &project_id).await.map_err(e)?.into_iter().map(|s| SenderDto { address: s.address, level: s.level, skip_auth: s.skip_auth }).collect())
 }
 
 #[tauri::command]
-pub async fn intake_upsert_sender(db: State<'_, IntakeDb>, sender: SenderDto) -> Result<(), String> {
+pub async fn intake_upsert_sender(db: State<'_, IntakeDb>, project_id: String, sender: SenderDto) -> Result<(), String> {
     if !super::rules::valid_address(&sender.address) {
         return Err("請輸入有效的電子郵件地址，或 Telegram 聊天室 tg:<chat_id>".into());
     }
-    store::upsert_sender(&db.pool, &Sender { address: sender.address, level: sender.level, skip_auth: sender.skip_auth }).await.map_err(e)
+    store::upsert_sender(&db.pool, &project_id, &Sender { address: sender.address, level: sender.level, skip_auth: sender.skip_auth }).await.map_err(e)
 }
 
 #[tauri::command]
-pub async fn intake_delete_sender(db: State<'_, IntakeDb>, address: String) -> Result<bool, String> {
-    store::delete_sender(&db.pool, &address).await.map_err(e)
+pub async fn intake_delete_sender(db: State<'_, IntakeDb>, project_id: String, address: String) -> Result<bool, String> {
+    store::delete_sender(&db.pool, &project_id, &address).await.map_err(e)
 }
 
 #[tauri::command]
-pub async fn intake_dropped(db: State<'_, IntakeDb>) -> Result<Vec<(String, i64)>, String> {
-    store::dropped_counts(&db.pool).await.map_err(e)
+pub async fn intake_dropped(db: State<'_, IntakeDb>, project_id: String) -> Result<Vec<(String, i64)>, String> {
+    store::dropped_counts(&db.pool, &project_id).await.map_err(e)
 }
 
 #[tauri::command]
@@ -107,8 +244,8 @@ pub async fn intake_send_reply(app: AppHandle, db: State<'_, IntakeDb>, id: Stri
 
 /// 這個分頁開始接收問題。
 #[tauri::command]
-pub async fn intake_tab_start(app: AppHandle, rt: State<'_, Arc<IntakeRuntime>>, tab_id: String) -> Result<(), String> {
-    rt.registry.register(&tab_id);
+pub async fn intake_tab_start(app: AppHandle, rt: State<'_, Arc<IntakeRuntime>>, tab_id: String, project_id: String) -> Result<(), String> {
+    rt.registry.register(&tab_id, &project_id);
     changed(&app);
     runtime::tick(&app).await;
     Ok(())
@@ -124,9 +261,15 @@ pub async fn intake_tab_stop(app: AppHandle, db: State<'_, IntakeDb>, rt: State<
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct TabDto {
+    pub tab_id: String,
+    pub project_id: String,
+}
+
 #[tauri::command]
-pub fn intake_tabs(rt: State<'_, Arc<IntakeRuntime>>) -> Vec<String> {
-    rt.registry.tabs()
+pub fn intake_tabs(rt: State<'_, Arc<IntakeRuntime>>) -> Vec<TabDto> {
+    rt.registry.tabs().into_iter().map(|t| TabDto { project_id: rt.registry.project_of(&t).unwrap_or_default(), tab_id: t }).collect()
 }
 
 #[tauri::command]

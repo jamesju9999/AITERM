@@ -68,6 +68,10 @@ impl Otps {
     }
 }
 
+fn otp_key(project_id: &str, addr: &str) -> String {
+    format!("{project_id}|{addr}")
+}
+
 pub fn random_code() -> String {
     let n = u32::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..4].try_into().unwrap());
     format!("{:06}", n % 1_000_000)
@@ -75,17 +79,18 @@ pub fn random_code() -> String {
 
 /// 發碼的前置檢查。回傳要寄出的 `(收件地址, 驗證碼)`；不在白名單或被限流回 `None`
 /// （呼叫端對外一律回同樣的成功訊息）。
-pub async fn prepare_code(pool: &SqlitePool, cfg: &Config, otps: &Otps, email: &str, now: i64) -> Result<Option<(String, String)>, sqlx::Error> {
+pub async fn prepare_code(pool: &SqlitePool, project_id: &str, cfg: &Config, otps: &Otps, email: &str, now: i64) -> Result<Option<(String, String)>, sqlx::Error> {
     if cfg.web_mode == WebMode::Off || !rules::valid_address(email) || email.trim().starts_with("tg:") {
         return Ok(None);
     }
     let addr = rules::normalize(email);
-    let senders = store::list_senders(pool).await?;
+    let senders = store::list_senders(pool, project_id).await?;
     if !senders.iter().any(|s| rules::normalize(&s.address) == addr) {
-        store::bump_dropped(pool, "web_not_allowed").await?;
+        store::bump_dropped(pool, project_id, "web_not_allowed").await?;
         return Ok(None);
     }
-    Ok(otps.issue(&addr, now, random_code()).map(|c| (addr, c)))
+    // 驗證碼綁定專案：同一個信箱在另一個專案拿到的碼不能拿來投這個專案。
+    Ok(otps.issue(&otp_key(project_id, &addr), now, random_code()).map(|c| (addr, c)))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -97,7 +102,7 @@ pub enum Submit {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn submit(pool: &SqlitePool, cfg: &Config, otps: &Otps, now: i64, email: &str, code: &str, subject: &str, body: &str, attach_root: &Path, images: Vec<Raw>) -> Result<Submit, sqlx::Error> {
+pub async fn submit(pool: &SqlitePool, project_id: &str, cfg: &Config, otps: &Otps, now: i64, email: &str, code: &str, subject: &str, body: &str, attach_root: &Path, images: Vec<Raw>) -> Result<Submit, sqlx::Error> {
     if cfg.web_mode == WebMode::Off {
         return Ok(Submit::Disabled);
     }
@@ -110,15 +115,15 @@ pub async fn submit(pool: &SqlitePool, cfg: &Config, otps: &Otps, now: i64, emai
     }
     let addr = rules::normalize(email);
     // 先驗證碼、後查白名單：兩者任一不符都回 BadCode，不洩漏白名單。
-    let senders = store::list_senders(pool).await?;
+    let senders = store::list_senders(pool, project_id).await?;
     let Some(sender) = senders.iter().find(|s| rules::normalize(&s.address) == addr) else { return Ok(Submit::BadCode) };
-    if !otps.verify(&addr, code, now) {
+    if !otps.verify(&otp_key(project_id, &addr), code, now) {
         return Ok(Submit::BadCode);
     }
     let subject: String = subject.trim().chars().take(200).collect();
     let mid = format!("web:{}", uuid::Uuid::new_v4());
     let body = if body.is_empty() { "（僅附圖）" } else { body };
-    let r = queue::enqueue(pool, cfg, sender.level, "web", &addr, &subject, body, &mid, attach_root, images).await?;
+    let r = queue::enqueue(pool, cfg, project_id, sender.level, "web", &addr, &subject, body, &mid, attach_root, images).await?;
     Ok(match r {
         Ingested::Queued(_) | Ingested::Duplicate => Submit::Accepted,
         Ingested::Dropped("rate_limited") => Submit::Invalid("送出太頻繁，請稍後再試"),
@@ -127,11 +132,11 @@ pub async fn submit(pool: &SqlitePool, cfg: &Config, otps: &Otps, now: i64, emai
 }
 
 pub const PAGE: &str = r#"<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>提問</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>提問 · __TITLE__</title>
 <style>body{font:16px system-ui;max-width:560px;margin:2rem auto;padding:0 1rem}label{display:block;margin:.8rem 0 .2rem}
 input,textarea,button{font:inherit;width:100%;box-sizing:border-box;padding:.5rem}button{margin-top:1rem;cursor:pointer}
 #msg{margin-top:1rem;min-height:1.5em}.ok{color:#15803d}.err{color:#b91c1c}[hidden]{display:none}</style></head><body>
-<h1>提問</h1>
+<h1>提問</h1><p>__TITLE__</p>
 <form id="f1"><label for="email">你的電子郵件（必須是已授權的信箱）</label>
 <input id="email" type="email" required autocomplete="email"><button>寄送驗證碼</button></form>
 <form id="f2" hidden><label for="code">收到的 6 位數驗證碼</label><input id="code" inputmode="numeric" maxlength="6" required>
@@ -143,12 +148,12 @@ input,textarea,button{font:inherit;width:100%;box-sizing:border-box;padding:.5re
 const $=id=>document.getElementById(id),m=(t,c)=>{$("msg").textContent=t;$("msg").className=c||""};
 async function post(u,d){const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
 let j={};try{j=await r.json()}catch(e){}return{ok:r.ok,j}}
-$("f1").onsubmit=async e=>{e.preventDefault();const r=await post("/api/code",{email:$("email").value});
+$("f1").onsubmit=async e=>{e.preventDefault();const r=await post("__BASE__/api/code",{email:$("email").value});
 m(r.ok?"若此信箱已獲授權，驗證碼已寄出（10 分鐘內有效）。":(r.j.error||"失敗"),r.ok?"ok":"err");if(r.ok)$("f2").hidden=false};
 const b64=f=>new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(String(r.result).split(",")[1]||"");r.onerror=no;r.readAsDataURL(f)});
 $("f2").onsubmit=async e=>{e.preventDefault();const fs=[...$("imgs").files].slice(0,5);
 const images=await Promise.all(fs.map(async f=>({name:f.name,data:await b64(f)})));
-const r=await post("/api/submit",{email:$("email").value,code:$("code").value,subject:$("subject").value,body:$("body").value,images});
+const r=await post("__BASE__/api/submit",{email:$("email").value,code:$("code").value,subject:$("subject").value,body:$("body").value,images});
 m(r.ok?"已收到，處理完成後會回信給你。":(r.j.error||"失敗"),r.ok?"ok":"err");if(r.ok){$("f2").reset()}};
 </script></body></html>"#;
 
@@ -161,7 +166,7 @@ mod tests {
     async fn pool() -> SqlitePool {
         let p = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         store::init_schema(&p).await.unwrap();
-        store::upsert_sender(&p, &Sender { address: "bob@corp.com".into(), level: Level::External, skip_auth: false }).await.unwrap();
+        store::upsert_sender(&p, "", &Sender { address: "bob@corp.com".into(), level: Level::External, skip_auth: false }).await.unwrap();
         p
     }
     fn cfg() -> Config {
@@ -213,13 +218,13 @@ mod tests {
         let p = pool().await;
         let tmp = tempfile::tempdir().unwrap();
         let o = Otps::default();
-        let got = prepare_code(&p, &cfg(), &o, "Bob <BOB@corp.com>", 0).await.unwrap().unwrap();
+        let got = prepare_code(&p, "", &cfg(), &o, "Bob <BOB@corp.com>", 0).await.unwrap().unwrap();
         assert_eq!(got.0, "bob@corp.com");
-        assert!(prepare_code(&p, &cfg(), &o, "evil@x.com", 0).await.unwrap().is_none());
-        assert!(prepare_code(&p, &cfg(), &o, "tg:123", 0).await.unwrap().is_none());
-        assert_eq!(store::dropped_counts(&p).await.unwrap(), vec![("web_not_allowed".to_string(), 1)]);
+        assert!(prepare_code(&p, "", &cfg(), &o, "evil@x.com", 0).await.unwrap().is_none());
+        assert!(prepare_code(&p, "", &cfg(), &o, "tg:123", 0).await.unwrap().is_none());
+        assert_eq!(store::dropped_counts(&p, "").await.unwrap(), vec![("web_not_allowed".to_string(), 1)]);
         let off = Config { web_mode: WebMode::Off, ..Config::default() };
-        assert!(prepare_code(&p, &off, &o, "bob@corp.com", 0).await.unwrap().is_none());
+        assert!(prepare_code(&p, "", &off, &o, "bob@corp.com", 0).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -227,13 +232,13 @@ mod tests {
         let p = pool().await;
         let tmp = tempfile::tempdir().unwrap();
         let o = Otps::default();
-        let (addr, code) = prepare_code(&p, &cfg(), &o, "bob@corp.com", 0).await.unwrap().unwrap();
-        assert_eq!(submit(&p, &cfg(), &o, 1, &addr, "000000", "s", "內容", tmp.path(), vec![]).await.unwrap(), Submit::BadCode);
-        assert!(store::list_items(&p, None).await.unwrap().is_empty());
-        assert_eq!(submit(&p, &cfg(), &o, 2, &addr, &code, "壞掉了", "請修", tmp.path(), vec![]).await.unwrap(), Submit::Accepted);
-        let it = &store::list_items(&p, None).await.unwrap()[0];
+        let (addr, code) = prepare_code(&p, "", &cfg(), &o, "bob@corp.com", 0).await.unwrap().unwrap();
+        assert_eq!(submit(&p, "", &cfg(), &o, 1, &addr, "000000", "s", "內容", tmp.path(), vec![]).await.unwrap(), Submit::BadCode);
+        assert!(store::list_items(&p, "", None).await.unwrap().is_empty());
+        assert_eq!(submit(&p, "", &cfg(), &o, 2, &addr, &code, "壞掉了", "請修", tmp.path(), vec![]).await.unwrap(), Submit::Accepted);
+        let it = &store::list_items(&p, "", None).await.unwrap()[0];
         assert_eq!((it.source.as_str(), it.sender.as_str(), it.sender_level.as_str(), it.status.as_str()), ("web", "bob@corp.com", "external", store::PENDING));
-        assert_eq!(submit(&p, &cfg(), &o, 3, &addr, &code, "s", "again", tmp.path(), vec![]).await.unwrap(), Submit::BadCode, "同一組碼不能再用");
+        assert_eq!(submit(&p, "", &cfg(), &o, 3, &addr, &code, "s", "again", tmp.path(), vec![]).await.unwrap(), Submit::BadCode, "同一組碼不能再用");
     }
 
     #[tokio::test]
@@ -241,15 +246,15 @@ mod tests {
         let p = pool().await;
         let tmp = tempfile::tempdir().unwrap();
         let o = Otps::default();
-        let (addr, code) = prepare_code(&p, &cfg(), &o, "bob@corp.com", 0).await.unwrap().unwrap();
-        assert!(matches!(submit(&p, &cfg(), &o, 1, &addr, &code, "s", "   ", tmp.path(), vec![]).await.unwrap(), Submit::Invalid(_)));
+        let (addr, code) = prepare_code(&p, "", &cfg(), &o, "bob@corp.com", 0).await.unwrap().unwrap();
+        assert!(matches!(submit(&p, "", &cfg(), &o, 1, &addr, &code, "s", "   ", tmp.path(), vec![]).await.unwrap(), Submit::Invalid(_)));
         let big = "字".repeat(MAX_BODY_CHARS + 1);
-        assert!(matches!(submit(&p, &cfg(), &o, 1, &addr, &code, "s", &big, tmp.path(), vec![]).await.unwrap(), Submit::Invalid(_)));
+        assert!(matches!(submit(&p, "", &cfg(), &o, 1, &addr, &code, "s", &big, tmp.path(), vec![]).await.unwrap(), Submit::Invalid(_)));
         // 內容無效時不應該消耗驗證碼
-        assert_eq!(submit(&p, &cfg(), &o, 2, &addr, &code, "s", "ok", tmp.path(), vec![]).await.unwrap(), Submit::Accepted);
-        assert_eq!(submit(&p, &cfg(), &o, 2, "evil@x.com", "123456", "s", "x", tmp.path(), vec![]).await.unwrap(), Submit::BadCode);
+        assert_eq!(submit(&p, "", &cfg(), &o, 2, &addr, &code, "s", "ok", tmp.path(), vec![]).await.unwrap(), Submit::Accepted);
+        assert_eq!(submit(&p, "", &cfg(), &o, 2, "evil@x.com", "123456", "s", "x", tmp.path(), vec![]).await.unwrap(), Submit::BadCode);
         let off = Config { web_mode: WebMode::Off, ..Config::default() };
-        assert_eq!(submit(&p, &off, &o, 2, &addr, &code, "s", "x", tmp.path(), vec![]).await.unwrap(), Submit::Disabled);
+        assert_eq!(submit(&p, "", &off, &o, 2, &addr, &code, "s", "x", tmp.path(), vec![]).await.unwrap(), Submit::Disabled);
     }
 
     #[test]
@@ -260,7 +265,7 @@ mod tests {
 
 // ---- HTTP 伺服器 ----
 
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, State};
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
@@ -278,8 +283,10 @@ pub struct WebState {
     pub attach_root: std::path::PathBuf,
     /// 佇列有新項目時通知前端。
     pub on_change: Box<dyn Fn() + Send + Sync>,
-    /// 寄驗證碼：`(收件地址, 主旨, 內文)`，在背景執行。
-    pub send_mail: Box<dyn Fn(String, String, String) + Send + Sync>,
+    /// 寄驗證碼：`(專案 id, 收件地址, 主旨, 內文)`，在背景執行。
+    pub send_mail: Box<dyn Fn(String, String, String, String) + Send + Sync>,
+    /// 目前開啟中的專案（id、名稱）；網址裡的短代碼靠它對回專案。
+    pub projects: Box<dyn Fn() -> Vec<(String, String)> + Send + Sync>,
 }
 
 #[derive(Default)]
@@ -330,23 +337,70 @@ fn json(status: StatusCode, v: serde_json::Value) -> impl IntoResponse {
     (status, [(header::CACHE_CONTROL, "no-store")], Json(v))
 }
 
-async fn page() -> impl IntoResponse {
-    ([(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(PAGE))
+/// 網址上的專案短代碼＝專案 id 的前 8 個字元；「未歸屬」的舊設定用 `legacy`。
+pub fn project_code(project_id: &str) -> String {
+    if project_id.is_empty() { "legacy".to_string() } else { project_id.chars().take(8).collect() }
 }
 
-async fn api_code(State(st): State<Arc<WebState>>, Json(req): Json<CodeReq>) -> impl IntoResponse {
-    let cfg = super::config::load(&st.pool).await;
-    if let Ok(Some((to, code))) = prepare_code(&st.pool, &cfg, &st.otps, &req.email, now()).await {
-        // 寄信放背景：回應時間不能洩漏「這個信箱有沒有在白名單」。
-        let body = format!("你的驗證碼是 {code}，10 分鐘內有效。如果不是你本人操作，請忽略這封信。");
-        (st.send_mail)(to, "提問驗證碼".into(), body);
+/// 依短代碼找專案，回傳 `(專案 id, 名稱, 設定)`；找不到或沒啟用網頁表單回 `None`。
+async fn resolve(st: &WebState, code: &str) -> Option<(String, String, Config)> {
+    let mut all = (st.projects)();
+    if super::config::exists(&st.pool, "").await {
+        all.push((String::new(), "未歸屬".to_string()));
     }
+    let (id, name) = all.into_iter().find(|(id, _)| project_code(id) == code)?;
+    let cfg = super::config::load(&st.pool, &id).await;
+    (cfg.web_mode != WebMode::Off).then_some((id, name, cfg))
+}
+
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+fn no_store_html(body: String) -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(body))
+}
+
+/// 首頁：列出已啟用網頁表單的專案。
+async fn index(State(st): State<Arc<WebState>>) -> impl IntoResponse {
+    let mut all = (st.projects)();
+    if super::config::exists(&st.pool, "").await {
+        all.push((String::new(), "未歸屬".to_string()));
+    }
+    let mut items = String::new();
+    for (id, name) in all {
+        if super::config::load(&st.pool, &id).await.web_mode != WebMode::Off {
+            items.push_str(&format!("<li><a href=\"/p/{}\">{}</a></li>", project_code(&id), escape_html(&name)));
+        }
+    }
+    let list = if items.is_empty() { "<p>目前沒有開放的專案。</p>".to_string() } else { format!("<ul>{items}</ul>") };
+    no_store_html(format!("<!doctype html><html lang=\"zh-Hant\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>提問</title><style>body{{font:16px system-ui;max-width:560px;margin:2rem auto;padding:0 1rem}}li{{margin:.6rem 0}}</style></head><body><h1>請選擇專案</h1>{list}</body></html>"))
+}
+
+async fn page(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>) -> impl IntoResponse {
+    match resolve(&st, &code).await {
+        Some((id, name, _)) => no_store_html(PAGE.replace("__TITLE__", &escape_html(&name)).replace("__BASE__", &format!("/p/{}", project_code(&id)))).into_response(),
+        None => (StatusCode::NOT_FOUND, "找不到這個專案，或尚未開放").into_response(),
+    }
+}
+
+async fn api_code(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>, Json(req): Json<CodeReq>) -> impl IntoResponse {
+    if let Some((pid, _, cfg)) = resolve(&st, &code).await {
+        if let Ok(Some((to, c))) = prepare_code(&st.pool, &pid, &cfg, &st.otps, &req.email, now()).await {
+            // 寄信放背景：回應時間不能洩漏「這個信箱有沒有在白名單」。
+            let body = format!("你的驗證碼是 {c}，10 分鐘內有效。如果不是你本人操作，請忽略這封信。");
+            (st.send_mail)(pid, to, "提問驗證碼".into(), body);
+        }
+    }
+    // 專案不存在、未開放、不在白名單都回一樣的內容，不洩漏哪些專案存在。
     json(StatusCode::OK, serde_json::json!({ "ok": true }))
 }
 
-async fn api_submit(State(st): State<Arc<WebState>>, Json(req): Json<SubmitReq>) -> impl IntoResponse {
-    let cfg = super::config::load(&st.pool).await;
-    match submit(&st.pool, &cfg, &st.otps, now(), &req.email, &req.code, &req.subject, &req.body, &st.attach_root, decode_images(req.images)).await {
+async fn api_submit(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>, Json(req): Json<SubmitReq>) -> impl IntoResponse {
+    let Some((pid, _, cfg)) = resolve(&st, &code).await else {
+        return json(StatusCode::SERVICE_UNAVAILABLE, serde_json::json!({ "error": "目前未開放" }));
+    };
+    match submit(&st.pool, &pid, &cfg, &st.otps, now(), &req.email, &req.code, &req.subject, &req.body, &st.attach_root, decode_images(req.images)).await {
         Ok(Submit::Accepted) => {
             (st.on_change)();
             json(StatusCode::OK, serde_json::json!({ "ok": true }))
@@ -363,10 +417,11 @@ async fn api_submit(State(st): State<Arc<WebState>>, Json(req): Json<SubmitReq>)
 
 pub fn router(st: Arc<WebState>) -> Router {
     Router::new()
-        .route("/", get(page))
+        .route("/", get(index))
+        .route("/p/{code}", get(page))
         // 要驗證碼的請求只有一個信箱，小上限；送出問題可能帶 5 張圖（base64 約 13MB）。
-        .route("/api/code", post(api_code).layer(DefaultBodyLimit::max(4 * 1024)))
-        .route("/api/submit", post(api_submit).layer(DefaultBodyLimit::max(MAX_SUBMIT_BYTES)))
+        .route("/p/{code}/api/code", post(api_code).layer(DefaultBodyLimit::max(4 * 1024)))
+        .route("/p/{code}/api/submit", post(api_submit).layer(DefaultBodyLimit::max(MAX_SUBMIT_BYTES)))
         .with_state(st)
 }
 
@@ -377,13 +432,17 @@ pub async fn restart<R: Runtime>(app: &AppHandle<R>) {
         h.abort();
     }
     let Some(db) = app.try_state::<super::IntakeDb>() else { return };
-    let cfg = super::config::load(&db.pool).await;
-    let host = match cfg.web_mode {
-        WebMode::Off => return,
-        WebMode::Local => [127, 0, 0, 1],
-        WebMode::Lan => [0, 0, 0, 0],
+    // 任一專案啟用網頁表單就開伺服器；任一專案設為區網就綁 0.0.0.0。
+    let modes: Vec<WebMode> = super::all_configs(app, &db.pool).await.into_iter().map(|(_, _, c)| c.web_mode).collect();
+    let host = if modes.contains(&WebMode::Lan) {
+        [0, 0, 0, 0]
+    } else if modes.contains(&WebMode::Local) {
+        [127, 0, 0, 1]
+    } else {
+        return;
     };
-    let addr = std::net::SocketAddr::from((host, cfg.web_port));
+    let port = super::config::load_global(&db.pool).await.web_port;
+    let addr = std::net::SocketAddr::from((host, port));
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) => {
@@ -391,7 +450,7 @@ pub async fn restart<R: Runtime>(app: &AppHandle<R>) {
             return;
         }
     };
-    let (a1, a2) = (app.clone(), app.clone());
+    let (a1, a2, a3) = (app.clone(), app.clone(), app.clone());
     let st = Arc::new(WebState {
         pool: db.pool.clone(),
         otps: Otps::default(),
@@ -400,10 +459,11 @@ pub async fn restart<R: Runtime>(app: &AppHandle<R>) {
             use tauri::Emitter;
             let _ = a1.emit(super::CHANGED_EVENT, ());
         }),
-        send_mail: Box::new(move |to, subject, body| {
+        projects: Box::new(move || super::open_projects(&a3)),
+        send_mail: Box::new(move |project_id, to, subject, body| {
             let app = a2.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = super::runtime::send_plain_mail(&app, &to, &subject, &body).await {
+                if let Err(e) = super::runtime::send_plain_mail(&app, &project_id, &to, &subject, &body).await {
                     log::warn!("intake web: 寄驗證碼失敗：{e}");
                 }
             });
@@ -431,8 +491,10 @@ mod http_tests {
     async fn app(mode: WebMode) -> (Router, SqlitePool, Sent, Arc<std::sync::atomic::AtomicUsize>) {
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         store::init_schema(&pool).await.unwrap();
-        store::upsert_sender(&pool, &Sender { address: "bob@corp.com".into(), level: Level::External, skip_auth: false }).await.unwrap();
-        super::super::config::save(&pool, &Config { web_mode: mode, ..Config::default() }).await.unwrap();
+        for pid in ["proj1", "proj2"] {
+            store::upsert_sender(&pool, pid, &Sender { address: "bob@corp.com".into(), level: Level::External, skip_auth: false }).await.unwrap();
+            super::super::config::save(&pool, pid, &Config { web_mode: mode, ..Config::default() }).await.unwrap();
+        }
         let sent: Sent = Arc::default();
         let (s2, changes) = (sent.clone(), Arc::new(std::sync::atomic::AtomicUsize::new(0)));
         let c2 = changes.clone();
@@ -442,7 +504,8 @@ mod http_tests {
             otps: Otps::default(),
             attach_root: root2,
             on_change: Box::new(move || { c2.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }),
-            send_mail: Box::new(move |to, sub, body| s2.lock().push((to, sub, body))),
+            send_mail: Box::new(move |_pid, to, sub, body| s2.lock().push((to, sub, body))),
+            projects: Box::new(|| vec![("proj1".to_string(), "專案一".to_string()), ("proj2".to_string(), "專案二".to_string())]),
         });
         (router(st), pool, sent, changes)
     }
@@ -461,7 +524,7 @@ mod http_tests {
     #[tokio::test]
     async fn full_flow_code_by_mail_then_submit() {
         let (r, pool, sent, changes) = app(WebMode::Local).await;
-        let (st, _) = post(&r, "/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
+        let (st, _) = post(&r, "/p/proj1/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
         assert_eq!(st, StatusCode::OK);
         let (to, _, body) = sent.lock()[0].clone();
         assert_eq!(to, "bob@corp.com");
@@ -469,19 +532,19 @@ mod http_tests {
         let chars: Vec<char> = body.chars().collect();
         let code: String = chars.windows(6).find(|w| w.iter().all(|c| c.is_ascii_digit())).unwrap().iter().collect();
 
-        let (st, _) = post(&r, "/api/submit", serde_json::json!({"email":"bob@corp.com","code":"000000","body":"hi"})).await;
+        let (st, _) = post(&r, "/p/proj1/api/submit", serde_json::json!({"email":"bob@corp.com","code":"000000","body":"hi"})).await;
         assert_eq!(st, StatusCode::FORBIDDEN);
-        let (st, _) = post(&r, "/api/submit", serde_json::json!({"email":"bob@corp.com","code":code,"subject":"s","body":"請修"})).await;
+        let (st, _) = post(&r, "/p/proj1/api/submit", serde_json::json!({"email":"bob@corp.com","code":code,"subject":"s","body":"請修"})).await;
         assert_eq!(st, StatusCode::OK);
-        assert_eq!(store::list_items(&pool, None).await.unwrap().len(), 1);
+        assert_eq!(store::list_items(&pool, "proj1", None).await.unwrap().len(), 1);
         assert_eq!(changes.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn code_endpoint_answers_identically_for_listed_and_unlisted_addresses() {
         let (r, _, sent, _) = app(WebMode::Local).await;
-        let a = post(&r, "/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
-        let b = post(&r, "/api/code", serde_json::json!({"email": "stranger@x.com"})).await;
+        let a = post(&r, "/p/proj1/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
+        let b = post(&r, "/p/proj1/api/code", serde_json::json!({"email": "stranger@x.com"})).await;
         assert_eq!(a, b, "狀態碼與內容必須一樣，否則可以拿來探測白名單");
         assert_eq!(sent.lock().len(), 1, "只有白名單內的信箱真的收到信");
     }
@@ -489,9 +552,9 @@ mod http_tests {
     #[tokio::test]
     async fn disabled_server_refuses_submissions_and_sends_no_codes() {
         let (r, _, sent, _) = app(WebMode::Off).await;
-        post(&r, "/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
+        post(&r, "/p/proj1/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
         assert!(sent.lock().is_empty());
-        let (st, _) = post(&r, "/api/submit", serde_json::json!({"email":"bob@corp.com","code":"123456","body":"x"})).await;
+        let (st, _) = post(&r, "/p/proj1/api/submit", serde_json::json!({"email":"bob@corp.com","code":"123456","body":"x"})).await;
         assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
     }
 
@@ -499,11 +562,11 @@ mod http_tests {
     async fn oversized_request_bodies_are_rejected_before_parsing() {
         let (r, pool, _, _) = app(WebMode::Local).await;
         let huge = "x".repeat(MAX_SUBMIT_BYTES + 1024);
-        let (st, _) = post(&r, "/api/submit", serde_json::json!({"email":"bob@corp.com","code":"123456","body":huge})).await;
+        let (st, _) = post(&r, "/p/proj1/api/submit", serde_json::json!({"email":"bob@corp.com","code":"123456","body":huge})).await;
         assert_eq!(st, StatusCode::PAYLOAD_TOO_LARGE);
-        assert!(store::list_items(&pool, None).await.unwrap().is_empty());
+        assert!(store::list_items(&pool, "proj1", None).await.unwrap().is_empty());
         // 要驗證碼的端點只該收到一個信箱，上限小得多。
-        let (st, _) = post(&r, "/api/code", serde_json::json!({"email":"bob@corp.com","pad":"x".repeat(8 * 1024)})).await;
+        let (st, _) = post(&r, "/p/proj1/api/code", serde_json::json!({"email":"bob@corp.com","pad":"x".repeat(8 * 1024)})).await;
         assert_eq!(st, StatusCode::PAYLOAD_TOO_LARGE);
     }
 
@@ -511,18 +574,18 @@ mod http_tests {
     async fn images_in_a_submission_are_saved_and_attached() {
         use base64::Engine;
         let (r, pool, sent, _) = app(WebMode::Local).await;
-        post(&r, "/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
+        post(&r, "/p/proj1/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
         let body = sent.lock()[0].2.clone();
         let chars: Vec<char> = body.chars().collect();
         let code: String = chars.windows(6).find(|w| w.iter().all(|c| c.is_ascii_digit())).unwrap().iter().collect();
         let png = [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 7, 7];
         let ok = base64::engine::general_purpose::STANDARD.encode(png);
-        let (st, _) = post(&r, "/api/submit", serde_json::json!({
+        let (st, _) = post(&r, "/p/proj1/api/submit", serde_json::json!({
             "email":"bob@corp.com","code":code,"subject":"s","body":"",
             "images":[{"name":"畫面.png","data":ok},{"name":"bad.png","data":"!!!not base64!!!"},{"name":"x.txt","data":base64::engine::general_purpose::STANDARD.encode(b"hello")}]
         })).await;
         assert_eq!(st, StatusCode::OK);
-        let it = &store::list_items(&pool, None).await.unwrap()[0];
+        let it = &store::list_items(&pool, "proj1", None).await.unwrap()[0];
         let atts = store::list_attachments(&pool, &it.id).await.unwrap();
         assert_eq!(atts.len(), 1);
         assert!(it.body.contains("僅附圖") && it.body.contains("2 個附件"), "{}", it.body);
@@ -531,10 +594,53 @@ mod http_tests {
     #[tokio::test]
     async fn page_is_served_with_no_store_and_frame_protection() {
         let (r, _, _, _) = app(WebMode::Local).await;
-        let resp = r.clone().oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+        let resp = r.clone().oneshot(Request::get("/p/proj1").body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.headers()[header::CACHE_CONTROL], "no-store");
         assert_eq!(resp.headers()[header::X_FRAME_OPTIONS], "DENY");
     }
-}
 
+    async fn get_text(r: &Router, path: &str) -> (StatusCode, String) {
+        let resp = r.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn each_project_has_its_own_page_and_the_index_lists_them() {
+        let (r, _, _, _) = app(WebMode::Local).await;
+        let (st, home) = get_text(&r, "/").await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(home.contains("/p/proj1") && home.contains("專案一") && home.contains("/p/proj2"), "{home}");
+        let (_, page) = get_text(&r, "/p/proj2").await;
+        assert!(page.contains("專案二") && page.contains("/p/proj2/api/submit") && !page.contains("__BASE__"), "{page}");
+        assert_eq!(get_text(&r, "/p/nope").await.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_project_looks_the_same_to_the_code_endpoint_and_refuses_submissions() {
+        let (r, _, sent, _) = app(WebMode::Local).await;
+        let a = post(&r, "/p/proj1/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
+        let b = post(&r, "/p/nope/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
+        assert_eq!(a, b);
+        assert_eq!(sent.lock().len(), 1, "不存在的專案不寄信");
+        let (st, _) = post(&r, "/p/nope/api/submit", serde_json::json!({"email":"bob@corp.com","code":"123456","body":"x"})).await;
+        assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn a_code_issued_for_one_project_cannot_be_used_in_another() {
+        let (r, pool, sent, _) = app(WebMode::Local).await;
+        post(&r, "/p/proj1/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
+        let body = sent.lock()[0].2.clone();
+        let chars: Vec<char> = body.chars().collect();
+        let code: String = chars.windows(6).find(|w| w.iter().all(|c| c.is_ascii_digit())).unwrap().iter().collect();
+        let (st, _) = post(&r, "/p/proj2/api/submit", serde_json::json!({"email":"bob@corp.com","code":code,"body":"偷渡"})).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        assert!(store::list_items(&pool, "proj2", None).await.unwrap().is_empty());
+        let (st, _) = post(&r, "/p/proj1/api/submit", serde_json::json!({"email":"bob@corp.com","code":code,"body":"正常"})).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(store::list_items(&pool, "proj1", None).await.unwrap().len(), 1);
+    }
+}

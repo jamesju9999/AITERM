@@ -56,32 +56,45 @@ pub fn parse(raw: &[u8]) -> Option<Parsed> {
     })
 }
 
-pub async fn ingest(pool: &SqlitePool, cfg: &Config, raw: &[u8], attach_root: &Path) -> Result<Ingested, sqlx::Error> {
+/// 一個專案收信設定（已啟用、且收信帳號就是這封信來的帳號）。
+pub type Candidate = (String, Config);
+
+/// 依各專案的辨識規則決定這封信屬於哪個專案；符合哪個就進哪個。
+/// 儲存設定時已檢查唯一性，所以不會有兩個專案同時符合；萬一資料庫被手動改出衝突，取排序在前的。
+pub async fn ingest_routed(pool: &SqlitePool, candidates: &[Candidate], raw: &[u8], attach_root: &Path) -> Result<Ingested, sqlx::Error> {
     let Some(p) = parse(raw) else { return Ok(Ingested::Dropped("unparsable")) };
-    let senders = store::list_senders(pool).await?;
-    let level = match rules::decide(&cfg.rules(), &senders, &p.headers) {
-        Decision::Accept(l) => l,
-        Decision::Drop(r) => {
-            // 「不是給我們的信」不計入：那是信箱裡的其他所有信，數字沒有意義。
-            if r != rules::Drop::NotForUs {
-                store::bump_dropped(pool, drop_reason(&r)).await?;
+    for (project_id, cfg) in candidates {
+        let senders = store::list_senders(pool, project_id).await?;
+        let level = match rules::decide(&cfg.rules(), &senders, &p.headers) {
+            Decision::Accept(l) => l,
+            // 「不是給這個專案的信」：換下一個專案看。
+            Decision::Drop(rules::Drop::NotForUs) => continue,
+            Decision::Drop(r) => {
+                store::bump_dropped(pool, project_id, drop_reason(&r)).await?;
+                return Ok(Ingested::Dropped(drop_reason(&r)));
             }
-            return Ok(Ingested::Dropped(drop_reason(&r)));
+        };
+        let sender = rules::normalize(&p.headers.from);
+        // 沒有 Message-ID 的信無法去重，用內容雜湊代替，避免重複輪詢造成重複項目。
+        let mid = if p.message_id.is_empty() {
+            format!("nomid:{}:{}", sender, fnv(raw))
+        } else {
+            p.message_id.clone()
+        };
+        let body = if p.body.trim().is_empty() && !p.files.is_empty() { "（僅附圖）".to_string() } else { p.body.clone() };
+        let r = queue::enqueue(pool, cfg, project_id, level, "email", &sender, &p.headers.subject, &body, &mid, attach_root, p.files).await?;
+        if let Ingested::Queued(id) = &r {
+            store::set_sender_name(pool, id, &p.from_name, &sender).await?;
         }
-    };
-    let sender = rules::normalize(&p.headers.from);
-    // 沒有 Message-ID 的信無法去重，用內容雜湊代替，避免重複輪詢造成重複項目。
-    let mid = if p.message_id.is_empty() {
-        format!("nomid:{}:{}", sender, fnv(raw))
-    } else {
-        p.message_id.clone()
-    };
-    let body = if p.body.trim().is_empty() && !p.files.is_empty() { "（僅附圖）".to_string() } else { p.body };
-    let r = queue::enqueue(pool, cfg, level, "email", &sender, &p.headers.subject, &body, &mid, attach_root, p.files).await?;
-    if let Ingested::Queued(id) = &r {
-        store::set_sender_name(pool, id, &p.from_name, &sender).await?;
+        return Ok(r);
     }
-    Ok(r)
+    Ok(Ingested::Dropped("not_for_us"))
+}
+
+/// 單一專案（測試用的簡寫）。
+#[cfg(test)]
+pub async fn ingest(pool: &SqlitePool, cfg: &Config, raw: &[u8], attach_root: &Path) -> Result<Ingested, sqlx::Error> {
+    ingest_routed(pool, &[(String::new(), cfg.clone())], raw, attach_root).await
 }
 
 fn fnv(b: &[u8]) -> u64 {
@@ -109,7 +122,7 @@ mod tests {
     const PASS: &str = "mx.google.com; spf=pass smtp.mailfrom=bob@corp.com";
 
     async fn allow(p: &SqlitePool, a: &str, l: Level) {
-        store::upsert_sender(p, &Sender { address: a.into(), level: l, skip_auth: false }).await.unwrap();
+        store::upsert_sender(p, "", &Sender { address: a.into(), level: l, skip_auth: false }).await.unwrap();
     }
 
     #[tokio::test]
@@ -121,8 +134,8 @@ mod tests {
         let a = ingest(&p, &cfg(), &mail("me@home.com", "x@y.z", "[AITerm] hi", "1@h", None), tmp.path()).await.unwrap();
         let b = ingest(&p, &cfg(), &mail("bob@corp.com", "me+aiterm@gmail.com", "q", "2@c", Some(PASS)), tmp.path()).await.unwrap();
         assert!(matches!(a, Ingested::Queued(_)) && matches!(b, Ingested::Queued(_)));
-        assert_eq!(store::list_items(&p, Some(store::QUEUED)).await.unwrap().len(), 1);
-        assert_eq!(store::list_items(&p, Some(store::PENDING)).await.unwrap().len(), 1);
+        assert_eq!(store::list_items(&p, "", Some(store::QUEUED)).await.unwrap().len(), 1);
+        assert_eq!(store::list_items(&p, "", Some(store::PENDING)).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -154,9 +167,9 @@ mod tests {
         assert_eq!(unrelated, Ingested::Dropped("not_for_us"));
         let stranger = ingest(&p, &cfg(), &mail("evil@x.com", "me+aiterm@gmail.com", "q", "4@x", Some(PASS)), tmp.path()).await.unwrap();
         assert_eq!(stranger, Ingested::Dropped("not_allowed"));
-        assert!(store::list_items(&p, None).await.unwrap().is_empty());
+        assert!(store::list_items(&p, "", None).await.unwrap().is_empty());
         // 只有「被點名但不被允許」才計數；其他信箱內容不計。
-        assert_eq!(store::dropped_counts(&p).await.unwrap(), vec![("not_allowed".to_string(), 1)]);
+        assert_eq!(store::dropped_counts(&p, "").await.unwrap(), vec![("not_allowed".to_string(), 1)]);
     }
 
     #[tokio::test]

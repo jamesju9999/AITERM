@@ -52,8 +52,10 @@ where
     panic!("等不到：{what}（{secs} 秒）");
 }
 
+/// 在 p1 找主旨（含標籤）符合的題目。
 async fn item_by_subject(pool: &sqlx::SqlitePool, subject: &str) -> store::IntakeItem {
-    store::list_items(pool, None).await.unwrap().into_iter().find(|i| i.subject == subject).unwrap_or_else(|| panic!("找不到項目：{subject}"))
+    let want = format!("[P1] {subject}");
+    store::list_items(pool, "p1", None).await.unwrap().into_iter().find(|i| i.subject == want).unwrap_or_else(|| panic!("找不到項目：{want}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -98,23 +100,27 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
     runtime::install(&h, &activity);
     let rt = h.state::<Arc<runtime::IntakeRuntime>>().inner().clone();
 
-    config::save(
-        &pool,
-        &Config {
-            enabled: true,
-            account_id: "acc".into(),
-            mode: MatchMode::Dedicated,
-            verify_command: "test -f fixed.txt".into(),
-            verify_timeout_secs: 30,
-            web_mode: WebMode::Off,
-            ..Config::default()
-        },
-    )
-    .await
-    .unwrap();
+    // 兩個專案共用同一個信箱，靠主旨標籤分流；只有 p1 有終端機分頁。
+    let cfg1 = Config {
+        enabled: true,
+        account_id: "acc".into(),
+        mode: MatchMode::SubjectTag,
+        tag: "[P1]".into(),
+        verify_command: "test -f fixed.txt".into(),
+        verify_timeout_secs: 30,
+        web_mode: WebMode::Off,
+        ..Config::default()
+    };
+    let cfg2 = Config { tag: "[P2]".into(), verify_command: String::new(), ..cfg1.clone() };
+    assert_eq!(config::conflict(&cfg1, &cfg2), None, "兩個專案的標籤不同，不該衝突");
+    config::save(&pool, "p1", &cfg1).await.unwrap();
+    config::save(&pool, "p2", &cfg2).await.unwrap();
     for (a, l) in [("me@home.com", Level::Internal), ("bob@corp.com", Level::External)] {
-        store::upsert_sender(&pool, &Sender { address: a.into(), level: l, skip_auth: false }).await.unwrap();
+        store::upsert_sender(&pool, "p1", &Sender { address: a.into(), level: l, skip_auth: false }).await.unwrap();
     }
+    // p2 只授權 me@home.com；bob 只在 p1 的白名單。
+    store::upsert_sender(&pool, "p2", &Sender { address: "me@home.com".into(), level: Level::Internal, skip_auth: false }).await.unwrap();
+    let routes: Vec<mail_source::Candidate> = vec![("p1".into(), cfg1.clone()), ("p2".into(), cfg2.clone())];
 
     // ---- 終端機分頁：真 shell 裡跑假 claude ----
     let tab = uuid::Uuid::new_v4().to_string();
@@ -146,15 +152,26 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
     assert!(read_log().contains("ARGS has_settings"), "shell 的 claude 包裝函式沒有補 --settings：\n{}", read_log());
-    rt.registry.register(&tab);
+    rt.registry.register(&tab, "p1");
 
     // ---- 假信箱：陌生人、內部（帶圖、要改程式）、外部 ----
     let attach_root = work.path().join("attachments");
-    let cfg = config::load(&pool).await;
-    let stranger = mail_source::ingest(&pool, &cfg, &eml("evil@x.com", "我要入侵", "s@x", "hi", false), &attach_root).await.unwrap();
+    let stranger = mail_source::ingest_routed(&pool, &routes, &eml("evil@x.com", "[P1] 我要入侵", "s@x", "hi", false), &attach_root).await.unwrap();
     assert_eq!(stranger, super::queue::Ingested::Dropped("not_allowed"));
-    mail_source::ingest(&pool, &cfg, &eml("me@home.com", "登入壞了", "a@h", "BUGFIX 請修登入", true), &attach_root).await.unwrap();
-    mail_source::ingest(&pool, &cfg, &eml("bob@corp.com", "請問怎麼用", "b@c", "想問用法", false), &attach_root).await.unwrap();
+    assert_eq!(store::dropped_counts(&pool, "p1").await.unwrap(), vec![("not_allowed".to_string(), 1)], "陌生人記在標籤所屬的專案");
+    assert!(store::dropped_counts(&pool, "p2").await.unwrap().is_empty());
+    // bob 只在 p1 授權：寄給 p2 的標籤要被擋在 p2，不會因為他在 p1 的白名單就進得去。
+    let cross = mail_source::ingest_routed(&pool, &routes, &eml("bob@corp.com", "[P2] 越權", "x@c", "我要問 p2", false), &attach_root).await.unwrap();
+    assert_eq!(cross, super::queue::Ingested::Dropped("not_allowed"));
+    assert_eq!(store::dropped_counts(&pool, "p2").await.unwrap(), vec![("not_allowed".to_string(), 1)]);
+    // 標籤都不符合的信不進任何專案。
+    let none = mail_source::ingest_routed(&pool, &routes, &eml("me@home.com", "沒有標籤", "n@h", "x", false), &attach_root).await.unwrap();
+    assert_eq!(none, super::queue::Ingested::Dropped("not_for_us"));
+    mail_source::ingest_routed(&pool, &routes, &eml("me@home.com", "[P1] 登入壞了", "a@h", "BUGFIX 請修登入", true), &attach_root).await.unwrap();
+    mail_source::ingest_routed(&pool, &routes, &eml("bob@corp.com", "[P1] 請問怎麼用", "b@c", "想問用法", false), &attach_root).await.unwrap();
+    // 屬於 p2 的內部問題：自動派送，但終端機分頁登記在 p1，所以絕不能被派進去。
+    mail_source::ingest_routed(&pool, &routes, &eml("me@home.com", "[P2] 另一個專案的題目", "p2@h", "P2ONLY 這題不屬於 p1", false), &attach_root).await.unwrap();
+    assert_eq!(store::list_items(&pool, "p2", None).await.unwrap().len(), 1);
 
     // ---- A：內部、自動派送 → 假 claude 修好 → 驗證通過 → 自動寄出失敗留草稿 ----
     wait_for("A 進入草稿", 90, || async { item_by_subject(&pool, "登入壞了").await.status == store::DRAFT }).await;
@@ -191,7 +208,7 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
     assert!(report.contains("沒有偵測到任何檔案變更") && !report.contains("未設定測試指令"), "{report}");
 
     // ---- D：處理到一半分頁被關掉 → 問題退回 pending 並說明原因，不遺失 ----
-    mail_source::ingest(&pool, &cfg, &eml("me@home.com", "會卡住的問題", "d@h", "HANG 這題不會回", false), &attach_root).await.unwrap();
+    mail_source::ingest_routed(&pool, &routes, &eml("me@home.com", "[P1] 會卡住的問題", "d@h", "HANG 這題不會回", false), &attach_root).await.unwrap();
     wait_for("假 claude 卡住", 60, || async { read_log().contains("HANGING") }).await;
     assert_eq!(item_by_subject(&pool, "會卡住的問題").await.status, store::RUNNING);
     pty.close(&tab).unwrap();
@@ -199,5 +216,9 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
     let d = item_by_subject(&pool, "會卡住的問題").await;
     assert!(d.error.as_deref().unwrap_or("").contains("分頁已關閉"), "{:?}", d.error);
     assert!(rt.registry.tabs().is_empty());
+    // p2 的題目從頭到尾沒被領取、沒被送進終端機。
+    let p2 = store::list_items(&pool, "p2", None).await.unwrap();
+    assert_eq!(p2[0].status, store::QUEUED, "別的專案的題目不可被這個專案的分頁領走");
+    assert!(!read_log().contains("P2ONLY"), "別的專案的題目被送進了終端機");
     let _: PathBuf = repo;
 }

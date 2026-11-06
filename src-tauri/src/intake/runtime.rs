@@ -79,9 +79,10 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
         }
     }
     for tab in rt.registry.idle_tabs() {
-        let item = match store::claim_next(&db.pool, &tab).await {
+        let project = rt.registry.project_of(&tab).unwrap_or_default();
+        let item = match store::claim_next(&db.pool, &project, &tab).await {
             Ok(Some(i)) => i,
-            Ok(None) => break,
+            Ok(None) => continue, // 這個專案沒有題目；別的專案的分頁還要看
             Err(e) => {
                 log::warn!("intake: claim failed: {e}");
                 break;
@@ -142,8 +143,8 @@ async fn finish_item<R: Runtime>(app: &AppHandle<R>, tab: &str, item_id: &str, a
         store::fail(&db.pool, item_id, "無法取得 Agent 的回答").await.ok();
         return;
     };
-    let cfg = config::load(&db.pool).await;
     let Ok(Some(item)) = store::get_item(&db.pool, item_id).await else { return };
+    let cfg = config::load(&db.pool, &item.project_id).await;
 
     let mut reply = filter::redact(&answer);
     let mut verified_ok = true;
@@ -192,9 +193,10 @@ fn mail_creds<R: Runtime>(app: &AppHandle<R>, account_id: &str) -> Result<(crate
 }
 
 /// 用收集帳號寄一封一般信（網頁表單的驗證碼）。
-pub async fn send_plain_mail<R: Runtime>(app: &AppHandle<R>, to: &str, subject: &str, body: &str) -> Result<(), String> {
+/// 用某個專案設定的收信帳號寄一封一般信（網頁表單的驗證碼）。
+pub async fn send_plain_mail<R: Runtime>(app: &AppHandle<R>, project_id: &str, to: &str, subject: &str, body: &str) -> Result<(), String> {
     let db = app.try_state::<IntakeDb>().ok_or("intake 未就緒")?;
-    let cfg = config::load(&db.pool).await;
+    let cfg = config::load(&db.pool, project_id).await;
     let (account, password) = mail_creds(app, &cfg.account_id)?;
     let msg = smtp::build_plain(&account.email, to, subject, body)?;
     smtp::send(&account.smtp_host, account.smtp_port, &account.username, &password, msg).await
@@ -224,8 +226,8 @@ pub async fn send_reply<R: Runtime>(app: &AppHandle<R>, item_id: &str) -> Result
         changed(app);
         return Ok(());
     }
-    // 信件與網頁表單都以電子郵件回覆。
-    let cfg = config::load(&db.pool).await;
+    // 信件與網頁表單都以電子郵件回覆，用該題所屬專案的收信帳號。
+    let cfg = config::load(&db.pool, &item.project_id).await;
     let (account, password) = mail_creds(app, &cfg.account_id)?;
     // 只有真的來自信件的項目才有可以串信的 Message-ID（網頁表單與無 ID 的信沒有）。
     let orig_id = if item.source == "email" && !item.message_id.starts_with("nomid:") { item.message_id.as_str() } else { "" };

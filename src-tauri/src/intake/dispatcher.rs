@@ -48,15 +48,24 @@ struct Active {
 #[derive(Default)]
 pub struct Registry {
     tabs: Mutex<HashMap<String, Option<Active>>>,
+    /// 每個分頁負責的專案（只領取該專案的問題）。
+    projects: Mutex<HashMap<String, String>>,
 }
 
 impl Registry {
-    pub fn register(&self, tab: &str) {
+    pub fn register(&self, tab: &str, project_id: &str) {
         self.tabs.lock().entry(tab.to_string()).or_insert(None);
+        self.projects.lock().insert(tab.to_string(), project_id.to_string());
+    }
+
+    /// 這個分頁負責的專案；沒登記回 `None`。
+    pub fn project_of(&self, tab: &str) -> Option<String> {
+        self.projects.lock().get(tab).cloned()
     }
 
     /// 取消登記；回傳該分頁進行中的問題 id（呼叫端要把它退回 pending）。
     pub fn unregister(&self, tab: &str) -> Option<String> {
+        self.projects.lock().remove(tab);
         self.tabs.lock().remove(tab).flatten().map(|a| a.item_id)
     }
 
@@ -159,7 +168,7 @@ mod tests {
             id: id.into(), source: "email".into(), sender: "bob@corp.com".into(), sender_level: level.into(),
             subject: "壞掉了".into(), body: "請修".into(), message_id: "m".into(), status: "running".into(),
             tab_id: None, reply_draft: None, error: None, created_at: 0, updated_at: 0,
-            kind: None, snapshot_head: None, verification: None, verified: None, sender_name: None,
+            kind: None, snapshot_head: None, verification: None, verified: None, sender_name: None, project_id: String::new(),
         }
     }
 
@@ -183,7 +192,7 @@ mod tests {
     #[test]
     fn completion_requires_the_prompt_to_have_been_seen() {
         let r = Registry::default();
-        r.register("t1");
+        r.register("t1", "");
         r.assign("t1", "abcdef1234567890");
         // 使用者上一輪遲到的 Stop：還沒看到我們的提問，不算。
         assert_eq!(r.on_turn_end("t1"), None);
@@ -199,8 +208,8 @@ mod tests {
     #[test]
     fn idle_busy_and_unregister() {
         let r = Registry::default();
-        r.register("a");
-        r.register("b");
+        r.register("a", "");
+        r.register("b", "");
         r.assign("a", "i1");
         assert_eq!(r.idle_tabs(), vec!["b".to_string()]);
         assert_eq!(r.running(), vec![("a".to_string(), "i1".to_string())]);
@@ -214,7 +223,7 @@ mod tests {
     #[test]
     fn release_frees_a_tab_after_dispatch_failure() {
         let r = Registry::default();
-        r.register("a");
+        r.register("a", "");
         r.assign("a", "i1");
         r.release("a");
         assert_eq!(r.idle_tabs(), vec!["a".to_string()]);

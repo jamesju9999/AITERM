@@ -43,15 +43,43 @@ impl IntakeDb {
     }
 }
 
-/// 郵件輪詢每收到一封信就呼叫。未啟用或不是指定帳號時什麼都不做。
+/// 目前開啟中的看板專案（id、名稱），依名稱排序。
+pub fn open_projects<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Vec<(String, String)> {
+    use tauri::Manager;
+    let Some(reg) = app.try_state::<crate::projects::ProjectRegistry>() else { return Vec::new() };
+    let mut v: Vec<(String, String)> = reg.all().into_iter().map(|h| (h.id, h.name)).collect();
+    v.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+    v
+}
+
+/// 要參與歸屬判斷的專案設定：每個開啟中的專案，加上仍有舊設定的「未歸屬」（空字串）。
+pub(crate) async fn all_configs<R: tauri::Runtime>(app: &tauri::AppHandle<R>, pool: &sqlx::SqlitePool) -> Vec<(String, String, config::Config)> {
+    let mut v = Vec::new();
+    for (id, name) in open_projects(app) {
+        let cfg = config::load(pool, &id).await;
+        v.push((id, name, cfg));
+    }
+    if config::exists(pool, "").await {
+        let cfg = config::load(pool, "").await;
+        v.push((String::new(), "未歸屬".to_string(), cfg));
+    }
+    v
+}
+
+/// 郵件輪詢每收到一封信就呼叫。依各專案的別名／標籤決定歸屬；沒有專案符合就什麼都不做。
 pub async fn on_mail<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_id: &str, raw: &[u8]) {
     use tauri::{Emitter, Manager};
     let Some(db) = app.try_state::<IntakeDb>() else { return };
-    let cfg = config::load(&db.pool).await;
-    if !cfg.enabled || cfg.account_id != account_id {
+    let candidates: Vec<mail_source::Candidate> = all_configs(app, &db.pool)
+        .await
+        .into_iter()
+        .filter(|(_, _, c)| c.enabled && c.account_id == account_id)
+        .map(|(id, _, c)| (id, c))
+        .collect();
+    if candidates.is_empty() {
         return;
     }
-    match mail_source::ingest(&db.pool, &cfg, raw, &attach::root()).await {
+    match mail_source::ingest_routed(&db.pool, &candidates, raw, &attach::root()).await {
         Ok(queue::Ingested::Queued(_)) => {
             let _ = app.emit(CHANGED_EVENT, ());
         }
@@ -60,12 +88,11 @@ pub async fn on_mail<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_id: &
     }
 }
 
-/// 這個郵件帳號目前是不是問題收集專用的（已啟用且被選為收信帳號）。
+/// 這個郵件帳號目前是不是問題收集專用的（任一專案已啟用並選它為收信帳號）。
 pub async fn owns_account<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_id: &str) -> bool {
     use tauri::Manager;
     let Some(db) = app.try_state::<IntakeDb>() else { return false };
-    let cfg = config::load(&db.pool).await;
-    cfg.enabled && cfg.account_id == account_id
+    all_configs(app, &db.pool).await.iter().any(|(_, _, c)| c.enabled && c.account_id == account_id)
 }
 
 /// Telegram 收到訊息時呼叫（見 `telegram::poll_updates`）。回傳 `true` 表示訊息已由問題收集處理，
@@ -73,7 +100,12 @@ pub async fn owns_account<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_
 pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: i64, message_id: i64, text: &str, is_owner: bool, photos: Vec<String>, sender_name: &str) -> bool {
     use tauri::{Emitter, Manager};
     let Some(db) = app.try_state::<IntakeDb>() else { return false };
-    let cfg = config::load(&db.pool).await;
+    let cands: Vec<telegram_source::Candidate> = all_configs(app, &db.pool)
+        .await
+        .into_iter()
+        .map(|(id, name, cfg)| telegram_source::Candidate { id, name, cfg })
+        .collect();
+    let default_project = config::load_global(&db.pool).await.telegram_default_project;
     let fetch_app = app.clone();
     let has_files = !photos.is_empty();
     let fetch = move || async move {
@@ -92,7 +124,7 @@ pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: 
         }
         out
     };
-    match telegram_source::ingest(&db.pool, &cfg, chat_id, message_id, text, is_owner, &attach::root(), has_files, fetch).await {
+    match telegram_source::route(&db.pool, &cands, &default_project, chat_id, message_id, text, is_owner, &attach::root(), has_files, fetch).await {
         Ok(queue::Ingested::Queued(id)) => {
             store::set_sender_name(&db.pool, &id, sender_name, &telegram_source::sender_key(chat_id)).await.ok();
             let _ = app.emit(CHANGED_EVENT, ());

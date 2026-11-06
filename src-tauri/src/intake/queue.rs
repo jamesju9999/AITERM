@@ -27,6 +27,7 @@ pub fn drop_reason(d: &rules::Drop) -> &'static str {
 pub async fn enqueue(
     pool: &SqlitePool,
     cfg: &Config,
+    project_id: &str,
     level: Level,
     source: &str,
     sender: &str,
@@ -37,8 +38,8 @@ pub async fn enqueue(
     files: Vec<Raw>,
 ) -> Result<Ingested, sqlx::Error> {
     let since = chrono::Utc::now().timestamp() - 3600;
-    if cfg.rate_limit_per_hour > 0 && store::count_from_sender_since(pool, sender, since).await? >= cfg.rate_limit_per_hour as i64 {
-        store::bump_dropped(pool, "rate_limited").await?;
+    if cfg.rate_limit_per_hour > 0 && store::count_from_sender_since(pool, project_id, sender, since).await? >= cfg.rate_limit_per_hour as i64 {
+        store::bump_dropped(pool, project_id, "rate_limited").await?;
         return Ok(Ingested::Dropped("rate_limited"));
     }
     let mode = match level {
@@ -56,7 +57,7 @@ pub async fn enqueue(
     } else {
         body
     };
-    let item = store::insert_item(pool, NewItem { id: Some(&id), source, sender, level, subject, body, message_id, status }).await?;
+    let item = store::insert_item(pool, NewItem { project_id, id: Some(&id), source, sender, level, subject, body, message_id, status }).await?;
     let Some(i) = item else {
         attach::remove_dir(attach_root, &id);
         return Ok(Ingested::Duplicate);
