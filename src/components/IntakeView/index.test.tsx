@@ -92,6 +92,15 @@ describe("IntakeView", () => {
     await waitFor(() => expect(ipc.intakeDelete).toHaveBeenCalledWith("1"));
   });
 
+  it("each list row shows when the question arrived", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ created_at: 1762396459 })]);
+    const { container } = wrap();
+    await screen.findByText("壞掉了");
+    const time = container.querySelector(".intake__row time") as HTMLTimeElement;
+    expect(time.dateTime).toBe(new Date(1762396459 * 1000).toISOString());
+    expect(time.textContent).toMatch(/\d/);
+  });
+
   it("a running item cannot be deleted", async () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "running" })]);
     wrap();

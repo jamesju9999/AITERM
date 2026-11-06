@@ -102,6 +102,7 @@ export function IntakeView() {
                   <span className={`intake__badge intake__badge--${i.status}`}>{t[`intake_status_${i.status}` as const]}</span>
                   <span className="intake__subject">{i.subject || t.intake_no_subject}</span>
                   <span className="intake__sender">{t.intake_asker}：{i.sender_name ? `${i.sender_name} <${i.sender}>` : i.sender} · {i.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
+                  <time className="intake__time" dateTime={new Date(i.created_at * 1000).toISOString()}>{formatTime(i.created_at)}</time>
                 </button>
                 <DeleteButton item={i} run={run} variant="row" />
               </li>
@@ -173,6 +174,10 @@ function Attachments({ itemId }: { itemId: string }) {
       )}
     </section>
   );
+}
+
+function formatTime(sec: number): string {
+  return new Date(sec * 1000).toLocaleString(undefined, { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 /** 二次確認的刪除鈕（Tauri 視窗裡 window.confirm 不可靠）。處理中的不能刪。 */

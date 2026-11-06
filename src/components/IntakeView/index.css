@@ -113,3 +113,4 @@
 .intake__del--pane { flex: none; padding: 4px 10px; border-color: var(--border, #333); }
 .intake__pane-top { display: flex; align-items: flex-start; gap: 12px; }
 .intake__pane-top .intake__flow { flex: 1; }
+.intake__time { grid-column: 2; font-size: 11px; color: var(--text-secondary, #888); opacity: 0.8; }
