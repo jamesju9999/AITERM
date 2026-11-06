@@ -40,7 +40,7 @@ function item(over: Partial<IntakeItem>): IntakeItem {
   return {
     id: "1", source: "email", sender: "bob@corp.com", sender_level: "external", subject: "壞掉了", body: "請修",
     message_id: "m", status: "pending", tab_id: null, reply_draft: null, error: null, created_at: 0, updated_at: 0,
-    kind: null, snapshot_head: null, verification: null, verified: null, sender_name: null, project_id: "p1", ...over,
+    kind: null, snapshot_head: null, verification: null, verified: null, sender_name: null, project_id: "p1", to_addrs: null, cc_addrs: null, ...over,
   };
 }
 const wrap = () => render(<LocaleProvider><IntakeView /></LocaleProvider>);
@@ -90,6 +90,21 @@ describe("IntakeView", () => {
     fireEvent.click(row);
     expect(await screen.findByText("bob@corp.com", { selector: "strong" })).toBeTruthy();
     expect(screen.getAllByText(t.intake_level_external).length).toBeGreaterThan(0);
+  });
+
+  it("tells who else will get the reply (other recipients and Cc), and says nothing when there are none", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ to_addrs: "me@x.com\nalice@corp.com\nbob@corp.com", cc_addrs: "carol@corp.com" })]);
+    wrap();
+    fireEvent.click(await screen.findByText(`${t.intake_asker}：bob@corp.com · ${t.intake_level_external}`));
+    expect(await screen.findByText(/回信也會寄給：me@x.com、alice@corp.com；副本：carol@corp.com/)).toBeTruthy();
+  });
+
+  it("shows no recipients line for a question with only the asker", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ to_addrs: "bob@corp.com", cc_addrs: "" })]);
+    wrap();
+    fireEvent.click(await screen.findByText(`${t.intake_asker}：bob@corp.com · ${t.intake_level_external}`));
+    await screen.findByText("bob@corp.com", { selector: "strong" });
+    expect(screen.queryByText(new RegExp(t.intake_reply_all))).toBeNull();
   });
 
   it("shows the display name first, with the address beside it", async () => {

@@ -26,6 +26,8 @@ export interface IntakeItem {
   verified: boolean | null;
   sender_name: string | null;
   project_id: string;
+  to_addrs: string | null;
+  cc_addrs: string | null;
 }
 
 export interface IntakeConfig {

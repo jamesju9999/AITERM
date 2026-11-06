@@ -39,6 +39,9 @@ pub struct IntakeItem {
     pub sender_name: Option<String>,
     /// 歸屬的專案（看板專案 id）。空字串＝尚未歸屬（升級前的舊資料）。
     pub project_id: String,
+    /// 原信的其他收件人／副本（一行一個地址）；回信時一併帶上。非信件來源或舊資料為 `None`。
+    pub to_addrs: Option<String>,
+    pub cc_addrs: Option<String>,
 }
 
 pub struct NewItem<'a> {
@@ -119,7 +122,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     }
     // 第 2 期新增的欄位。CREATE 是 IF NOT EXISTS，舊資料庫不會自動長出來，逐欄補。
     let have: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('intake_items')").fetch_all(pool).await?;
-    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT")] {
+    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT"), ("to_addrs", "TEXT"), ("cc_addrs", "TEXT")] {
         if !have.iter().any(|c| c == col) {
             sqlx::query(&format!("ALTER TABLE intake_items ADD COLUMN {col} {ty}")).execute(pool).await?;
         }
@@ -148,6 +151,13 @@ pub async fn set_sender_name(pool: &SqlitePool, id: &str, name: &str, address: &
     if let Some(n) = clean_name(name, address) {
         sqlx::query("UPDATE intake_items SET sender_name = ? WHERE id = ?").bind(n).bind(id).execute(pool).await?;
     }
+    Ok(())
+}
+
+/// 記下原信的收件人與副本，之後回信「回覆全部」用。地址來自外部，濾掉含換行的，避免一行一個的格式被攪亂。
+pub async fn set_recipients(pool: &SqlitePool, id: &str, to: &[String], cc: &[String]) -> Result<(), sqlx::Error> {
+    let join = |v: &[String]| v.iter().filter(|a| !a.contains(['\n', '\r'])).cloned().collect::<Vec<_>>().join("\n");
+    sqlx::query("UPDATE intake_items SET to_addrs = ?, cc_addrs = ? WHERE id = ?").bind(join(to)).bind(join(cc)).bind(id).execute(pool).await?;
     Ok(())
 }
 

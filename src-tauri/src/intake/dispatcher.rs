@@ -208,7 +208,7 @@ mod tests {
             id: id.into(), source: "email".into(), sender: "bob@corp.com".into(), sender_level: level.into(),
             subject: "壞掉了".into(), body: "請修".into(), message_id: "m".into(), status: "running".into(),
             tab_id: None, reply_draft: None, error: None, created_at: 0, updated_at: 0,
-            kind: None, snapshot_head: None, verification: None, verified: None, sender_name: None, project_id: String::new(),
+            kind: None, snapshot_head: None, verification: None, verified: None, sender_name: None, project_id: String::new(), to_addrs: None, cc_addrs: None,
         }
     }
 

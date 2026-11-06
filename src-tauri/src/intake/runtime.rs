@@ -285,11 +285,15 @@ pub async fn send_reply<R: Runtime>(app: &AppHandle<R>, item_id: &str) -> Result
     let (account, password) = mail_creds(app, &cfg.account_id)?;
     // 只有真的來自信件的項目才有可以串信的 Message-ID（網頁表單與無 ID 的信沒有）。
     let orig_id = if item.source == "email" && !item.message_id.starts_with("nomid:") { item.message_id.as_str() } else { "" };
+    // 回覆全部：原信的其他收件人與副本都要收到（只有真的來自信件的項目才有這些資料）。
+    let (also_to, cc) = smtp::reply_all(&item.sender, item.to_addrs.as_deref().unwrap_or(""), item.cc_addrs.as_deref().unwrap_or(""), &[account.email.as_str(), cfg.alias.as_str()]);
     let msg = smtp::build_reply(&smtp::Outgoing {
         from: &account.email,
         to: &item.sender,
         orig_subject: &item.subject,
         orig_message_id: orig_id,
+        also_to: &also_to,
+        cc: &cc,
         // 使用者編輯過的草稿也再過一次，避免手誤貼進金鑰。
         body: &filter::redact(&body),
     })?;

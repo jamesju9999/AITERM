@@ -17,6 +17,9 @@ pub struct Parsed {
     pub body: String,
     pub from_name: String,
     pub files: Vec<Raw>,
+    /// 原信 To／Cc 的地址（不含 Delivered-To，那是收信帳號自己的投遞位址）。
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
 }
 
 fn addrs(a: Option<&mail_parser::Address<'_>>) -> Vec<String> {
@@ -27,8 +30,9 @@ pub fn parse(raw: &[u8]) -> Option<Parsed> {
     let m = MessageParser::default().parse(raw)?;
     let from = addrs(m.from()).into_iter().next().unwrap_or_default();
     let from_name = m.from().and_then(|a| a.first()).and_then(|x| x.name()).unwrap_or("").to_string();
-    let mut recipients = addrs(m.to());
-    recipients.extend(addrs(m.cc()));
+    let (to, cc) = (addrs(m.to()), addrs(m.cc()));
+    let mut recipients = to.clone();
+    recipients.extend(cc.clone());
     for v in m.header_values("Delivered-To") {
         if let HeaderValue::Text(t) = v {
             recipients.push(t.to_string());
@@ -53,6 +57,8 @@ pub fn parse(raw: &[u8]) -> Option<Parsed> {
         message_id,
         body,
         from_name,
+        to,
+        cc,
     })
 }
 
@@ -85,6 +91,7 @@ pub async fn ingest_routed(pool: &SqlitePool, candidates: &[Candidate], raw: &[u
         let r = queue::enqueue(pool, cfg, project_id, level, "email", &sender, &p.headers.subject, &body, &mid, attach_root, p.files).await?;
         if let Ingested::Queued(id) = &r {
             store::set_sender_name(pool, id, &p.from_name, &sender).await?;
+            store::set_recipients(pool, id, &p.to, &p.cc).await?;
         }
         return Ok(r);
     }
@@ -123,6 +130,18 @@ mod tests {
 
     async fn allow(p: &SqlitePool, a: &str, l: Level) {
         store::upsert_sender(p, "", &Sender { address: a.into(), level: l, skip_auth: false }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_original_to_and_cc_are_kept_for_reply_all() {
+        let p = pool().await;
+        let tmp = tempfile::tempdir().unwrap();
+        allow(&p, "bob@corp.com", Level::External).await;
+        let raw = format!("Authentication-Results: {PASS}\r\nFrom: Bob <bob@corp.com>\r\nTo: me+aiterm@gmail.com, Alice <alice@corp.com>\r\nCc: carol@corp.com\r\nSubject: q\r\nMessage-ID: <rc@c>\r\n\r\nbody\r\n");
+        assert!(matches!(ingest(&p, &cfg(), raw.as_bytes(), tmp.path()).await.unwrap(), Ingested::Queued(_)));
+        let it = &store::list_items(&p, "", None).await.unwrap()[0];
+        assert_eq!(it.to_addrs.as_deref(), Some("me+aiterm@gmail.com\nalice@corp.com"));
+        assert_eq!(it.cc_addrs.as_deref(), Some("carol@corp.com"));
     }
 
     #[tokio::test]

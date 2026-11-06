@@ -310,6 +310,21 @@ function FileRow({ att }: { att: IntakeAttachment }) {
   );
 }
 
+/** 原信的其他收件人與副本：回信會一併寄給他們（自己與提問者除外，實際名單在寄出時才算）。 */
+function Recipients({ item }: { item: IntakeItem }) {
+  const { t } = useLocale();
+  const lines = (v: string | null) => (v ?? "").split("\n").filter(Boolean);
+  const others = lines(item.to_addrs).filter((a) => a.toLowerCase() !== item.sender.toLowerCase());
+  const cc = lines(item.cc_addrs);
+  if (item.source !== "email" || (others.length === 0 && cc.length === 0)) return null;
+  return (
+    <p className="intake__meta intake__recipients">
+      {t.intake_reply_all}：{others.join("、")}
+      {cc.length > 0 && `${others.length > 0 ? "；" : ""}${t.intake_reply_cc}：${cc.join("、")}`}
+    </p>
+  );
+}
+
 function Attachments({ itemId }: { itemId: string }) {
   const { t } = useLocale();
   const [atts, setAtts] = useState<IntakeAttachment[]>([]);
@@ -464,6 +479,7 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
         </div>
       </header>
       {item.error && <div className="intake__banner">{item.error}</div>}
+      <Recipients item={item} />
 
       <section className="intake__block">
         <h4 className="intake__block-title">{t.intake_block_question}</h4>

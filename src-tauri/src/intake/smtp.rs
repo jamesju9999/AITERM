@@ -12,6 +12,33 @@ pub struct Outgoing<'a> {
     /// 原信的 Message-ID（不含角括號）；空字串則不帶串信標頭。
     pub orig_message_id: &'a str,
     pub body: &'a str,
+    /// 回覆全部：原信的其他收件人與副本（已去掉自己、寄件人與重複）。
+    pub also_to: &'a [String],
+    pub cc: &'a [String],
+}
+
+fn key(a: &str) -> String {
+    super::rules::normalize(a)
+}
+
+/// 算出回信的「其他收件人」與「副本」：原信 To／Cc 去掉寄件人、我們自己（收信帳號與別名）和重複；
+/// To 優先於 Cc（同一人只出現一次）。
+pub fn reply_all(sender: &str, to: &str, cc: &str, mine: &[&str]) -> (Vec<String>, Vec<String>) {
+    let mut seen: Vec<String> = std::iter::once(sender).chain(mine.iter().copied()).filter(|s| !s.trim().is_empty()).map(key).collect();
+    let mut pick = |list: &str| -> Vec<String> {
+        let mut out = vec![];
+        for a in list.lines().map(str::trim).filter(|a| !a.is_empty()) {
+            let k = key(a);
+            if !seen.contains(&k) {
+                seen.push(k);
+                out.push(a.to_string());
+            }
+        }
+        out
+    };
+    let t = pick(to);
+    let c = pick(cc);
+    (t, c)
 }
 
 pub fn reply_subject(orig: &str) -> String {
@@ -30,6 +57,13 @@ pub fn build_reply(o: &Outgoing<'_>) -> Result<Message, String> {
     let from: Mailbox = o.from.parse().map_err(|e| format!("寄件地址無效：{e}"))?;
     let to: Mailbox = o.to.parse().map_err(|e| format!("收件地址無效：{e}"))?;
     let mut b = Message::builder().from(from).to(to).subject(reply_subject(o.orig_subject));
+    // 其他收件人與副本：格式不對的地址略過，不讓一個壞地址擋住整封回信。
+    for a in o.also_to.iter().filter_map(|a| a.parse::<Mailbox>().ok()) {
+        b = b.to(a);
+    }
+    for a in o.cc.iter().filter_map(|a| a.parse::<Mailbox>().ok()) {
+        b = b.cc(a);
+    }
     if !o.orig_message_id.is_empty() {
         let id = format!("<{}>", o.orig_message_id.trim_matches(|c| c == '<' || c == '>'));
         b = b.header(InReplyTo::from(id.clone())).header(References::from(id));
@@ -87,12 +121,36 @@ mod tests {
 
     #[test]
     fn reply_threads_onto_original() {
-        let m = build_reply(&Outgoing { from: "me@home.com", to: "Bob <bob@corp.com>", orig_subject: "q", orig_message_id: "<abc@corp>", body: "答案" }).unwrap();
+        let m = build_reply(&Outgoing { from: "me@home.com", to: "Bob <bob@corp.com>", orig_subject: "q", orig_message_id: "<abc@corp>", body: "答案", also_to: &[], cc: &[] }).unwrap();
         let raw = String::from_utf8(m.formatted()).unwrap();
         assert!(raw.contains("In-Reply-To: <abc@corp>"), "{raw}");
         assert!(raw.contains("References: <abc@corp>"), "{raw}");
         assert!(raw.contains("Subject: Re: q"), "{raw}");
         assert!(raw.contains("bob@corp.com"));
+    }
+
+    #[test]
+    fn reply_all_drops_sender_self_and_duplicates_and_keeps_to_before_cc() {
+        let (to, cc) = reply_all(
+            "Bob <bob@corp.com>",
+            "me+aiterm@gmail.com\nAlice@Corp.com\nbob@corp.com",
+            "carol@corp.com\nalice@corp.com\n\nme@gmail.com",
+            &["me@gmail.com", "me+aiterm@gmail.com"],
+        );
+        assert_eq!(to, vec!["Alice@Corp.com"]);
+        assert_eq!(cc, vec!["carol@corp.com"], "Alice 已在收件人，不重複放副本；自己不寄給自己");
+    }
+
+    #[test]
+    fn reply_carries_all_recipients_and_cc_and_skips_malformed_ones() {
+        let (also, cc) = (vec!["alice@corp.com".to_string(), "not an address".to_string()], vec!["carol@corp.com".to_string()]);
+        let m = build_reply(&Outgoing { from: "me@home.com", to: "bob@corp.com", orig_subject: "q", orig_message_id: "", body: "答", also_to: &also, cc: &cc }).unwrap();
+        let raw = String::from_utf8(m.formatted()).unwrap();
+        assert!(raw.contains("bob@corp.com") && raw.contains("alice@corp.com"), "{raw}");
+        assert!(raw.contains("Cc: carol@corp.com"), "{raw}");
+        let env = m.envelope();
+        let rcpt: Vec<String> = env.to().iter().map(|a| a.to_string()).collect();
+        assert_eq!(rcpt.len(), 3, "信封收件人要包含 To 與 Cc：{rcpt:?}");
     }
 
     #[test]
@@ -115,7 +173,7 @@ mod tests {
 
     #[test]
     fn reply_carries_both_a_plain_and_an_html_part() {
-        let m = build_reply(&Outgoing { from: "me@home.com", to: "bob@corp.com", orig_subject: "q", orig_message_id: "", body: "**粗體**" }).unwrap();
+        let m = build_reply(&Outgoing { from: "me@home.com", to: "bob@corp.com", orig_subject: "q", orig_message_id: "", body: "**粗體**", also_to: &[], cc: &[] }).unwrap();
         let raw = String::from_utf8(m.formatted()).unwrap();
         assert!(raw.contains("multipart/alternative"), "{raw}");
         assert!(raw.contains("text/plain") && raw.contains("text/html"), "{raw}");
@@ -123,6 +181,6 @@ mod tests {
 
     #[test]
     fn invalid_address_is_an_error_not_a_panic() {
-        assert!(build_reply(&Outgoing { from: "nope", to: "a@b.c", orig_subject: "", orig_message_id: "", body: "" }).is_err());
+        assert!(build_reply(&Outgoing { from: "nope", to: "a@b.c", orig_subject: "", orig_message_id: "", body: "", also_to: &[], cc: &[] }).is_err());
     }
 }
