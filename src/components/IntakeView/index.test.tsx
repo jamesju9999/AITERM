@@ -40,7 +40,7 @@ function item(over: Partial<IntakeItem>): IntakeItem {
   return {
     id: "1", source: "email", sender: "bob@corp.com", sender_level: "external", subject: "壞掉了", body: "請修",
     message_id: "m", status: "pending", tab_id: null, reply_draft: null, error: null, created_at: 0, updated_at: 0,
-    kind: null, snapshot_head: null, verification: null, verified: null, sender_name: null, project_id: "p1", to_addrs: null, cc_addrs: null, ...over,
+    kind: null, snapshot_head: null, verification: null, verified: null, sender_name: null, project_id: "p1", to_addrs: null, cc_addrs: null, board_task_id: null, ...over,
   };
 }
 const wrap = () => render(<LocaleProvider><IntakeView /></LocaleProvider>);
@@ -54,7 +54,7 @@ function cfgView(over: Partial<ipc.IntakeConfig> = {}, extra: Partial<ipc.Intake
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320, ...over,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320, route_to_board: true, ...over,
     },
     saved: true,
     telegram_default: false,
@@ -81,6 +81,14 @@ describe("IntakeView", () => {
     fireEvent.click(await screen.findByText("壞掉了"));
     fireEvent.click(await screen.findByText(t.intake_action_approve));
     await waitFor(() => expect(ipc.intakeApprove).toHaveBeenCalledWith("1"));
+  });
+
+  it("an item sent to the board says so and shows the card id", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "on_board", kind: "code_change", board_task_id: "abcdef12-3456" })]);
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    expect(await screen.findByText(`${t.intake_on_board_note}（abcdef12）`)).toBeTruthy();
+    expect(screen.getAllByText(t.intake_status_on_board).length).toBeGreaterThan(0);
   });
 
   it("names who asked, with their level, in both the list and the detail", async () => {

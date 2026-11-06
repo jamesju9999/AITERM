@@ -12,6 +12,8 @@ pub const RUNNING: &str = "running";
 pub const DONE: &str = "done";
 pub const DRAFT: &str = "draft";
 pub const REJECTED: &str = "rejected";
+/// 已建成看板卡片，等看板處理；不佔用任何分頁。
+pub const ON_BOARD: &str = "on_board";
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct IntakeItem {
@@ -42,6 +44,8 @@ pub struct IntakeItem {
     /// 原信的其他收件人／副本（一行一個地址）；回信時一併帶上。非信件來源或舊資料為 `None`。
     pub to_addrs: Option<String>,
     pub cc_addrs: Option<String>,
+    /// 走看板時對應的卡片 id；沒走看板為 `None`。
+    pub board_task_id: Option<String>,
 }
 
 pub struct NewItem<'a> {
@@ -122,7 +126,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     }
     // 第 2 期新增的欄位。CREATE 是 IF NOT EXISTS，舊資料庫不會自動長出來，逐欄補。
     let have: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('intake_items')").fetch_all(pool).await?;
-    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT"), ("to_addrs", "TEXT"), ("cc_addrs", "TEXT")] {
+    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT"), ("to_addrs", "TEXT"), ("cc_addrs", "TEXT"), ("board_task_id", "TEXT")] {
         if !have.iter().any(|c| c == col) {
             sqlx::query(&format!("ALTER TABLE intake_items ADD COLUMN {col} {ty}")).execute(pool).await?;
         }
@@ -171,6 +175,42 @@ pub async fn set_kind(pool: &SqlitePool, id: &str, kind: &str, snapshot_head: Op
     sqlx::query("UPDATE intake_items SET kind = ?, snapshot_head = ?, updated_at = ? WHERE id = ?")
         .bind(kind).bind(snapshot_head).bind(now()).bind(id).execute(pool).await?;
     Ok(())
+}
+
+// ---- 看板 ----
+
+/// 還沒分類、也還沒被領走的題目（路由階段用）。舊的先。
+pub async fn list_unrouted(pool: &SqlitePool, project_id: &str) -> Result<Vec<IntakeItem>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM intake_items WHERE project_id = ? AND status IN (?, ?) AND kind IS NULL ORDER BY created_at, rowid")
+        .bind(project_id).bind(PENDING).bind(QUEUED).fetch_all(pool).await
+}
+
+/// 建卡成功後認領：`pending/queued → on_board` 並記卡片 id。已被別處領走（狀態變了或已有卡）就回 `false`。
+pub async fn mark_on_board(pool: &SqlitePool, id: &str, task_id: &str) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET status = ?, board_task_id = ?, tab_id = NULL, error = NULL, updated_at = ? WHERE id = ? AND status IN (?, ?) AND board_task_id IS NULL")
+        .bind(ON_BOARD).bind(task_id).bind(now()).bind(id).bind(PENDING).bind(QUEUED)
+        .execute(pool).await?;
+    Ok(r.rows_affected() > 0)
+}
+
+pub async fn list_on_board(pool: &SqlitePool) -> Result<Vec<IntakeItem>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM intake_items WHERE status = ? ORDER BY created_at, rowid").bind(ON_BOARD).fetch_all(pool).await
+}
+
+/// 卡片不見了：退回 `pending` 並記原因，不自動重派。
+pub async fn return_from_board(pool: &SqlitePool, id: &str, error: &str) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET status = ?, board_task_id = NULL, error = ?, updated_at = ? WHERE id = ? AND status = ?")
+        .bind(PENDING).bind(error).bind(now()).bind(id).bind(ON_BOARD)
+        .execute(pool).await?;
+    Ok(r.rows_affected() > 0)
+}
+
+/// 卡片做完：`on_board → draft` 並存回覆。
+pub async fn finish_from_board(pool: &SqlitePool, id: &str, reply: &str) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET status = ?, reply_draft = ?, error = NULL, updated_at = ? WHERE id = ? AND status = ?")
+        .bind(DRAFT).bind(reply).bind(now()).bind(id).bind(ON_BOARD)
+        .execute(pool).await?;
+    Ok(r.rows_affected() > 0)
 }
 
 pub async fn set_verification(pool: &SqlitePool, id: &str, report: &str, passed: bool) -> Result<(), sqlx::Error> {
@@ -225,7 +265,7 @@ pub async fn approve(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
 }
 
 pub async fn reject(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
-    transition(pool, id, &[PENDING, QUEUED], REJECTED).await
+    transition(pool, id, &[PENDING, QUEUED, ON_BOARD], REJECTED).await
 }
 
 /// 刪除一題（含附圖紀錄）。處理中（`running`）的不能刪：Agent 正在做，刪了回覆會無處可存。
@@ -427,6 +467,38 @@ mod tests {
     }
     fn new<'a>(mid: &'a str, status: &'a str) -> NewItem<'a> {
         NewItem { project_id: "", id: None, source: "email", sender: "a@corp.com", level: Level::External, subject: "s", body: "b", message_id: mid, status }
+    }
+
+    #[tokio::test]
+    async fn board_lifecycle_claims_once_and_returns_or_finishes() {
+        let p = pool().await;
+        let a = insert_item(&p, new("m1", QUEUED)).await.unwrap().unwrap();
+        assert_eq!(list_unrouted(&p, "").await.unwrap().len(), 1);
+        assert!(mark_on_board(&p, &a.id, "card1").await.unwrap());
+        assert!(!mark_on_board(&p, &a.id, "card2").await.unwrap(), "已有卡不可重複認領");
+        assert!(list_unrouted(&p, "").await.unwrap().is_empty());
+        assert!(claim_next(&p, "", "t").await.unwrap().is_none(), "on_board 不會被分頁領走");
+        let on = list_on_board(&p).await.unwrap();
+        assert_eq!((on.len(), on[0].board_task_id.as_deref()), (1, Some("card1")));
+        assert!(return_from_board(&p, &a.id, "沒了").await.unwrap());
+        let back = get_item(&p, &a.id).await.unwrap().unwrap();
+        assert_eq!((back.status.as_str(), back.board_task_id, back.error.as_deref()), (PENDING, None, Some("沒了")));
+        assert!(mark_on_board(&p, &a.id, "card3").await.unwrap());
+        assert!(finish_from_board(&p, &a.id, "好了").await.unwrap());
+        let done = get_item(&p, &a.id).await.unwrap().unwrap();
+        assert_eq!((done.status.as_str(), done.reply_draft.as_deref()), (DRAFT, Some("好了")));
+        assert!(!finish_from_board(&p, &a.id, "again").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn classified_items_are_not_unrouted_and_on_board_can_be_rejected() {
+        let p = pool().await;
+        let a = insert_item(&p, new("m1", PENDING)).await.unwrap().unwrap();
+        set_kind(&p, &a.id, "question", None).await.unwrap();
+        assert!(list_unrouted(&p, "").await.unwrap().is_empty());
+        let b = insert_item(&p, new("m2", QUEUED)).await.unwrap().unwrap();
+        mark_on_board(&p, &b.id, "c").await.unwrap();
+        assert!(reject(&p, &b.id).await.unwrap());
     }
 
     #[tokio::test]
