@@ -76,8 +76,9 @@
 .intake__flow-step--done .intake__flow-dot { background: #14b8a6; border-color: #14b8a6; color: #04201d; }
 .intake__flow-step--current .intake__flow-dot { border-color: #14b8a6; color: #14b8a6; box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.18); }
 .intake__flow-step--current .intake__flow-label { color: var(--text-primary, #e0e0e0); font-weight: 600; }
-.intake__flow-step--skipped .intake__flow-dot { border-color: #14b8a6; color: #14b8a6; opacity: 0.6; }
-.intake__flow-step--skipped .intake__flow-label { opacity: 0.6; }
+/* 略過的步驟：圓點必須維持不透明，否則後面的連線會從圓圈中穿過去；只把顏色調淡。 */
+.intake__flow-step--skipped .intake__flow-dot { background: var(--bg-secondary, #1a1a2e); border-color: rgba(20, 184, 166, 0.45); color: rgba(20, 184, 166, 0.7); }
+.intake__flow-step--skipped .intake__flow-label { color: var(--text-secondary, #888); }
 .intake__flow-step--failed .intake__flow-dot { background: #f87171; border-color: #f87171; color: #2a0a0a; }
 .intake__flow-step--failed .intake__flow-label { color: #f87171; }
 
