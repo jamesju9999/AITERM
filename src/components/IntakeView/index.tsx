@@ -283,10 +283,15 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
 
   return (
     <div className="intake__settings">
+      <section className="intake__card">
+        <h3 className="intake__card-title">{t.intake_sec_general}</h3>
       <label className="intake__field">
         <input type="checkbox" checked={cfg.enabled} onChange={(e) => set("enabled", e.target.checked)} />
         {t.intake_set_enabled}
       </label>
+      </section>
+      <section className="intake__card">
+        <h3 className="intake__card-title">{t.intake_sec_channels}</h3>
       <label className="intake__field">
         <input type="checkbox" checked={cfg.telegram_enabled} onChange={(e) => set("telegram_enabled", e.target.checked)} />
         {t.intake_set_telegram}
@@ -350,6 +355,9 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
         {t.intake_set_auth_server}
         <input value={cfg.auth_server} onChange={(e) => set("auth_server", e.target.value)} />
       </label>
+      </section>
+      <section className="intake__card">
+        <h3 className="intake__card-title">{t.intake_sec_flow}</h3>
       {(["internal", "external"] as const).map((lv) => (
         <div key={lv} className="intake__field intake__field--row">
           <span>{lv === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
@@ -380,6 +388,9 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
           onChange={(e) => set("rate_limit_per_hour", Math.max(0, Number(e.target.value) || 0))}
         />
       </label>
+      </section>
+      <section className="intake__card">
+        <h3 className="intake__card-title">{t.intake_sec_verify}</h3>
       <label className="intake__field">
         {t.intake_set_verify_command}
         <input
@@ -397,14 +408,16 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
           onChange={(e) => set("verify_timeout_secs", Math.max(1, Number(e.target.value) || 1))}
         />
       </label>
-      <div className="intake__actions">
+      </section>
+      <div className="intake__actions intake__save">
         <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={() => void save()}>
           {t.intake_set_save}
         </button>
         {saved && <span>{t.intake_set_saved}</span>}
       </div>
 
-      <h4 className="intake__section">{t.intake_senders}</h4>
+      <section className="intake__card">
+      <h3 className="intake__card-title">{t.intake_senders}</h3>
       <ul className="intake__senders">
         {senders.map((s) => (
           <li key={s.address}>
@@ -440,6 +453,7 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
           {t.intake_dropped}：{dropped.map(([r, n]) => `${r} ${n}`).join("、")}
         </p>
       )}
+      </section>
     </div>
   );
 }
