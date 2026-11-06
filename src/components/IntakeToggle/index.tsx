@@ -106,7 +106,7 @@ export function IntakeToggle({ sessionId }: Props) {
                   ))}
                 </select>
               </label>
-              {outside && <p className="aiterm-intake-toggle__warn">{t.intake_toggle_outside}</p>}
+              {outside && <p className="aiterm-intake-toggle__warn">{t.intake_toggle_outside.replace("{dir}", chosen?.repo_dir ?? "")}</p>}
               <div className="aiterm-intake-toggle__row">
                 <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={busy} onClick={() => void start(picking.choice)}>
                   {t.intake_toggle_start}

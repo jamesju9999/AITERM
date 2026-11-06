@@ -44,7 +44,8 @@ describe("IntakeToggle", () => {
     expect(select.value).toBe("p2"); // 分頁在 /work/two/src
     expect(ipc.intakeTabStart).not.toHaveBeenCalled();
     fireEvent.change(select, { target: { value: "p1" } });
-    expect(screen.getByText(t.intake_toggle_outside)).toBeInTheDocument(); // /work/two/src 不在專案一底下
+    // /work/two/src 不在專案一（/work/one）底下：警告要寫出專案目錄，使用者才看得出差在哪。
+    expect(screen.getByText(t.intake_toggle_outside.replace("{dir}", "/work/one"))).toBeInTheDocument();
     fireEvent.click(screen.getByText(t.intake_toggle_start));
     await waitFor(() => expect(ipc.intakeTabStart).toHaveBeenCalledWith("pty-1", "p1"));
   });
