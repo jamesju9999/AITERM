@@ -52,6 +52,15 @@ describe("IntakeView", () => {
     await waitFor(() => expect(ipc.intakeApprove).toHaveBeenCalledWith("1"));
   });
 
+  it("names who asked, with their level, in both the list and the detail", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ sender: "bob@corp.com", sender_level: "external" })]);
+    wrap();
+    const row = await screen.findByText(`${t.intake_asker}：bob@corp.com · ${t.intake_level_external}`);
+    fireEvent.click(row);
+    expect(await screen.findByText("bob@corp.com", { selector: "strong" })).toBeTruthy();
+    expect(screen.getAllByText(t.intake_level_external).length).toBeGreaterThan(0);
+  });
+
   it("does not offer dispatch for an item that is already running", async () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "running" })]);
     wrap();

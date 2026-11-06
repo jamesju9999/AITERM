@@ -50,3 +50,8 @@
 .intake__senders li { display: flex; gap: 10px; align-items: center; padding: 6px 10px; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #2a2a2a); border-radius: 6px; font-size: 13px; }
 .intake__senders li button { margin-left: auto; }
 @media (max-width: 720px) { .intake__body { grid-template-columns: 1fr; } .intake__field { grid-template-columns: 1fr; } .intake__settings .intake__meta, .intake__settings .intake__error { margin-left: 0; } }
+.intake__asker { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; padding: 8px 12px; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #2a2a2a); border-radius: 8px; font-size: 13px; }
+.intake__asker-label { color: var(--text-secondary, #888); }
+.intake__level { font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; }
+.intake__level--internal { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.intake__level--external { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
