@@ -206,3 +206,10 @@
 /* 白名單卡片往下撐滿，底部對齊儲存列上方的分隔線；項目多時卡片內捲動 */
 .intake__card--grow { flex: 1 1 auto; min-height: 120px; }
 .intake__card--grow .intake__senders { align-content: start; }
+
+/* 所有按鈕統一高度 34px（與下拉、輸入框同高）；列內的小圖示鈕（✕）、分頁、切換鈕、縮圖不在此列 */
+.intake .aiterm-btn, .intake__del--pane, .intake__refresh { box-sizing: border-box; height: 34px; }
+.intake .aiterm-btn { padding: 0 14px; font-size: 13px; }
+.intake__refresh { width: 34px; }
+.intake__del--pane { padding: 0 14px; font-size: 13px; }
+.intake__listhead .intake__refresh { font-size: 18px; }
