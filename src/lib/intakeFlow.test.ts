@@ -17,6 +17,11 @@ describe("flowSteps", () => {
     expect(states({ ...base, status: "on_board", kind: "code_change" })).toBe("done,done,done,current,todo,todo");
   });
 
+  it("a board item that was never verified here shows the verify step as skipped, not done", () => {
+    expect(states({ ...base, status: "draft", kind: "code_change", board_task_id: "card" })).toBe("done,done,done,done,skipped,current");
+    expect(states({ ...base, status: "done", kind: "code_change", board_task_id: "card" })).toBe("done,done,done,done,skipped,done");
+  });
+
   it("a code change is verified; a failed verification shows as failed", () => {
     expect(states({ ...base, status: "done", kind: "code_change", verified: true, verification: "ok" })).toBe("done,done,done,done,done,done");
     expect(states({ ...base, status: "draft", kind: "code_change", verified: false, verification: "紅" })).toBe("done,done,done,done,failed,current");

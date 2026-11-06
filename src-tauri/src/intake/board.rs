@@ -101,7 +101,7 @@ async fn copy_attachments(handle: &ProjectHandle, task_id: &str, files: &[Attach
 /// 內文優先序：卡片摘要 → 對話記錄最後一段 Agent 回答 → 卡片的錯誤訊息。
 /// 一律過機密過濾；結果（成功／失敗／已取消）附在最後。
 pub fn compose_reply(outcome: Option<&str>, summary: Option<&str>, last_text: Option<&str>, error: Option<&str>) -> (String, bool) {
-    let nonempty = |s: Option<&str>| s.map(str::trim).filter(|t| !t.is_empty()).map(str::to_owned);
+    let nonempty = |s: Option<&str>| s.map(strip_done_marker).filter(|t| !t.is_empty());
     let success = outcome == Some("success");
     let (text, used_error) = match (nonempty(summary), nonempty(last_text), nonempty(error)) {
         (Some(s), _, _) => (s, false),
@@ -121,6 +121,47 @@ pub fn compose_reply(outcome: Option<&str>, summary: Option<&str>, last_text: Op
         }
     }
     (filter::redact(&reply), success)
+}
+
+/// 看板要求 Agent 在完成時印的標記（`<<AITERM_DONE:識別碼>>`）。它是給看板看的，不能出現在回信裡。
+fn strip_done_marker(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("<<AITERM_DONE:") {
+        out.push_str(&rest[..i]);
+        match rest[i..].find(">>") {
+            Some(j) => rest = &rest[i + j + 2..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_string()
+}
+
+/// 對話記錄（JSONL）裡最後一段「去掉完成標記後還有內容」的 Agent 回答。
+/// 真實的 Claude 常在最後一則只印標記，所以要往前找，不能只看最後一則。
+fn last_answer_in(jsonl: &str) -> Option<String> {
+    for line in jsonl.lines().rev() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(blocks) = v.pointer("/message/content").and_then(|c| c.as_array()) else { continue };
+        let text: Vec<String> = blocks
+            .iter()
+            .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .map(strip_done_marker)
+            .filter(|t| !t.is_empty())
+            .collect();
+        if !text.is_empty() {
+            return Some(text.join("\n\n"));
+        }
+    }
+    None
 }
 
 /// 卡片的對話記錄檔。Codex 卡片會記 `session_path`；Claude 卡片只記 `session_id`，
@@ -157,7 +198,8 @@ pub async fn settle(intake: &SqlitePool, handle: &ProjectHandle, item: &IntakeIt
         return Ok(Settled::Waiting);
     }
     let last = transcript_of(&handle.path, crate::tasks::session_log::claude_projects_root().as_deref(), &task)
-        .and_then(|p| dispatcher::last_assistant_text(&p));
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| last_answer_in(&t));
     let (reply, success) = compose_reply(task.outcome.as_deref(), task.ai_summary.as_deref(), last.as_deref(), task.error_message.as_deref());
     if !store::finish_from_board(intake, &item.id, &reply).await.map_err(|e| e.to_string())? {
         return Ok(Settled::Waiting);
@@ -296,6 +338,25 @@ mod tests {
         assert_eq!(dispatcher::last_assistant_text(&path).as_deref(), Some("登入頁已修好"));
         assert!(transcript_of(&h.path, Some(&root), &tasks::TaskRow { session_id: Some("nope".into()), ..card.clone() }).is_none());
         assert!(transcript_of(&h.path, None, &card).is_none());
+    }
+
+    #[test]
+    fn the_done_marker_never_reaches_the_reply_and_an_earlier_answer_is_used() {
+        assert_eq!(strip_done_marker("好了\n\n<<AITERM_DONE:abc-123>>"), "好了");
+        assert_eq!(strip_done_marker("<<AITERM_DONE:abc>>"), "");
+        assert_eq!(strip_done_marker("前<<AITERM_DONE:a>>中<<AITERM_DONE:b>>後"), "前中後");
+        assert_eq!(strip_done_marker("沒結尾<<AITERM_DONE:abc"), "沒結尾");
+        let log = [
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"已新增 hello.txt"}]}}"#,
+            r#"{"type":"user","message":{"content":"（完成標記提示）"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"<<AITERM_DONE:abc>>"}]}}"#,
+        ]
+        .join("\n");
+        assert_eq!(last_answer_in(&log).as_deref(), Some("已新增 hello.txt"));
+        let (r, _) = compose_reply(Some("success"), None, Some("完成了\n<<AITERM_DONE:x>>"), None);
+        assert!(r.starts_with("完成了") && !r.contains("AITERM_DONE"), "{r}");
+        let (r, _) = compose_reply(Some("success"), None, Some("<<AITERM_DONE:x>>"), None);
+        assert!(r.contains("沒有留下文字說明") && !r.contains("AITERM_DONE"), "{r}");
     }
 
     #[test]
