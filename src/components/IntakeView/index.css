@@ -174,3 +174,15 @@
 .intake__enable-text { display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
 .intake__settings .intake__hint { margin-left: 26px; }
 .intake__enable .intake__meta { margin-left: 0; }
+
+/* 接收路徑：三種路徑用分頁切換，每個分頁標籤帶目前狀態 */
+.intake__tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--border, #2a2a2a); }
+.intake__tab { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; margin-bottom: -1px; font: inherit; font-size: 13px; color: var(--text-secondary, #888); background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer; }
+.intake__tab:hover { color: var(--text-primary, #e0e0e0); }
+.intake__tab--active { color: var(--text-primary, #e0e0e0); border-bottom-color: var(--accent, #14b8a6); font-weight: 600; }
+.intake__tab-chip { font-size: 11px; line-height: 1.6; padding: 0 8px; font-weight: 400; border-radius: 999px; background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+.intake__tab-chip--on { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.intake__tabpanel { display: flex; flex-direction: column; gap: 10px; padding-top: 6px; }
+/* 內容不滿一頁時，儲存列也固定在面板最下方，不漂在半空 */
+.intake__settings { min-height: 0; }
+.intake__save { margin-top: auto; }

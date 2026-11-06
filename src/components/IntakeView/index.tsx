@@ -557,6 +557,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   const { t } = useLocale();
   const [cfg, setCfg] = useState<IntakeConfig | null>(null);
   const [hasOwn, setHasOwn] = useState(true);
+  const [chanTab, setChanTab] = useState<"mail" | "telegram" | "web">("mail");
   const [tgDefault, setTgDefault] = useState(false);
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [senders, setSenders] = useState<IntakeSender[]>([]);
@@ -643,10 +644,30 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
           <span className="intake__meta">{t.intake_enable_desc}</span>
         </span>
       </label>
-      <div className="intake__cols">
-      <div className="intake__col">
       <section className="intake__card">
-        <h3 className="intake__card-title">{t.intake_sec_mailbox}</h3>
+        <h3 className="intake__card-title">{t.intake_sec_channels}</h3>
+        <div className="intake__tabs" role="tablist">
+          {([
+            ["mail", t.intake_sec_mailbox, cfg.account_id ? t.intake_tab_set : t.intake_tab_unset, !!cfg.account_id],
+            ["telegram", t.intake_sec_telegram, cfg.telegram_enabled ? t.intake_tab_on : t.intake_tab_off, cfg.telegram_enabled],
+            ["web", t.intake_sec_web, cfg.web_mode !== "off" ? t.intake_tab_on : t.intake_tab_off, cfg.web_mode !== "off"],
+          ] as const).map(([key, label, status, on]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={chanTab === key}
+              className={`intake__tab ${chanTab === key ? "intake__tab--active" : ""}`}
+              onClick={() => setChanTab(key)}
+            >
+              {label}
+              <span className={`intake__tab-chip ${on ? "intake__tab-chip--on" : ""}`}>{status}</span>
+            </button>
+          ))}
+        </div>
+        <div className="intake__tabpanel" role="tabpanel">
+        {chanTab === "mail" && (
+          <>
       <label className="intake__field">
         {t.intake_set_account}
         <select value={cfg.account_id} onChange={(e) => set("account_id", e.target.value)}>
@@ -681,7 +702,53 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         {t.intake_set_auth_server}
         <input value={cfg.auth_server} onChange={(e) => set("auth_server", e.target.value)} />
       </label>
+          </>
+        )}
+        {chanTab === "telegram" && (
+          <>
+      <label className="intake__field">
+        <input type="checkbox" checked={cfg.telegram_enabled} onChange={(e) => set("telegram_enabled", e.target.checked)} />
+        {t.intake_set_telegram}
+      </label>
+      <p className="intake__meta intake__hint">{t.intake_set_telegram_hint}</p>
+      <label className="intake__field">
+        <input type="checkbox" checked={tgDefault} onChange={(e) => { setSaved(false); setTgDefault(e.target.checked); }} />
+        {t.intake_set_tg_default}
+      </label>
+          </>
+        )}
+        {chanTab === "web" && (
+          <>
+      <label className="intake__field">
+        {t.intake_set_web}
+        <select value={cfg.web_mode} onChange={(e) => set("web_mode", e.target.value as IntakeConfig["web_mode"])}>
+          <option value="off">{t.intake_web_off}</option>
+          <option value="local">{t.intake_web_local}</option>
+          <option value="lan">{t.intake_web_lan}</option>
+        </select>
+        {cfg.web_mode !== "off" && (
+          <input
+            type="number"
+            aria-label={`${t.intake_set_web_port} ${t.intake_web_port_shared}`}
+            min={1024}
+            max={65535}
+            value={cfg.web_port}
+            onChange={(e) => set("web_port", Math.min(65535, Math.max(1024, Number(e.target.value) || 8320)))}
+          />
+        )}
+      </label>
+      {cfg.web_mode !== "off" && (
+        <p className="intake__meta">
+          {t.intake_web_url}：http://{cfg.web_mode === "lan" ? "<本機 IP>" : "127.0.0.1"}:{cfg.web_port}/
+        </p>
+      )}
+      {cfg.web_mode === "lan" && <p className="intake__error">{t.intake_web_lan_warning}</p>}
+          </>
+        )}
+        </div>
       </section>
+      <div className="intake__cols">
+      <div className="intake__col">
       <section className="intake__card">
         <h3 className="intake__card-title">{t.intake_sec_flow}</h3>
       {(["internal", "external"] as const).map((lv) => (
@@ -737,46 +804,6 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       </section>
       </div>
       <div className="intake__col">
-      <section className="intake__card">
-        <h3 className="intake__card-title">{t.intake_sec_telegram}</h3>
-      <label className="intake__field">
-        <input type="checkbox" checked={cfg.telegram_enabled} onChange={(e) => set("telegram_enabled", e.target.checked)} />
-        {t.intake_set_telegram}
-      </label>
-      <p className="intake__meta intake__hint">{t.intake_set_telegram_hint}</p>
-      <label className="intake__field">
-        <input type="checkbox" checked={tgDefault} onChange={(e) => { setSaved(false); setTgDefault(e.target.checked); }} />
-        {t.intake_set_tg_default}
-      </label>
-      </section>
-      <section className="intake__card">
-        <h3 className="intake__card-title">{t.intake_sec_web}</h3>
-      <label className="intake__field">
-        {t.intake_set_web}
-        <select value={cfg.web_mode} onChange={(e) => set("web_mode", e.target.value as IntakeConfig["web_mode"])}>
-          <option value="off">{t.intake_web_off}</option>
-          <option value="local">{t.intake_web_local}</option>
-          <option value="lan">{t.intake_web_lan}</option>
-        </select>
-        {cfg.web_mode !== "off" && (
-          <input
-            type="number"
-            aria-label={`${t.intake_set_web_port} ${t.intake_web_port_shared}`}
-            min={1024}
-            max={65535}
-            value={cfg.web_port}
-            onChange={(e) => set("web_port", Math.min(65535, Math.max(1024, Number(e.target.value) || 8320)))}
-          />
-        )}
-      </label>
-      {cfg.web_mode !== "off" && (
-        <p className="intake__meta">
-          {t.intake_web_url}：http://{cfg.web_mode === "lan" ? "<本機 IP>" : "127.0.0.1"}:{cfg.web_port}/
-        </p>
-      )}
-      {cfg.web_mode === "lan" && <p className="intake__error">{t.intake_web_lan_warning}</p>}
-      </section>
-
       <section className="intake__card">
       <h3 className="intake__card-title">{t.intake_senders}</h3>
       <ul className="intake__senders">

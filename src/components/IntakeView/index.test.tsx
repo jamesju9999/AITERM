@@ -333,6 +333,7 @@ describe("IntakeView", () => {
     vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ enabled: true }));
     wrap();
     fireEvent.click(await screen.findByText(t.intake_settings));
+    fireEvent.click(await screen.findByRole("tab", { name: new RegExp(t.intake_sec_web) }));
     const select = (await screen.findByLabelText(t.intake_set_web)) as HTMLSelectElement;
     expect(screen.queryByLabelText(webPort)).toBeNull();
     expect(screen.queryByText(t.intake_web_lan_warning)).toBeNull();
@@ -468,6 +469,28 @@ describe("IntakeView", () => {
     fireEvent.click(await screen.findByText(t.intake_settings));
     fireEvent.click(await screen.findByText(t.intake_copy_legacy));
     await waitFor(() => expect(ipc.intakeCopyLegacyConfig).toHaveBeenCalledWith("p1"));
+  });
+
+  it("the three receiving channels live in tabs that show each one's state and switch the fields", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ account_id: "acc", telegram_enabled: true, web_mode: "off" }));
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    const mail = await screen.findByRole("tab", { name: new RegExp(t.intake_sec_mailbox) });
+    const tg = screen.getByRole("tab", { name: new RegExp(t.intake_sec_telegram) });
+    const web = screen.getByRole("tab", { name: new RegExp(t.intake_sec_web) });
+    // 每個標籤帶著目前狀態
+    expect(mail).toHaveTextContent(t.intake_tab_set);
+    expect(tg).toHaveTextContent(t.intake_tab_on);
+    expect(web).toHaveTextContent(t.intake_tab_off);
+    // 預設在信箱：只有信箱的欄位
+    expect(mail).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText(t.intake_set_account)).toBeInTheDocument();
+    expect(screen.queryByLabelText(t.intake_set_web)).toBeNull();
+    fireEvent.click(tg);
+    expect(tg).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText(t.intake_set_tg_default)).toBeInTheDocument();
+    expect(screen.queryByLabelText(t.intake_set_account)).toBeNull();
   });
 
   it("accepts telegram chat ids in the allowlist but rejects malformed addresses", () => {
