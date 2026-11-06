@@ -92,9 +92,15 @@
 .intake__chips { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
 .intake__chip { font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; background: rgba(148, 163, 184, 0.15); color: var(--text-secondary, #aaa); }
 .intake__banner { padding: 8px 12px; border-radius: 8px; font-size: 13px; color: #fbbf24; background: rgba(251, 191, 36, 0.1); border-left: 3px solid #fbbf24; }
-.intake__block { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #2a2a2a); border-radius: 10px; }
-.intake__block-head { display: flex; align-items: center; justify-content: space-between; }
-.intake__block-title { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; color: var(--text-secondary, #888); }
+.intake__block { display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; }
+/* 標頭與終端機的指令區塊一樣：整條淡色底、小字、灰色 */
+.intake__block-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; background: rgba(255, 255, 255, 0.03); }
+.intake__block-title { margin: 0; padding: 4px 10px; font-size: 11px; font-weight: 400; letter-spacing: 0; color: #888; background: rgba(255, 255, 255, 0.03); }
+.intake__block-head .intake__block-title { padding: 0; background: none; }
+.intake__block-title.intake__ok { color: #4ade80; }
+.intake__block-title.intake__error { color: #f87171; }
+.intake__block > :not(.intake__block-title):not(.intake__block-head) { margin: 10px 12px 12px; }
+.intake__block .intake__draft { width: auto; align-self: stretch; }
 .intake__block .intake__text { background: transparent; border: 0; padding: 0; font-size: 14px; line-height: 1.6; }
 .intake__block .intake__draft { background: var(--bg-secondary, #1a1a2e); }
 .intake__block section { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
@@ -138,3 +144,4 @@
 .intake__flow-tip-state--failed { color: #f87171; }
 .intake__flow-step:first-child .intake__flow-tip { left: 0; transform: translate(0, 6px); }
 .intake__flow-step:last-child .intake__flow-tip { left: auto; right: 0; transform: translate(0, 6px); }
+.intake__block section .intake__block-title { padding: 0; background: none; }
