@@ -94,9 +94,9 @@
 .intake__banner { padding: 8px 12px; border-radius: 8px; font-size: 13px; color: #fbbf24; background: rgba(251, 191, 36, 0.1); border-left: 3px solid #fbbf24; }
 .intake__block { display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; }
 /* 標頭與終端機的指令區塊一樣：整條淡色底、小字、灰色 */
-.intake__block-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; background: rgba(255, 255, 255, 0.03); }
-.intake__block-title { margin: 0; padding: 4px 10px; font-size: 11px; font-weight: 400; letter-spacing: 0; color: #888; background: rgba(255, 255, 255, 0.03); }
-.intake__block-head .intake__block-title { padding: 0; background: none; }
+.intake__block-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; box-sizing: border-box; min-height: 36px; padding: 4px 10px; background: rgba(255, 255, 255, 0.03); }
+.intake__block-title { display: flex; align-items: center; box-sizing: border-box; min-height: 36px; margin: 0; padding: 4px 10px; font-size: 12px; font-weight: 400; letter-spacing: 0; color: #888; background: rgba(255, 255, 255, 0.03); }
+.intake__block-head .intake__block-title { min-height: 0; padding: 0; background: none; }
 .intake__block-title.intake__ok { color: #4ade80; }
 .intake__block-title.intake__error { color: #f87171; }
 .intake__block > :not(.intake__block-title):not(.intake__block-head) { margin: 10px 12px 12px; }
@@ -144,4 +144,4 @@
 .intake__flow-tip-state--failed { color: #f87171; }
 .intake__flow-step:first-child .intake__flow-tip { left: 0; transform: translate(0, 6px); }
 .intake__flow-step:last-child .intake__flow-tip { left: auto; right: 0; transform: translate(0, 6px); }
-.intake__block section .intake__block-title { padding: 0; background: none; }
+.intake__block section .intake__block-title { display: block; min-height: 0; padding: 0; background: none; }
