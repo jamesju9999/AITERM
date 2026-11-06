@@ -88,6 +88,15 @@ export interface IntakeTab {
 }
 
 export const intakeProjects = () => invoke<IntakeProjects>("intake_projects");
+export interface IntakeRefreshResult {
+  /** 有去信箱收信。 */
+  polled: boolean;
+  ok: boolean;
+  new_items: number;
+  error: string | null;
+}
+/** 立刻去這個專案設定的信箱收一次信，收完回傳結果。 */
+export const intakeRefresh = (projectId: string) => invoke<IntakeRefreshResult>("intake_refresh", { projectId });
 export const intakeAdoptLegacy = (projectId: string) => invoke<void>("intake_adopt_legacy", { projectId });
 export const intakeAssign = (id: string, projectId: string) => invoke<boolean>("intake_assign", { id, projectId });
 export const intakeCopyLegacyConfig = (projectId: string) => invoke<void>("intake_copy_legacy_config", { projectId });

@@ -204,6 +204,56 @@ pub async fn intake_dropped(db: State<'_, IntakeDb>, project_id: String) -> Resu
     store::dropped_counts(&db.pool, &project_id).await.map_err(e)
 }
 
+#[derive(Serialize)]
+pub struct RefreshResult {
+    /// 有去信箱收信（這個專案有設定收信帳號才會）。
+    pub polled: bool,
+    /// 收信是否成功；沒去收信時為 true。
+    pub ok: bool,
+    /// 這次重新整理新增的題目數（這個專案）。
+    pub new_items: i64,
+    pub error: Option<String>,
+}
+
+/// 「重新整理」：立刻去這個專案設定的信箱收一次信，收完再通知畫面重新載入。
+/// 做法是重啟該信箱的背景任務——它連上線後一定先同步一次——並等同步結束的訊號。
+#[tauri::command]
+pub async fn intake_refresh(app: AppHandle, db: State<'_, IntakeDb>, project_id: String) -> Result<RefreshResult, String> {
+    let cfg = config::load(&db.pool, &project_id).await;
+    let before = store::list_items(&db.pool, &project_id, None).await.map_err(e)?.len() as i64;
+    let mut out = RefreshResult { polled: false, ok: true, new_items: 0, error: None };
+    if cfg.enabled && !cfg.account_id.is_empty() {
+        use tauri::Manager;
+        out.polled = true;
+        let mut rx = app.state::<crate::mail::manager::MailSyncSignals>().0.subscribe();
+        // 先訂閱再重啟，才不會漏掉很快就結束的同步。
+        crate::mail::poller::restart_account(&app, &cfg.account_id).await;
+        let wait = async {
+            loop {
+                match rx.recv().await {
+                    Ok((id, ok)) if id == cfg.account_id => return Some(ok),
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return None,
+                }
+            }
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(45), wait).await {
+            Ok(Some(true)) => {}
+            Ok(Some(false)) => {
+                out.ok = false;
+                out.error = Some("信箱連線或收信失敗，請檢查信箱帳號設定".into());
+            }
+            _ => {
+                out.ok = false;
+                out.error = Some("等了 45 秒還沒收完，會在背景繼續收".into());
+            }
+        }
+    }
+    out.new_items = store::list_items(&db.pool, &project_id, None).await.map_err(e)?.len() as i64 - before;
+    changed(&app);
+    Ok(out)
+}
+
 #[tauri::command]
 pub async fn intake_approve(app: AppHandle, db: State<'_, IntakeDb>, id: String) -> Result<bool, String> {
     let r = store::approve(&db.pool, &id).await.map_err(e)?;

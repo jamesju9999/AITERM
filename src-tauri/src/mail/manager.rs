@@ -35,6 +35,24 @@ pub struct DeleteRequest {
     pub reply: tokio::sync::oneshot::Sender<Result<(), String>>,
 }
 
+/// 每個帳號「連線後第一次同步」的結果廣播：`(帳號 id, 是否成功)`。
+///
+/// 問題收集的「重新整理」靠它知道一次立即收信何時結束（重啟帳號任務一定會先同步一次）。
+/// 沒有人訂閱時送出會失敗，直接忽略即可。
+pub struct MailSyncSignals(pub tokio::sync::broadcast::Sender<(String, bool)>);
+
+impl MailSyncSignals {
+    pub fn new() -> Self {
+        Self(tokio::sync::broadcast::channel(16).0)
+    }
+}
+
+impl Default for MailSyncSignals {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Holds one background sync task per mail account. Managed as Tauri
 /// state wrapped in `tokio::sync::Mutex` (see lib.rs) — mirrors
 /// `telegram::TelegramState`'s single-task spawn/abort pattern, extended to

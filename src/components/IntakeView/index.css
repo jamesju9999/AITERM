@@ -158,3 +158,12 @@
 .intake__file-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .intake__file-actions { margin-left: auto; display: flex; gap: 6px; flex: none; }
 .intake__file-preview { margin: 0; padding: 8px 10px; max-height: 240px; overflow: auto; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; border-top: 1px solid var(--border, #2a2a2a); }
+
+/* 清單頂端的重新整理鈕 */
+.intake__listhead .intake__listtitle { margin-right: auto; }
+.intake__refresh { width: 26px; height: 26px; padding: 0; font-size: 16px; line-height: 1; color: var(--text-secondary, #aaa); background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; cursor: pointer; transition: var(--transition-smooth, all 0.2s); }
+.intake__refresh:hover:not(:disabled) { color: var(--text-primary, #e0e0e0); border-color: var(--accent, #14b8a6); }
+.intake__refresh:disabled { cursor: progress; }
+.intake__refresh--busy { animation: intake-spin 0.9s linear infinite; color: var(--accent, #14b8a6); }
+@keyframes intake-spin { to { transform: rotate(360deg); } }
+.intake__refresh-msg { font-size: 12px; color: #34d399; white-space: nowrap; }

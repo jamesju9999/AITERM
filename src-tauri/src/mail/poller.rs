@@ -472,6 +472,13 @@ async fn run_connection(
 /// Returns the connection whenever it is still alive, so the caller can log
 /// out exactly once. `None` is returned only when the session died together
 /// with the socket, where there is nothing left to log out of.
+/// 告訴等著的人：這個帳號連線後的第一次同步結束了（成功或失敗）。
+fn signal_first_sync(app: &AppHandle, account_id: &str, ok: bool) {
+    if let Some(s) = app.try_state::<super::manager::MailSyncSignals>() {
+        let _ = s.0.send((account_id.to_string(), ok));
+    }
+}
+
 async fn drive_session(
     app: &AppHandle,
     account: &MailAccountConfig,
@@ -504,6 +511,7 @@ async fn drive_session(
         // below has already had a sync succeed on this connection, which is
         // an ordinary reconnect and not the user's problem.
         report_health(app, &account.id, failing, false, &e.to_string());
+        signal_first_sync(app, &account.id, false);
         return (Some(conn), SessionExit::Retry { steady_lifetime: Duration::ZERO });
     }
 
@@ -521,6 +529,7 @@ async fn drive_session(
     // however long it took to fail.
     let steady_since = Some(Instant::now());
     report_health(app, &account.id, failing, true, "");
+    signal_first_sync(app, &account.id, true);
 
     if !conn.supports_idle() {
         // Unchanged pre-IDLE behavior, for servers that cannot push — plus the

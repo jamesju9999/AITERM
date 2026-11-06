@@ -13,6 +13,7 @@ import {
   intakeGetConfig,
   intakeList,
   intakeProjects,
+  intakeRefresh,
   intakeReject,
   intakeSendReply,
   intakeSenders,
@@ -64,6 +65,8 @@ export function IntakeView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
 
   const loadProjects = useCallback(() => {
     intakeProjects()
@@ -102,6 +105,26 @@ export function IntakeView() {
   const selected = items.find((i) => i.id === selectedId) ?? null;
   const current = projects.find((p) => p.id === projectId) ?? null;
   const inUnassigned = projectId === "" && unassigned > 0;
+
+  /** 重新載入清單，並立刻去這個專案的信箱收一次信。 */
+  async function refresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshMsg(null);
+    setError(null);
+    try {
+      const r = await intakeRefresh(projectId);
+      if (r.error) setError(r.error);
+      setRefreshMsg(
+        !r.polled ? t.intake_refresh_reloaded : r.new_items > 0 ? t.intake_refresh_new.replace("{n}", String(r.new_items)) : r.ok ? t.intake_refresh_none : null,
+      );
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setRefreshing(false);
+      reload();
+    }
+  }
 
   async function run(fn: () => Promise<unknown>) {
     setError(null);
@@ -154,6 +177,17 @@ export function IntakeView() {
             <div className="intake__listpane">
             <div className="intake__listhead">
               <span className="intake__listtitle">{t.intake_list_title.replace("{n}", String(items.length))}</span>
+              {refreshMsg && !refreshing && <span className="intake__refresh-msg" role="status">{refreshMsg}</span>}
+              <button
+                type="button"
+                className={`intake__refresh ${refreshing ? "intake__refresh--busy" : ""}`}
+                title={refreshing ? t.intake_refreshing : t.intake_refresh}
+                aria-label={t.intake_refresh}
+                disabled={refreshing}
+                onClick={() => void refresh()}
+              >
+                ⟳
+              </button>
               <select
                 aria-label={t.intake_filter_label}
                 value={filter}

@@ -15,6 +15,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeAdoptLegacy: vi.fn(() => Promise.resolve()),
   intakeAssign: vi.fn(() => Promise.resolve(true)),
   intakeCopyLegacyConfig: vi.fn(() => Promise.resolve()),
+  intakeRefresh: vi.fn(),
   intakeApprove: vi.fn(() => Promise.resolve(true)),
   intakeReject: vi.fn(() => Promise.resolve(true)),
   intakeDelete: vi.fn(() => Promise.resolve(true)),
@@ -424,6 +425,38 @@ describe("IntakeView", () => {
     fireEvent.click(await screen.findByText(t.intake_settings));
     await screen.findByText(t.intake_editing_project.replace("{name}", "專案一"));
     expect(screen.queryByText(t.intake_copy_legacy)).toBeNull();
+  });
+
+  it("refresh checks the mailbox for this project, shows how many arrived, and blocks double clicks while it runs", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    let finish!: (v: ipc.IntakeRefreshResult) => void;
+    vi.mocked(ipc.intakeRefresh).mockReturnValue(new Promise((r) => (finish = r)));
+    wrap();
+    const btn = (await screen.findByLabelText(t.intake_refresh)) as HTMLButtonElement;
+    fireEvent.click(btn);
+    await waitFor(() => expect(btn.disabled).toBe(true));
+    fireEvent.click(btn);
+    expect(ipc.intakeRefresh).toHaveBeenCalledTimes(1);
+    expect(ipc.intakeRefresh).toHaveBeenCalledWith("p1");
+    finish({ polled: true, ok: true, new_items: 2, error: null });
+    expect(await screen.findByText(t.intake_refresh_new.replace("{n}", "2"))).toBeInTheDocument();
+    expect(btn.disabled).toBe(false);
+  });
+
+  it("refresh says so when nothing new arrived, when no mailbox is configured, and shows a failure", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    wrap();
+    const btn = await screen.findByLabelText(t.intake_refresh);
+    vi.mocked(ipc.intakeRefresh).mockResolvedValueOnce({ polled: true, ok: true, new_items: 0, error: null });
+    fireEvent.click(btn);
+    expect(await screen.findByText(t.intake_refresh_none)).toBeInTheDocument();
+    vi.mocked(ipc.intakeRefresh).mockResolvedValueOnce({ polled: false, ok: true, new_items: 0, error: null });
+    fireEvent.click(btn);
+    expect(await screen.findByText(t.intake_refresh_reloaded)).toBeInTheDocument();
+    vi.mocked(ipc.intakeRefresh).mockResolvedValueOnce({ polled: true, ok: false, new_items: 0, error: "信箱連線或收信失敗，請檢查信箱帳號設定" });
+    fireEvent.click(btn);
+    expect(await screen.findByRole("alert")).toHaveTextContent("信箱連線或收信失敗");
+    expect(screen.queryByText(t.intake_refresh_none)).toBeNull();
   });
 
   it("offers to copy the pre-upgrade settings when this project has none and old settings remain, even with no unassigned questions", async () => {

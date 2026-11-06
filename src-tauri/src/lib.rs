@@ -301,6 +301,7 @@ pub fn run() {
         .manage(intake_db)
         .manage(project_registry)
         .manage(tokio::sync::Mutex::new(MailState::new()))
+        .manage(mail::manager::MailSyncSignals::new())
         .manage(Db2SidecarState::new(sidecar_path))
         .manage(Arc::new(Mutex::new(VcsCredentialManager::new())))
         .manage(VcsAgentStepRegistry::new())
@@ -544,6 +545,7 @@ pub fn run() {
             intake::commands::intake_reject,
             intake::commands::intake_delete,
             intake::commands::intake_projects,
+            intake::commands::intake_refresh,
             intake::commands::intake_adopt_legacy,
             intake::commands::intake_assign,
             intake::commands::intake_copy_legacy_config,
