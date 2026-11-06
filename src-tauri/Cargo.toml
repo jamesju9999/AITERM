@@ -115,6 +115,7 @@ tauri-plugin-notification = "2"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"
 anydoc = "0.1.9"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 [dev-dependencies]
 wiremock = "0.6"

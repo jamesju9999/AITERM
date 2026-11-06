@@ -1,6 +1,7 @@
 //! 寄回覆信。`mail/` 只有收信，這裡補上寄信；帳號與密碼沿用郵件帳號設定與 keyring。
 use lettre::message::header::{InReplyTo, References};
-use lettre::message::Mailbox;
+use lettre::message::{Mailbox, MultiPart};
+use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag, TagEnd};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
@@ -33,7 +34,32 @@ pub fn build_reply(o: &Outgoing<'_>) -> Result<Message, String> {
         let id = format!("<{}>", o.orig_message_id.trim_matches(|c| c == '<' || c == '>'));
         b = b.header(InReplyTo::from(id.clone())).header(References::from(id));
     }
-    b.body(o.body.to_string()).map_err(|e| e.to_string())
+    // 回答多半是 Markdown：寄成「純文字＋HTML」兩種版本，支援 HTML 的信箱顯示排版，其餘看純文字。
+    b.multipart(MultiPart::alternative_plain_html(o.body.to_string(), markdown_to_html(o.body))).map_err(|e| e.to_string())
+}
+
+fn safe_url(u: &str) -> bool {
+    let l = u.trim().to_ascii_lowercase();
+    l.starts_with("https://") || l.starts_with("http://") || l.starts_with("mailto:")
+}
+
+/// Markdown → 信件用 HTML。內容來自 AI 與外部提問者，所以：原始 HTML 一律當文字跳脫、
+/// 只放行 http(s)／mailto 連結、圖片不嵌入（只留替代文字，避免追蹤像素）。
+pub fn markdown_to_html(md: &str) -> String {
+    let events = Parser::new_ext(md, Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS).filter_map(|e| match e {
+        Event::Html(h) | Event::InlineHtml(h) => Some(Event::Text(h)),
+        Event::Start(Tag::Image { .. }) | Event::End(TagEnd::Image) => None,
+        Event::Start(Tag::Link { link_type, dest_url, title, id }) => {
+            let dest_url = if safe_url(&dest_url) { dest_url } else { CowStr::Borrowed("") };
+            Some(Event::Start(Tag::Link { link_type, dest_url, title, id }))
+        }
+        other => Some(other),
+    });
+    let mut out = String::new();
+    html::push_html(&mut out, events);
+    format!(
+        "<div style=\"font-family:-apple-system,'Segoe UI',Roboto,'PingFang TC','Microsoft JhengHei',sans-serif;font-size:14px;line-height:1.6;color:#222\">{out}</div>"
+    )
 }
 
 /// 465 走隱含 TLS，其餘（587 等）走 STARTTLS。
@@ -75,6 +101,24 @@ mod tests {
         let raw = String::from_utf8(m.formatted()).unwrap();
         assert!(raw.contains("bob@corp.com") && !raw.contains("In-Reply-To"), "{raw}");
         assert!(build_plain("x", "bob@corp.com", "s", "b").is_err());
+    }
+
+    #[test]
+    fn markdown_becomes_html_and_unsafe_parts_are_neutralised() {
+        let h = markdown_to_html("**左欄**\n\n- 項目一\n- `code`\n\n[好](https://a.com) [壞](javascript:alert(1)) <script>x</script> ![追蹤](http://t.com/p.png)");
+        assert!(h.contains("<strong>左欄</strong>") && h.contains("<li>項目一</li>") && h.contains("<code>code</code>"), "{h}");
+        assert!(h.contains("href=\"https://a.com\""), "{h}");
+        assert!(!h.contains("javascript:"), "{h}");
+        assert!(!h.contains("<script>") && h.contains("&lt;script&gt;"), "{h}");
+        assert!(!h.contains("<img"), "{h}");
+    }
+
+    #[test]
+    fn reply_carries_both_a_plain_and_an_html_part() {
+        let m = build_reply(&Outgoing { from: "me@home.com", to: "bob@corp.com", orig_subject: "q", orig_message_id: "", body: "**粗體**" }).unwrap();
+        let raw = String::from_utf8(m.formatted()).unwrap();
+        assert!(raw.contains("multipart/alternative"), "{raw}");
+        assert!(raw.contains("text/plain") && raw.contains("text/html"), "{raw}");
     }
 
     #[test]
