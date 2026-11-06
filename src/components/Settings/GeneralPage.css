@@ -83,25 +83,9 @@
   flex-wrap: wrap;
 }
 
+/* 樣式統一放在 App.css 的 .aiterm-select／.step-select */
 .step-select {
-  background: #1a1a1a;
-  border: 1px solid #2e2e2e;
-  border-radius: 6px;
-  color: #e6e6e6;
-  font-size: 13px;
-  padding: 8px 12px;
-  cursor: pointer;
-  outline: none;
   min-width: 160px;
-}
-
-.step-select:focus {
-  border-color: #2d5aab;
-}
-
-.step-select:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .step-warning {

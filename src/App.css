@@ -68,6 +68,27 @@ input, textarea, select {
   transition: var(--transition-smooth);
 }
 
+/* 統一的下拉選單樣式（設定頁、問題收集共用）。
+ * 原生下拉會忽略上下內距，變得比旁邊的輸入框矮，所以用明確的高度。 */
+.aiterm-select,
+.step-select {
+  box-sizing: border-box;
+  height: 34px;
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 6px;
+  color: #e6e6e6;
+  font-size: 13px;
+  padding: 0 12px;
+  cursor: pointer;
+  outline: none;
+}
+.aiterm-select:disabled,
+.step-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 input:focus, textarea:focus, select:focus {
   border-color: var(--accent) !important;
   box-shadow: 0 0 8px var(--accent-glow) !important;

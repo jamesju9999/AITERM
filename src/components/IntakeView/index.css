@@ -191,7 +191,8 @@
 .intake__senders { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 6px 10px; }
 
 /* 下拉選單與 AITerm 其他地方（設定頁的 .step-select）統一：深灰底、細邊框、13px、上下內距 8px */
-.intake select { background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 6px; color: #e6e6e6; font-size: 13px; padding: 8px 12px; cursor: pointer; outline: none; }
+/* 下拉選單樣式與設定頁共用（App.css 的 .aiterm-select）；這裡只補高度以外的尺寸 */
+.intake select { box-sizing: border-box; height: 34px; background: #1a1a1a; border: 1px solid #2e2e2e; border-radius: 6px; color: #e6e6e6; font-size: 13px; padding: 0 12px; cursor: pointer; outline: none; }
 .intake select:disabled { opacity: 0.5; cursor: not-allowed; }
 .intake__settings input:not([type="checkbox"]) { padding: 8px 12px; font-size: 13px; }
 
