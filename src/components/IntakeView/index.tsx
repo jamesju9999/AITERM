@@ -333,6 +333,8 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
   const [preview, setPreview] = useState(false);
   const [assignTo, setAssignTo] = useState("");
   const hasReply = (item.status === "draft" || item.status === "done") && item.reply_draft !== null;
+  // 沒有任何可按的按鈕（例如已完成的題目）就不顯示底部操作列，回覆卡片可以一路貼到面板底部。
+  const hasActions = item.status === "pending" || item.status === "queued" || (item.status === "draft" && hasReply) || item.project_id === "";
   return (
     <div className="intake__pane">
       <div className="intake__pane-top">
@@ -373,7 +375,7 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
       )}
 
       {hasReply && (
-        <section className={`intake__block ${item.status === "draft" && !preview ? "intake__block--grow" : ""}`}>
+        <section className="intake__block intake__block--grow">
           <div className="intake__block-head">
             <h4 className="intake__block-title">{t.intake_reply}</h4>
             {item.status === "draft" && (
@@ -391,6 +393,7 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
         </section>
       )}
 
+      {hasActions && (
       <footer className="intake__footer">
         {item.project_id === "" && (
           <>
@@ -439,6 +442,7 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
           </>
         )}
       </footer>
+      )}
     </div>
   );
 }
