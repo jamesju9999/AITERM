@@ -79,6 +79,16 @@ pub async fn intake_reject(app: AppHandle, db: State<'_, IntakeDb>, id: String) 
 }
 
 #[tauri::command]
+pub async fn intake_delete(app: AppHandle, db: State<'_, IntakeDb>, id: String) -> Result<bool, String> {
+    let r = store::delete_item(&db.pool, &id).await.map_err(e)?;
+    if r {
+        super::attach::remove_dir(&super::attach::root(), &id);
+    }
+    changed(&app);
+    Ok(r)
+}
+
+#[tauri::command]
 pub async fn intake_update_draft(app: AppHandle, db: State<'_, IntakeDb>, id: String, draft: String) -> Result<bool, String> {
     let r = store::update_draft(&db.pool, &id, &draft).await.map_err(e)?;
     changed(&app);

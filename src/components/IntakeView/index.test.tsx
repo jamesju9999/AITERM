@@ -13,6 +13,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeList: vi.fn(),
   intakeApprove: vi.fn(() => Promise.resolve(true)),
   intakeReject: vi.fn(() => Promise.resolve(true)),
+  intakeDelete: vi.fn(() => Promise.resolve(true)),
   intakeUpdateDraft: vi.fn(() => Promise.resolve(true)),
   intakeSendReply: vi.fn(() => Promise.resolve()),
   intakeGetConfig: vi.fn(),
@@ -68,6 +69,24 @@ describe("IntakeView", () => {
     fireEvent.click(row);
     expect(await screen.findByText("王小明", { selector: "strong" })).toBeTruthy();
     expect(screen.getByText("bob@corp.com", { selector: ".intake__asker .intake__meta" })).toBeTruthy();
+  });
+
+  it("delete needs a second click, and is not offered while the item is running", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "draft", reply_draft: "x" })]);
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    fireEvent.click(await screen.findByText(t.intake_action_delete));
+    expect(ipc.intakeDelete).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByText(t.intake_action_delete_confirm));
+    await waitFor(() => expect(ipc.intakeDelete).toHaveBeenCalledWith("1"));
+  });
+
+  it("a running item cannot be deleted", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "running" })]);
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    await screen.findByText("請修");
+    expect(screen.queryByText(t.intake_action_delete)).toBeNull();
   });
 
   it("does not offer dispatch for an item that is already running", async () => {

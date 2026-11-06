@@ -63,6 +63,7 @@ export const intakeUpsertSender = (sender: IntakeSender) => invoke<void>("intake
 export const intakeDeleteSender = (address: string) => invoke<boolean>("intake_delete_sender", { address });
 export const intakeDropped = () => invoke<[string, number][]>("intake_dropped");
 export const intakeApprove = (id: string) => invoke<boolean>("intake_approve", { id });
+export const intakeDelete = (id: string) => invoke<boolean>("intake_delete", { id });
 export const intakeReject = (id: string) => invoke<boolean>("intake_reject", { id });
 export const intakeUpdateDraft = (id: string, draft: string) => invoke<boolean>("intake_update_draft", { id, draft });
 export const intakeSendReply = (id: string) => invoke<void>("intake_send_reply", { id });

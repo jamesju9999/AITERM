@@ -184,6 +184,16 @@ pub async fn reject(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
     transition(pool, id, &[PENDING, QUEUED], REJECTED).await
 }
 
+/// 刪除一題（含附圖紀錄）。處理中（`running`）的不能刪：Agent 正在做，刪了回覆會無處可存。
+pub async fn delete_item(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("DELETE FROM intake_items WHERE id = ? AND status != ?").bind(id).bind(RUNNING).execute(pool).await?;
+    if r.rows_affected() == 0 {
+        return Ok(false);
+    }
+    sqlx::query("DELETE FROM intake_attachments WHERE item_id = ?").bind(id).execute(pool).await?;
+    Ok(true)
+}
+
 /// 原子領取最舊的 `queued`，標成 `running` 並記下分頁。
 pub async fn claim_next(pool: &SqlitePool, tab_id: &str) -> Result<Option<IntakeItem>, sqlx::Error> {
     let r = sqlx::query(
@@ -451,5 +461,23 @@ mod tests {
         bump_dropped(&p, "not_allowed").await.unwrap();
         bump_dropped(&p, "not_allowed").await.unwrap();
         assert_eq!(dropped_counts(&p).await.unwrap(), vec![("not_allowed".to_string(), 2)]);
+    }
+
+    #[tokio::test]
+    async fn delete_removes_the_item_and_its_attachments_but_never_a_running_one() {
+        let p = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        init_schema(&p).await.unwrap();
+        let mk = |mid: &'static str| NewItem { id: None, source: "email", sender: "a@corp.com", level: Level::Internal, subject: "s", body: "b", message_id: mid, status: QUEUED };
+        let a = insert_item(&p, mk("m1")).await.unwrap().unwrap();
+        let b = insert_item(&p, mk("m2")).await.unwrap().unwrap();
+        add_attachment(&p, &a.id, &crate::intake::attach::Saved { filename: "x.png".into(), path: "/x/x.png".into(), mime: "image/png", size: 1 }).await.unwrap();
+        claim_next(&p, "tab").await.unwrap(); // a 變成 running
+        assert!(!delete_item(&p, &a.id).await.unwrap(), "處理中不能刪");
+        assert!(delete_item(&p, &b.id).await.unwrap());
+        assert!(get_item(&p, &b.id).await.unwrap().is_none());
+        finish(&p, &a.id, "r", false).await.unwrap();
+        assert!(delete_item(&p, &a.id).await.unwrap());
+        assert!(list_attachments(&p, &a.id).await.unwrap().is_empty());
+        assert!(!delete_item(&p, "nope").await.unwrap());
     }
 }

@@ -542,6 +542,7 @@ pub fn run() {
             intake::commands::intake_dropped,
             intake::commands::intake_approve,
             intake::commands::intake_reject,
+            intake::commands::intake_delete,
             intake::commands::intake_update_draft,
             intake::commands::intake_send_reply,
             intake::commands::intake_tab_start,

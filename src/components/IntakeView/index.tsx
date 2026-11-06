@@ -3,6 +3,7 @@ import {
   intakeApprove,
   intakeAttachmentData,
   intakeAttachments,
+  intakeDelete,
   intakeDeleteSender,
   intakeDropped,
   intakeGetConfig,
@@ -174,6 +175,7 @@ function Attachments({ itemId }: { itemId: string }) {
 function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void> }) {
   const { t } = useLocale();
   const [draft, setDraft] = useState(item.reply_draft ?? "");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   return (
     <div>
       <h3>{item.subject || t.intake_no_subject}</h3>
@@ -217,6 +219,17 @@ function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unkno
           </button>
         )}
       </div>
+      {item.status !== "running" && (
+        <div className="intake__actions intake__delete">
+          <button
+            className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm intake__delete-btn ${confirmDelete ? "intake__delete-btn--armed" : ""}`}
+            onClick={() => (confirmDelete ? void run(() => intakeDelete(item.id)) : setConfirmDelete(true))}
+            onBlur={() => setConfirmDelete(false)}
+          >
+            {confirmDelete ? t.intake_action_delete_confirm : t.intake_action_delete}
+          </button>
+        </div>
+      )}
       {(item.status === "draft" || item.status === "done") && item.reply_draft !== null && (
         <section>
           <h4>{t.intake_reply}</h4>

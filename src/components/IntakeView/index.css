@@ -67,3 +67,6 @@
 .intake__lightbox-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6); cursor: default; }
 .intake__lightbox-close { position: absolute; top: 16px; right: 20px; width: 32px; height: 32px; font-size: 16px; color: #fff; background: rgba(255, 255, 255, 0.12); border: 0; border-radius: 50%; cursor: pointer; }
 .intake__lightbox-close:hover { background: rgba(255, 255, 255, 0.25); }
+.intake__delete { margin-top: auto; padding-top: 8px; }
+.intake__delete-btn { color: #f87171; }
+.intake__delete-btn--armed { background: rgba(239, 68, 68, 0.18); border-color: #f87171; }
