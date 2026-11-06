@@ -61,3 +61,9 @@
 .intake__level { font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; }
 .intake__level--internal { background: rgba(16, 185, 129, 0.15); color: #34d399; }
 .intake__level--external { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+.intake__thumb-btn { padding: 0; background: none; border: 0; cursor: zoom-in; border-radius: 6px; }
+.intake__thumb-btn:hover .intake__thumb { border-color: var(--accent, #a855f7); }
+.intake__lightbox { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 32px; background: rgba(0, 0, 0, 0.8); cursor: zoom-out; }
+.intake__lightbox-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6); cursor: default; }
+.intake__lightbox-close { position: absolute; top: 16px; right: 20px; width: 32px; height: 32px; font-size: 16px; color: #fff; background: rgba(255, 255, 255, 0.12); border: 0; border-radius: 50%; cursor: pointer; }
+.intake__lightbox-close:hover { background: rgba(255, 255, 255, 0.25); }

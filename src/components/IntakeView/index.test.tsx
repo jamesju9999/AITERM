@@ -128,6 +128,25 @@ describe("IntakeView", () => {
     expect(screen.getByText(t.intake_attachments.replace("{n}", "2"))).toBeInTheDocument();
   });
 
+  it("clicking a thumbnail opens it enlarged; Esc and the close button dismiss it", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({})]);
+    vi.mocked(ipc.intakeAttachments).mockResolvedValue([
+      { id: "a1", item_id: "1", filename: "1-shot.png", path: "/x/1-shot.png", mime: "image/png", size: 10 },
+    ]);
+    vi.mocked(ipc.intakeAttachmentData).mockResolvedValue("data:image/png;base64,AAAA");
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(await screen.findByTitle("1-shot.png"));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,AAAA");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(await screen.findByTitle("1-shot.png"));
+    fireEvent.click(await screen.findByLabelText(t.intake_image_close));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
   it("shows no image section for an item without attachments", async () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([item({})]);
     wrap();

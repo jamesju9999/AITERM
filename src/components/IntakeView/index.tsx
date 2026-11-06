@@ -117,6 +117,14 @@ function Attachments({ itemId }: { itemId: string }) {
   const [atts, setAtts] = useState<IntakeAttachment[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [failed, setFailed] = useState<Record<string, true>>({});
+  const [zoomId, setZoomId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!zoomId) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setZoomId(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomId]);
 
   useEffect(() => {
     let alive = true;
@@ -143,9 +151,9 @@ function Attachments({ itemId }: { itemId: string }) {
       <div className="intake__images">
         {atts.map((a) =>
           urls[a.id] ? (
-            <a key={a.id} href={urls[a.id]} target="_blank" rel="noreferrer" title={a.filename}>
+            <button key={a.id} type="button" className="intake__thumb-btn" title={a.filename} onClick={() => setZoomId(a.id)}>
               <img src={urls[a.id]} alt={a.filename} className="intake__thumb" />
-            </a>
+            </button>
           ) : (
             <span key={a.id} className="intake__thumb intake__thumb--empty">
               {failed[a.id] ? t.intake_attachment_failed : a.filename}
@@ -153,6 +161,12 @@ function Attachments({ itemId }: { itemId: string }) {
           ),
         )}
       </div>
+      {zoomId && urls[zoomId] && (
+        <div className="intake__lightbox" role="dialog" aria-label={atts.find((a) => a.id === zoomId)?.filename} onClick={() => setZoomId(null)}>
+          <button type="button" className="intake__lightbox-close" aria-label={t.intake_image_close} onClick={() => setZoomId(null)}>✕</button>
+          <img src={urls[zoomId]} alt={atts.find((a) => a.id === zoomId)?.filename ?? ""} className="intake__lightbox-img" onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
     </section>
   );
 }
