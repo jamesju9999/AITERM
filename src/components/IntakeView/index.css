@@ -186,3 +186,6 @@
 /* 內容不滿一頁時，儲存列也固定在面板最下方，不漂在半空 */
 .intake__settings { min-height: 0; }
 .intake__save { margin-top: auto; }
+
+/* 白名單全寬：項目排成多欄，「移除」不會離地址太遠 */
+.intake__senders { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 6px 10px; }

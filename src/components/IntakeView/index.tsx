@@ -782,6 +782,8 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         />
       </label>
       </section>
+      </div>
+      <div className="intake__col">
       <section className="intake__card">
         <h3 className="intake__card-title">{t.intake_sec_verify}</h3>
       <label className="intake__field">
@@ -803,7 +805,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       </label>
       </section>
       </div>
-      <div className="intake__col">
+      </div>
       <section className="intake__card">
       <h3 className="intake__card-title">{t.intake_senders}</h3>
       <ul className="intake__senders">
@@ -842,8 +844,6 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         </p>
       )}
       </section>
-      </div>
-      </div>
       <div className="intake__actions intake__save">
         <button className="aiterm-btn aiterm-btn--primary" onClick={() => void save()}>
           {t.intake_set_save}
