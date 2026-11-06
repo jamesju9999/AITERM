@@ -11,6 +11,10 @@ vi.mock("../../ipc/mail", () => ({ mailListAccounts: vi.fn(() => Promise.resolve
 vi.mock("../../ipc/intake", async (orig) => ({
   ...(await orig<typeof import("../../ipc/intake")>()),
   intakeList: vi.fn(),
+  intakeProjects: vi.fn(),
+  intakeAdoptLegacy: vi.fn(() => Promise.resolve()),
+  intakeAssign: vi.fn(() => Promise.resolve(true)),
+  intakeCopyLegacyConfig: vi.fn(() => Promise.resolve()),
   intakeApprove: vi.fn(() => Promise.resolve(true)),
   intakeReject: vi.fn(() => Promise.resolve(true)),
   intakeDelete: vi.fn(() => Promise.resolve(true)),
@@ -28,18 +32,42 @@ vi.mock("../../ipc/intake", async (orig) => ({
 import * as ipc from "../../ipc/intake";
 
 const t = translations["zh-TW"];
+const webPort = `${t.intake_set_web_port} ${t.intake_web_port_shared}`;
 
 function item(over: Partial<IntakeItem>): IntakeItem {
   return {
     id: "1", source: "email", sender: "bob@corp.com", sender_level: "external", subject: "壞掉了", body: "請修",
     message_id: "m", status: "pending", tab_id: null, reply_draft: null, error: null, created_at: 0, updated_at: 0,
-    kind: null, snapshot_head: null, verification: null, verified: null, sender_name: null, ...over,
+    kind: null, snapshot_head: null, verification: null, verified: null, sender_name: null, project_id: "p1", ...over,
   };
 }
 const wrap = () => render(<LocaleProvider><IntakeView /></LocaleProvider>);
 
+const P1 = { id: "p1", name: "專案一", repo_dir: "/work/one", open_count: 0, total: 0, enabled: true };
+const P2 = { id: "p2", name: "專案二", repo_dir: null, open_count: 2, total: 5, enabled: false };
+
+function cfgView(over: Partial<ipc.IntakeConfig> = {}, extra: Partial<ipc.IntakeConfigView> = {}): ipc.IntakeConfigView {
+  return {
+    config: {
+      enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
+      internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
+      reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320, ...over,
+    },
+    saved: true,
+    telegram_default: false,
+    ...extra,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  try {
+    localStorage.clear();
+  } catch {
+    /* ignore */
+  }
+  vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [P1, P2], unassigned: 0 });
   // clearAllMocks 不會清掉 mockResolvedValue 設過的實作，上一個測試的附圖會漏進來。
   vi.mocked(ipc.intakeAttachments).mockResolvedValue([]);
 });
@@ -220,12 +248,7 @@ describe("IntakeView", () => {
 
   it("settings: adds an allowlist sender only with a valid address and saves config", async () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([]);
-    vi.mocked(ipc.intakeGetConfig).mockResolvedValue({
-      enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
-      internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
-      reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320,
-    });
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ enabled: false }));
     wrap();
     fireEvent.click(await screen.findByText(t.intake_settings));
     const addr = await screen.findByLabelText(t.intake_sender_address);
@@ -235,35 +258,115 @@ describe("IntakeView", () => {
     expect(add.disabled).toBe(false);
     fireEvent.click(add);
     await waitFor(() =>
-      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith({ address: "bob@corp.com", level: "internal", skip_auth: false }),
+      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: "bob@corp.com", level: "internal", skip_auth: false }),
     );
     fireEvent.click(screen.getByLabelText(t.intake_set_enabled));
     fireEvent.change(screen.getByLabelText(t.intake_set_verify_command), { target: { value: "npm test" } });
     fireEvent.click(screen.getByText(t.intake_set_save));
     await waitFor(() =>
-      expect(ipc.intakeSetConfig).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, verify_command: "npm test" })),
+      expect(ipc.intakeSetConfig).toHaveBeenCalledWith("p1", expect.objectContaining({ enabled: true, verify_command: "npm test" }), false),
     );
     expect(screen.getByText(/not_allowed 3/)).toBeInTheDocument();
   });
 
   it("web form: LAN mode warns about exposure and the port only shows when enabled", async () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([]);
-    vi.mocked(ipc.intakeGetConfig).mockResolvedValue({
-      enabled: true, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
-      internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
-      reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320,
-    });
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ enabled: true }));
     wrap();
     fireEvent.click(await screen.findByText(t.intake_settings));
     const select = (await screen.findByLabelText(t.intake_set_web)) as HTMLSelectElement;
-    expect(screen.queryByLabelText(t.intake_set_web_port)).toBeNull();
+    expect(screen.queryByLabelText(webPort)).toBeNull();
     expect(screen.queryByText(t.intake_web_lan_warning)).toBeNull();
     fireEvent.change(select, { target: { value: "local" } });
-    expect(screen.getByLabelText(t.intake_set_web_port)).toBeInTheDocument();
+    expect(screen.getByLabelText(webPort)).toBeInTheDocument();
     expect(screen.queryByText(t.intake_web_lan_warning)).toBeNull();
     fireEvent.change(select, { target: { value: "lan" } });
     expect(screen.getByText(t.intake_web_lan_warning)).toBeInTheDocument();
+  });
+
+  it("loads the first project's questions, and switching project reloads that project's list", async () => {
+    vi.mocked(ipc.intakeList).mockImplementation((pid) => Promise.resolve(pid === "p2" ? [item({ id: "9", subject: "二號專案的題目", project_id: "p2" })] : [item({})]));
+    wrap();
+    await screen.findByText("壞掉了");
+    expect(ipc.intakeList).toHaveBeenCalledWith("p1", undefined);
+    fireEvent.change(screen.getByLabelText(t.intake_project_label), { target: { value: "p2" } });
+    expect(await screen.findByText("二號專案的題目")).toBeInTheDocument();
+    expect(screen.queryByText("壞掉了")).toBeNull();
+    expect(localStorage.getItem("aiterm.intake.project")).toBe("p2");
+  });
+
+  it("the project picker shows how many questions need attention", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    wrap();
+    expect(await screen.findByRole("option", { name: "專案二 (2)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "專案一" })).toBeInTheDocument();
+  });
+
+  it("remembers the chosen project across visits and falls back when it no longer exists", async () => {
+    localStorage.setItem("aiterm.intake.project", "gone");
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    wrap();
+    await waitFor(() => expect(ipc.intakeList).toHaveBeenCalledWith("p1", undefined));
+    expect((screen.getByLabelText(t.intake_project_label) as HTMLSelectElement).value).toBe("p1");
+  });
+
+  it("with no project at all it says to create one instead of showing an empty queue", async () => {
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [], unassigned: 0 });
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    wrap();
+    expect(await screen.findByText(t.intake_no_projects)).toBeInTheDocument();
+    expect(screen.queryByText(t.intake_settings)).toBeNull();
+  });
+
+  it("unassigned questions get their own view, can be moved one by one or all at once, and have no settings", async () => {
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [P1, P2], unassigned: 3 });
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ project_id: "" })]);
+    wrap();
+    fireEvent.change(await screen.findByLabelText(t.intake_project_label), { target: { value: "" } });
+    expect(screen.queryByText(t.intake_settings)).toBeNull();
+    // 全部歸給某專案
+    const adoptSelects = await screen.findAllByLabelText(t.intake_assign_pick);
+    fireEvent.change(adoptSelects[0], { target: { value: "p2" } });
+    fireEvent.click(screen.getByText(t.intake_adopt_all));
+    await waitFor(() => expect(ipc.intakeAdoptLegacy).toHaveBeenCalledWith("p2"));
+    // 單題指派
+    fireEvent.click(await screen.findByText("壞掉了"));
+    const perItem = await screen.findAllByLabelText(t.intake_assign_pick);
+    fireEvent.change(perItem[perItem.length - 1], { target: { value: "p1" } });
+    fireEvent.click(screen.getByText(t.intake_assign));
+    await waitFor(() => expect(ipc.intakeAssign).toHaveBeenCalledWith("1", "p1"));
+  });
+
+  it("settings belong to the chosen project and say which one is being edited", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView());
+    wrap();
+    fireEvent.change(await screen.findByLabelText(t.intake_project_label), { target: { value: "p2" } });
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    expect(await screen.findByText(t.intake_editing_project.replace("{name}", "專案二"))).toBeInTheDocument();
+    expect(ipc.intakeGetConfig).toHaveBeenCalledWith("p2");
+    expect(ipc.intakeSenders).toHaveBeenCalledWith("p2");
+  });
+
+  it("a conflict from the backend (same tag as another project) is shown instead of silently saved", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView());
+    vi.mocked(ipc.intakeSetConfig).mockRejectedValue(new Error("與專案「專案二」衝突：主旨標籤跟另一個專案相同"));
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    fireEvent.click(await screen.findByText(t.intake_set_save));
+    expect(await screen.findByRole("alert")).toHaveTextContent("與專案「專案二」衝突");
+    expect(screen.queryByText(new RegExp(t.intake_set_saved))).toBeNull();
+  });
+
+  it("offers to copy the pre-upgrade settings only when this project has none and old data exists", async () => {
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [P1, P2], unassigned: 2 });
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({}, { saved: false }));
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    fireEvent.click(await screen.findByText(t.intake_copy_legacy));
+    await waitFor(() => expect(ipc.intakeCopyLegacyConfig).toHaveBeenCalledWith("p1"));
   });
 
   it("accepts telegram chat ids in the allowlist but rejects malformed addresses", () => {

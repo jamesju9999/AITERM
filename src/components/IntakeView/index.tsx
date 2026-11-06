@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  intakeAdoptLegacy,
   intakeApprove,
+  intakeAssign,
+  intakeCopyLegacyConfig,
   intakeAttachmentData,
   intakeAttachments,
   intakeDelete,
@@ -8,6 +11,7 @@ import {
   intakeDropped,
   intakeGetConfig,
   intakeList,
+  intakeProjects,
   intakeReject,
   intakeSendReply,
   intakeSenders,
@@ -17,6 +21,7 @@ import {
   type IntakeAttachment,
   type IntakeConfig,
   type IntakeItem,
+  type IntakeProject,
   type IntakeSender,
   type IntakeStatus,
   type Level,
@@ -30,6 +35,16 @@ import { validAddress } from "../../lib/intakeAddress";
 import { flowSteps } from "../../lib/intakeFlow";
 import "./index.css";
 
+const PROJECT_KEY = "aiterm.intake.project";
+
+function savedProject(): string | null {
+  try {
+    return localStorage.getItem(PROJECT_KEY);
+  } catch {
+    return null;
+  }
+}
+
 const STATUSES: IntakeStatus[] = ["pending", "queued", "running", "draft", "done", "rejected"];
 
 function errText(e: unknown): string {
@@ -38,22 +53,52 @@ function errText(e: unknown): string {
 
 export function IntakeView() {
   const { t } = useLocale();
+  const [projects, setProjects] = useState<IntakeProject[]>([]);
+  const [unassigned, setUnassigned] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [choice, setChoice] = useState<string | null>(savedProject);
   const [items, setItems] = useState<IntakeItem[]>([]);
   const [filter, setFilter] = useState<IntakeStatus | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const loadProjects = useCallback(() => {
+    intakeProjects()
+      .then((v) => {
+        setProjects(v.projects);
+        setUnassigned(v.unassigned);
+        setLoaded(true);
+      })
+      .catch((e) => setError(errText(e)));
+  }, []);
+
+  // 選到的專案不存在（被移除、第一次使用）就用第一個專案；「未歸屬」只有在使用者自己選、且還有舊資料時才看。
+  const known = choice !== null && (projects.some((p) => p.id === choice) || (choice === "" && unassigned > 0));
+  const projectId = known ? choice : (projects[0]?.id ?? "");
+
+  useEffect(() => {
+    if (!loaded) return;
+    try {
+      localStorage.setItem(PROJECT_KEY, projectId);
+    } catch {
+      /* 沒有儲存空間也能用 */
+    }
+  }, [loaded, projectId]);
+
   const reload = useCallback(() => {
-    intakeList(filter === "all" ? undefined : filter)
+    loadProjects();
+    intakeList(projectId, filter === "all" ? undefined : filter)
       .then(setItems)
       .catch((e) => setError(errText(e)));
-  }, [filter]);
+  }, [filter, projectId, loadProjects]);
 
   useEffect(reload, [reload]);
   useIntakeChanged(reload);
 
   const selected = items.find((i) => i.id === selectedId) ?? null;
+  const current = projects.find((p) => p.id === projectId) ?? null;
+  const inUnassigned = projectId === "" && unassigned > 0;
 
   async function run(fn: () => Promise<unknown>) {
     setError(null);
@@ -65,10 +110,28 @@ export function IntakeView() {
     reload();
   }
 
+  const noProject = loaded && projects.length === 0 && unassigned === 0;
+
   return (
     <div className="intake">
       <div className="intake__bar">
         <h2 className="intake__title"><MailIcon size={20} className="intake__title-icon" />{t.intake_tab}</h2>
+        <select
+          aria-label={t.intake_project_label}
+          className="intake__project-select"
+          value={projectId}
+          onChange={(e) => {
+            setChoice(e.target.value);
+            setSelectedId(null);
+            setShowSettings(false);
+            setError(null);
+          }}
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}{p.open_count > 0 ? ` (${p.open_count})` : ""}</option>
+          ))}
+          {unassigned > 0 && <option value="">{t.intake_unassigned} ({unassigned})</option>}
+        </select>
         <select
           aria-label={t.intake_filter_label}
           value={filter}
@@ -81,38 +144,65 @@ export function IntakeView() {
             </option>
           ))}
         </select>
-        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setShowSettings((v) => !v)}>
-          {t.intake_settings}
-        </button>
+        {!inUnassigned && !noProject && (
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setShowSettings((v) => !v)}>
+            {t.intake_settings}
+          </button>
+        )}
       </div>
       {error && <div className="intake__error" role="alert">{error}</div>}
 
-      {showSettings ? (
-        <SettingsPanel onError={setError} />
+      {noProject ? (
+        <p className="intake__empty">{t.intake_no_projects}</p>
+      ) : showSettings && !inUnassigned ? (
+        <SettingsPanel key={projectId} projectId={projectId} projectName={current?.name ?? ""} unassigned={unassigned} onError={setError} />
       ) : (
-        <div className="intake__body">
-          <ul className="intake__list" aria-label={t.intake_tab}>
-            {items.length === 0 && <li className="intake__empty">{t.intake_empty}</li>}
-            {items.map((i) => (
-              <li key={i.id} className="intake__li">
-                <button
-                  className={`intake__row ${i.id === selectedId ? "intake__row--active" : ""}`}
-                  onClick={() => setSelectedId(i.id)}
-                >
-                  <span className={`intake__badge intake__badge--${i.status}`}>{t[`intake_status_${i.status}` as const]}</span>
-                  <span className="intake__subject">{i.subject || t.intake_no_subject}</span>
-                  <span className="intake__sender">{t.intake_asker}：{i.sender_name ? `${i.sender_name} <${i.sender}>` : i.sender} · {i.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
-                  <time className="intake__time" dateTime={new Date(i.created_at * 1000).toISOString()}>{formatTime(i.created_at)}</time>
-                </button>
-                <DeleteButton item={i} run={run} variant="row" />
-              </li>
-            ))}
-          </ul>
-          <div className="intake__detail">
-            {selected ? <Detail key={selected.id} item={selected} run={run} /> : <p className="intake__empty">{t.intake_pick}</p>}
+        <>
+          {inUnassigned && <AdoptBar projects={projects} run={run} />}
+          <div className="intake__body">
+            <ul className="intake__list" aria-label={t.intake_tab}>
+              {items.length === 0 && <li className="intake__empty">{t.intake_empty}</li>}
+              {items.map((i) => (
+                <li key={i.id} className="intake__li">
+                  <button
+                    className={`intake__row ${i.id === selectedId ? "intake__row--active" : ""}`}
+                    onClick={() => setSelectedId(i.id)}
+                  >
+                    <span className={`intake__badge intake__badge--${i.status}`}>{t[`intake_status_${i.status}` as const]}</span>
+                    <span className="intake__subject">{i.subject || t.intake_no_subject}</span>
+                    <span className="intake__sender">{t.intake_asker}：{i.sender_name ? `${i.sender_name} <${i.sender}>` : i.sender} · {i.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
+                    <time className="intake__time" dateTime={new Date(i.created_at * 1000).toISOString()}>{formatTime(i.created_at)}</time>
+                  </button>
+                  <DeleteButton item={i} run={run} variant="row" />
+                </li>
+              ))}
+            </ul>
+            <div className="intake__detail">
+              {selected ? <Detail key={selected.id} item={selected} run={run} projects={projects} /> : <p className="intake__empty">{t.intake_pick}</p>}
+            </div>
           </div>
-        </div>
+        </>
       )}
+    </div>
+  );
+}
+
+/** 「未歸屬」檢視上方：把舊資料一次歸給某個專案。 */
+function AdoptBar({ projects, run }: { projects: IntakeProject[]; run: (fn: () => Promise<unknown>) => Promise<void> }) {
+  const { t } = useLocale();
+  const [target, setTarget] = useState("");
+  return (
+    <div className="intake__banner intake__adopt">
+      <span>{t.intake_adopt_hint}</span>
+      <select aria-label={t.intake_assign_pick} value={target} onChange={(e) => setTarget(e.target.value)}>
+        <option value="">{t.intake_assign_pick}</option>
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>{p.name}</option>
+        ))}
+      </select>
+      <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={!target} onClick={() => void run(() => intakeAdoptLegacy(target))}>
+        {t.intake_adopt_all}
+      </button>
     </div>
   );
 }
@@ -218,10 +308,11 @@ function FlowBar({ item }: { item: IntakeItem }) {
   );
 }
 
-function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void> }) {
+function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void>; projects: IntakeProject[] }) {
   const { t } = useLocale();
   const [draft, setDraft] = useState(item.reply_draft ?? "");
   const [preview, setPreview] = useState(false);
+  const [assignTo, setAssignTo] = useState("");
   const hasReply = (item.status === "draft" || item.status === "done") && item.reply_draft !== null;
   return (
     <div className="intake__pane">
@@ -282,6 +373,19 @@ function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unkno
       )}
 
       <footer className="intake__footer">
+        {item.project_id === "" && (
+          <>
+            <select aria-label={t.intake_assign_pick} value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
+              <option value="">{t.intake_assign_pick}</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <button className="aiterm-btn aiterm-btn--secondary" disabled={!assignTo} onClick={() => void run(() => intakeAssign(item.id, assignTo))}>
+              {t.intake_assign}
+            </button>
+          </>
+        )}
         {item.status === "pending" && (
           <>
             <button className="aiterm-btn aiterm-btn--primary" onClick={() => void run(() => intakeApprove(item.id))}>
@@ -320,9 +424,11 @@ function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unkno
   );
 }
 
-function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
+function SettingsPanel({ projectId, projectName, unassigned, onError }: { projectId: string; projectName: string; unassigned: number; onError: (m: string | null) => void }) {
   const { t } = useLocale();
   const [cfg, setCfg] = useState<IntakeConfig | null>(null);
+  const [hasOwn, setHasOwn] = useState(true);
+  const [tgDefault, setTgDefault] = useState(false);
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [senders, setSenders] = useState<IntakeSender[]>([]);
   const [dropped, setDropped] = useState<[string, number][]>([]);
@@ -331,15 +437,21 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
   const [saved, setSaved] = useState(false);
 
   const loadSenders = useCallback(() => {
-    intakeSenders().then(setSenders).catch((e) => onError(errText(e)));
-    intakeDropped().then(setDropped).catch(() => {});
-  }, [onError]);
+    intakeSenders(projectId).then(setSenders).catch((e) => onError(errText(e)));
+    intakeDropped(projectId).then(setDropped).catch(() => {});
+  }, [onError, projectId]);
 
   useEffect(() => {
-    intakeGetConfig().then(setCfg).catch((e) => onError(errText(e)));
+    intakeGetConfig(projectId)
+      .then((v) => {
+        setCfg(v.config);
+        setHasOwn(v.saved);
+        setTgDefault(v.telegram_default);
+      })
+      .catch((e) => onError(errText(e)));
     mailListAccounts().then(setAccounts).catch(() => {});
     loadSenders();
-  }, [loadSenders, onError]);
+  }, [loadSenders, onError, projectId]);
 
   if (!cfg) return null;
   const set = <K extends keyof IntakeConfig>(k: K, v: IntakeConfig[K]) => {
@@ -349,8 +461,9 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
 
   async function save() {
     try {
-      await intakeSetConfig(cfg!);
+      await intakeSetConfig(projectId, cfg!, tgDefault);
       setSaved(true);
+      setHasOwn(true);
       onError(null);
     } catch (e) {
       onError(errText(e));
@@ -359,7 +472,7 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
 
   async function addSender() {
     try {
-      await intakeUpsertSender({ address: newAddr.trim(), level: newLevel, skip_auth: false });
+      await intakeUpsertSender(projectId, { address: newAddr.trim(), level: newLevel, skip_auth: false });
       setNewAddr("");
       onError(null);
       loadSenders();
@@ -373,6 +486,27 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
 
   return (
     <div className="intake__settings">
+      <div className="intake__editing">{t.intake_editing_project.replace("{name}", projectName)}</div>
+      {!hasOwn && unassigned > 0 && (
+        <div className="intake__banner intake__adopt">
+          <span>{t.intake_copy_legacy_hint}</span>
+          <button
+            className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+            onClick={() =>
+              void intakeCopyLegacyConfig(projectId)
+                .then(() => intakeGetConfig(projectId))
+                .then((v) => {
+                  setCfg(v.config);
+                  setHasOwn(v.saved);
+                  loadSenders();
+                })
+                .catch((e) => onError(errText(e)))
+            }
+          >
+            {t.intake_copy_legacy}
+          </button>
+        </div>
+      )}
       <div className="intake__cols">
       <div className="intake__col">
       <section className="intake__card">
@@ -390,6 +524,10 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
       </label>
       <p className="intake__meta">{t.intake_set_telegram_hint}</p>
       <label className="intake__field">
+        <input type="checkbox" checked={tgDefault} onChange={(e) => { setSaved(false); setTgDefault(e.target.checked); }} />
+        {t.intake_set_tg_default}
+      </label>
+      <label className="intake__field">
         {t.intake_set_web}
         <select value={cfg.web_mode} onChange={(e) => set("web_mode", e.target.value as IntakeConfig["web_mode"])}>
           <option value="off">{t.intake_web_off}</option>
@@ -399,7 +537,7 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
         {cfg.web_mode !== "off" && (
           <input
             type="number"
-            aria-label={t.intake_set_web_port}
+            aria-label={`${t.intake_set_web_port} ${t.intake_web_port_shared}`}
             min={1024}
             max={65535}
             value={cfg.web_port}
@@ -515,12 +653,12 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
                 <input
                   type="checkbox"
                   checked={s.skip_auth}
-                  onChange={(e) => void intakeUpsertSender({ ...s, skip_auth: e.target.checked }).then(loadSenders)}
+                  onChange={(e) => void intakeUpsertSender(projectId, { ...s, skip_auth: e.target.checked }).then(loadSenders)}
                 />
                 {t.intake_skip_auth}
               </label>
             )}
-            <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void intakeDeleteSender(s.address).then(loadSenders)}>
+            <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void intakeDeleteSender(projectId, s.address).then(loadSenders)}>
               {t.intake_remove}
             </button>
           </li>

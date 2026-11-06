@@ -114,3 +114,10 @@
 .intake__pane-top { display: flex; align-items: flex-start; gap: 12px; }
 .intake__pane-top .intake__flow { flex: 1; }
 .intake__time { grid-column: 2; font-size: 11px; color: var(--text-secondary, #888); opacity: 0.8; }
+
+/* 專案選擇器與設定頁的專案提示 */
+.intake__project-select { padding: 6px 10px; max-width: 240px; background: var(--bg-secondary, #1a1a2e); color: inherit; border: 1px solid var(--border, #333); border-radius: 6px; }
+.intake__editing { font-size: 13px; color: var(--text-secondary, #888); }
+.intake__adopt { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.intake__adopt select { padding: 4px 8px; background: var(--bg-primary, #0a0b14); color: inherit; border: 1px solid var(--border, #333); border-radius: 6px; }
+.intake__footer select { padding: 6px 10px; background: var(--bg-primary, #0a0b14); color: inherit; border: 1px solid var(--border, #333); border-radius: 6px; }

@@ -25,6 +25,7 @@ export interface IntakeItem {
   verification: string | null;
   verified: boolean | null;
   sender_name: string | null;
+  project_id: string;
 }
 
 export interface IntakeConfig {
@@ -55,21 +56,56 @@ export interface IntakeSender {
 
 export const INTAKE_CHANGED_EVENT = "intake://changed";
 
-export const intakeGetConfig = () => invoke<IntakeConfig>("intake_get_config");
-export const intakeSetConfig = (config: IntakeConfig) => invoke<void>("intake_set_config", { config });
-export const intakeList = (status?: IntakeStatus) => invoke<IntakeItem[]>("intake_list", { status: status ?? null });
-export const intakeSenders = () => invoke<IntakeSender[]>("intake_senders");
-export const intakeUpsertSender = (sender: IntakeSender) => invoke<void>("intake_upsert_sender", { sender });
-export const intakeDeleteSender = (address: string) => invoke<boolean>("intake_delete_sender", { address });
-export const intakeDropped = () => invoke<[string, number][]>("intake_dropped");
+export interface IntakeConfigView {
+  config: IntakeConfig;
+  /** 這個專案是否存過自己的設定。 */
+  saved: boolean;
+  telegram_default: boolean;
+}
+
+export interface IntakeProject {
+  id: string;
+  name: string;
+  /** 看板設定的專案目錄；沒設定為 null。 */
+  repo_dir: string | null;
+  /** 需要處理的題數（待派送＋待寄出草稿）與總數。 */
+  open_count: number;
+  total: number;
+  enabled: boolean;
+}
+
+export interface IntakeProjects {
+  projects: IntakeProject[];
+  /** 尚未歸屬的題數（升級前的舊資料）。 */
+  unassigned: number;
+}
+
+export interface IntakeTab {
+  tab_id: string;
+  project_id: string;
+}
+
+export const intakeProjects = () => invoke<IntakeProjects>("intake_projects");
+export const intakeAdoptLegacy = (projectId: string) => invoke<void>("intake_adopt_legacy", { projectId });
+export const intakeAssign = (id: string, projectId: string) => invoke<boolean>("intake_assign", { id, projectId });
+export const intakeCopyLegacyConfig = (projectId: string) => invoke<void>("intake_copy_legacy_config", { projectId });
+export const intakeGetConfig = (projectId: string) => invoke<IntakeConfigView>("intake_get_config", { projectId });
+export const intakeSetConfig = (projectId: string, config: IntakeConfig, telegramDefault: boolean) =>
+  invoke<void>("intake_set_config", { projectId, config, telegramDefault });
+export const intakeList = (projectId: string, status?: IntakeStatus) =>
+  invoke<IntakeItem[]>("intake_list", { projectId, status: status ?? null });
+export const intakeSenders = (projectId: string) => invoke<IntakeSender[]>("intake_senders", { projectId });
+export const intakeUpsertSender = (projectId: string, sender: IntakeSender) => invoke<void>("intake_upsert_sender", { projectId, sender });
+export const intakeDeleteSender = (projectId: string, address: string) => invoke<boolean>("intake_delete_sender", { projectId, address });
+export const intakeDropped = (projectId: string) => invoke<[string, number][]>("intake_dropped", { projectId });
 export const intakeApprove = (id: string) => invoke<boolean>("intake_approve", { id });
 export const intakeDelete = (id: string) => invoke<boolean>("intake_delete", { id });
 export const intakeReject = (id: string) => invoke<boolean>("intake_reject", { id });
 export const intakeUpdateDraft = (id: string, draft: string) => invoke<boolean>("intake_update_draft", { id, draft });
 export const intakeSendReply = (id: string) => invoke<void>("intake_send_reply", { id });
-export const intakeTabStart = (tabId: string) => invoke<void>("intake_tab_start", { tabId });
+export const intakeTabStart = (tabId: string, projectId: string) => invoke<void>("intake_tab_start", { tabId, projectId });
 export const intakeTabStop = (tabId: string) => invoke<void>("intake_tab_stop", { tabId });
-export const intakeTabs = () => invoke<string[]>("intake_tabs");
+export const intakeTabs = () => invoke<IntakeTab[]>("intake_tabs");
 
 export function onIntakeChanged(cb: () => void): Promise<UnlistenFn> {
   return listen(INTAKE_CHANGED_EVENT, cb);
