@@ -64,7 +64,8 @@ struct TelegramPhoto {
 #[derive(Debug, Deserialize)]
 struct TelegramDocument {
     file_id: String,
-    mime_type: Option<String>,
+    /// 使用者傳的原始檔名（log、pdf…）；下載後沿用它當附件名稱。
+    file_name: Option<String>,
 }
 
 impl TelegramMessage {
@@ -84,16 +85,14 @@ impl TelegramMessage {
         self.text.as_deref().or(self.caption.as_deref())
     }
 
-    /// 這則訊息帶的圖片檔 id（最大尺寸的 photo，或圖片類型的 document）。
-    fn image_file_ids(&self) -> Vec<String> {
+    /// 這則訊息帶的附件 `(file_id, 檔名)`：最大尺寸的 photo，以及以「檔案」形式傳的任何文件（log、pdf…）。
+    fn attachment_ids(&self) -> Vec<(String, String)> {
         let mut v = Vec::new();
         if let Some(best) = self.photo.as_ref().and_then(|p| p.iter().max_by_key(|x| x.file_size.unwrap_or(0))) {
-            v.push(best.file_id.clone());
+            v.push((best.file_id.clone(), String::new()));
         }
         if let Some(d) = &self.document {
-            if d.mime_type.as_deref().is_some_and(|m| m.starts_with("image/")) {
-                v.push(d.file_id.clone());
-            }
+            v.push((d.file_id.clone(), d.file_name.clone().unwrap_or_default()));
         }
         v
     }
@@ -222,7 +221,7 @@ async fn poll_updates(app: AppHandle, token: String, allowed_chat_id: i64) {
                                     }
                                     // 問題收集：主人用 `/ask ` 開頭的訊息進佇列，不當一般對話轉送。
                                     {
-                                        let photos = msg.image_file_ids();
+                                        let photos = msg.attachment_ids();
                                         if msg.body_text().is_some() || !photos.is_empty() {
                                             let text = msg.body_text().unwrap_or("");
                                             if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, true, photos, &msg.sender_display()).await {
@@ -239,7 +238,7 @@ async fn poll_updates(app: AppHandle, token: String, allowed_chat_id: i64) {
                                 } else {
                                     // 白名單內的其他聊天室可以送問題進問題收集；其餘照舊只記警告。
                                     {
-                                        let photos = msg.image_file_ids();
+                                        let photos = msg.attachment_ids();
                                         if msg.body_text().is_some() || !photos.is_empty() {
                                             let text = msg.body_text().unwrap_or("");
                                             if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, false, photos, &msg.sender_display()).await {
@@ -348,7 +347,7 @@ pub async fn send_to_chat(token: &str, chat_id: i64, text: &str, reply_to: Optio
 }
 
 /// 下載 Telegram 上的檔案（先 getFile 取路徑，再下載）。超過 `max_bytes` 視為失敗。
-pub async fn download_file(token: &str, file_id: &str, max_bytes: usize) -> Result<crate::intake::attach::Raw, String> {
+pub async fn download_file(token: &str, file_id: &str, name: &str, max_bytes: usize) -> Result<crate::intake::attach::Raw, String> {
     let client = reqwest::Client::new();
     let info: serde_json::Value = client
         .get(format!("https://api.telegram.org/bot{token}/getFile"))
@@ -374,7 +373,7 @@ pub async fn download_file(token: &str, file_id: &str, max_bytes: usize) -> Resu
     if bytes.len() > max_bytes {
         return Err("檔案太大".into());
     }
-    let name = path.rsplit('/').next().unwrap_or("image").to_string();
+    let name = if name.trim().is_empty() { path.rsplit('/').next().unwrap_or("file").to_string() } else { name.to_string() };
     Ok(crate::intake::attach::Raw { name, bytes: bytes.to_vec() })
 }
 
@@ -394,5 +393,14 @@ mod sender_display_tests {
         assert_eq!(user_only.sender_display(), "@ming");
         let none = msg(r#"{"message_id":1,"chat":{"id":5}}"#);
         assert_eq!(none.sender_display(), "");
+    }
+
+    #[test]
+    fn photos_and_documents_of_any_type_are_collected_with_their_names() {
+        let m = msg(r#"{"message_id":1,"chat":{"id":5},"photo":[{"file_id":"small","file_size":10},{"file_id":"big","file_size":900}],"document":{"file_id":"doc1","file_name":"server.log","mime_type":"text/plain"}}"#);
+        assert_eq!(m.attachment_ids(), vec![("big".to_string(), String::new()), ("doc1".to_string(), "server.log".to_string())]);
+        let pdf = msg(r#"{"message_id":2,"chat":{"id":5},"document":{"file_id":"d2","file_name":"報告.pdf","mime_type":"application/pdf"}}"#);
+        assert_eq!(pdf.attachment_ids(), vec![("d2".to_string(), "報告.pdf".to_string())], "不再只收圖片");
+        assert!(msg(r#"{"message_id":3,"chat":{"id":5},"text":"hi"}"#).attachment_ids().is_empty());
     }
 }

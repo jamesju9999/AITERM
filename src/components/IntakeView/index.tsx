@@ -5,6 +5,7 @@ import {
   intakeAssign,
   intakeCopyLegacyConfig,
   intakeAttachmentData,
+  intakeAttachmentText,
   intakeAttachments,
   intakeDelete,
   intakeDeleteSender,
@@ -216,6 +217,65 @@ function AdoptBar({ projects, run }: { projects: IntakeProject[]; run: (fn: () =
   );
 }
 
+function formatSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 非圖片附件：檔名、大小、複製路徑（貼給別的工具用）；純文字另有預覽。 */
+function FileRow({ att }: { att: IntakeAttachment }) {
+  const { t } = useLocale();
+  const [preview, setPreview] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const isText = att.mime === "text/plain";
+
+  async function togglePreview() {
+    if (open) return setOpen(false);
+    setOpen(true);
+    if (preview === null) {
+      try {
+        setPreview(await intakeAttachmentText(att.id));
+      } catch {
+        setPreview("");
+        setMsg(t.intake_file_preview_failed);
+      }
+    }
+  }
+
+  async function copyPath() {
+    try {
+      await navigator.clipboard.writeText(att.path);
+      setMsg(t.intake_file_copied);
+    } catch {
+      setMsg(att.path);
+    }
+  }
+
+  return (
+    <li className="intake__file">
+      <div className="intake__file-row">
+        <span className="intake__file-icon" aria-hidden>📄</span>
+        <span className="intake__file-name" title={att.path}>{att.filename}</span>
+        <span className="intake__meta">{formatSize(att.size)}</span>
+        {msg && <span className="intake__meta">{msg}</span>}
+        <span className="intake__file-actions">
+          {isText && (
+            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void togglePreview()}>
+              {open ? t.intake_file_hide : t.intake_file_preview}
+            </button>
+          )}
+          <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void copyPath()}>
+            {t.intake_file_copy_path}
+          </button>
+        </span>
+      </div>
+      {open && preview !== null && <pre className="intake__file-preview">{preview}</pre>}
+    </li>
+  );
+}
+
 function Attachments({ itemId }: { itemId: string }) {
   const { t } = useLocale();
   const [atts, setAtts] = useState<IntakeAttachment[]>([]);
@@ -236,7 +296,8 @@ function Attachments({ itemId }: { itemId: string }) {
       .then(async (list) => {
         if (!alive) return;
         setAtts(list);
-        for (const a of list) {
+        // 只有圖片需要載入內容做縮圖；其他檔案列出檔名與大小，純文字另外提供預覽。
+        for (const a of list.filter((x) => x.mime.startsWith("image/"))) {
           intakeAttachmentData(a.id)
             .then((u) => alive && setUrls((m) => ({ ...m, [a.id]: u })))
             .catch(() => alive && setFailed((m) => ({ ...m, [a.id]: true })));
@@ -249,11 +310,14 @@ function Attachments({ itemId }: { itemId: string }) {
   }, [itemId]);
 
   if (atts.length === 0) return null;
+  const images = atts.filter((a) => a.mime.startsWith("image/"));
+  const files = atts.filter((a) => !a.mime.startsWith("image/"));
   return (
     <section>
       <h4 className="intake__block-title">{t.intake_attachments.replace("{n}", String(atts.length))}</h4>
+      {images.length > 0 && (
       <div className="intake__images">
-        {atts.map((a) =>
+        {images.map((a) =>
           urls[a.id] ? (
             <button key={a.id} type="button" className="intake__thumb-btn" title={a.filename} onClick={() => setZoomId(a.id)}>
               <img src={urls[a.id]} alt={a.filename} className="intake__thumb" />
@@ -265,6 +329,14 @@ function Attachments({ itemId }: { itemId: string }) {
           ),
         )}
       </div>
+      )}
+      {files.length > 0 && (
+        <ul className="intake__files">
+          {files.map((a) => (
+            <FileRow key={a.id} att={a} />
+          ))}
+        </ul>
+      )}
       {zoomId && urls[zoomId] && (
         <div className="intake__lightbox" role="dialog" aria-label={atts.find((a) => a.id === zoomId)?.filename} onClick={() => setZoomId(null)}>
           <button type="button" className="intake__lightbox-close" aria-label={t.intake_image_close} onClick={() => setZoomId(null)}>✕</button>

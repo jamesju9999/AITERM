@@ -28,6 +28,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeDropped: vi.fn(() => Promise.resolve([["not_allowed", 3]])),
   intakeAttachments: vi.fn(() => Promise.resolve([])),
   intakeAttachmentData: vi.fn(),
+  intakeAttachmentText: vi.fn(),
 }));
 import * as ipc from "../../ipc/intake";
 
@@ -238,6 +239,49 @@ describe("IntakeView", () => {
     fireEvent.click(await screen.findByTitle("1-shot.png"));
     fireEvent.click(await screen.findByLabelText(t.intake_image_close));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("lists non-image attachments with name and size, loads image data only for images, and previews text files", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({})]);
+    vi.mocked(ipc.intakeAttachments).mockResolvedValue([
+      { id: "i1", item_id: "1", filename: "1-shot.png", path: "/x/1-shot.png", mime: "image/png", size: 10 },
+      { id: "f1", item_id: "1", filename: "2-server.log", path: "/x/2-server.log", mime: "text/plain", size: 2048 },
+      { id: "f2", item_id: "1", filename: "3-report.pdf", path: "/x/3-report.pdf", mime: "application/octet-stream", size: 3 * 1024 * 1024 },
+    ]);
+    vi.mocked(ipc.intakeAttachmentData).mockResolvedValue("data:image/png;base64,AAAA");
+    vi.mocked(ipc.intakeAttachmentText).mockResolvedValue("ERROR boom\n密碼錯誤");
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    expect(await screen.findByText("2-server.log")).toBeInTheDocument();
+    expect(screen.getByText("3-report.pdf")).toBeInTheDocument();
+    expect(screen.getByText("2.0 KB")).toBeInTheDocument();
+    expect(screen.getByText("3.0 MB")).toBeInTheDocument();
+    expect(screen.getByText(t.intake_attachments.replace("{n}", "3"))).toBeInTheDocument();
+    await screen.findByAltText("1-shot.png");
+    expect(ipc.intakeAttachmentData).toHaveBeenCalledTimes(1);
+    expect(ipc.intakeAttachmentData).toHaveBeenCalledWith("i1");
+    // 只有純文字有預覽鈕；pdf 沒有。
+    const previews = screen.getAllByText(t.intake_file_preview);
+    expect(previews).toHaveLength(1);
+    fireEvent.click(previews[0]);
+    expect(await screen.findByText(/ERROR boom/)).toBeInTheDocument();
+    expect(ipc.intakeAttachmentText).toHaveBeenCalledWith("f1");
+    fireEvent.click(screen.getByText(t.intake_file_hide));
+    await waitFor(() => expect(screen.queryByText(/ERROR boom/)).toBeNull());
+  });
+
+  it("copy path puts the file's location on the clipboard", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({})]);
+    vi.mocked(ipc.intakeAttachments).mockResolvedValue([
+      { id: "f2", item_id: "1", filename: "3-report.pdf", path: "/x/3-report.pdf", mime: "application/octet-stream", size: 3 },
+    ]);
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    fireEvent.click(await screen.findByText(t.intake_file_copy_path));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("/x/3-report.pdf"));
+    expect(await screen.findByText(t.intake_file_copied)).toBeInTheDocument();
   });
 
   it("shows no image section for an item without attachments", async () => {

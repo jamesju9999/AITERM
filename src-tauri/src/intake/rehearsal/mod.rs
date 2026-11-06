@@ -25,13 +25,24 @@ fn run(dir: &Path, args: &[&str]) {
     assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
 }
 
+const LOG: &[u8] = "2026-11-06 12:00:01 ERROR login failed: 密碼錯誤\n".as_bytes();
+
 fn eml(from: &str, subject: &str, mid: &str, body: &str, with_image: bool) -> Vec<u8> {
+    eml_with(from, subject, mid, body, with_image, false)
+}
+
+/// `with_log`：另附一個純文字 log 檔（任意附件）。
+fn eml_with(from: &str, subject: &str, mid: &str, body: &str, with_image: bool, with_log: bool) -> Vec<u8> {
     let mut m = format!(
         "From: {from}\r\nTo: support@example.com\r\nSubject: {subject}\r\nMessage-ID: <{mid}>\r\nAuthentication-Results: mx.example.com; spf=pass smtp.mailfrom={from}\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{body}\r\n"
     );
     if with_image {
         let b64 = base64::engine::general_purpose::STANDARD.encode(PNG);
         m.push_str(&format!("--B\r\nContent-Type: image/png; name=\"畫面.png\"\r\nContent-Disposition: attachment; filename=\"畫面.png\"\r\nContent-Transfer-Encoding: base64\r\n\r\n{b64}\r\n"));
+    }
+    if with_log {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(LOG);
+        m.push_str(&format!("--B\r\nContent-Type: text/plain; name=\"server.log\"\r\nContent-Disposition: attachment; filename=\"server.log\"\r\nContent-Transfer-Encoding: base64\r\n\r\n{b64}\r\n"));
     }
     m.push_str("--B--\r\n");
     m.into_bytes()
@@ -167,7 +178,7 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
     // 標籤都不符合的信不進任何專案。
     let none = mail_source::ingest_routed(&pool, &routes, &eml("me@home.com", "沒有標籤", "n@h", "x", false), &attach_root).await.unwrap();
     assert_eq!(none, super::queue::Ingested::Dropped("not_for_us"));
-    mail_source::ingest_routed(&pool, &routes, &eml("me@home.com", "[P1] 登入壞了", "a@h", "BUGFIX 請修登入", true), &attach_root).await.unwrap();
+    mail_source::ingest_routed(&pool, &routes, &eml_with("me@home.com", "[P1] 登入壞了", "a@h", "BUGFIX 請修登入", true, true), &attach_root).await.unwrap();
     mail_source::ingest_routed(&pool, &routes, &eml("bob@corp.com", "[P1] 請問怎麼用", "b@c", "想問用法", false), &attach_root).await.unwrap();
     // 屬於 p2 的內部問題：自動派送，但終端機分頁登記在 p1，所以絕不能被派進去。
     mail_source::ingest_routed(&pool, &routes, &eml("me@home.com", "[P2] 另一個專案的題目", "p2@h", "P2ONLY 這題不屬於 p1", false), &attach_root).await.unwrap();
@@ -180,6 +191,7 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
     println!("---- 假 claude 記錄 ----\n{log}");
     assert!(log.contains("[INTAKE#") && log.contains("<<<INTAKE") && log.contains("不可信"), "提示格式不對");
     assert!(log.contains("IMG ok"), "Agent 沒看到附圖檔案");
+    assert!(log.contains("server.log") && !log.contains("MISSING"), "Agent 提示裡沒有列出 log 附件，或檔案不在磁碟上：\n{log}");
     assert!(log.contains("HOOK UserPromptSubmit ok") && log.contains("HOOK Stop ok"), "hook 沒打通");
     let reply = a.reply_draft.clone().unwrap();
     println!("---- A 的回覆草稿 ----\n{reply}\n---- A 的驗證 ----\n{:?}\nerror={:?}", a.verification, a.error);
@@ -191,8 +203,12 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
     assert_eq!(a.verified, Some(true));
     assert!(a.error.as_deref().unwrap_or("").contains("自動寄出失敗"), "沒有郵件帳號，自動寄出應失敗並留下草稿：{:?}", a.error);
     let atts = store::list_attachments(&pool, &a.id).await.unwrap();
-    assert_eq!(atts.len(), 1);
-    assert_eq!(std::fs::read(&atts[0].path).unwrap(), PNG);
+    assert_eq!(atts.len(), 2, "圖片與 log 都收");
+    let png = atts.iter().find(|x| x.mime == "image/png").unwrap();
+    assert_eq!(std::fs::read(&png.path).unwrap(), PNG);
+    let logf = atts.iter().find(|x| x.mime == "text/plain").unwrap();
+    assert_eq!(std::fs::read(&logf.path).unwrap(), LOG);
+    assert!(logf.filename.ends_with("server.log"), "{}", logf.filename);
 
     // ---- B：外部、手動派送 → 沒按之前不會動 → 按了才跑；沒改程式所以驗證不通過、一律草稿 ----
     tokio::time::sleep(Duration::from_secs(7)).await;

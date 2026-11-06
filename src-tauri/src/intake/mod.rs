@@ -97,7 +97,7 @@ pub async fn owns_account<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_
 
 /// Telegram 收到訊息時呼叫（見 `telegram::poll_updates`）。回傳 `true` 表示訊息已由問題收集處理，
 /// 呼叫端不要再當一般訊息轉送。
-pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: i64, message_id: i64, text: &str, is_owner: bool, photos: Vec<String>, sender_name: &str) -> bool {
+pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: i64, message_id: i64, text: &str, is_owner: bool, photos: Vec<(String, String)>, sender_name: &str) -> bool {
     use tauri::{Emitter, Manager};
     let Some(db) = app.try_state::<IntakeDb>() else { return false };
     let cands: Vec<telegram_source::Candidate> = all_configs(app, &db.pool)
@@ -116,10 +116,10 @@ pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: 
             return Vec::new();
         };
         let mut out = Vec::new();
-        for id in photos.into_iter().take(attach::MAX_FILES) {
-            match crate::telegram::download_file(&token, &id, attach::MAX_BYTES).await {
+        for (id, name) in photos.into_iter().take(attach::MAX_FILES) {
+            match crate::telegram::download_file(&token, &id, &name, attach::MAX_BYTES).await {
                 Ok(raw) => out.push(raw),
-                Err(e) => log::warn!("intake: Telegram 圖片下載失敗：{e}"),
+                Err(e) => log::warn!("intake: Telegram 附件下載失敗：{e}"),
             }
         }
         out

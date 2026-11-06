@@ -111,7 +111,7 @@ where
         return Ok(Ingested::Dropped("not_for_us"));
     }
     let files = if has_files { fetch().await } else { Vec::new() };
-    let body = if body.is_empty() { "（僅附圖）" } else { body };
+    let body = if body.is_empty() { "（僅附件）" } else { body };
     let mid = format!("tg:{chat_id}:{message_id}");
     queue::enqueue(pool, cfg, project_id, level, "telegram", &key, &subject_of(body), body, &mid, attach_root, files).await
 }
@@ -333,7 +333,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         store::upsert_sender(&p, "", &Sender { address: "tg:7".into(), level: Level::External, skip_auth: false }).await.unwrap();
         let Ingested::Queued(id) = ingest(&p, "", &cfg(), 7, 3, "", false, tmp.path(), true, || async { vec![Raw { name: "x".into(), bytes: PNG.to_vec() }] }).await.unwrap() else { panic!() };
-        assert_eq!(store::get_item(&p, &id).await.unwrap().unwrap().body, "（僅附圖）");
+        assert_eq!(store::get_item(&p, &id).await.unwrap().unwrap().body, "（僅附件）");
         assert_eq!(store::list_attachments(&p, &id).await.unwrap().len(), 1);
     }
 

@@ -81,7 +81,7 @@ pub async fn ingest_routed(pool: &SqlitePool, candidates: &[Candidate], raw: &[u
         } else {
             p.message_id.clone()
         };
-        let body = if p.body.trim().is_empty() && !p.files.is_empty() { "（僅附圖）".to_string() } else { p.body.clone() };
+        let body = if p.body.trim().is_empty() && !p.files.is_empty() { "（僅附件）".to_string() } else { p.body.clone() };
         let r = queue::enqueue(pool, cfg, project_id, level, "email", &sender, &p.headers.subject, &body, &mid, attach_root, p.files).await?;
         if let Ingested::Queued(id) = &r {
             store::set_sender_name(pool, id, &p.from_name, &sender).await?;
@@ -218,11 +218,14 @@ mod tests {
         let raw = mail_with_image("q", "img1@c", "看圖", &[("shot.png", "image/png", PNG), ("run.exe", "application/octet-stream", b"MZ\x90")]);
         let Ingested::Queued(id) = ingest(&p, &cfg(), &raw, tmp.path()).await.unwrap() else { panic!("not queued") };
         let atts = store::list_attachments(&p, &id).await.unwrap();
-        assert_eq!(atts.len(), 1, "只收圖片");
-        assert_eq!((atts[0].mime.as_str(), atts[0].size), ("image/png", PNG.len() as i64));
-        assert_eq!(std::fs::read(&atts[0].path).unwrap(), PNG);
+        assert_eq!(atts.len(), 2, "圖片與其他檔案都收");
+        let png = atts.iter().find(|a| a.mime == "image/png").unwrap();
+        assert_eq!(png.size, PNG.len() as i64);
+        assert_eq!(std::fs::read(&png.path).unwrap(), PNG);
+        let other = atts.iter().find(|a| a.mime == "application/octet-stream").unwrap();
+        assert!(other.filename.ends_with(".exe"), "{}", other.filename);
         let item = store::get_item(&p, &id).await.unwrap().unwrap();
-        assert!(item.body.contains("看圖") && item.body.contains("被略過"), "{}", item.body);
+        assert!(item.body.contains("看圖") && !item.body.contains("被略過"), "{}", item.body);
     }
 
     #[tokio::test]
@@ -232,7 +235,7 @@ mod tests {
         allow(&p, "bob@corp.com", Level::External).await;
         let raw = mail_with_image("[AITerm]", "img2@c", "", &[("a.png", "image/png", PNG)]);
         let Ingested::Queued(id) = ingest(&p, &cfg(), &raw, tmp.path()).await.unwrap() else { panic!("not queued") };
-        assert_eq!(store::get_item(&p, &id).await.unwrap().unwrap().body, "（僅附圖）");
+        assert_eq!(store::get_item(&p, &id).await.unwrap().unwrap().body, "（僅附件）");
         assert_eq!(ingest(&p, &cfg(), &raw, tmp.path()).await.unwrap(), Ingested::Duplicate);
         assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 1, "重複的信不可留下孤兒目錄");
     }

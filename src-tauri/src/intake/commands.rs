@@ -287,6 +287,38 @@ pub async fn intake_attachment_data(db: State<'_, IntakeDb>, id: String) -> Resu
     data_url(&super::attach::root(), &row)
 }
 
+/// 純文字附件（log、txt、json…）的前 64KB，給畫面預覽。只讀我們自己存放目錄底下的檔案。
+#[tauri::command]
+pub async fn intake_attachment_text(db: State<'_, IntakeDb>, id: String) -> Result<String, String> {
+    let row = store::get_attachment(&db.pool, &id).await.map_err(e)?.ok_or("找不到附件")?;
+    text_preview(&super::attach::root(), &row)
+}
+
+pub const PREVIEW_BYTES: usize = 64 * 1024;
+
+pub fn text_preview(root: &std::path::Path, row: &store::AttachmentRow) -> Result<String, String> {
+    use std::io::Read;
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(&row.path).canonicalize().map_err(|e| e.to_string())?;
+    if !path.starts_with(&root) {
+        return Err("附件路徑不在允許的目錄內".into());
+    }
+    let mut buf = Vec::new();
+    std::fs::File::open(&path).and_then(|f| f.take(PREVIEW_BYTES as u64 + 4).read_to_end(&mut buf)).map_err(|e| e.to_string())?;
+    // 以內容判斷，不信資料庫裡的 mime 欄位。
+    if !super::attach::looks_like_text(&buf) {
+        return Err("這個檔案不是純文字，無法預覽".into());
+    }
+    let cut = buf.len() > PREVIEW_BYTES;
+    buf.truncate(PREVIEW_BYTES);
+    // 截斷可能切在多位元組字元中間：用 lossy 轉換，只會多一個替代字元。
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    if cut {
+        text.push_str("\n…（內容太長，只顯示前 64KB）");
+    }
+    Ok(text)
+}
+
 pub fn data_url(root: &std::path::Path, row: &store::AttachmentRow) -> Result<String, String> {
     use base64::Engine;
     let root = root.canonicalize().map_err(|e| e.to_string())?;
@@ -353,5 +385,27 @@ mod tests {
         let text = root.path().join("n.png");
         std::fs::write(&text, b"not an image").unwrap();
         assert!(data_url(root.path(), &row(&text)).is_err(), "副檔名是 png 但內容不是圖片");
+    }
+
+    #[test]
+    fn text_preview_reads_only_text_under_the_root_and_cuts_long_files() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let log = root.path().join("a.log");
+        std::fs::write(&log, "ERROR boom\n中文也行\n").unwrap();
+        assert_eq!(text_preview(root.path(), &row(&log)).unwrap(), "ERROR boom\n中文也行\n");
+
+        let big = root.path().join("big.log");
+        std::fs::write(&big, "x".repeat(PREVIEW_BYTES + 100)).unwrap();
+        let t = text_preview(root.path(), &row(&big)).unwrap();
+        assert!(t.starts_with("xxx") && t.ends_with("只顯示前 64KB）") && t.len() < PREVIEW_BYTES + 100, "{}", t.len());
+
+        let bin = root.path().join("b.bin");
+        std::fs::write(&bin, b"\0\x01\x02binary").unwrap();
+        assert!(text_preview(root.path(), &row(&bin)).is_err(), "二進位不預覽");
+
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "密碼").unwrap();
+        assert!(text_preview(root.path(), &row(&secret)).is_err(), "目錄外的檔案不能讀");
     }
 }

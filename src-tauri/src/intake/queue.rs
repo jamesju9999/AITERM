@@ -52,7 +52,7 @@ pub async fn enqueue(
     let (saved, skipped) = if files.is_empty() { (vec![], 0) } else { attach::save_all(attach_root, &id, files) };
     let body_owned;
     let body = if skipped > 0 {
-        body_owned = format!("{body}\n\n（另有 {skipped} 個附件因格式不是圖片、太大或超過 {} 張上限而被略過）", attach::MAX_FILES);
+        body_owned = format!("{body}\n\n（另有 {skipped} 個附件被略過：空檔、單檔超過 {} MB，或超過 {} 個／總量上限）", attach::MAX_BYTES / 1024 / 1024, attach::MAX_FILES);
         body_owned.as_str()
     } else {
         body

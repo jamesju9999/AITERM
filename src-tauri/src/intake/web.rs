@@ -17,7 +17,7 @@ pub const CODE_TTL_SECS: i64 = 600;
 pub const MAX_ATTEMPTS: u32 = 5;
 pub const MAX_CODE_REQUESTS: usize = 3;
 pub const MAX_BODY_CHARS: usize = 20_000;
-pub const MAX_SUBMIT_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_SUBMIT_BYTES: usize = 48 * 1024 * 1024;
 
 struct Entry {
     code: String,
@@ -122,7 +122,7 @@ pub async fn submit(pool: &SqlitePool, project_id: &str, cfg: &Config, otps: &Ot
     }
     let subject: String = subject.trim().chars().take(200).collect();
     let mid = format!("web:{}", uuid::Uuid::new_v4());
-    let body = if body.is_empty() { "（僅附圖）" } else { body };
+    let body = if body.is_empty() { "（僅附件）" } else { body };
     let r = queue::enqueue(pool, cfg, project_id, sender.level, "web", &addr, &subject, body, &mid, attach_root, images).await?;
     Ok(match r {
         Ingested::Queued(_) | Ingested::Duplicate => Submit::Accepted,
@@ -142,7 +142,7 @@ input,textarea,button{font:inherit;width:100%;box-sizing:border-box;padding:.5re
 <form id="f2" hidden><label for="code">收到的 6 位數驗證碼</label><input id="code" inputmode="numeric" maxlength="6" required>
 <label for="subject">主旨</label><input id="subject" maxlength="200">
 <label for="body">問題內容</label><textarea id="body" rows="8"></textarea>
-<label for="imgs">附圖（選填，最多 5 張，每張 10MB 內）</label><input id="imgs" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple><button>送出</button></form>
+<label for="imgs">附件（選填：圖片、文件、log 都可以；最多 10 個，每個 20MB 內，合計約 35MB 內）</label><input id="imgs" type="file" multiple><button>送出</button></form>
 <div id="msg" role="status"></div>
 <script>
 const $=id=>document.getElementById(id),m=(t,c)=>{$("msg").textContent=t;$("msg").className=c||""};
@@ -151,9 +151,9 @@ let j={};try{j=await r.json()}catch(e){}return{ok:r.ok,j}}
 $("f1").onsubmit=async e=>{e.preventDefault();const r=await post("__BASE__/api/code",{email:$("email").value});
 m(r.ok?"若此信箱已獲授權，驗證碼已寄出（10 分鐘內有效）。":(r.j.error||"失敗"),r.ok?"ok":"err");if(r.ok)$("f2").hidden=false};
 const b64=f=>new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(String(r.result).split(",")[1]||"");r.onerror=no;r.readAsDataURL(f)});
-$("f2").onsubmit=async e=>{e.preventDefault();const fs=[...$("imgs").files].slice(0,5);
-const images=await Promise.all(fs.map(async f=>({name:f.name,data:await b64(f)})));
-const r=await post("__BASE__/api/submit",{email:$("email").value,code:$("code").value,subject:$("subject").value,body:$("body").value,images});
+$("f2").onsubmit=async e=>{e.preventDefault();const fs=[...$("imgs").files].slice(0,10);
+const files=await Promise.all(fs.map(async f=>({name:f.name,data:await b64(f)})));
+const r=await post("__BASE__/api/submit",{email:$("email").value,code:$("code").value,subject:$("subject").value,body:$("body").value,files});
 m(r.ok?"已收到，處理完成後會回信給你。":(r.j.error||"失敗"),r.ok?"ok":"err");if(r.ok){$("f2").reset()}};
 </script></body></html>"#;
 
@@ -307,22 +307,22 @@ struct SubmitReq {
     subject: String,
     #[serde(default)]
     body: String,
-    /// 圖片以 base64 傳送；格式與大小由 `attach` 依內容驗證。
-    #[serde(default)]
-    images: Vec<ImageReq>,
+    /// 檔案以 base64 傳送；大小與個數由 `attach` 限制，圖片與否由內容判斷。舊版頁面送的欄位叫 `images`，一併接受。
+    #[serde(default, alias = "images")]
+    files: Vec<FileReq>,
 }
 
 #[derive(Deserialize)]
-struct ImageReq {
+struct FileReq {
     #[serde(default)]
     name: String,
     data: String,
 }
 
 /// base64 解不開的圖片留成空內容，之後會被當成「略過」計數，而不是讓整個請求失敗。
-fn decode_images(images: Vec<ImageReq>) -> Vec<Raw> {
+fn decode_files(files: Vec<FileReq>) -> Vec<Raw> {
     use base64::Engine;
-    images
+    files
         .into_iter()
         .take(attach::MAX_FILES + 5)
         .map(|i| Raw { name: i.name, bytes: base64::engine::general_purpose::STANDARD.decode(i.data.trim()).unwrap_or_default() })
@@ -400,7 +400,7 @@ async fn api_submit(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<Stri
     let Some((pid, _, cfg)) = resolve(&st, &code).await else {
         return json(StatusCode::SERVICE_UNAVAILABLE, serde_json::json!({ "error": "目前未開放" }));
     };
-    match submit(&st.pool, &pid, &cfg, &st.otps, now(), &req.email, &req.code, &req.subject, &req.body, &st.attach_root, decode_images(req.images)).await {
+    match submit(&st.pool, &pid, &cfg, &st.otps, now(), &req.email, &req.code, &req.subject, &req.body, &st.attach_root, decode_files(req.files)).await {
         Ok(Submit::Accepted) => {
             (st.on_change)();
             json(StatusCode::OK, serde_json::json!({ "ok": true }))
@@ -571,7 +571,7 @@ mod http_tests {
     }
 
     #[tokio::test]
-    async fn images_in_a_submission_are_saved_and_attached() {
+    async fn files_in_a_submission_are_saved_and_attached() {
         use base64::Engine;
         let (r, pool, sent, _) = app(WebMode::Local).await;
         post(&r, "/p/proj1/api/code", serde_json::json!({"email": "bob@corp.com"})).await;
@@ -582,13 +582,13 @@ mod http_tests {
         let ok = base64::engine::general_purpose::STANDARD.encode(png);
         let (st, _) = post(&r, "/p/proj1/api/submit", serde_json::json!({
             "email":"bob@corp.com","code":code,"subject":"s","body":"",
-            "images":[{"name":"畫面.png","data":ok},{"name":"bad.png","data":"!!!not base64!!!"},{"name":"x.txt","data":base64::engine::general_purpose::STANDARD.encode(b"hello")}]
+            "files":[{"name":"畫面.png","data":ok},{"name":"bad.png","data":"!!!not base64!!!"},{"name":"x.txt","data":base64::engine::general_purpose::STANDARD.encode(b"hello")}]
         })).await;
         assert_eq!(st, StatusCode::OK);
         let it = &store::list_items(&pool, "proj1", None).await.unwrap()[0];
         let atts = store::list_attachments(&pool, &it.id).await.unwrap();
-        assert_eq!(atts.len(), 1);
-        assert!(it.body.contains("僅附圖") && it.body.contains("2 個附件"), "{}", it.body);
+        assert_eq!(atts.len(), 2, "圖片與文字檔都收；解不開的 base64 被略過");
+        assert!(it.body.contains("僅附件") && it.body.contains("1 個附件被略過"), "{}", it.body);
     }
 
     #[tokio::test]

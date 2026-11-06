@@ -123,4 +123,6 @@ export interface IntakeAttachment {
 }
 export const intakeAttachments = (itemId: string) => invoke<IntakeAttachment[]>("intake_attachments", { itemId });
 /** 回傳 `data:` URL。 */
+/** 純文字附件（log、txt…）的前 64KB，給預覽。 */
+export const intakeAttachmentText = (id: string) => invoke<string>("intake_attachment_text", { id });
 export const intakeAttachmentData = (id: string) => invoke<string>("intake_attachment_data", { id });
