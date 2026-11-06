@@ -115,6 +115,8 @@ export const intakeReject = (id: string) => invoke<boolean>("intake_reject", { i
 export const intakeUpdateDraft = (id: string, draft: string) => invoke<boolean>("intake_update_draft", { id, draft });
 export const intakeSendReply = (id: string) => invoke<void>("intake_send_reply", { id });
 export const intakeTabStart = (tabId: string, projectId: string) => invoke<void>("intake_tab_start", { tabId, projectId });
+/** 把分頁切換到專案的專案目錄；分頁沒閒置在提示字元、路徑無法安全送出或切換失敗時丟出原因。 */
+export const intakeTabCd = (tabId: string, projectId: string) => invoke<string>("intake_tab_cd", { tabId, projectId });
 export const intakeTabStop = (tabId: string) => invoke<void>("intake_tab_stop", { tabId });
 export const intakeTabs = () => invoke<IntakeTab[]>("intake_tabs");
 

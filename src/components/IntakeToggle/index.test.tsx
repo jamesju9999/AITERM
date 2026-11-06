@@ -6,12 +6,14 @@ import { translations } from "../../lib/i18n";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 vi.mock("../../ipc/fs", () => ({ getSessionCwd: vi.fn(() => Promise.resolve("/work/two/src")) }));
+import { getSessionCwd } from "../../ipc/fs";
 vi.mock("../../ipc/intake", async (orig) => ({
   ...(await orig<typeof import("../../ipc/intake")>()),
   intakeTabs: vi.fn(),
   intakeProjects: vi.fn(),
   intakeTabStart: vi.fn(() => Promise.resolve()),
   intakeTabStop: vi.fn(() => Promise.resolve()),
+  intakeTabCd: vi.fn(() => Promise.resolve("/work/one")),
 }));
 import * as ipc from "../../ipc/intake";
 
@@ -23,6 +25,9 @@ const TWO = [proj("p1", "專案一", "/work/one"), proj("p2", "專案二", "/wor
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // 上一個測試把它改成「已在專案目錄裡」，不重設會漏到下一個測試。
+  vi.mocked(getSessionCwd).mockResolvedValue("/work/two/src");
+  vi.mocked(ipc.intakeTabCd).mockResolvedValue("/work/one");
   vi.mocked(ipc.intakeTabs).mockResolvedValue([]);
   vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: TWO, unassigned: 0, legacy_settings: false });
 });
@@ -48,6 +53,28 @@ describe("IntakeToggle", () => {
     expect(screen.getByText(t.intake_toggle_outside.replace("{dir}", "/work/one"))).toBeInTheDocument();
     fireEvent.click(screen.getByText(t.intake_toggle_start));
     await waitFor(() => expect(ipc.intakeTabStart).toHaveBeenCalledWith("pty-1", "p1"));
+  });
+
+  it("the switch button sends the project (never a path) and the warning disappears once the tab is inside it", async () => {
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_toggle_off));
+    fireEvent.change(await screen.findByLabelText(t.intake_toggle_pick), { target: { value: "p1" } });
+    expect(screen.getByText(t.intake_toggle_outside.replace("{dir}", "/work/one"))).toBeInTheDocument();
+    vi.mocked(getSessionCwd).mockResolvedValue("/work/one");
+    fireEvent.click(screen.getByText(t.intake_toggle_cd));
+    await waitFor(() => expect(ipc.intakeTabCd).toHaveBeenCalledWith("pty-1", "p1"));
+    await waitFor(() => expect(screen.queryByText(t.intake_toggle_outside.replace("{dir}", "/work/one"))).toBeNull());
+    expect(screen.queryByText(t.intake_toggle_cd)).toBeNull();
+  });
+
+  it("a refused switch (a program is running) is shown and the warning stays", async () => {
+    vi.mocked(ipc.intakeTabCd).mockRejectedValueOnce(new Error("這個分頁正在執行程式，請先結束它再切換"));
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_toggle_off));
+    fireEvent.change(await screen.findByLabelText(t.intake_toggle_pick), { target: { value: "p1" } });
+    fireEvent.click(screen.getByText(t.intake_toggle_cd));
+    expect(await screen.findByRole("alert")).toHaveTextContent("正在執行程式");
+    expect(screen.getByText(t.intake_toggle_outside.replace("{dir}", "/work/one"))).toBeInTheDocument();
   });
 
   it("cancelling the picker starts nothing", async () => {

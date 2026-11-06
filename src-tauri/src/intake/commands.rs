@@ -320,6 +320,27 @@ pub struct TabDto {
     pub project_id: String,
 }
 
+/// 把這個分頁切換到專案的專案目錄。只在分頁閒置在 shell 提示字元時才送。
+/// 路徑從專案設定讀，不接受前端傳來的路徑，避免被拿去在終端機裡執行任意字串。
+#[tauri::command]
+pub async fn intake_tab_cd(
+    reg: State<'_, crate::projects::ProjectRegistry>,
+    pty: State<'_, Arc<crate::pty::PtyManager>>,
+    tab_id: String,
+    project_id: String,
+) -> Result<String, String> {
+    let handle = reg.get(&project_id).ok_or("找不到這個專案")?;
+    let dir = crate::tasks::repo_check::saved_project_repo(&handle.pool)
+        .await
+        .map_err(e)?
+        .ok_or("這個專案還沒有設定專案目錄（請在 Agent 協作設定）")?;
+    if !std::path::Path::new(&dir).is_dir() {
+        return Err(format!("專案目錄不存在：{dir}"));
+    }
+    super::tabcd::cd_tab(&pty, &tab_id, &dir).await?;
+    Ok(dir)
+}
+
 #[tauri::command]
 pub fn intake_tabs(rt: State<'_, Arc<IntakeRuntime>>) -> Vec<TabDto> {
     rt.registry.tabs().into_iter().map(|t| TabDto { project_id: rt.registry.project_of(&t).unwrap_or_default(), tab_id: t }).collect()

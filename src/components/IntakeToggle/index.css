@@ -9,3 +9,4 @@
 .aiterm-intake-toggle__pop select { padding: 6px 8px; font: inherit; color: inherit; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; }
 .aiterm-intake-toggle__warn { color: #fbbf24; overflow-wrap: anywhere; word-break: break-word; line-height: 1.5; }
 .aiterm-intake-toggle__row { display: flex; gap: 8px; }
+.aiterm-intake-toggle__err { color: #f87171; overflow-wrap: anywhere; line-height: 1.5; }

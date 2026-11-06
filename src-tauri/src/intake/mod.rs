@@ -15,6 +15,7 @@ pub mod runtime;
 pub mod smtp;
 pub mod telegram_source;
 pub mod store;
+pub mod tabcd;
 pub mod verify;
 pub mod web;
 

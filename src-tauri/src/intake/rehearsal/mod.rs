@@ -151,6 +151,20 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
     pty.write(&tab, format!("export PATH='{}':\"$PATH\"; hash -r; echo PATH\"\"SET\r", bin.display()).as_bytes()).unwrap();
     // 輸入的指令回顯是 PATH""SET，執行結果才是 PATHSET，兩者不會混淆。
     wait_for("PATH 已設定", 10, || async { pty.get_recent_output(&tab, 4000).is_some_and(|o| o.contains("PATHSET")) }).await;
+    // ---- 「切換到專案目錄」：在真的 shell 提示字元下切過去（路徑含空白、單引號、中文），再切回 ----
+    let tricky = repo.join("sub dir").join("it's 記帳本");
+    std::fs::create_dir_all(&tricky).unwrap();
+    super::tabcd::cd_tab(&pty, &tab, &tricky.to_string_lossy()).await.expect("閒置在提示字元時應該切得過去");
+    // 用 shell 自己的 pwd 驗證真的切過去了（分頁目錄追蹤解析不了含單引號的路徑，不能當依據）。
+    let pwd_file = work.path().join("pwd.txt");
+    pty.write(&tab, format!("pwd -P > '{}'\r", pwd_file.display()).as_bytes()).unwrap();
+    wait_for("pwd 寫出", 10, || async { std::fs::read_to_string(&pwd_file).is_ok_and(|s| s.trim_end().ends_with("it's 記帳本")) }).await;
+    pty.write(&tab, b"echo half-typed-garbage").unwrap(); // 提示字元上留著一半的字：切換前必須先清掉，不能接在後面
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    super::tabcd::cd_tab(&pty, &tab, &repo.to_string_lossy()).await.expect("切回專案目錄");
+    assert!(!pty.get_recent_output(&tab, 8000).unwrap_or_default().contains("half-typed-garbagecd"), "cd 被接在使用者打到一半的字後面");
+    let missing = super::tabcd::cd_tab(&pty, &tab, &repo.join("不存在的資料夾").to_string_lossy()).await.expect_err("資料夾不存在要回報失敗");
+    assert!(missing.contains("切換失敗"), "{missing}");
     pty.write(&tab, b"claude\r").unwrap();
     let t0 = Instant::now();
     while !pty.get_recent_output(&tab, 4000).is_some_and(|o| o.contains("READY")) {
@@ -162,6 +176,10 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
         );
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
+    // 假 claude 在跑：這時絕不能把 cd 打進去。
+    let busy = super::tabcd::cd_tab(&pty, &tab, &repo.to_string_lossy()).await.expect_err("有程式在跑時必須拒絕");
+    assert!(busy.contains("正在執行程式"), "{busy}");
+    assert!(!read_log().contains("cd --"), "cd 被打進了執行中的程式：{}", read_log());
     assert!(read_log().contains("ARGS has_settings"), "shell 的 claude 包裝函式沒有補 --settings：\n{}", read_log());
     rt.registry.register(&tab, "p1");
 

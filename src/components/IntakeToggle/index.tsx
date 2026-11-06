@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { intakeProjects, intakeTabStart, intakeTabStop, intakeTabs, type IntakeProject } from "../../ipc/intake";
+import { intakeProjects, intakeTabCd, intakeTabStart, intakeTabStop, intakeTabs, type IntakeProject } from "../../ipc/intake";
 import { getSessionCwd } from "../../ipc/fs";
 import { useIntakeChanged } from "../../hooks/useIntakeChanged";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -18,6 +18,7 @@ export function IntakeToggle({ sessionId }: Props) {
   const [projectId, setProjectId] = useState<string | null>(null); // 目前收集的專案（null＝沒在收集）
   const [names, setNames] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [cdError, setCdError] = useState<string | null>(null);
   const [picking, setPicking] = useState<{ projects: IntakeProject[]; choice: string; cwd: string | null } | null>(null);
 
   const refresh = useCallback(() => {
@@ -38,6 +39,21 @@ export function IntakeToggle({ sessionId }: Props) {
       await intakeTabStart(sessionId, project);
       setPicking(null);
       refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 替這個分頁切換到所選專案的目錄，成功後重新判斷分頁目錄，黃字就會自己消失。 */
+  async function goToProjectDir(projectId: string) {
+    setBusy(true);
+    setCdError(null);
+    try {
+      await intakeTabCd(sessionId, projectId);
+      const cwd = await getSessionCwd(sessionId).catch(() => null);
+      setPicking((p) => (p ? { ...p, cwd } : p));
+    } catch (e) {
+      setCdError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -100,13 +116,24 @@ export function IntakeToggle({ sessionId }: Props) {
             <>
               <label>
                 {t.intake_toggle_pick}
-                <select value={picking.choice} onChange={(e) => setPicking({ ...picking, choice: e.target.value })}>
+                <select value={picking.choice} onChange={(e) => {
+                    setCdError(null);
+                    setPicking({ ...picking, choice: e.target.value });
+                  }}>
                   {picking.projects.map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
               </label>
-              {outside && <p className="aiterm-intake-toggle__warn">{t.intake_toggle_outside.replace("{dir}", chosen?.repo_dir ?? "")}</p>}
+              {outside && (
+                <>
+                  <p className="aiterm-intake-toggle__warn">{t.intake_toggle_outside.replace("{dir}", chosen?.repo_dir ?? "")}</p>
+                  <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy} onClick={() => void goToProjectDir(picking.choice)}>
+                    {t.intake_toggle_cd}
+                  </button>
+                  {cdError && <p className="aiterm-intake-toggle__err" role="alert">{cdError}</p>}
+                </>
+              )}
               <div className="aiterm-intake-toggle__row">
                 <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={busy} onClick={() => void start(picking.choice)}>
                   {t.intake_toggle_start}
