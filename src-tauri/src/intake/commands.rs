@@ -108,6 +108,8 @@ pub struct ProjectsView {
     pub projects: Vec<ProjectSummary>,
     /// 尚未歸屬的題數（升級前的舊資料）。為 0 就不顯示「未歸屬」。
     pub unassigned: i64,
+    /// 「未歸屬」底下還留著升級前的設定或白名單（可複製到專案）。
+    pub legacy_settings: bool,
 }
 
 #[tauri::command]
@@ -134,7 +136,8 @@ pub async fn intake_projects(app: AppHandle, db: State<'_, IntakeDb>, reg: State
         let repo_dir = crate::tasks::repo_check::saved_project_repo(&h.pool).await.ok().flatten();
         projects.push(ProjectSummary { enabled: config::load(&db.pool, &h.id).await.enabled, id: h.id, name: h.name, repo_dir, open_count, total });
     }
-    Ok(ProjectsView { projects, unassigned: count_of("").1 })
+    let legacy_settings = config::exists(&db.pool, "").await || !store::list_senders(&db.pool, "").await.map_err(e)?.is_empty();
+    Ok(ProjectsView { projects, unassigned: count_of("").1, legacy_settings })
 }
 
 /// 舊設定（若新專案還沒有自己的）、白名單、題目與丟棄計數歸給專案。
@@ -295,6 +298,32 @@ pub fn data_url(root: &std::path::Path, row: &store::AttachmentRow) -> Result<St
     // 以內容判斷 MIME，不信資料庫裡的欄位。
     let (mime, _) = super::attach::sniff(&bytes).ok_or("檔案內容不是支援的圖片")?;
     Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+#[cfg(test)]
+mod adopt_tests {
+    use super::*;
+    use crate::intake::store::NewItem;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn adopting_moves_config_senders_items_and_drops_together() {
+        let p = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        store::init_schema(&p).await.unwrap();
+        config::save(&p, "", &Config { enabled: true, tag: "[OLD]".into(), ..Config::default() }).await.unwrap();
+        store::upsert_sender(&p, "", &Sender { address: "a@b.co".into(), level: Level::Internal, skip_auth: false }).await.unwrap();
+        store::bump_dropped(&p, "", "not_allowed").await.unwrap();
+        store::insert_item(&p, NewItem { project_id: "", id: None, source: "email", sender: "a@b.co", level: Level::Internal, subject: "s", body: "b", message_id: "m", status: store::PENDING }).await.unwrap();
+
+        adopt(&p, "proj").await.unwrap();
+
+        assert_eq!(config::load(&p, "proj").await.tag, "[OLD]");
+        assert!(config::exists(&p, "proj").await);
+        assert_eq!(store::list_senders(&p, "proj").await.unwrap().len(), 1);
+        assert!(store::list_senders(&p, "").await.unwrap().is_empty());
+        assert_eq!(store::list_items(&p, "proj", None).await.unwrap().len(), 1);
+        assert_eq!(store::dropped_counts(&p, "proj").await.unwrap().len(), 1);
+    }
 }
 
 #[cfg(test)]

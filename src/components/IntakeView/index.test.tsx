@@ -67,7 +67,7 @@ beforeEach(() => {
   } catch {
     /* ignore */
   }
-  vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [P1, P2], unassigned: 0 });
+  vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [P1, P2], unassigned: 0, legacy_settings: false });
   // clearAllMocks 不會清掉 mockResolvedValue 設過的實作，上一個測試的附圖會漏進來。
   vi.mocked(ipc.intakeAttachments).mockResolvedValue([]);
 });
@@ -311,7 +311,7 @@ describe("IntakeView", () => {
   });
 
   it("with no project at all it says to create one instead of showing an empty queue", async () => {
-    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [], unassigned: 0 });
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [], unassigned: 0, legacy_settings: false });
     vi.mocked(ipc.intakeList).mockResolvedValue([]);
     wrap();
     expect(await screen.findByText(t.intake_no_projects)).toBeInTheDocument();
@@ -319,7 +319,7 @@ describe("IntakeView", () => {
   });
 
   it("unassigned questions get their own view, can be moved one by one or all at once, and have no settings", async () => {
-    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [P1, P2], unassigned: 3 });
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [P1, P2], unassigned: 3, legacy_settings: true });
     vi.mocked(ipc.intakeList).mockResolvedValue([item({ project_id: "" })]);
     wrap();
     fireEvent.change(await screen.findByLabelText(t.intake_project_label), { target: { value: "" } });
@@ -359,8 +359,18 @@ describe("IntakeView", () => {
     expect(screen.queryByText(new RegExp(t.intake_set_saved))).toBeNull();
   });
 
-  it("offers to copy the pre-upgrade settings only when this project has none and old data exists", async () => {
-    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [P1, P2], unassigned: 2 });
+  it("does not offer copying when there are no old settings left", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({}, { saved: false }));
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    await screen.findByText(t.intake_editing_project.replace("{name}", "專案一"));
+    expect(screen.queryByText(t.intake_copy_legacy)).toBeNull();
+  });
+
+  it("offers to copy the pre-upgrade settings when this project has none and old settings remain, even with no unassigned questions", async () => {
+    // 題目都已歸屬（unassigned 為 0），但舊設定與白名單還在：照樣要有複製入口。
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [P1, P2], unassigned: 0, legacy_settings: true });
     vi.mocked(ipc.intakeList).mockResolvedValue([]);
     vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({}, { saved: false }));
     wrap();

@@ -24,12 +24,12 @@ const TWO = [proj("p1", "專案一", "/work/one"), proj("p2", "專案二", "/wor
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(ipc.intakeTabs).mockResolvedValue([]);
-  vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: TWO, unassigned: 0 });
+  vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: TWO, unassigned: 0, legacy_settings: false });
 });
 
 describe("IntakeToggle", () => {
   it("with one project it starts straight away for THIS pty session and that project", async () => {
-    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: ONE, unassigned: 0 });
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: ONE, unassigned: 0, legacy_settings: false });
     vi.mocked(ipc.intakeTabs).mockResolvedValueOnce([]).mockResolvedValue([{ tab_id: "pty-1", project_id: "p1" }]);
     wrap();
     fireEvent.click(await screen.findByText(t.intake_toggle_off));
@@ -58,7 +58,7 @@ describe("IntakeToggle", () => {
   });
 
   it("with no project it explains instead of starting", async () => {
-    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [], unassigned: 0 });
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [], unassigned: 0, legacy_settings: false });
     wrap();
     fireEvent.click(await screen.findByText(t.intake_toggle_off));
     expect(await screen.findByText(t.intake_no_projects)).toBeInTheDocument();

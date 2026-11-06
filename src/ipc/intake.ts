@@ -78,6 +78,8 @@ export interface IntakeProjects {
   projects: IntakeProject[];
   /** 尚未歸屬的題數（升級前的舊資料）。 */
   unassigned: number;
+  /** 「未歸屬」底下還留著升級前的設定或白名單。 */
+  legacy_settings: boolean;
 }
 
 export interface IntakeTab {

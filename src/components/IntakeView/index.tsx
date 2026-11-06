@@ -55,6 +55,7 @@ export function IntakeView() {
   const { t } = useLocale();
   const [projects, setProjects] = useState<IntakeProject[]>([]);
   const [unassigned, setUnassigned] = useState(0);
+  const [legacySettings, setLegacySettings] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [choice, setChoice] = useState<string | null>(savedProject);
   const [items, setItems] = useState<IntakeItem[]>([]);
@@ -68,6 +69,7 @@ export function IntakeView() {
       .then((v) => {
         setProjects(v.projects);
         setUnassigned(v.unassigned);
+        setLegacySettings(v.legacy_settings);
         setLoaded(true);
       })
       .catch((e) => setError(errText(e)));
@@ -155,7 +157,7 @@ export function IntakeView() {
       {noProject ? (
         <p className="intake__empty">{t.intake_no_projects}</p>
       ) : showSettings && !inUnassigned ? (
-        <SettingsPanel key={projectId} projectId={projectId} projectName={current?.name ?? ""} unassigned={unassigned} onError={setError} />
+        <SettingsPanel key={projectId} projectId={projectId} projectName={current?.name ?? ""} legacySettings={legacySettings} onError={setError} />
       ) : (
         <>
           {inUnassigned && <AdoptBar projects={projects} run={run} />}
@@ -424,7 +426,7 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
   );
 }
 
-function SettingsPanel({ projectId, projectName, unassigned, onError }: { projectId: string; projectName: string; unassigned: number; onError: (m: string | null) => void }) {
+function SettingsPanel({ projectId, projectName, legacySettings, onError }: { projectId: string; projectName: string; legacySettings: boolean; onError: (m: string | null) => void }) {
   const { t } = useLocale();
   const [cfg, setCfg] = useState<IntakeConfig | null>(null);
   const [hasOwn, setHasOwn] = useState(true);
@@ -487,7 +489,7 @@ function SettingsPanel({ projectId, projectName, unassigned, onError }: { projec
   return (
     <div className="intake__settings">
       <div className="intake__editing">{t.intake_editing_project.replace("{name}", projectName)}</div>
-      {!hasOwn && unassigned > 0 && (
+      {!hasOwn && legacySettings && (
         <div className="intake__banner intake__adopt">
           <span>{t.intake_copy_legacy_hint}</span>
           <button
