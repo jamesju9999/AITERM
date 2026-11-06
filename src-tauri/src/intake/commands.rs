@@ -38,13 +38,17 @@ pub async fn intake_get_config(db: State<'_, IntakeDb>, project_id: String) -> R
 
 /// 儲存前檢查會不會讓同一封信有兩個歸屬（同一信箱下別名／主旨標籤相同、專用信箱被共用）。
 async fn check_conflicts(app: &AppHandle, pool: &sqlx::SqlitePool, project_id: &str, cfg: &Config) -> Result<(), String> {
-    let mut others = super::open_projects(app);
-    others.push((String::new(), "未歸屬".to_string()));
-    for (id, name) in others {
+    resolve_conflicts(pool, project_id, cfg, &super::open_projects(app)).await
+}
+
+/// 與其他**專案**衝突就拒絕並指出是哪個；與升級前遺留的「未歸屬」設定衝突，則直接把那份舊設定停用。
+/// 舊設定在畫面上看不到也關不掉，不能讓使用者被一個看不見的東西擋住；它的用途已經由新專案接手。
+async fn resolve_conflicts(pool: &sqlx::SqlitePool, project_id: &str, cfg: &Config, projects: &[(String, String)]) -> Result<(), String> {
+    for (id, name) in projects {
         if id == project_id {
             continue;
         }
-        let other = config::load(pool, &id).await;
+        let other = config::load(pool, id).await;
         if let Some(field) = config::conflict(cfg, &other) {
             let what = match field {
                 "dedicated" => "這個信箱已被設為另一個專案的專用信箱，同一個信箱不能同時給多個專案",
@@ -52,6 +56,13 @@ async fn check_conflicts(app: &AppHandle, pool: &sqlx::SqlitePool, project_id: &
                 _ => "主旨標籤跟另一個專案相同",
             };
             return Err(format!("與專案「{name}」衝突：{what}"));
+        }
+    }
+    if !project_id.is_empty() {
+        let mut legacy = config::load(pool, "").await;
+        if config::conflict(cfg, &legacy).is_some() {
+            legacy.enabled = false;
+            config::save(pool, "", &legacy).await.map_err(e)?;
         }
     }
     Ok(())
@@ -401,6 +412,44 @@ pub fn data_url(root: &std::path::Path, row: &store::AttachmentRow) -> Result<St
     // 以內容判斷 MIME，不信資料庫裡的欄位。
     let (mime, _) = super::attach::sniff(&bytes).ok_or("檔案內容不是支援的圖片")?;
     Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+#[cfg(test)]
+mod conflict_tests {
+    use super::*;
+    use crate::intake::rules::MatchMode;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    fn cfg(tag: &str) -> Config {
+        Config { enabled: true, account_id: "acc".into(), mode: MatchMode::SubjectTag, tag: tag.into(), ..Config::default() }
+    }
+    async fn pool() -> sqlx::SqlitePool {
+        let p = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        store::init_schema(&p).await.unwrap();
+        p
+    }
+
+    #[tokio::test]
+    async fn a_leftover_unassigned_config_is_switched_off_instead_of_blocking_the_save() {
+        let p = pool().await;
+        config::save(&p, "", &cfg("[AITerm]")).await.unwrap();
+        let projects = vec![("a".to_string(), "專案A".to_string())];
+        resolve_conflicts(&p, "a", &cfg("[AITerm]"), &projects).await.expect("舊的未歸屬設定不該擋住新專案");
+        assert!(!config::load(&p, "").await.enabled, "衝突的舊設定被停用，否則同一封信會有兩個接收者");
+    }
+
+    #[tokio::test]
+    async fn a_non_conflicting_leftover_is_left_alone_and_a_real_project_conflict_still_blocks() {
+        let p = pool().await;
+        config::save(&p, "", &cfg("[Old]")).await.unwrap();
+        config::save(&p, "b", &cfg("[Same]")).await.unwrap();
+        let projects = vec![("a".to_string(), "專案A".to_string()), ("b".to_string(), "專案B".to_string())];
+        resolve_conflicts(&p, "a", &cfg("[New]"), &projects).await.unwrap();
+        assert!(config::load(&p, "").await.enabled, "沒有衝突就不動舊設定");
+        let err = resolve_conflicts(&p, "a", &cfg("[same]"), &projects).await.unwrap_err();
+        assert!(err.contains("專案B") && err.contains("主旨標籤"), "{err}");
+        assert!(config::load(&p, "").await.enabled, "被擋下的這次不能順便動到舊設定");
+    }
 }
 
 #[cfg(test)]
