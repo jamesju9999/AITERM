@@ -97,7 +97,7 @@ export function IntakeView() {
                 >
                   <span className={`intake__badge intake__badge--${i.status}`}>{t[`intake_status_${i.status}` as const]}</span>
                   <span className="intake__subject">{i.subject || t.intake_no_subject}</span>
-                  <span className="intake__sender">{t.intake_asker}：{i.sender} · {i.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
+                  <span className="intake__sender">{t.intake_asker}：{i.sender_name ? `${i.sender_name} <${i.sender}>` : i.sender} · {i.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
                 </button>
               </li>
             ))}
@@ -164,7 +164,8 @@ function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unkno
       <h3>{item.subject || t.intake_no_subject}</h3>
       <p className="intake__asker">
         <span className="intake__asker-label">{t.intake_asker}</span>
-        <strong>{item.sender}</strong>
+        {item.sender_name && <strong>{item.sender_name}</strong>}
+        {item.sender_name ? <span className="intake__meta">{item.sender}</span> : <strong>{item.sender}</strong>}
         <span className={`intake__level intake__level--${item.sender_level}`}>
           {item.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}
         </span>

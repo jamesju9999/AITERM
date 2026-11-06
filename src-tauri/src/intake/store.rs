@@ -35,6 +35,8 @@ pub struct IntakeItem {
     /// 驗證結果的文字報告（也會附在回信裡）。
     pub verification: Option<String>,
     pub verified: Option<bool>,
+    /// 提問者的顯示名稱（信件的寄件人名稱、Telegram 的姓名）；沒有就是 `None`。
+    pub sender_name: Option<String>,
 }
 
 pub struct NewItem<'a> {
@@ -100,10 +102,24 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     }
     // 第 2 期新增的欄位。CREATE 是 IF NOT EXISTS，舊資料庫不會自動長出來，逐欄補。
     let have: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('intake_items')").fetch_all(pool).await?;
-    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER")] {
+    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT")] {
         if !have.iter().any(|c| c == col) {
             sqlx::query(&format!("ALTER TABLE intake_items ADD COLUMN {col} {ty}")).execute(pool).await?;
         }
+    }
+    Ok(())
+}
+
+/// 顯示名稱來自外部，清掉控制字元、截短；空白或跟地址一樣就當作沒有。
+pub fn clean_name(name: &str, address: &str) -> Option<String> {
+    let n: String = name.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(80).collect();
+    let n = n.trim().to_string();
+    if n.is_empty() || n.eq_ignore_ascii_case(address) { None } else { Some(n) }
+}
+
+pub async fn set_sender_name(pool: &SqlitePool, id: &str, name: &str, address: &str) -> Result<(), sqlx::Error> {
+    if let Some(n) = clean_name(name, address) {
+        sqlx::query("UPDATE intake_items SET sender_name = ? WHERE id = ?").bind(n).bind(id).execute(pool).await?;
     }
     Ok(())
 }

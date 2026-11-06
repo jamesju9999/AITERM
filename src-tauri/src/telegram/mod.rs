@@ -35,6 +35,8 @@ struct TelegramUpdate {
 struct TelegramMessage {
     message_id: i64,
     chat: TelegramChat,
+    /// 發話的人（群組或私訊皆有）；用來顯示提問者姓名。
+    from: Option<TelegramUser>,
     text: Option<String>,
     /// 圖片訊息的說明文字（問題內容寫在這裡）。
     caption: Option<String>,
@@ -44,6 +46,13 @@ struct TelegramMessage {
     document: Option<TelegramDocument>,
     /// 使用者「回覆」某則訊息時，被回覆的那則（用來對應到 Agent 的問題）。
     reply_to_message: Option<Box<TelegramMessage>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramUser {
+    first_name: Option<String>,
+    last_name: Option<String>,
+    username: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +68,17 @@ struct TelegramDocument {
 }
 
 impl TelegramMessage {
+    /// 發話者的顯示名稱：姓名優先，沒有就用 @username。
+    fn sender_display(&self) -> String {
+        let Some(u) = &self.from else { return String::new() };
+        let full = [u.first_name.as_deref(), u.last_name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+        if !full.trim().is_empty() {
+            full
+        } else {
+            u.username.as_deref().map(|n| format!("@{n}")).unwrap_or_default()
+        }
+    }
+
     /// 訊息文字：一般訊息用 text，圖片訊息用 caption。
     fn body_text(&self) -> Option<&str> {
         self.text.as_deref().or(self.caption.as_deref())
@@ -205,7 +225,7 @@ async fn poll_updates(app: AppHandle, token: String, allowed_chat_id: i64) {
                                         let photos = msg.image_file_ids();
                                         if msg.body_text().is_some() || !photos.is_empty() {
                                             let text = msg.body_text().unwrap_or("");
-                                            if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, true, photos).await {
+                                            if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, true, photos, &msg.sender_display()).await {
                                                 continue;
                                             }
                                         }
@@ -222,7 +242,7 @@ async fn poll_updates(app: AppHandle, token: String, allowed_chat_id: i64) {
                                         let photos = msg.image_file_ids();
                                         if msg.body_text().is_some() || !photos.is_empty() {
                                             let text = msg.body_text().unwrap_or("");
-                                            if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, false, photos).await {
+                                            if crate::intake::on_telegram(&app, msg.chat.id, msg.message_id, text, false, photos, &msg.sender_display()).await {
                                                 continue;
                                             }
                                         }
@@ -356,4 +376,23 @@ pub async fn download_file(token: &str, file_id: &str, max_bytes: usize) -> Resu
     }
     let name = path.rsplit('/').next().unwrap_or("image").to_string();
     Ok(crate::intake::attach::Raw { name, bytes: bytes.to_vec() })
+}
+
+#[cfg(test)]
+mod sender_display_tests {
+    use super::*;
+
+    fn msg(json: &str) -> TelegramMessage {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn name_comes_from_first_and_last_name_then_username_then_nothing() {
+        let both = msg(r#"{"message_id":1,"chat":{"id":5},"from":{"first_name":"小明","last_name":"王","username":"ming"}}"#);
+        assert_eq!(both.sender_display(), "小明 王");
+        let user_only = msg(r#"{"message_id":1,"chat":{"id":5},"from":{"username":"ming"}}"#);
+        assert_eq!(user_only.sender_display(), "@ming");
+        let none = msg(r#"{"message_id":1,"chat":{"id":5}}"#);
+        assert_eq!(none.sender_display(), "");
+    }
 }

@@ -15,6 +15,7 @@ pub struct Parsed {
     pub headers: Headers,
     pub message_id: String,
     pub body: String,
+    pub from_name: String,
     pub files: Vec<Raw>,
 }
 
@@ -25,6 +26,7 @@ fn addrs(a: Option<&mail_parser::Address<'_>>) -> Vec<String> {
 pub fn parse(raw: &[u8]) -> Option<Parsed> {
     let m = MessageParser::default().parse(raw)?;
     let from = addrs(m.from()).into_iter().next().unwrap_or_default();
+    let from_name = m.from().and_then(|a| a.first()).and_then(|x| x.name()).unwrap_or("").to_string();
     let mut recipients = addrs(m.to());
     recipients.extend(addrs(m.cc()));
     for v in m.header_values("Delivered-To") {
@@ -50,6 +52,7 @@ pub fn parse(raw: &[u8]) -> Option<Parsed> {
         headers: Headers { from, recipients, subject: m.subject().unwrap_or("").to_string(), auth_results },
         message_id,
         body,
+        from_name,
     })
 }
 
@@ -74,7 +77,11 @@ pub async fn ingest(pool: &SqlitePool, cfg: &Config, raw: &[u8], attach_root: &P
         p.message_id.clone()
     };
     let body = if p.body.trim().is_empty() && !p.files.is_empty() { "（僅附圖）".to_string() } else { p.body };
-    queue::enqueue(pool, cfg, level, "email", &sender, &p.headers.subject, &body, &mid, attach_root, p.files).await
+    let r = queue::enqueue(pool, cfg, level, "email", &sender, &p.headers.subject, &body, &mid, attach_root, p.files).await?;
+    if let Ingested::Queued(id) = &r {
+        store::set_sender_name(pool, id, &p.from_name, &sender).await?;
+    }
+    Ok(r)
 }
 
 fn fnv(b: &[u8]) -> u64 {
@@ -116,6 +123,26 @@ mod tests {
         assert!(matches!(a, Ingested::Queued(_)) && matches!(b, Ingested::Queued(_)));
         assert_eq!(store::list_items(&p, Some(store::QUEUED)).await.unwrap().len(), 1);
         assert_eq!(store::list_items(&p, Some(store::PENDING)).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_senders_display_name_is_kept_and_a_bare_address_has_none() {
+        let p = pool().await;
+        let tmp = tempfile::tempdir().unwrap();
+        allow(&p, "bob@corp.com", Level::External).await;
+        allow(&p, "me@home.com", Level::Internal).await;
+        let Ingested::Queued(a) = ingest(&p, &cfg(), &mail("=?UTF-8?B?546L5bCP5piO?= <bob@corp.com>", "me+aiterm@gmail.com", "q", "n1@c", Some(PASS)), tmp.path()).await.unwrap() else { panic!() };
+        let Ingested::Queued(b) = ingest(&p, &cfg(), &mail("me@home.com", "x@y.z", "[AITerm] hi", "n2@h", None), tmp.path()).await.unwrap() else { panic!() };
+        assert_eq!(store::get_item(&p, &a).await.unwrap().unwrap().sender_name.as_deref(), Some("王小明"));
+        assert_eq!(store::get_item(&p, &b).await.unwrap().unwrap().sender_name, None);
+    }
+
+    #[test]
+    fn display_names_are_cleaned() {
+        assert_eq!(store::clean_name("  王小明\u{7}\n ", "a@b.c").as_deref(), Some("王小明"));
+        assert_eq!(store::clean_name("A@B.C", "a@b.c"), None, "跟地址一樣不算名稱");
+        assert_eq!(store::clean_name("   ", "a@b.c"), None);
+        assert_eq!(store::clean_name(&"長".repeat(200), "a@b.c").unwrap().chars().count(), 80);
     }
 
     #[tokio::test]

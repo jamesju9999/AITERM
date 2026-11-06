@@ -24,6 +24,7 @@ export interface IntakeItem {
   snapshot_head: string | null;
   verification: string | null;
   verified: boolean | null;
+  sender_name: string | null;
 }
 
 export interface IntakeConfig {

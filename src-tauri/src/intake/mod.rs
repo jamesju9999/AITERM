@@ -70,7 +70,7 @@ pub async fn owns_account<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_
 
 /// Telegram 收到訊息時呼叫（見 `telegram::poll_updates`）。回傳 `true` 表示訊息已由問題收集處理，
 /// 呼叫端不要再當一般訊息轉送。
-pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: i64, message_id: i64, text: &str, is_owner: bool, photos: Vec<String>) -> bool {
+pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: i64, message_id: i64, text: &str, is_owner: bool, photos: Vec<String>, sender_name: &str) -> bool {
     use tauri::{Emitter, Manager};
     let Some(db) = app.try_state::<IntakeDb>() else { return false };
     let cfg = config::load(&db.pool).await;
@@ -93,7 +93,8 @@ pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: 
         out
     };
     match telegram_source::ingest(&db.pool, &cfg, chat_id, message_id, text, is_owner, &attach::root(), has_files, fetch).await {
-        Ok(queue::Ingested::Queued(_)) => {
+        Ok(queue::Ingested::Queued(id)) => {
+            store::set_sender_name(&db.pool, &id, sender_name, &telegram_source::sender_key(chat_id)).await.ok();
             let _ = app.emit(CHANGED_EVENT, ());
             true
         }

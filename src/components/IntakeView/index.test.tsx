@@ -32,7 +32,7 @@ function item(over: Partial<IntakeItem>): IntakeItem {
   return {
     id: "1", source: "email", sender: "bob@corp.com", sender_level: "external", subject: "壞掉了", body: "請修",
     message_id: "m", status: "pending", tab_id: null, reply_draft: null, error: null, created_at: 0, updated_at: 0,
-    kind: null, snapshot_head: null, verification: null, verified: null, ...over,
+    kind: null, snapshot_head: null, verification: null, verified: null, sender_name: null, ...over,
   };
 }
 const wrap = () => render(<LocaleProvider><IntakeView /></LocaleProvider>);
@@ -59,6 +59,15 @@ describe("IntakeView", () => {
     fireEvent.click(row);
     expect(await screen.findByText("bob@corp.com", { selector: "strong" })).toBeTruthy();
     expect(screen.getAllByText(t.intake_level_external).length).toBeGreaterThan(0);
+  });
+
+  it("shows the display name first, with the address beside it", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ sender_name: "王小明" })]);
+    wrap();
+    const row = await screen.findByText(`${t.intake_asker}：王小明 <bob@corp.com> · ${t.intake_level_external}`);
+    fireEvent.click(row);
+    expect(await screen.findByText("王小明", { selector: "strong" })).toBeTruthy();
+    expect(screen.getByText("bob@corp.com", { selector: ".intake__asker .intake__meta" })).toBeTruthy();
   });
 
   it("does not offer dispatch for an item that is already running", async () => {
