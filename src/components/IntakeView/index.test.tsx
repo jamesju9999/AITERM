@@ -113,12 +113,24 @@ describe("IntakeView", () => {
     expect(order[0]).toBeLessThan(order[1]);
   });
 
-  it("a sent (done) reply is read-only", async () => {
-    vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "done", reply_draft: "已寄" })]);
+  it("a sent (done) reply is shown rendered and cannot be edited", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "done", reply_draft: "**已寄**" })]);
     wrap();
     fireEvent.click(await screen.findByText("壞掉了"));
-    expect(((await screen.findByDisplayValue("已寄")) as HTMLTextAreaElement).readOnly).toBe(true);
+    expect(await screen.findByText("已寄", { selector: "strong" })).toBeTruthy();
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByText(t.intake_action_send)).toBeNull();
+  });
+
+  it("a draft can be previewed as rendered Markdown without losing the edit", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "draft", reply_draft: "**重點**" })]);
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    expect(((await screen.findByDisplayValue("**重點**")) as HTMLTextAreaElement).readOnly).toBe(false);
+    fireEvent.click(screen.getByText(t.intake_preview));
+    expect(await screen.findByText("重點", { selector: "strong" })).toBeTruthy();
+    fireEvent.click(screen.getByText(t.intake_edit));
+    expect(await screen.findByDisplayValue("**重點**")).toBeTruthy();
   });
 
   it("surfaces a backend failure instead of swallowing it", async () => {

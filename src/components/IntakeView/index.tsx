@@ -22,10 +22,12 @@ import {
   type Level,
 } from "../../ipc/intake";
 import { MailIcon } from "../Icons";
+import { MarkdownText } from "../../lib/markdown";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
 import { useIntakeChanged } from "../../hooks/useIntakeChanged";
 import { useLocale } from "../../contexts/LocaleContext";
 import { validAddress } from "../../lib/intakeAddress";
+import { flowSteps } from "../../lib/intakeFlow";
 import "./index.css";
 
 const STATUSES: IntakeStatus[] = ["pending", "queued", "running", "draft", "done", "rejected"];
@@ -172,94 +174,126 @@ function Attachments({ itemId }: { itemId: string }) {
   );
 }
 
+function FlowBar({ item }: { item: IntakeItem }) {
+  const { t } = useLocale();
+  const steps = flowSteps(item);
+  return (
+    <ol className="intake__flow" aria-label={t.intake_flow_label}>
+      {steps.map((s, i) => (
+        <li key={s.key} className={`intake__flow-step intake__flow-step--${s.state}`} aria-current={s.state === "current" ? "step" : undefined}>
+          <span className="intake__flow-dot">{s.state === "done" ? "✓" : s.state === "failed" ? "!" : s.state === "skipped" ? "–" : i + 1}</span>
+          <span className="intake__flow-label">{t[`intake_flow_${s.key}` as const]}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void> }) {
   const { t } = useLocale();
   const [draft, setDraft] = useState(item.reply_draft ?? "");
+  const [preview, setPreview] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const hasReply = (item.status === "draft" || item.status === "done") && item.reply_draft !== null;
   return (
-    <div>
-      <h3>{item.subject || t.intake_no_subject}</h3>
-      <p className="intake__asker">
-        <span className="intake__asker-label">{t.intake_asker}</span>
-        {item.sender_name && <strong>{item.sender_name}</strong>}
-        {item.sender_name ? <span className="intake__meta">{item.sender}</span> : <strong>{item.sender}</strong>}
-        <span className={`intake__level intake__level--${item.sender_level}`}>
-          {item.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}
-        </span>
-        <span className="intake__meta">{item.source}</span>
-      </p>
-      {item.kind && (
-        <p className="intake__meta">{item.kind === "code_change" ? t.intake_kind_code_change : t.intake_kind_question}</p>
-      )}
-      {item.error && <p className="intake__error">{item.error}</p>}
-      <pre className="intake__text">{item.body}</pre>
-      <Attachments itemId={item.id} />
+    <div className="intake__pane">
+      <FlowBar item={item} />
+      <header className="intake__head">
+        <h3>{item.subject || t.intake_no_subject}</h3>
+        <div className="intake__chips">
+          <span className="intake__asker">
+            <span className="intake__asker-label">{t.intake_asker}</span>
+            {item.sender_name && <strong>{item.sender_name}</strong>}
+            {item.sender_name ? <span className="intake__meta">{item.sender}</span> : <strong>{item.sender}</strong>}
+          </span>
+          <span className={`intake__level intake__level--${item.sender_level}`}>
+            {item.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}
+          </span>
+          <span className="intake__chip">{item.source}</span>
+          {item.kind && <span className="intake__chip">{item.kind === "code_change" ? t.intake_kind_code_change : t.intake_kind_question}</span>}
+          <span className="intake__meta">{new Date(item.created_at * 1000).toLocaleString()}</span>
+        </div>
+      </header>
+      {item.error && <div className="intake__banner">{item.error}</div>}
+
+      <section className="intake__block">
+        <h4 className="intake__block-title">{t.intake_block_question}</h4>
+        <pre className="intake__text">{item.body}</pre>
+        <Attachments itemId={item.id} />
+      </section>
+
       {item.verification && (
-        <section>
-          <h4 className={item.verified ? "intake__ok" : "intake__error"}>
+        <section className="intake__block">
+          <h4 className={`intake__block-title ${item.verified ? "intake__ok" : "intake__error"}`}>
             {item.verified ? t.intake_verify_passed : t.intake_verify_failed}
           </h4>
           <pre className="intake__text">{item.verification}</pre>
         </section>
       )}
-      <div className="intake__actions">
+
+      {hasReply && (
+        <section className="intake__block">
+          <div className="intake__block-head">
+            <h4 className="intake__block-title">{t.intake_reply}</h4>
+            {item.status === "draft" && (
+              <div className="intake__seg" role="group">
+                <button type="button" className={!preview ? "is-on" : ""} onClick={() => setPreview(false)}>{t.intake_edit}</button>
+                <button type="button" className={preview ? "is-on" : ""} onClick={() => setPreview(true)}>{t.intake_preview}</button>
+              </div>
+            )}
+          </div>
+          {item.status === "done" || preview ? (
+            <div className="intake__md"><MarkdownText text={item.status === "done" ? item.reply_draft ?? "" : draft} /></div>
+          ) : (
+            <textarea className="intake__draft" value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} />
+          )}
+        </section>
+      )}
+
+      <footer className="intake__footer">
         {item.status === "pending" && (
           <>
-            <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={() => void run(() => intakeApprove(item.id))}>
+            <button className="aiterm-btn aiterm-btn--primary" onClick={() => void run(() => intakeApprove(item.id))}>
               {t.intake_action_approve}
             </button>
-            <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void run(() => intakeReject(item.id))}>
+            <button className="aiterm-btn aiterm-btn--secondary" onClick={() => void run(() => intakeReject(item.id))}>
               {t.intake_action_reject}
             </button>
           </>
         )}
         {item.status === "queued" && (
-          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void run(() => intakeReject(item.id))}>
+          <button className="aiterm-btn aiterm-btn--secondary" onClick={() => void run(() => intakeReject(item.id))}>
             {t.intake_action_reject}
           </button>
         )}
-      </div>
-      {item.status !== "running" && (
-        <div className="intake__actions intake__delete">
+        {item.status === "draft" && hasReply && (
+          <>
+            <button
+              className="aiterm-btn aiterm-btn--primary"
+              onClick={() =>
+                void run(async () => {
+                  await intakeUpdateDraft(item.id, draft);
+                  await intakeSendReply(item.id);
+                })
+              }
+            >
+              {t.intake_action_send}
+            </button>
+            <button className="aiterm-btn aiterm-btn--secondary" onClick={() => void run(() => intakeUpdateDraft(item.id, draft))}>
+              {t.intake_action_save_draft}
+            </button>
+          </>
+        )}
+        {item.status !== "running" && (
           <button
-            className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm intake__delete-btn ${confirmDelete ? "intake__delete-btn--armed" : ""}`}
+            className={`aiterm-btn aiterm-btn--secondary intake__delete-btn ${confirmDelete ? "intake__delete-btn--armed" : ""}`}
             onClick={() => (confirmDelete ? void run(() => intakeDelete(item.id)) : setConfirmDelete(true))}
             onBlur={() => setConfirmDelete(false)}
           >
             {confirmDelete ? t.intake_action_delete_confirm : t.intake_action_delete}
           </button>
-        </div>
-      )}
-      {(item.status === "draft" || item.status === "done") && item.reply_draft !== null && (
-        <section>
-          <h4>{t.intake_reply}</h4>
-          <textarea
-            className="intake__draft"
-            value={draft}
-            readOnly={item.status === "done"}
-            onChange={(e) => setDraft(e.target.value)}
-            rows={10}
-          />
-          {item.status === "draft" && (
-            <div className="intake__actions">
-              <button
-                className="aiterm-btn aiterm-btn--primary aiterm-btn--sm"
-                onClick={() =>
-                  void run(async () => {
-                    await intakeUpdateDraft(item.id, draft);
-                    await intakeSendReply(item.id);
-                  })
-                }
-              >
-                {t.intake_action_send}
-              </button>
-              <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void run(() => intakeUpdateDraft(item.id, draft))}>
-                {t.intake_action_save_draft}
-              </button>
-            </div>
-          )}
-        </section>
-      )}
+        )}
+      </footer>
     </div>
   );
 }
