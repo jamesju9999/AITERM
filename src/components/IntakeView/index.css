@@ -145,3 +145,8 @@
 .intake__flow-step:first-child .intake__flow-tip { left: 0; transform: translate(0, 6px); }
 .intake__flow-step:last-child .intake__flow-tip { left: auto; right: 0; transform: translate(0, 6px); }
 .intake__block section .intake__block-title { display: block; min-height: 0; padding: 0; background: none; }
+
+/* 問題內容／驗證結果很長時，卡片內自己捲動，不把回覆卡片與操作按鈕擠到畫面外 */
+.intake__block .intake__text { max-height: 320px; overflow: auto; }
+/* 操作按鈕固定在面板底部，內容再長都按得到 */
+.intake__footer { position: sticky; bottom: 0; z-index: 2; margin-bottom: -20px; padding-bottom: 14px; background: var(--bg-secondary, #1a1a2e); }
