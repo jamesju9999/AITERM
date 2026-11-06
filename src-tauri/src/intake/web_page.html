@@ -1,0 +1,136 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>提問 · __TITLE__</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1f2328;--muted:#6b7280;--line:#d8dce2;--accent:#2563eb;--accent-fg:#fff;--ok:#15803d;--okbg:#ecfdf3;--err:#b91c1c;--errbg:#fef2f2;--soft:#eef2ff}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--card:#1d2026;--fg:#e6e8eb;--muted:#9aa3ae;--line:#323842;--accent:#4f8cff;--accent-fg:#0b1020;--ok:#4ade80;--okbg:#10261a;--err:#f87171;--errbg:#2b1618;--soft:#232a3d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif}
+main{max-width:640px;margin:0 auto;padding:32px 16px 64px}
+header{margin-bottom:20px}
+h1{margin:0;font-size:26px}
+.proj{display:inline-block;margin-top:6px;padding:2px 10px;border-radius:999px;background:var(--soft);color:var(--accent);font-size:14px;font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.card h2{margin:0 0 4px;font-size:17px}
+.hint{margin:0 0 14px;color:var(--muted);font-size:14px}
+label{display:block;margin:14px 0 6px;font-size:14px;font-weight:600}
+input,textarea,button{font:inherit;color:inherit}
+input[type=email],input[type=text],input:not([type]),textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+textarea{min-height:180px;resize:vertical}
+input:focus,textarea:focus,button:focus-visible,.drop:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.code{letter-spacing:.4em;font-size:22px;text-align:center;font-variant-numeric:tabular-nums}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+button{padding:0 18px;height:40px;border:1px solid var(--line);border-radius:8px;background:var(--card);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:600}
+button.link{border:0;background:none;height:auto;padding:0;color:var(--accent);text-decoration:underline}
+button:disabled{opacity:.5;cursor:not-allowed}
+.wide{width:100%;margin-top:16px}
+.who{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px;font-size:14px}
+.who b{word-break:break-all}.who .left{color:var(--muted)}
+.count{margin-top:4px;text-align:right;color:var(--muted);font-size:12px}
+.drop{margin-top:6px;padding:16px;border:2px dashed var(--line);border-radius:10px;text-align:center;color:var(--muted);cursor:pointer;font-size:14px}
+.drop.over{border-color:var(--accent);background:var(--soft);color:var(--accent)}
+.files{list-style:none;margin:8px 0 0;padding:0}
+.files li{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 10px;border-radius:8px;background:var(--bg);margin-top:6px;font-size:14px}
+.files .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.files .sz{color:var(--muted);white-space:nowrap}
+.files button{height:auto;padding:0 6px;border:0;background:none;color:var(--err);font-size:18px;line-height:1}
+#msg{margin:0 0 16px;padding:10px 14px;border-radius:8px;font-size:14px}
+#msg:empty{display:none}#msg.ok{background:var(--okbg);color:var(--ok)}#msg.err{background:var(--errbg);color:var(--err)}
+.sent{list-style:none;margin:8px 0 0;padding:0;font-size:14px}
+.sent li{padding:6px 0;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:10px}
+.sent li:first-child{border-top:0}.sent .t{color:var(--muted);white-space:nowrap}
+.sent .s{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[hidden]{display:none!important}
+@media(max-width:480px){main{padding-top:20px}.card{padding:16px}}
+</style></head><body><main>
+<header><h1>提問</h1><span class="proj">__TITLE__</span></header>
+<div id="msg" role="status" aria-live="polite"></div>
+
+<section class="card" id="login">
+<h2>先驗證信箱</h2><p class="hint">只有已授權的信箱可以提問。驗證一次後，30 分鐘內可以連續提交多個問題。</p>
+<form id="f1"><label for="email">電子郵件</label>
+<input id="email" type="email" required autocomplete="email" placeholder="name@example.com">
+<button class="primary wide" id="send">寄送驗證碼</button></form>
+<form id="f2" hidden><label for="code">收到的 6 位數驗證碼</label>
+<div class="row"><input id="code" class="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required style="flex:1;min-width:0">
+<button class="primary" id="verify">驗證</button></div>
+<p class="hint" style="margin:8px 0 0">沒收到？<button type="button" class="link" id="resend">重新寄送</button></p></form>
+</section>
+
+<section class="card" id="compose" hidden>
+<div class="who"><span>已驗證：<b id="whoami"></b></span><span><span class="left" id="left"></span> · <button type="button" class="link" id="logout">登出</button></span></div>
+<form id="f3">
+<label for="subject">主旨（選填）</label><input id="subject" maxlength="200">
+<label for="body">問題內容</label><textarea id="body" maxlength="20000" placeholder="描述你遇到的情況、預期的結果。Ctrl／⌘＋Enter 可直接送出。"></textarea>
+<div class="count"><span id="chars">0</span> / 20000</div>
+<label>附件（選填）</label>
+<div class="drop" id="drop" tabindex="0" role="button">拖曳檔案到這裡，或點一下選擇<br><small>圖片、文件、log 都可以；最多 10 個，每個 20MB 內，合計約 35MB 內</small></div>
+<input id="pick" type="file" multiple hidden>
+<ul class="files" id="files"></ul>
+<button class="primary wide" id="submit">送出問題</button>
+</form></section>
+
+<section class="card" id="sentbox" hidden><h2>這次已送出</h2><ul class="sent" id="sent"></ul></section>
+
+<script>
+const $=id=>document.getElementById(id);
+const MAX_FILES=10,MAX_ONE=20*1048576,MAX_SUM=35*1048576;
+let token="",expiry=0,picked=[],timer=0,cool=0;
+function note(t,c){$("msg").textContent=t||"";$("msg").className=t?c:""}
+async function post(u,d){try{const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
+let j={};try{j=await r.json()}catch(e){}return{ok:r.ok,status:r.status,j}}catch(e){return{ok:false,status:0,j:{error:"連不上伺服器，請確認網路後再試"}}}}
+function show(loggedIn){$("login").hidden=loggedIn;$("compose").hidden=!loggedIn;if(!loggedIn){clearInterval(timer)}}
+function tick(){const s=Math.max(0,Math.round((expiry-Date.now())/1000));
+if(s<=0&&token){expire("登入已逾時，請重新驗證；你寫的內容還在。");return}
+$("left").textContent="剩 "+Math.ceil(s/60)+" 分鐘"}
+function startSession(t,email,ttl){token=t;expiry=Date.now()+ttl*1000;$("whoami").textContent=email;show(true);tick();clearInterval(timer);timer=setInterval(tick,15000)}
+function expire(text){token="";show(false);$("f1").hidden=false;$("f2").hidden=true;$("code").value="";note(text,"err")}
+const kb=n=>n>=1048576?(n/1048576).toFixed(1)+" MB":Math.max(1,Math.round(n/1024))+" KB";
+function renderFiles(){$("files").innerHTML="";picked.forEach((f,i)=>{const li=document.createElement("li");
+const a=document.createElement("span");a.className="nm";a.textContent=f.name;
+const b=document.createElement("span");b.className="sz";b.textContent=kb(f.size);
+const x=document.createElement("button");x.type="button";x.textContent="×";x.title="移除";x.setAttribute("aria-label","移除 "+f.name);x.onclick=()=>{picked.splice(i,1);renderFiles()};
+const r=document.createElement("span");r.style.cssText="display:flex;gap:8px;align-items:center";r.append(b,x);li.append(a,r);$("files").append(li)})}
+function addFiles(list){for(const f of list){
+if(picked.length>=MAX_FILES){note("最多 "+MAX_FILES+" 個附件","err");break}
+if(f.size>MAX_ONE){note(f.name+" 超過 20MB，沒有加入","err");continue}
+if(picked.reduce((n,x)=>n+x.size,0)+f.size>MAX_SUM){note("附件合計太大，"+f.name+" 沒有加入","err");continue}
+picked.push(f)}renderFiles()}
+const drop=$("drop");
+drop.onclick=()=>$("pick").click();
+drop.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();$("pick").click()}};
+$("pick").onchange=e=>{addFiles(e.target.files);e.target.value=""};
+["dragenter","dragover"].forEach(n=>drop.addEventListener(n,e=>{e.preventDefault();drop.classList.add("over")}));
+["dragleave","drop"].forEach(n=>drop.addEventListener(n,e=>{e.preventDefault();drop.classList.remove("over")}));
+drop.addEventListener("drop",e=>addFiles(e.dataTransfer.files));
+$("body").oninput=()=>{$("chars").textContent=$("body").value.length};
+function cooldown(){cool=45;const b=$("resend");const iv=setInterval(()=>{cool--;b.disabled=cool>0;b.textContent=cool>0?"重新寄送（"+cool+"）":"重新寄送";if(cool<=0)clearInterval(iv)},1000);b.disabled=true}
+async function sendCode(){note("");$("send").disabled=true;const r=await post("__BASE__/api/code",{email:$("email").value});$("send").disabled=false;
+if(!r.ok){note(r.j.error||"寄送失敗","err");return}
+note("若此信箱已獲授權，驗證碼已寄出（10 分鐘內有效）。","ok");$("f1").hidden=true;$("f2").hidden=false;$("code").focus();cooldown()}
+$("f1").onsubmit=e=>{e.preventDefault();sendCode()};
+$("resend").onclick=sendCode;
+$("f2").onsubmit=async e=>{e.preventDefault();note("");$("verify").disabled=true;
+const r=await post("__BASE__/api/login",{email:$("email").value,code:$("code").value});$("verify").disabled=false;
+if(!r.ok){note(r.j.error||"驗證失敗","err");$("code").select();return}
+note("");startSession(r.j.token,r.j.email,r.j.ttl);$("body").focus()};
+$("logout").onclick=async()=>{const t=token;token="";await post("__BASE__/api/logout",{token:t});show(false);$("f1").hidden=false;$("f2").hidden=true;$("code").value="";note("已登出。","ok")};
+const b64=f=>new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(String(r.result).split(",")[1]||"");r.onerror=no;r.readAsDataURL(f)});
+$("f3").onsubmit=async e=>{e.preventDefault();
+if(!$("body").value.trim()&&!picked.length){note("請寫下問題內容，或附上檔案。","err");$("body").focus();return}
+note("");$("submit").disabled=true;$("submit").textContent="送出中…";
+try{const files=await Promise.all(picked.map(async f=>({name:f.name,data:await b64(f)})));
+const subject=$("subject").value.trim();
+const r=await post("__BASE__/api/submit",{token,subject,body:$("body").value,files});
+if(r.ok){expiry=Date.now()+r.j.ttl*1000;tick();
+const li=document.createElement("li"),s=document.createElement("span"),t=document.createElement("span");
+s.className="s";s.textContent=subject||$("body").value.trim().split("\n")[0].slice(0,60)||"（僅附件）";
+t.className="t";t.textContent=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});li.append(s,t);$("sent").prepend(li);$("sentbox").hidden=false;
+$("subject").value="";$("body").value="";$("chars").textContent="0";picked=[];renderFiles();
+note("已收到，處理完成後會回信給你。可以繼續提下一題。","ok");$("subject").focus()}
+else if(r.status===401){expire("登入已逾時或失效，請重新驗證；你寫的內容還在。")}
+else note(r.j.error||"失敗","err")}
+finally{$("submit").disabled=false;$("submit").textContent="送出問題"}};
+$("body").onkeydown=e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();$("f3").requestSubmit()}};
+</script></main></body></html>
