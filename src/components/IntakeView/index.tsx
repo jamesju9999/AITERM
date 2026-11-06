@@ -416,12 +416,6 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
         />
       </label>
       </section>
-      <div className="intake__actions intake__save">
-        <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={() => void save()}>
-          {t.intake_set_save}
-        </button>
-        {saved && <span>{t.intake_set_saved}</span>}
-      </div>
 
       <section className="intake__card">
       <h3 className="intake__card-title">{t.intake_senders}</h3>
@@ -461,6 +455,12 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
         </p>
       )}
       </section>
+      <div className="intake__actions intake__save">
+        <button className="aiterm-btn aiterm-btn--primary" onClick={() => void save()}>
+          {t.intake_set_save}
+        </button>
+        {saved && <span className="intake__saved" role="status">✓ {t.intake_set_saved}</span>}
+      </div>
     </div>
   );
 }
