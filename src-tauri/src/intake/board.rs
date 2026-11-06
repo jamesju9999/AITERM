@@ -46,7 +46,7 @@ fn card_title(item: &IntakeItem) -> String {
 /// `queued` 的項目（自動派送）→ 卡片進排隊欄；`pending`（手動）→ 留在規劃欄。
 pub async fn route_item(intake: &SqlitePool, handle: &ProjectHandle, item: &IntakeItem, repo_dir: &str) -> Result<String, String> {
     let files = store::list_attachments(intake, &item.id).await.map_err(|e| e.to_string())?;
-    let id = tasks::create_task(&handle.pool, &card_title(item), &card_body(item, &files), repo_dir, false, false)
+    let id = tasks::create_task(&handle.pool, &card_title(item), &card_body(item, &files), repo_dir, true, false)
         .await
         .map_err(|e| e.to_string())?;
     let built = async {
@@ -123,6 +123,16 @@ pub fn compose_reply(outcome: Option<&str>, summary: Option<&str>, last_text: Op
     (filter::redact(&reply), success)
 }
 
+/// 卡片的對話記錄檔。Codex 卡片會記 `session_path`；Claude 卡片只記 `session_id`，
+/// 檔案在 `~/.claude/projects/<編碼過的目錄>/<session_id>.jsonl`，用 id 去掃（不重建編碼規則）。
+fn transcript_of(project_path: &Path, projects_root: Option<&Path>, task: &tasks::TaskRow) -> Option<std::path::PathBuf> {
+    if let Some(p) = task.session_path.as_deref().filter(|p| !p.is_empty()) {
+        return Some(crate::tasks::resolve_stored_path(project_path, p));
+    }
+    let sid = task.session_id.as_deref().filter(|s| !s.is_empty())?;
+    crate::tasks::session_log::find_session_log(projects_root?, sid)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Settled {
     /// 卡片還在進行，什麼都沒做。
@@ -146,10 +156,7 @@ pub async fn settle(intake: &SqlitePool, handle: &ProjectHandle, item: &IntakeIt
     if task.status != tasks::STATUS_DONE {
         return Ok(Settled::Waiting);
     }
-    let last = task
-        .session_path
-        .as_deref()
-        .map(|p| crate::tasks::resolve_stored_path(&handle.path, p))
+    let last = transcript_of(&handle.path, crate::tasks::session_log::claude_projects_root().as_deref(), &task)
         .and_then(|p| dispatcher::last_assistant_text(&p));
     let (reply, success) = compose_reply(task.outcome.as_deref(), task.ai_summary.as_deref(), last.as_deref(), task.error_message.as_deref());
     if !store::finish_from_board(intake, &item.id, &reply).await.map_err(|e| e.to_string())? {
@@ -191,6 +198,7 @@ mod tests {
         let id = route_item(&intake, &h, &item, "/repo").await.unwrap();
         let card = tasks::get_task(&h.pool, &id).await.unwrap().unwrap();
         assert_eq!((card.status.as_str(), card.project_dir.as_str(), card.title.as_str()), ("queued", "/repo", "登入壞了"));
+        assert!(card.parallel_ok, "不可獨佔：獨佔卡執行時會擋住看板上其他人的卡");
         assert!(card.body.contains("<<<INTAKE") && card.body.contains("請修 bug") && card.body.contains("不可信"));
         let got = store::get_item(&intake, &item.id).await.unwrap().unwrap();
         assert_eq!((got.status.as_str(), got.board_task_id.as_deref()), ("on_board", Some(id.as_str())));
@@ -267,6 +275,27 @@ mod tests {
         assert_eq!(settle(&intake, &h, &item).await.unwrap(), Settled::Returned);
         let got = store::get_item(&intake, &item.id).await.unwrap().unwrap();
         assert_eq!((got.status.as_str(), got.board_task_id, got.error.as_deref()), ("pending", None, Some("看板卡片已不存在")));
+    }
+
+    #[tokio::test]
+    async fn a_claude_card_finds_its_transcript_by_session_id() {
+        let (intake, h, d) = setup().await;
+        let item = add(&intake, "m1", store::QUEUED, "修").await;
+        let id = route_item(&intake, &h, &item, "/repo").await.unwrap();
+        tasks::dispatch_for_test(&h.pool, &id, "tab").await;
+        tasks::set_session_id(&h.pool, &id, "SID-1").await.unwrap();
+        let root = d.path().join("claude-projects");
+        std::fs::create_dir_all(root.join("-some-encoded-dir")).unwrap();
+        std::fs::write(
+            root.join("-some-encoded-dir").join("SID-1.jsonl"),
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"登入頁已修好"}]}}"#,
+        )
+        .unwrap();
+        let card = tasks::get_task(&h.pool, &id).await.unwrap().unwrap();
+        let path = transcript_of(&h.path, Some(&root), &card).unwrap();
+        assert_eq!(dispatcher::last_assistant_text(&path).as_deref(), Some("登入頁已修好"));
+        assert!(transcript_of(&h.path, Some(&root), &tasks::TaskRow { session_id: Some("nope".into()), ..card.clone() }).is_none());
+        assert!(transcript_of(&h.path, None, &card).is_none());
     }
 
     #[test]
