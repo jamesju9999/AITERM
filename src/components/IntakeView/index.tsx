@@ -636,50 +636,17 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
           </button>
         </div>
       )}
+      <label className="intake__enable">
+        <input type="checkbox" aria-label={t.intake_set_enabled} checked={cfg.enabled} onChange={(e) => set("enabled", e.target.checked)} />
+        <span className="intake__enable-text">
+          <strong>{t.intake_set_enabled}</strong>
+          <span className="intake__meta">{t.intake_enable_desc}</span>
+        </span>
+      </label>
       <div className="intake__cols">
       <div className="intake__col">
       <section className="intake__card">
-        <h3 className="intake__card-title">{t.intake_sec_general}</h3>
-      <label className="intake__field">
-        <input type="checkbox" checked={cfg.enabled} onChange={(e) => set("enabled", e.target.checked)} />
-        {t.intake_set_enabled}
-      </label>
-      </section>
-      <section className="intake__card">
-        <h3 className="intake__card-title">{t.intake_sec_channels}</h3>
-      <label className="intake__field">
-        <input type="checkbox" checked={cfg.telegram_enabled} onChange={(e) => set("telegram_enabled", e.target.checked)} />
-        {t.intake_set_telegram}
-      </label>
-      <p className="intake__meta">{t.intake_set_telegram_hint}</p>
-      <label className="intake__field">
-        <input type="checkbox" checked={tgDefault} onChange={(e) => { setSaved(false); setTgDefault(e.target.checked); }} />
-        {t.intake_set_tg_default}
-      </label>
-      <label className="intake__field">
-        {t.intake_set_web}
-        <select value={cfg.web_mode} onChange={(e) => set("web_mode", e.target.value as IntakeConfig["web_mode"])}>
-          <option value="off">{t.intake_web_off}</option>
-          <option value="local">{t.intake_web_local}</option>
-          <option value="lan">{t.intake_web_lan}</option>
-        </select>
-        {cfg.web_mode !== "off" && (
-          <input
-            type="number"
-            aria-label={`${t.intake_set_web_port} ${t.intake_web_port_shared}`}
-            min={1024}
-            max={65535}
-            value={cfg.web_port}
-            onChange={(e) => set("web_port", Math.min(65535, Math.max(1024, Number(e.target.value) || 8320)))}
-          />
-        )}
-      </label>
-      {cfg.web_mode !== "off" && (
-        <p className="intake__meta">
-          {t.intake_web_url}：http://{cfg.web_mode === "lan" ? "<本機 IP>" : "127.0.0.1"}:{cfg.web_port}/
-        </p>
-      )}
-      {cfg.web_mode === "lan" && <p className="intake__error">{t.intake_web_lan_warning}</p>}
+        <h3 className="intake__card-title">{t.intake_sec_mailbox}</h3>
       <label className="intake__field">
         {t.intake_set_account}
         <select value={cfg.account_id} onChange={(e) => set("account_id", e.target.value)}>
@@ -715,8 +682,6 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         <input value={cfg.auth_server} onChange={(e) => set("auth_server", e.target.value)} />
       </label>
       </section>
-      </div>
-      <div className="intake__col">
       <section className="intake__card">
         <h3 className="intake__card-title">{t.intake_sec_flow}</h3>
       {(["internal", "external"] as const).map((lv) => (
@@ -769,6 +734,47 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
           onChange={(e) => set("verify_timeout_secs", Math.max(1, Number(e.target.value) || 1))}
         />
       </label>
+      </section>
+      </div>
+      <div className="intake__col">
+      <section className="intake__card">
+        <h3 className="intake__card-title">{t.intake_sec_telegram}</h3>
+      <label className="intake__field">
+        <input type="checkbox" checked={cfg.telegram_enabled} onChange={(e) => set("telegram_enabled", e.target.checked)} />
+        {t.intake_set_telegram}
+      </label>
+      <p className="intake__meta intake__hint">{t.intake_set_telegram_hint}</p>
+      <label className="intake__field">
+        <input type="checkbox" checked={tgDefault} onChange={(e) => { setSaved(false); setTgDefault(e.target.checked); }} />
+        {t.intake_set_tg_default}
+      </label>
+      </section>
+      <section className="intake__card">
+        <h3 className="intake__card-title">{t.intake_sec_web}</h3>
+      <label className="intake__field">
+        {t.intake_set_web}
+        <select value={cfg.web_mode} onChange={(e) => set("web_mode", e.target.value as IntakeConfig["web_mode"])}>
+          <option value="off">{t.intake_web_off}</option>
+          <option value="local">{t.intake_web_local}</option>
+          <option value="lan">{t.intake_web_lan}</option>
+        </select>
+        {cfg.web_mode !== "off" && (
+          <input
+            type="number"
+            aria-label={`${t.intake_set_web_port} ${t.intake_web_port_shared}`}
+            min={1024}
+            max={65535}
+            value={cfg.web_port}
+            onChange={(e) => set("web_port", Math.min(65535, Math.max(1024, Number(e.target.value) || 8320)))}
+          />
+        )}
+      </label>
+      {cfg.web_mode !== "off" && (
+        <p className="intake__meta">
+          {t.intake_web_url}：http://{cfg.web_mode === "lan" ? "<本機 IP>" : "127.0.0.1"}:{cfg.web_port}/
+        </p>
+      )}
+      {cfg.web_mode === "lan" && <p className="intake__error">{t.intake_web_lan_warning}</p>}
       </section>
 
       <section className="intake__card">
