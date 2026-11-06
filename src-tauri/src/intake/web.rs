@@ -444,6 +444,23 @@ fn no_store_html(body: String) -> impl IntoResponse {
     ([(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(body))
 }
 
+const BASE_CSS: &str = include_str!("web_base.css");
+
+/// 非表單頁（首頁、找不到）共用的外框，樣式與表單頁同一份。
+fn shell(title: &str, inner: &str) -> String {
+    format!("<!doctype html><html lang=\"zh-Hant\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"color-scheme\" content=\"light dark\"><title>{title}</title><style>{BASE_CSS}</style></head><body><main>{inner}</main></body></html>")
+}
+
+fn empty_card(icon: &str, title: &str, hint: &str, back: bool) -> String {
+    let btn = if back { "<a class=\"btn\" href=\"/\">回到專案列表</a>" } else { "" };
+    format!("<section class=\"card empty\"><div class=\"ico\">{icon}</div><h2>{title}</h2><p class=\"hint\">{hint}</p>{btn}</section>")
+}
+
+fn not_found() -> impl IntoResponse {
+    let body = shell("找不到頁面", &empty_card("🔎", "找不到這個頁面", "這個專案不存在，或網頁提問尚未開放。請向管理者確認網址。", true));
+    (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(body))
+}
+
 /// 首頁：列出已啟用網頁表單的專案。
 async fn index(State(st): State<Arc<WebState>>) -> impl IntoResponse {
     let mut all = (st.projects)();
@@ -453,17 +470,21 @@ async fn index(State(st): State<Arc<WebState>>) -> impl IntoResponse {
     let mut items = String::new();
     for (id, name) in all {
         if super::config::load(&st.pool, &id).await.web_mode != WebMode::Off {
-            items.push_str(&format!("<li><a href=\"/p/{}\">{}</a></li>", project_code(&id), escape_html(&name)));
+            items.push_str(&format!("<li><a class=\"item\" href=\"/p/{}\"><span>{}<small>點選後驗證信箱並提問</small></span><span class=\"go\">→</span></a></li>", project_code(&id), escape_html(&name)));
         }
     }
-    let list = if items.is_empty() { "<p>目前沒有開放的專案。</p>".to_string() } else { format!("<ul>{items}</ul>") };
-    no_store_html(format!("<!doctype html><html lang=\"zh-Hant\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>提問</title><meta name=\"color-scheme\" content=\"light dark\"><style>body{{font:16px/1.5 system-ui,-apple-system,sans-serif;max-width:560px;margin:0 auto;padding:32px 16px}}ul{{list-style:none;padding:0}}li{{margin:10px 0}}a{{display:block;padding:14px 16px;border:1px solid #8884;border-radius:10px;text-decoration:none;color:inherit;font-weight:600}}a:hover{{border-color:#2563eb;color:#2563eb}}</style></head><body><h1>請選擇專案</h1>{list}</body></html>"))
+    let inner = if items.is_empty() {
+        empty_card("📭", "目前沒有開放的專案", "管理者尚未開放網頁提問。", false)
+    } else {
+        format!("<header><h1>提問</h1><p class=\"hint\" style=\"margin:6px 0 0\">請選擇要提問的專案</p></header><ul class=\"list\">{items}</ul>")
+    };
+    no_store_html(shell("提問", &inner))
 }
 
-async fn page(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>) -> impl IntoResponse {
+async fn page(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>) -> axum::response::Response {
     match resolve(&st, &code).await {
-        Some((id, name, _)) => no_store_html(PAGE.replace("__TITLE__", &escape_html(&name)).replace("__BASE__", &format!("/p/{}", project_code(&id)))).into_response(),
-        None => (StatusCode::NOT_FOUND, "找不到這個專案，或尚未開放").into_response(),
+        Some((id, name, _)) => no_store_html(PAGE.replace("__BASE_CSS__", BASE_CSS).replace("__TITLE__", &escape_html(&name)).replace("__BASE__", &format!("/p/{}", project_code(&id)))).into_response(),
+        None => not_found().into_response(),
     }
 }
 
@@ -519,6 +540,7 @@ async fn api_submit(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<Stri
 pub fn router(st: Arc<WebState>) -> Router {
     Router::new()
         .route("/", get(index))
+        .fallback(|| async { not_found() })
         .route("/p/{code}", get(page))
         // 要驗證碼的請求只有一個信箱，小上限；送出問題可能帶 5 張圖（base64 約 13MB）。
         .route("/p/{code}/api/code", post(api_code).layer(DefaultBodyLimit::max(4 * 1024)))
@@ -732,8 +754,11 @@ mod http_tests {
         assert_eq!(st, StatusCode::OK);
         assert!(home.contains("/p/proj1") && home.contains("專案一") && home.contains("/p/proj2"), "{home}");
         let (_, page) = get_text(&r, "/p/proj2").await;
-        assert!(page.contains("專案二") && page.contains("/p/proj2/api/submit") && !page.contains("__BASE__"), "{page}");
-        assert_eq!(get_text(&r, "/p/nope").await.0, StatusCode::NOT_FOUND);
+        assert!(page.contains("專案二") && page.contains("/p/proj2/api/submit") && !page.contains("__BASE__") && !page.contains("__BASE_CSS__"), "{page}");
+        let (st, nf) = get_text(&r, "/p/nope").await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        assert!(nf.contains("回到專案列表") && nf.contains("<style>"), "找不到頁面要有樣式與返回連結");
+        assert_eq!(get_text(&r, "/whatever").await.0, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

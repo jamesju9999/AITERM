@@ -2,17 +2,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <title>提問 · __TITLE__</title>
 <style>
-:root{--bg:#f4f5f7;--card:#fff;--fg:#1f2328;--muted:#6b7280;--line:#d8dce2;--accent:#2563eb;--accent-fg:#fff;--ok:#15803d;--okbg:#ecfdf3;--err:#b91c1c;--errbg:#fef2f2;--soft:#eef2ff}
-@media(prefers-color-scheme:dark){:root{--bg:#14161a;--card:#1d2026;--fg:#e6e8eb;--muted:#9aa3ae;--line:#323842;--accent:#4f8cff;--accent-fg:#0b1020;--ok:#4ade80;--okbg:#10261a;--err:#f87171;--errbg:#2b1618;--soft:#232a3d}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif}
-main{max-width:640px;margin:0 auto;padding:32px 16px 64px}
-header{margin-bottom:20px}
-h1{margin:0;font-size:26px}
-.proj{display:inline-block;margin-top:6px;padding:2px 10px;border-radius:999px;background:var(--soft);color:var(--accent);font-size:14px;font-weight:600}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-.card h2{margin:0 0 4px;font-size:17px}
-.hint{margin:0 0 14px;color:var(--muted);font-size:14px}
+__BASE_CSS__
 label{display:block;margin:14px 0 6px;font-size:14px;font-weight:600}
 input,textarea,button{font:inherit;color:inherit}
 input[type=email],input[type=text],input:not([type]),textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
@@ -41,10 +31,8 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .sent li{padding:6px 0;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:10px}
 .sent li:first-child{border-top:0}.sent .t{color:var(--muted);white-space:nowrap}
 .sent .s{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-[hidden]{display:none!important}
-@media(max-width:480px){main{padding-top:20px}.card{padding:16px}}
 </style></head><body><main>
-<header><h1>提問</h1><span class="proj">__TITLE__</span></header>
+<header><a class="crumb" href="/">← 所有專案</a><br><h1>提問</h1><span class="proj">__TITLE__</span></header>
 <div id="msg" role="status" aria-live="polite"></div>
 
 <section class="card" id="login">
