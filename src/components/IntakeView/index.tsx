@@ -20,6 +20,7 @@ import {
   type IntakeStatus,
   type Level,
 } from "../../ipc/intake";
+import { MailIcon } from "../Icons";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
 import { useIntakeChanged } from "../../hooks/useIntakeChanged";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -64,7 +65,7 @@ export function IntakeView() {
   return (
     <div className="intake">
       <div className="intake__bar">
-        <h2 className="intake__title">{t.intake_tab}</h2>
+        <h2 className="intake__title"><MailIcon size={20} className="intake__title-icon" />{t.intake_tab}</h2>
         <select
           aria-label={t.intake_filter_label}
           value={filter}
