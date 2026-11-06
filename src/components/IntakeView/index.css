@@ -33,19 +33,22 @@
 .intake__thumb--empty { display: inline-flex; align-items: center; justify-content: center; width: 120px; height: 80px; font-size: 12px; color: var(--text-secondary, #888); }
 
 /* 設定頁：分組卡片＋左標籤右欄位 */
-.intake__settings { overflow: auto; display: flex; flex-direction: column; gap: 14px; max-width: 820px; min-height: 0; flex: 1; padding-right: 4px; }
+.intake__settings { overflow: auto; display: flex; flex-direction: column; gap: 14px; min-height: 0; flex: 1; padding-right: 4px; }
+.intake__cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.intake__col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+@media (max-width: 1100px) { .intake__cols { grid-template-columns: minmax(0, 1fr); } }
 .intake__card { display: flex; flex-direction: column; gap: 10px; padding: 14px 18px; background: var(--bg-secondary, #1a1a2e); border: 1px solid var(--border, #2a2a2a); border-radius: 10px; }
 .intake__card-title { margin: 0 0 2px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; color: var(--text-secondary, #888); }
-.intake__field { display: grid; grid-template-columns: 220px minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 4px; font-size: 13px; }
+.intake__field { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 4px; font-size: 13px; }
 .intake__field:has(> input[type="checkbox"]) { display: flex; gap: 8px; }
 .intake__field--row { display: flex; align-items: center; gap: 12px; }
-.intake__field--row > span { width: 220px; flex: none; }
+.intake__field--row > span { width: 190px; flex: none; }
 .intake__field--inline { display: flex; flex-wrap: wrap; gap: 8px; }
 .intake__field--inline > input { width: 280px; max-width: none; }
 .intake__field > label { display: inline-flex; align-items: center; gap: 6px; }
 .intake__settings input:not([type="checkbox"]), .intake__settings select { min-width: 0; max-width: 320px; padding: 6px 10px; font: inherit; color: inherit; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; }
 .intake__settings input[type="checkbox"] { accent-color: var(--accent, #a855f7); }
-.intake__settings .intake__meta, .intake__settings .intake__error { margin-left: 232px; }
+.intake__settings .intake__meta, .intake__settings .intake__error { margin-left: 202px; }
 .intake__save { position: sticky; bottom: 0; z-index: 1; margin: 0; padding: 10px 0; gap: 12px; background: var(--bg-primary, #0a0b14); border-top: 1px solid var(--border, #2a2a2a); }
 .intake__saved { font-size: 13px; color: #34d399; animation: intake-saved-in 0.2s ease-out; }
 @keyframes intake-saved-in { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }

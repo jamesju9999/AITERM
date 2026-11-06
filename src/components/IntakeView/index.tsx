@@ -290,6 +290,8 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
 
   return (
     <div className="intake__settings">
+      <div className="intake__cols">
+      <div className="intake__col">
       <section className="intake__card">
         <h3 className="intake__card-title">{t.intake_sec_general}</h3>
       <label className="intake__field">
@@ -363,6 +365,8 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
         <input value={cfg.auth_server} onChange={(e) => set("auth_server", e.target.value)} />
       </label>
       </section>
+      </div>
+      <div className="intake__col">
       <section className="intake__card">
         <h3 className="intake__card-title">{t.intake_sec_flow}</h3>
       {(["internal", "external"] as const).map((lv) => (
@@ -455,6 +459,8 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
         </p>
       )}
       </section>
+      </div>
+      </div>
       <div className="intake__actions intake__save">
         <button className="aiterm-btn aiterm-btn--primary" onClick={() => void save()}>
           {t.intake_set_save}
