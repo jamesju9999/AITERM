@@ -134,18 +134,6 @@ export function IntakeView() {
           ))}
           {unassigned > 0 && <option value="">{t.intake_unassigned} ({unassigned})</option>}
         </select>
-        <select
-          aria-label={t.intake_filter_label}
-          value={filter}
-          onChange={(e) => setFilter(e.target.value as IntakeStatus | "all")}
-        >
-          <option value="all">{t.intake_filter_all}</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {t[`intake_status_${s}` as const]}
-            </option>
-          ))}
-        </select>
         {!inUnassigned && !noProject && (
           <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setShowSettings((v) => !v)}>
             {t.intake_settings}
@@ -162,6 +150,22 @@ export function IntakeView() {
         <>
           {inUnassigned && <AdoptBar projects={projects} run={run} />}
           <div className="intake__body">
+            <div className="intake__listpane">
+            <div className="intake__listhead">
+              <span className="intake__listtitle">{t.intake_list_title.replace("{n}", String(items.length))}</span>
+              <select
+                aria-label={t.intake_filter_label}
+                value={filter}
+                onChange={(e) => setFilter(e.target.value as IntakeStatus | "all")}
+              >
+                <option value="all">{t.intake_filter_all}</option>
+                {STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {t[`intake_status_${s}` as const]}
+                  </option>
+                ))}
+                    </select>
+            </div>
             <ul className="intake__list" aria-label={t.intake_tab}>
               {items.length === 0 && <li className="intake__empty">{t.intake_empty}</li>}
               {items.map((i) => (
@@ -170,15 +174,18 @@ export function IntakeView() {
                     className={`intake__row ${i.id === selectedId ? "intake__row--active" : ""}`}
                     onClick={() => setSelectedId(i.id)}
                   >
-                    <span className={`intake__badge intake__badge--${i.status}`}>{t[`intake_status_${i.status}` as const]}</span>
+                    <span className="intake__rowtop">
+                      <span className={`intake__badge intake__badge--${i.status}`}>{t[`intake_status_${i.status}` as const]}</span>
+                      <time className="intake__time" dateTime={new Date(i.created_at * 1000).toISOString()}>{formatTime(i.created_at)}</time>
+                    </span>
                     <span className="intake__subject">{i.subject || t.intake_no_subject}</span>
                     <span className="intake__sender">{t.intake_asker}：{i.sender_name ? `${i.sender_name} <${i.sender}>` : i.sender} · {i.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
-                    <time className="intake__time" dateTime={new Date(i.created_at * 1000).toISOString()}>{formatTime(i.created_at)}</time>
                   </button>
                   <DeleteButton item={i} run={run} variant="row" />
                 </li>
               ))}
             </ul>
+            </div>
             <div className="intake__detail">
               {selected ? <Detail key={selected.id} item={selected} run={run} projects={projects} /> : <p className="intake__empty">{t.intake_pick}</p>}
             </div>
