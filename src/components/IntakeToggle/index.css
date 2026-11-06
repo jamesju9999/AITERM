@@ -13,3 +13,4 @@
 
 /* 氣泡裡的按鈕與問題收集其他按鈕同高 */
 .aiterm-intake-toggle__pop .aiterm-btn { box-sizing: border-box; height: 34px; padding: 0 14px; font-size: 13px; }
+.aiterm-intake-toggle--waiting { border-color: #fbbf24 !important; color: #fbbf24 !important; }

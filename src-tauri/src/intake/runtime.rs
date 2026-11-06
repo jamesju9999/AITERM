@@ -31,6 +31,21 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, activity: &Arc<ClaudeActivity>) {
                 r.registry.on_prompt(sid, p);
             }
         }
+        "session-end" => {
+            r.registry.mark_claude(sid, false);
+            // Claude Code 在這題做到一半結束了：不會再有回覆，把題目退回而不是讓它卡在處理中。
+            if let Some(item_id) = r.registry.unregister_active(sid) {
+                let h = h.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(db) = h.try_state::<IntakeDb>() {
+                        store::fail(&db.pool, &item_id, "Claude Code 已結束，這題沒有完成").await.ok();
+                    }
+                    changed(&h);
+                });
+            } else {
+                changed(&h);
+            }
+        }
         "turn-end" => {
             if let Some(item_id) = r.registry.on_turn_end(sid) {
                 // 驗證（跑測試）可能要好幾分鐘：先把分頁標成忙碌，免得下一題在測試還在跑時就開始改檔。
@@ -59,6 +74,28 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, activity: &Arc<ClaudeActivity>) {
     });
 }
 
+/// 派出去的提問超過這麼多秒還沒被 Claude Code 收到，就當作派送失敗。
+const UNARMED_TIMEOUT_SECS: u64 = 90;
+
+/// 這個分頁現在能不能把提問打進去。條件（缺一不可）：
+/// 1. 知道有 Claude Code 在跑：`claude` 函式送出的啟動標記是最後一個；沒有標記（舊分頁、使用者自己的別名、
+///    標記被擠出緩衝區）時，退而看 hook 事件（提問／回覆事件代表 Claude Code 活著）。
+/// 2. shell 不是停在提示字元——停在提示字元代表 Claude Code 已經不在了，打進去就是在 shell 裡執行。
+///    沒有 shell 整合、無從判斷時，以 1 為準。
+pub fn can_type_prompt(registry: &dispatcher::Registry, pty: &PtyManager, tab: &str) -> Result<(), &'static str> {
+    let raw = pty.get_recent_raw(tab, 256 * 1024).unwrap_or_default();
+    match super::tabcd::claude_running(&raw) {
+        Some(true) => {}
+        Some(false) => return Err("Claude Code 已結束"),
+        None if registry.claude_up(tab) => {}
+        None => return Err("尚未偵測到 Claude Code"),
+    }
+    if super::tabcd::shell_idle(&raw) == Some(true) {
+        return Err("分頁停在 shell 提示字元，Claude Code 已不在了");
+    }
+    Ok(())
+}
+
 /// 一次掃描：清掉已關閉的分頁，再把可派的問題派給閒置分頁。
 pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
     let (Some(db), Some(rt), Some(pty)) = (
@@ -78,7 +115,18 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
             touched = true;
         }
     }
+    // 看門狗：派出去很久、提問卻一直沒被 Claude Code 收到，退回待派送並釋放分頁，不要永遠卡住。
+    for (tab, id) in rt.registry.stale_unarmed(UNARMED_TIMEOUT_SECS) {
+        rt.registry.release(&tab);
+        store::fail(&db.pool, &id, "Claude Code 沒有收到提問，已退回待派送").await.ok();
+        touched = true;
+    }
     for tab in rt.registry.idle_tabs() {
+        // 絕不能把提問打進沒有 Claude Code 的分頁：那是 shell，會把問題內容當指令執行。
+        if let Err(why) = can_type_prompt(&rt.registry, &pty, &tab) {
+            log::debug!("intake: 不派送給分頁 {tab}：{why}");
+            continue;
+        }
         let project = rt.registry.project_of(&tab).unwrap_or_default();
         let item = match store::claim_next(&db.pool, &project, &tab).await {
             Ok(Some(i)) => i,
@@ -91,6 +139,12 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
         rt.registry.assign(&tab, &item.id);
         touched = true;
         prepare(app, &db.pool, &pty, &item, &tab).await;
+        // 初篩可能花了幾十秒，這段時間 Claude Code 可能已經結束：打字前再確認一次。
+        if let Err(why) = can_type_prompt(&rt.registry, &pty, &tab) {
+            rt.registry.release(&tab);
+            store::fail(&db.pool, &item.id, &format!("派送前分頁已不能接收提問：{why}")).await.ok();
+            continue;
+        }
         if let Err(e) = {
             let images = store::list_attachments(&db.pool, &item.id).await.unwrap_or_default();
             crate::tasks::dispatch::write_then_submit(&pty, &tab, &dispatcher::build_prompt(&item, &images)).await

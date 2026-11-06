@@ -85,6 +85,8 @@ export interface IntakeProjects {
 export interface IntakeTab {
   tab_id: string;
   project_id: string;
+  /** 這個分頁現在能收提問（偵測到 Claude Code 在跑）。false 時要先在分頁裡啟動 claude。 */
+  claude_ready: boolean;
 }
 
 export const intakeProjects = () => invoke<IntakeProjects>("intake_projects");

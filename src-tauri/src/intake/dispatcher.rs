@@ -42,11 +42,13 @@ pub fn build_prompt(item: &IntakeItem, images: &[AttachmentRow]) -> String {
     )
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Active {
     item_id: String,
     marker: String,
     armed: bool,
+    /// 派出去的時間：提問一直沒被 Claude Code 收到（`armed` 沒變真）就是出事了，見 `stale_unarmed`。
+    assigned_at: std::time::Instant,
 }
 
 /// 登記的分頁與各自進行中的問題。純記憶體，方便測試。
@@ -55,6 +57,9 @@ pub struct Registry {
     tabs: Mutex<HashMap<String, Option<Active>>>,
     /// 每個分頁負責的專案（只領取該專案的問題）。
     projects: Mutex<HashMap<String, String>>,
+    /// 已知有 Claude Code 在跑的分頁（靠 SessionStart／SessionEnd 與提問、回覆事件）。
+    /// 沒有它就不能把提問打進分頁：那是 shell，會把問題內容當指令執行。
+    claude_up: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Registry {
@@ -96,8 +101,36 @@ impl Registry {
 
     pub fn assign(&self, tab: &str, item_id: &str) {
         if let Some(slot) = self.tabs.lock().get_mut(tab) {
-            *slot = Some(Active { item_id: item_id.to_string(), marker: marker_for(item_id), armed: false });
+            *slot = Some(Active { item_id: item_id.to_string(), marker: marker_for(item_id), armed: false, assigned_at: std::time::Instant::now() });
         }
+    }
+
+    /// 分頁還在，但進行中的問題不會再有結果（例如 Claude Code 結束了）：清掉進行中狀態並回傳問題 id。
+    pub fn unregister_active(&self, tab: &str) -> Option<String> {
+        self.tabs.lock().get_mut(tab)?.take().map(|a| a.item_id)
+    }
+
+    /// 這個分頁裡有沒有 Claude Code 在跑（已知的）。
+    pub fn claude_up(&self, tab: &str) -> bool {
+        self.claude_up.lock().contains(tab)
+    }
+
+    pub fn mark_claude(&self, tab: &str, up: bool) {
+        let mut g = self.claude_up.lock();
+        if up {
+            g.insert(tab.to_string());
+        } else {
+            g.remove(tab);
+        }
+    }
+
+    /// 派出去超過 `secs` 秒、提問還沒被 Claude Code 收到的 `(分頁, 問題 id)`。
+    pub fn stale_unarmed(&self, secs: u64) -> Vec<(String, String)> {
+        self.tabs
+            .lock()
+            .iter()
+            .filter_map(|(t, a)| a.as_ref().filter(|a| !a.armed && a.assigned_at.elapsed().as_secs() >= secs).map(|a| (t.clone(), a.item_id.clone())))
+            .collect()
     }
 
     /// 派送失敗：釋放分頁。
@@ -109,6 +142,7 @@ impl Registry {
 
     /// `UserPromptSubmit`：提問含標記才算送出。
     pub fn on_prompt(&self, tab: &str, prompt: &str) {
+        self.mark_claude(tab, true); // 有提問事件就代表 Claude Code 活著
         if let Some(Some(a)) = self.tabs.lock().get_mut(tab) {
             if prompt.contains(&a.marker) {
                 a.armed = true;
@@ -118,6 +152,7 @@ impl Registry {
 
     /// `Stop`：已送出才算完成，回傳問題 id 並釋放分頁。
     pub fn on_turn_end(&self, tab: &str) -> Option<String> {
+        self.mark_claude(tab, true);
         let mut g = self.tabs.lock();
         let slot = g.get_mut(tab)?;
         if slot.as_ref()?.armed {
@@ -259,5 +294,44 @@ mod tests {
         std::fs::write(&f, json!({"type":"assistant","message":{"content":[{"type":"text","text":"從檔案"}]}}).to_string()).unwrap();
         assert_eq!(answer_from_stop(&json!({"transcript_path": f.to_str().unwrap()})).as_deref(), Some("從檔案"));
         assert_eq!(answer_from_stop(&json!({})), None);
+    }
+
+    #[test]
+    fn a_tab_is_only_known_to_have_claude_after_a_session_or_prompt_event_and_forgets_on_end() {
+        let r = Registry::default();
+        r.register("t", "");
+        assert!(!r.claude_up("t"), "剛加入的分頁不能假設有 Claude Code");
+        r.mark_claude("t", true);
+        assert!(r.claude_up("t"));
+        r.mark_claude("t", false);
+        assert!(!r.claude_up("t"));
+        r.on_prompt("t", "使用者自己打的一句話");
+        assert!(r.claude_up("t"), "有提問事件代表 Claude Code 活著");
+        r.mark_claude("t", false);
+        assert!(r.on_turn_end("t").is_none() && r.claude_up("t"), "回覆事件也代表活著");
+    }
+
+    #[test]
+    fn a_prompt_that_claude_never_received_is_found_by_the_watchdog_and_a_received_one_is_not() {
+        let r = Registry::default();
+        r.register("a", "");
+        r.register("b", "");
+        r.assign("a", "item-a");
+        r.assign("b", "item-b");
+        assert!(r.stale_unarmed(60).is_empty(), "剛派出去不算逾時");
+        r.on_prompt("b", &format!("{} 內容", marker_for("item-b")));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert_eq!(r.stale_unarmed(1), vec![("a".to_string(), "item-a".to_string())], "只有沒被收到的那題逾時");
+    }
+
+    #[test]
+    fn unregister_active_clears_only_the_running_item_and_keeps_the_tab() {
+        let r = Registry::default();
+        r.register("t", "p");
+        assert_eq!(r.unregister_active("t"), None);
+        r.assign("t", "i1");
+        assert_eq!(r.unregister_active("t").as_deref(), Some("i1"));
+        assert!(r.is_registered("t") && r.idle_tabs() == vec!["t".to_string()], "分頁還在、回到閒置");
+        assert_eq!(r.unregister_active("nope"), None);
     }
 }

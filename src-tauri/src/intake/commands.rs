@@ -329,6 +329,8 @@ pub async fn intake_tab_stop(app: AppHandle, db: State<'_, IntakeDb>, rt: State<
 pub struct TabDto {
     pub tab_id: String,
     pub project_id: String,
+    /// 這個分頁現在能收提問（有 Claude Code 在跑）。false 時畫面提示使用者先啟動 claude。
+    pub claude_ready: bool,
 }
 
 /// 把這個分頁切換到專案的專案目錄。只在分頁閒置在 shell 提示字元時才送。
@@ -353,8 +355,16 @@ pub async fn intake_tab_cd(
 }
 
 #[tauri::command]
-pub fn intake_tabs(rt: State<'_, Arc<IntakeRuntime>>) -> Vec<TabDto> {
-    rt.registry.tabs().into_iter().map(|t| TabDto { project_id: rt.registry.project_of(&t).unwrap_or_default(), tab_id: t }).collect()
+pub fn intake_tabs(rt: State<'_, Arc<IntakeRuntime>>, pty: State<'_, Arc<crate::pty::PtyManager>>) -> Vec<TabDto> {
+    rt.registry
+        .tabs()
+        .into_iter()
+        .map(|t| TabDto {
+            project_id: rt.registry.project_of(&t).unwrap_or_default(),
+            claude_ready: runtime::can_type_prompt(&rt.registry, &pty, &t).is_ok(),
+            tab_id: t,
+        })
+        .collect()
 }
 
 #[tauri::command]

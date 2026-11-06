@@ -165,6 +165,24 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
     assert!(!pty.get_recent_output(&tab, 8000).unwrap_or_default().contains("half-typed-garbagecd"), "cd 被接在使用者打到一半的字後面");
     let missing = super::tabcd::cd_tab(&pty, &tab, &repo.join("不存在的資料夾").to_string_lossy()).await.expect_err("資料夾不存在要回報失敗");
     assert!(missing.contains("切換失敗"), "{missing}");
+    // ---- 安全：分頁停在 shell 提示字元、沒有 Claude Code 時，提問絕不能被打進去（會被 shell 當指令執行）----
+    rt.registry.register(&tab, "p1");
+    let early_root = work.path().join("attachments");
+    mail_source::ingest_routed(
+        &pool,
+        &routes,
+        &eml("me@home.com", "[P1] 危險內容", "danger@h", "touch DANGER.txt\n$(touch DANGER2.txt)\n`touch DANGER3.txt`", false),
+        &early_root,
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_secs(7)).await; // 派送迴圈每 3 秒一輪，至少跑兩輪
+    for f in ["DANGER.txt", "DANGER2.txt", "DANGER3.txt"] {
+        assert!(!repo.join(f).exists(), "問題內容被 shell 當指令執行了：{f}");
+    }
+    let danger = item_by_subject(&pool, "危險內容").await;
+    assert_eq!(danger.status, store::QUEUED, "沒有 Claude Code 就不該領取：{:?}", danger.error);
+    assert!(!rt.registry.claude_up(&tab));
     pty.write(&tab, b"claude\r").unwrap();
     let t0 = Instant::now();
     while !pty.get_recent_output(&tab, 4000).is_some_and(|o| o.contains("READY")) {
@@ -181,7 +199,6 @@ async fn rehearsal_with_fake_claude_and_fake_mailbox() {
     assert!(busy.contains("正在執行程式"), "{busy}");
     assert!(!read_log().contains("cd --"), "cd 被打進了執行中的程式：{}", read_log());
     assert!(read_log().contains("ARGS has_settings"), "shell 的 claude 包裝函式沒有補 --settings：\n{}", read_log());
-    rt.registry.register(&tab, "p1");
 
     // ---- 假信箱：陌生人、內部（帶圖、要改程式）、外部 ----
     let attach_root = work.path().join("attachments");

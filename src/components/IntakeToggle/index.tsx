@@ -16,6 +16,7 @@ interface Props {
 export function IntakeToggle({ sessionId }: Props) {
   const { t } = useLocale();
   const [projectId, setProjectId] = useState<string | null>(null); // 目前收集的專案（null＝沒在收集）
+  const [ready, setReady] = useState(true); // 偵測到 Claude Code 在這個分頁裡跑
   const [names, setNames] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [cdError, setCdError] = useState<string | null>(null);
@@ -24,7 +25,9 @@ export function IntakeToggle({ sessionId }: Props) {
   const refresh = useCallback(() => {
     Promise.all([intakeTabs(), intakeProjects()])
       .then(([tabs, view]) => {
-        setProjectId(tabs.find((x) => x.tab_id === sessionId)?.project_id ?? null);
+        const mine = tabs.find((x) => x.tab_id === sessionId);
+        setProjectId(mine?.project_id ?? null);
+        setReady(mine?.claude_ready ?? true);
         setNames(Object.fromEntries(view.projects.map((p) => [p.id, p.name])));
       })
       .catch(() => {});
@@ -95,8 +98,8 @@ export function IntakeToggle({ sessionId }: Props) {
   return (
     <div className="aiterm-intake-toggle">
       <button
-        className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm ${on ? "aiterm-intake-toggle--on" : ""}`}
-        title={t.intake_toggle_tooltip}
+        className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm ${on ? "aiterm-intake-toggle--on" : ""} ${on && !ready ? "aiterm-intake-toggle--waiting" : ""}`}
+        title={on && !ready ? t.intake_toggle_waiting_hint : t.intake_toggle_tooltip}
         aria-pressed={on}
         disabled={busy}
         onClick={(e) => {
@@ -106,7 +109,7 @@ export function IntakeToggle({ sessionId }: Props) {
         style={{ display: "flex", alignItems: "center", gap: "6px" }}
       >
         <MailIcon size={14} />
-        <span>{on ? `${t.intake_toggle_on}${names[projectId] ? `：${names[projectId]}` : ""}` : t.intake_toggle_off}</span>
+        <span>{on ? `${t.intake_toggle_on}${names[projectId] ? `：${names[projectId]}` : ""}${ready ? "" : `（${t.intake_toggle_waiting}）`}` : t.intake_toggle_off}</span>
       </button>
       {picking && (
         <div className="aiterm-intake-toggle__pop" role="dialog" onClick={(e) => e.stopPropagation()}>

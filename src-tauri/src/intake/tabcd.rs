@@ -5,6 +5,27 @@
 //! （C＝指令開始、D＝指令結束、A／B＝提示字元），沒有標記就當作無法判斷、不送。
 use aiterm_core::pty::cd_parser::ShellVariant;
 
+/// `claude` 函式（shell 整合）在啟動與結束時送的標記（OSC 7771）：最後一個是 `claude=1` 代表 Claude Code 在跑，
+/// `claude=0` 代表已結束，一個都沒有（舊分頁、使用者自己的 claude 別名、標記被擠出緩衝區）回 `None`。
+pub fn claude_running(raw: &[u8]) -> Option<bool> {
+    const PREFIX: &[u8] = b"\x1b]7771;claude=";
+    let mut last = None;
+    let mut i = 0;
+    while i + PREFIX.len() < raw.len() {
+        if raw[i..].starts_with(PREFIX) {
+            last = Some(raw[i + PREFIX.len()]);
+            i += PREFIX.len();
+        } else {
+            i += 1;
+        }
+    }
+    match last? {
+        b'1' => Some(true),
+        b'0' => Some(false),
+        _ => None,
+    }
+}
+
 /// 對真的分頁做整件事：確認閒置 → 清行並送出 `cd` → 等分頁目錄真的變過去。
 pub async fn cd_tab(pty: &crate::pty::PtyManager, tab_id: &str, dir: &str) -> Result<(), String> {
     let shell = pty.get_shell_variant(tab_id).ok_or("找不到這個分頁")?;
@@ -106,6 +127,16 @@ mod tests {
         long.extend(std::iter::repeat(b'x').take(100_000));
         long.extend(b"\x1b]133;C\x07vim");
         assert_eq!(shell_idle(&long), Some(false));
+    }
+
+    #[test]
+    fn claude_running_follows_the_last_start_or_end_marker() {
+        assert_eq!(claude_running(b""), None);
+        assert_eq!(claude_running(b"$ ls\n"), None, "沒有標記不能假設");
+        assert_eq!(claude_running(b"\x1b]7771;claude=1\x07banner"), Some(true));
+        assert_eq!(claude_running(b"\x1b]7771;claude=1\x07work\x1b]7771;claude=0\x07$ "), Some(false));
+        assert_eq!(claude_running(b"\x1b]7771;claude=0\x07$ claude\x1b]7771;claude=1\x07"), Some(true), "再啟動一次");
+        assert_eq!(claude_running(b"\x1b]7771;claude=9\x07"), None, "看不懂的值不當作在跑");
     }
 
     #[test]

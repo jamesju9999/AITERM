@@ -144,10 +144,16 @@ if ($env:AITERM_CLAUDE_SETTINGS -and -not (Get-Command claude -CommandType Funct
         foreach ($a in $args) {
             if ($a -is [string] -and ($a -eq '--settings' -or $a -like '--settings=*')) { $hasSettings = $true }
         }
-        if ($hasSettings -or -not $env:AITERM_CLAUDE_SETTINGS) {
-            & $real.Source @args
-        } else {
-            & $real.Source --settings $env:AITERM_CLAUDE_SETTINGS @args
+        # 啟動／結束各送一個標記（OSC 7771）：問題收集靠它確定這個分頁裡真的有 Claude Code 在跑。
+        [Console]::Write("$([char]27)]7771;claude=1$([char]7)")
+        try {
+            if ($hasSettings -or -not $env:AITERM_CLAUDE_SETTINGS) {
+                & $real.Source @args
+            } else {
+                & $real.Source --settings $env:AITERM_CLAUDE_SETTINGS @args
+            }
+        } finally {
+            [Console]::Write("$([char]27)]7771;claude=0$([char]7)")
         }
     }
 }
@@ -416,7 +422,7 @@ add-zsh-hook precmd __aiterm_precmd
 # 使用者自己已有 claude 別名／函式就不覆蓋（該分頁不會有側欄，但行為完全是他原本的）。
 # 沒有 AITERM_CLAUDE_SETTINGS（例如 aiterm-host）時原樣轉交。
 if (( ! ${+aliases[claude]} )) && (( ! ${+functions[claude]} )); then
-  function claude {
+  function __aiterm_claude_run {
     local a
     if [[ -n "$AITERM_CLAUDE_SETTINGS" ]]; then
       for a in "$@"; do
@@ -426,6 +432,16 @@ if (( ! ${+aliases[claude]} )) && (( ! ${+functions[claude]} )); then
     else
       command claude "$@"
     fi
+  }
+  # 啟動／結束各送一個標記（OSC 7771）：問題收集靠它確定這個分頁裡「真的有 Claude Code 在跑」，
+  # 才敢把提問打進去——否則提問會被 shell 當指令執行。
+  function claude {
+    local __rc
+    printf '\033]7771;claude=1\007'
+    __aiterm_claude_run "$@"
+    __rc=$?
+    printf '\033]7771;claude=0\007'
+    return $__rc
   }
 fi
 "#;
@@ -495,7 +511,7 @@ PROMPT_COMMAND="__aiterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__aiterm_appe
 # 在使用者 rc 之後才定義，所以函式一定贏過 PATH 上任何位置的 claude。
 # 使用者自己已有 claude 別名／函式就不覆蓋；沒有 AITERM_CLAUDE_SETTINGS 時原樣轉交。
 if ! alias claude >/dev/null 2>&1 && ! declare -F claude >/dev/null 2>&1; then
-  function claude {
+  function __aiterm_claude_run {
     local a
     if [[ -n "$AITERM_CLAUDE_SETTINGS" ]]; then
       for a in "$@"; do
@@ -505,6 +521,16 @@ if ! alias claude >/dev/null 2>&1 && ! declare -F claude >/dev/null 2>&1; then
     else
       command claude "$@"
     fi
+  }
+  # 啟動／結束各送一個標記（OSC 7771）：問題收集靠它確定這個分頁裡「真的有 Claude Code 在跑」，
+  # 才敢把提問打進去——否則提問會被 shell 當指令執行。
+  function claude {
+    local __rc
+    printf '\033]7771;claude=1\007'
+    __aiterm_claude_run "$@"
+    __rc=$?
+    printf '\033]7771;claude=0\007'
+    return $__rc
   }
 fi
 "#;
@@ -915,6 +941,46 @@ mod tests {
         assert!(status.success(), "{shell} exited with {status}");
         let text = std::fs::read_to_string(&out).ok()?;
         Some(text.lines().map(str::to_owned).collect())
+    }
+
+    /// 跟 `run_claude_line` 一樣，但回傳 shell 的 stdout 位元組與離開碼（假 claude 以 `FAKE_EXIT` 指定離開碼，並印一行 RAN）。
+    #[cfg(not(windows))]
+    fn run_claude_capture(shell: &str, line: &str, fake_exit: i32) -> Option<(Vec<u8>, i32)> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+        if !std::path::Path::new(shell).exists() {
+            return None;
+        }
+        let (root, bin) = fake_claude_bin();
+        std::fs::write(bin.join("claude"), "#!/bin/sh\necho RAN\nexit ${FAKE_EXIT:-0}\n").unwrap();
+        std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let spec = inject_shell_integration(PathBuf::from(shell));
+        let mut cmd = Command::new(&spec.program);
+        cmd.args(&spec.args).args(["-i", "-c", line]);
+        cmd.env_clear().env("HOME", &home).env("PATH", format!("{}:/usr/bin:/bin", bin.display())).env("FAKE_EXIT", fake_exit.to_string());
+        for (k, v) in &spec.envs {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().unwrap();
+        Some((out.stdout, out.status.code().unwrap_or(-1)))
+    }
+
+    /// 問題收集靠這兩個標記確定分頁裡真的有 Claude Code 在跑；少了開頭，提問會被 shell 當指令執行。
+    #[cfg(not(windows))]
+    #[test]
+    fn claude_function_brackets_the_run_with_start_and_end_markers_and_keeps_the_exit_code() {
+        const START: &[u8] = b"\x1b]7771;claude=1\x07";
+        const END: &[u8] = b"\x1b]7771;claude=0\x07";
+        let pos = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).position(|w| w == needle);
+        for shell in ["/bin/bash", "/bin/zsh"] {
+            let Some((out, code)) = run_claude_capture(shell, "claude", 3) else { continue };
+            let (s, ran, e) = (pos(&out, START), pos(&out, b"RAN"), pos(&out, END));
+            assert!(s.is_some() && ran.is_some() && e.is_some(), "{shell}: {:?}", String::from_utf8_lossy(&out));
+            assert!(s < ran && ran < e, "{shell}: 順序要是 開始標記 → claude 輸出 → 結束標記");
+            assert_eq!(code, 3, "{shell}: 包一層之後 claude 的離開碼不能丟");
+        }
     }
 
     #[cfg(not(windows))]

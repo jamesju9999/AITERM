@@ -35,7 +35,7 @@ beforeEach(() => {
 describe("IntakeToggle", () => {
   it("with one project it starts straight away for THIS pty session and that project", async () => {
     vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: ONE, unassigned: 0, legacy_settings: false });
-    vi.mocked(ipc.intakeTabs).mockResolvedValueOnce([]).mockResolvedValue([{ tab_id: "pty-1", project_id: "p1" }]);
+    vi.mocked(ipc.intakeTabs).mockResolvedValueOnce([]).mockResolvedValue([{ tab_id: "pty-1", project_id: "p1", claude_ready: true }]);
     wrap();
     fireEvent.click(await screen.findByText(t.intake_toggle_off));
     await waitFor(() => expect(ipc.intakeTabStart).toHaveBeenCalledWith("pty-1", "p1"));
@@ -95,8 +95,8 @@ describe("IntakeToggle", () => {
 
   it("stops when already collecting; another tab being registered does not count", async () => {
     vi.mocked(ipc.intakeTabs).mockResolvedValue([
-      { tab_id: "other", project_id: "p2" },
-      { tab_id: "pty-1", project_id: "p1" },
+      { tab_id: "other", project_id: "p2", claude_ready: true },
+      { tab_id: "pty-1", project_id: "p1", claude_ready: true },
     ]);
     wrap();
     fireEvent.click(await screen.findByText(`${t.intake_toggle_on}：專案一`));
@@ -104,8 +104,15 @@ describe("IntakeToggle", () => {
     expect(ipc.intakeTabStart).not.toHaveBeenCalled();
   });
 
+  it("when collecting but Claude Code is not detected in the tab, it says so instead of looking ready", async () => {
+    vi.mocked(ipc.intakeTabs).mockResolvedValue([{ tab_id: "pty-1", project_id: "p1", claude_ready: false }]);
+    wrap();
+    const btn = await screen.findByText(`${t.intake_toggle_on}：專案一（${t.intake_toggle_waiting}）`);
+    expect(btn.closest("button")).toHaveAttribute("title", t.intake_toggle_waiting_hint);
+  });
+
   it("shows off when only a different tab is registered", async () => {
-    vi.mocked(ipc.intakeTabs).mockResolvedValue([{ tab_id: "other", project_id: "p1" }]);
+    vi.mocked(ipc.intakeTabs).mockResolvedValue([{ tab_id: "other", project_id: "p1", claude_ready: true }]);
     wrap();
     // 初始狀態本來就是「關」，不等 intakeTabs 結算就斷言會空過（變異測試抓到過）。
     await act(async () => {});
