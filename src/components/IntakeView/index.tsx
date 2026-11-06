@@ -806,7 +806,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       </section>
       </div>
       </div>
-      <section className="intake__card">
+      <section className="intake__card intake__card--grow">
       <h3 className="intake__card-title">{t.intake_senders}</h3>
       <ul className="intake__senders">
         {senders.map((s) => (

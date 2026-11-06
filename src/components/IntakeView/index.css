@@ -202,3 +202,7 @@
 
 /* 原生下拉會忽略上下內距，變得比旁邊的輸入框矮；用明確的高度讓同一列的欄位等高 */
 .intake__settings select, .intake__settings input:not([type="checkbox"]) { box-sizing: border-box; height: 34px; }
+
+/* 白名單卡片往下撐滿，底部對齊儲存列上方的分隔線；項目多時卡片內捲動 */
+.intake__card--grow { flex: 1 1 auto; min-height: 120px; }
+.intake__card--grow .intake__senders { align-content: start; }
