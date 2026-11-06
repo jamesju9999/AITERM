@@ -81,6 +81,17 @@ describe("IntakeView", () => {
     await waitFor(() => expect(ipc.intakeDelete).toHaveBeenCalledWith("1"));
   });
 
+  it("the list row has its own delete button, also two-step, without selecting the row", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "draft", reply_draft: "x" })]);
+    wrap();
+    const del = await screen.findByLabelText(t.intake_action_delete);
+    fireEvent.click(del);
+    expect(ipc.intakeDelete).not.toHaveBeenCalled();
+    expect(screen.queryByText("請修")).toBeNull(); // 沒有因為點刪除而選取該列
+    fireEvent.click(await screen.findByText(t.intake_action_delete_confirm));
+    await waitFor(() => expect(ipc.intakeDelete).toHaveBeenCalledWith("1"));
+  });
+
   it("a running item cannot be deleted", async () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "running" })]);
     wrap();

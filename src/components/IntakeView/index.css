@@ -64,11 +64,9 @@
 .intake__lightbox-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6); cursor: default; }
 .intake__lightbox-close { position: absolute; top: 16px; right: 20px; width: 32px; height: 32px; font-size: 16px; color: #fff; background: rgba(255, 255, 255, 0.12); border: 0; border-radius: 50%; cursor: pointer; }
 .intake__lightbox-close:hover { background: rgba(255, 255, 255, 0.25); }
-.intake__delete-btn { color: #f87171; }
-.intake__delete-btn--armed { background: rgba(239, 68, 68, 0.18); border-color: #f87171; }
 
 /* 流程指示條：圓點＋連線，已完成的段落用綠色 */
-.intake__flow { list-style: none; margin: 0 0 12px; padding: 0; display: flex; }
+.intake__flow { list-style: none; margin: 0 auto; padding: 0; display: flex; max-width: 760px; width: 100%; }
 .intake__flow-step { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary, #888); }
 .intake__flow-step::before { content: ""; position: absolute; top: 13px; right: 50%; width: 100%; height: 2px; background: var(--border, #333); }
 .intake__flow-step:first-child::before { display: none; }
@@ -101,5 +99,17 @@
 .intake__seg { display: inline-flex; border: 1px solid var(--border, #333); border-radius: 6px; overflow: hidden; }
 .intake__seg button { padding: 2px 12px; font-size: 12px; color: var(--text-secondary, #888); background: none; border: 0; cursor: pointer; }
 .intake__seg button.is-on { background: var(--accent-dim, rgba(168, 85, 247, 0.15)); color: var(--text-primary, #e0e0e0); }
-.intake__footer { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border, #2a2a2a); }
-.intake__footer .intake__delete-btn { margin-left: auto; }
+.intake__footer { display: flex; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border, #2a2a2a); }
+.intake__block--grow { flex: 1 1 auto; min-height: 220px; }
+.intake__block--grow .intake__draft { flex: 1 1 auto; min-height: 180px; resize: none; }
+
+/* 刪除鈕：清單列右上角、詳情面板左上角 */
+.intake__li { position: relative; }
+.intake__del { font: inherit; font-size: 12px; color: var(--text-secondary, #888); background: none; border: 1px solid transparent; border-radius: 6px; cursor: pointer; transition: var(--transition-smooth, all 0.2s); }
+.intake__del:hover { color: #f87171; border-color: rgba(248, 113, 113, 0.5); }
+.intake__del--armed, .intake__del--armed:hover { color: #fff; background: #dc2626; border-color: #dc2626; }
+.intake__del--row { position: absolute; top: 8px; right: 8px; min-width: 24px; height: 24px; padding: 0 6px; line-height: 1; opacity: 0.55; }
+.intake__li:hover .intake__del--row, .intake__del--row:focus-visible, .intake__del--row.intake__del--armed { opacity: 1; }
+.intake__del--pane { flex: none; padding: 4px 10px; border-color: var(--border, #333); }
+.intake__pane-top { display: flex; align-items: flex-start; gap: 12px; }
+.intake__pane-top .intake__flow { flex: 1; }

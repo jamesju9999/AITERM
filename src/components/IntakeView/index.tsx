@@ -94,7 +94,7 @@ export function IntakeView() {
           <ul className="intake__list" aria-label={t.intake_tab}>
             {items.length === 0 && <li className="intake__empty">{t.intake_empty}</li>}
             {items.map((i) => (
-              <li key={i.id}>
+              <li key={i.id} className="intake__li">
                 <button
                   className={`intake__row ${i.id === selectedId ? "intake__row--active" : ""}`}
                   onClick={() => setSelectedId(i.id)}
@@ -103,6 +103,7 @@ export function IntakeView() {
                   <span className="intake__subject">{i.subject || t.intake_no_subject}</span>
                   <span className="intake__sender">{t.intake_asker}：{i.sender_name ? `${i.sender_name} <${i.sender}>` : i.sender} · {i.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
                 </button>
+                <DeleteButton item={i} run={run} variant="row" />
               </li>
             ))}
           </ul>
@@ -150,7 +151,7 @@ function Attachments({ itemId }: { itemId: string }) {
   if (atts.length === 0) return null;
   return (
     <section>
-      <h4>{t.intake_attachments.replace("{n}", String(atts.length))}</h4>
+      <h4 className="intake__block-title">{t.intake_attachments.replace("{n}", String(atts.length))}</h4>
       <div className="intake__images">
         {atts.map((a) =>
           urls[a.id] ? (
@@ -174,6 +175,29 @@ function Attachments({ itemId }: { itemId: string }) {
   );
 }
 
+/** 二次確認的刪除鈕（Tauri 視窗裡 window.confirm 不可靠）。處理中的不能刪。 */
+function DeleteButton({ item, run, variant }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void>; variant: "row" | "pane" }) {
+  const { t } = useLocale();
+  const [armed, setArmed] = useState(false);
+  if (item.status === "running") return null;
+  return (
+    <button
+      type="button"
+      className={`intake__del intake__del--${variant} ${armed ? "intake__del--armed" : ""}`}
+      title={t.intake_action_delete}
+      aria-label={t.intake_action_delete}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (armed) void run(() => intakeDelete(item.id));
+        else setArmed(true);
+      }}
+      onBlur={() => setArmed(false)}
+    >
+      {armed ? t.intake_action_delete_confirm : variant === "row" ? "✕" : t.intake_action_delete}
+    </button>
+  );
+}
+
 function FlowBar({ item }: { item: IntakeItem }) {
   const { t } = useLocale();
   const steps = flowSteps(item);
@@ -193,11 +217,13 @@ function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unkno
   const { t } = useLocale();
   const [draft, setDraft] = useState(item.reply_draft ?? "");
   const [preview, setPreview] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const hasReply = (item.status === "draft" || item.status === "done") && item.reply_draft !== null;
   return (
     <div className="intake__pane">
-      <FlowBar item={item} />
+      <div className="intake__pane-top">
+        <DeleteButton item={item} run={run} variant="pane" />
+        <FlowBar item={item} />
+      </div>
       <header className="intake__head">
         <h3>{item.subject || t.intake_no_subject}</h3>
         <div className="intake__chips">
@@ -232,7 +258,7 @@ function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unkno
       )}
 
       {hasReply && (
-        <section className="intake__block">
+        <section className={`intake__block ${item.status === "draft" && !preview ? "intake__block--grow" : ""}`}>
           <div className="intake__block-head">
             <h4 className="intake__block-title">{t.intake_reply}</h4>
             {item.status === "draft" && (
@@ -283,15 +309,6 @@ function Detail({ item, run }: { item: IntakeItem; run: (fn: () => Promise<unkno
               {t.intake_action_save_draft}
             </button>
           </>
-        )}
-        {item.status !== "running" && (
-          <button
-            className={`aiterm-btn aiterm-btn--secondary intake__delete-btn ${confirmDelete ? "intake__delete-btn--armed" : ""}`}
-            onClick={() => (confirmDelete ? void run(() => intakeDelete(item.id)) : setConfirmDelete(true))}
-            onBlur={() => setConfirmDelete(false)}
-          >
-            {confirmDelete ? t.intake_action_delete_confirm : t.intake_action_delete}
-          </button>
         )}
       </footer>
     </div>
