@@ -19,8 +19,16 @@
 .intake__draft { width: 100%; box-sizing: border-box; font: inherit; }
 .intake__actions { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
 .intake__empty { opacity: 0.6; padding: 12px; list-style: none; }
-.intake__settings { overflow: auto; display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
-.intake__field { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.intake__settings { overflow: auto; display: flex; flex-direction: column; gap: 10px; max-width: 760px; padding: 16px 20px; border: 1px solid var(--border, #334155); border-radius: 8px; }
+.intake__settings h3 { margin: 16px 0 4px; font-size: 14px; }
+.intake__field { display: grid; grid-template-columns: 240px minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 4px; }
+.intake__field:has(> input[type="checkbox"]) { display: flex; gap: 8px; }
+.intake__field > select, .intake__field > input:not([type="checkbox"]) { min-width: 0; max-width: 320px; padding: 4px 8px; }
+.intake__field > span { grid-column: 1; }
+.intake__field > label { display: inline-flex; align-items: center; gap: 6px; }
+.intake__field > select + label { margin-left: 4px; }
+.intake__settings .intake__meta, .intake__settings .intake__error { margin: 0 0 0 252px; }
+.intake__settings .intake__actions { margin: 8px 0 0 252px; }
 .intake__senders { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .intake__senders li { display: flex; gap: 8px; align-items: center; }
 @media (max-width: 720px) { .intake__body { grid-template-columns: 1fr; } }
@@ -28,3 +36,8 @@
 .intake__images { display: flex; flex-wrap: wrap; gap: 8px; }
 .intake__thumb { max-width: 160px; max-height: 120px; object-fit: cover; border: 1px solid var(--border, #334155); border-radius: 6px; }
 .intake__thumb--empty { display: inline-flex; align-items: center; justify-content: center; width: 120px; height: 80px; font-size: 12px; opacity: 0.7; }
+.intake__field--inline { display: flex; flex-wrap: wrap; gap: 8px; }
+.intake__field--inline > input { width: 280px; max-width: none; }
+.intake__section { margin: 20px 0 4px; padding-top: 12px; border-top: 1px solid var(--border, #334155); font-size: 14px; }
+.intake__field--row { display: flex; align-items: center; gap: 12px; }
+.intake__field--row > span { width: 240px; flex: none; }

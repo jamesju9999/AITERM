@@ -351,7 +351,7 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
         <input value={cfg.auth_server} onChange={(e) => set("auth_server", e.target.value)} />
       </label>
       {(["internal", "external"] as const).map((lv) => (
-        <div key={lv} className="intake__field">
+        <div key={lv} className="intake__field intake__field--row">
           <span>{lv === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
           <select
             aria-label={`${lv}-dispatch`}
@@ -404,7 +404,7 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
         {saved && <span>{t.intake_set_saved}</span>}
       </div>
 
-      <h4>{t.intake_senders}</h4>
+      <h4 className="intake__section">{t.intake_senders}</h4>
       <ul className="intake__senders">
         {senders.map((s) => (
           <li key={s.address}>
@@ -425,7 +425,7 @@ function SettingsPanel({ onError }: { onError: (m: string | null) => void }) {
           </li>
         ))}
       </ul>
-      <div className="intake__field">
+      <div className="intake__field intake__field--inline">
         <input aria-label={t.intake_sender_address} value={newAddr} placeholder="name@example.com / tg:123456" onChange={(e) => setNewAddr(e.target.value)} />
         <select aria-label={t.intake_sender_level} value={newLevel} onChange={(e) => setNewLevel(e.target.value as Level)}>
           <option value="internal">{t.intake_level_internal}</option>
