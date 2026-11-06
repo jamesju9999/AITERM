@@ -43,7 +43,12 @@ struct Session {
     project_id: String,
     addr: String,
     expires: i64,
+    /// 已上傳、還沒隨題目送出的附件（只放記憶體，登出或過期就丟掉）。
+    staged: Vec<(String, Raw)>,
 }
+
+/// 一個工作階段暫存的附件總量上限（與頁面上標示的「合計約 35MB」一致）。
+pub const MAX_STAGED_BYTES: usize = 35 * 1024 * 1024;
 
 impl Otps {
     /// 發一組新碼；10 分鐘內發太多次回 `None`。新碼會讓舊碼失效。
@@ -91,7 +96,7 @@ impl Otps {
         if m.len() >= MAX_SESSIONS {
             return None;
         }
-        m.insert(token.clone(), Session { project_id: project_id.to_string(), addr: addr.to_string(), expires: now + SESSION_TTL_SECS });
+        m.insert(token.clone(), Session { project_id: project_id.to_string(), addr: addr.to_string(), expires: now + SESSION_TTL_SECS, staged: vec![] });
         Some(token)
     }
 
@@ -107,6 +112,51 @@ impl Otps {
         }
         s.expires = now + SESSION_TTL_SECS;
         Some(s.addr.clone())
+    }
+
+    /// 同 `touch`，但不延長到期時間：給輪詢進度用，免得開著頁面就永遠不過期。
+    pub fn peek(&self, token: &str, project_id: &str, now: i64) -> Option<String> {
+        let m = self.sessions.lock();
+        let s = m.get(token)?;
+        (s.project_id == project_id && s.expires > now).then(|| s.addr.clone())
+    }
+
+    /// 暫存一個附件，回傳它的 id。超過個數、單檔或總量上限、空檔都拒絕。
+    pub fn stage(&self, token: &str, project_id: &str, now: i64, name: &str, bytes: Vec<u8>) -> Result<String, &'static str> {
+        let mut m = self.sessions.lock();
+        let s = m.get_mut(token).filter(|s| s.project_id == project_id && s.expires > now).ok_or("session")?;
+        if bytes.is_empty() {
+            return Err("empty");
+        }
+        if bytes.len() > attach::MAX_BYTES {
+            return Err("too_big");
+        }
+        if s.staged.len() >= attach::MAX_FILES || s.staged.iter().map(|(_, r)| r.bytes.len()).sum::<usize>() + bytes.len() > MAX_STAGED_BYTES {
+            return Err("too_many");
+        }
+        s.expires = now + SESSION_TTL_SECS;
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        s.staged.push((id.clone(), Raw { name: name.chars().take(200).collect(), bytes }));
+        Ok(id)
+    }
+
+    pub fn unstage(&self, token: &str, id: &str) {
+        if let Some(s) = self.sessions.lock().get_mut(token) {
+            s.staged.retain(|(i, _)| i != id);
+        }
+    }
+
+    /// 取出（複製）要隨題目送出的暫存附件；找不到的 id 略過。
+    pub fn staged_for(&self, token: &str, ids: &[String]) -> Vec<Raw> {
+        let m = self.sessions.lock();
+        let Some(s) = m.get(token) else { return vec![] };
+        ids.iter().filter_map(|id| s.staged.iter().find(|(i, _)| i == id).map(|(_, r)| Raw { name: r.name.clone(), bytes: r.bytes.clone() })).collect()
+    }
+
+    pub fn clear_staged(&self, token: &str, ids: &[String]) {
+        if let Some(s) = self.sessions.lock().get_mut(token) {
+            s.staged.retain(|(i, _)| !ids.contains(i));
+        }
     }
 
     pub fn logout(&self, token: &str) {
@@ -331,6 +381,45 @@ mod tests {
     }
 
     #[test]
+    fn staged_files_obey_limits_belong_to_the_session_and_vanish_with_it() {
+        let o = Otps::default();
+        o.issue(&otp_key("p", "a@b.co"), 0, "111111".into()).unwrap();
+        let t = o.login("p", "a@b.co", "111111", 0).unwrap();
+        assert_eq!(o.stage("nope", "p", 1, "x", vec![1]), Err("session"));
+        assert_eq!(o.stage(&t, "other", 1, "x", vec![1]), Err("session"), "別的專案不能用");
+        assert_eq!(o.stage(&t, "p", 1, "x", vec![]), Err("empty"));
+        assert_eq!(o.stage(&t, "p", 1, "x", vec![0; attach::MAX_BYTES + 1]), Err("too_big"));
+        let id = o.stage(&t, "p", 1, "a.log", vec![1, 2, 3]).unwrap();
+        assert_eq!(o.staged_for(&t, &[id.clone(), "不存在".into()]).len(), 1);
+        o.unstage(&t, &id);
+        assert!(o.staged_for(&t, &[id]).is_empty());
+        for _ in 0..attach::MAX_FILES {
+            o.stage(&t, "p", 1, "f", vec![1]).unwrap();
+        }
+        assert_eq!(o.stage(&t, "p", 1, "f", vec![1]), Err("too_many"), "個數上限");
+        let o2 = Otps::default();
+        o2.issue(&otp_key("p", "a@b.co"), 0, "111111".into()).unwrap();
+        let t2 = o2.login("p", "a@b.co", "111111", 0).unwrap();
+        for _ in 0..2 {
+            o2.stage(&t2, "p", 1, "big", vec![0; attach::MAX_BYTES]).unwrap_or_default();
+        }
+        assert_eq!(o2.stage(&t2, "p", 1, "big", vec![0; attach::MAX_BYTES]), Err("too_many"), "總量上限 35MB");
+        assert!(o.peek(&t, "p", SESSION_TTL_SECS + 5).is_none() && o.stage(&t, "p", SESSION_TTL_SECS + 5, "x", vec![1]).is_err(), "過期後不能再傳");
+    }
+
+    #[test]
+    fn peek_does_not_extend_the_session_but_touch_does() {
+        let o = Otps::default();
+        o.issue(&otp_key("p", "a@b.co"), 0, "111111".into()).unwrap();
+        let t = o.login("p", "a@b.co", "111111", 0).unwrap();
+        assert!(o.peek(&t, "p", SESSION_TTL_SECS - 1).is_some());
+        assert!(o.peek(&t, "p", SESSION_TTL_SECS + 1).is_none(), "輪詢不能讓登入永遠不過期");
+        let t = { o.issue(&otp_key("p", "a@b.co"), 5000, "222222".into()).unwrap(); o.login("p", "a@b.co", "222222", 5000).unwrap() };
+        assert!(o.touch(&t, "p", 5000 + SESSION_TTL_SECS - 1).is_some());
+        assert!(o.peek(&t, "p", 5000 + 2 * SESSION_TTL_SECS - 5).is_some(), "touch 之後到期時間往後延");
+    }
+
+    #[test]
     fn page_posts_json_to_the_two_endpoints() {
         assert!(PAGE.contains("/api/code") && PAGE.contains("/api/login") && PAGE.contains("/api/submit") && PAGE.contains("/api/logout") && PAGE.contains("application/json"));
     }
@@ -393,6 +482,15 @@ struct SubmitReq {
     /// 檔案以 base64 傳送；大小與個數由 `attach` 限制，圖片與否由內容判斷。舊版頁面送的欄位叫 `images`，一併接受。
     #[serde(default, alias = "images")]
     files: Vec<FileReq>,
+    /// 先用 `/api/attach` 上傳好的附件 id。
+    #[serde(default)]
+    uploads: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct UnattachReq {
+    token: String,
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -448,43 +546,56 @@ const BASE_CSS: &str = include_str!("web_base.css");
 
 /// 非表單頁（首頁、找不到）共用的外框，樣式與表單頁同一份。
 fn shell(title: &str, inner: &str) -> String {
-    format!("<!doctype html><html lang=\"zh-Hant\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"color-scheme\" content=\"light dark\"><title>{title}</title><style>{BASE_CSS}</style></head><body><main>{inner}</main></body></html>")
+    format!("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"color-scheme\" content=\"light dark\"><title>{title}</title><style>{BASE_CSS}</style></head><body><main>{inner}</main></body></html>")
 }
 
-fn empty_card(icon: &str, title: &str, hint: &str, back: bool) -> String {
-    let btn = if back { "<a class=\"btn\" href=\"/\">回到專案列表</a>" } else { "" };
+fn empty_card(icon: &str, title: &str, hint: &str, back: Option<&str>) -> String {
+    let btn = back.map(|t| format!("<a class=\"btn\" href=\"/\">{t}</a>")).unwrap_or_default();
     format!("<section class=\"card empty\"><div class=\"ico\">{icon}</div><h2>{title}</h2><p class=\"hint\">{hint}</p>{btn}</section>")
 }
 
-fn not_found() -> impl IntoResponse {
-    let body = shell("找不到頁面", &empty_card("🔎", "找不到這個頁面", "這個專案不存在，或網頁提問尚未開放。請向管理者確認網址。", true));
-    (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(body))
+/// 瀏覽器偏好中文（或沒說）就用繁體中文，否則英文。表單頁自己在前端依 `navigator.language` 切換。
+fn zh(headers: &axum::http::HeaderMap) -> bool {
+    headers.get(header::ACCEPT_LANGUAGE).and_then(|v| v.to_str().ok()).map(|v| v.trim().to_ascii_lowercase()).map_or(true, |v| v.is_empty() || v.starts_with("zh"))
+}
+
+fn not_found(zh: bool) -> axum::response::Response {
+    let (title, hint, back, page) = if zh {
+        ("找不到這個頁面", "這個專案不存在，或網頁提問尚未開放。請向管理者確認網址。", "回到專案列表", "找不到頁面")
+    } else {
+        ("Page not found", "This project doesn't exist, or web questions aren't open yet. Please check the address with the administrator.", "Back to projects", "Not found")
+    };
+    let body = shell(page, &empty_card("🔎", title, hint, Some(back)));
+    (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(body)).into_response()
 }
 
 /// 首頁：列出已啟用網頁表單的專案。
-async fn index(State(st): State<Arc<WebState>>) -> impl IntoResponse {
+async fn index(State(st): State<Arc<WebState>>, headers: axum::http::HeaderMap) -> impl IntoResponse {
+    let zh = zh(&headers);
     let mut all = (st.projects)();
     if super::config::exists(&st.pool, "").await {
         all.push((String::new(), "未歸屬".to_string()));
     }
+    let go = if zh { "點選後驗證信箱並提問" } else { "Verify your email and ask" };
     let mut items = String::new();
     for (id, name) in all {
         if super::config::load(&st.pool, &id).await.web_mode != WebMode::Off {
-            items.push_str(&format!("<li><a class=\"item\" href=\"/p/{}\"><span>{}<small>點選後驗證信箱並提問</small></span><span class=\"go\">→</span></a></li>", project_code(&id), escape_html(&name)));
+            items.push_str(&format!("<li><a class=\"item\" href=\"/p/{}\"><span>{}<small>{go}</small></span><span class=\"go\">→</span></a></li>", project_code(&id), escape_html(&name)));
         }
     }
+    let (title, pick, none, none_hint) = if zh { ("提問", "請選擇要提問的專案", "目前沒有開放的專案", "管理者尚未開放網頁提問。") } else { ("Ask a question", "Choose a project", "No projects are open", "The administrator hasn't opened web questions yet.") };
     let inner = if items.is_empty() {
-        empty_card("📭", "目前沒有開放的專案", "管理者尚未開放網頁提問。", false)
+        empty_card("📭", none, none_hint, None)
     } else {
-        format!("<header><h1>提問</h1><p class=\"hint\" style=\"margin:6px 0 0\">請選擇要提問的專案</p></header><ul class=\"list\">{items}</ul>")
+        format!("<header><h1>{title}</h1><p class=\"hint\" style=\"margin:6px 0 0\">{pick}</p></header><ul class=\"list\">{items}</ul>")
     };
-    no_store_html(shell("提問", &inner))
+    no_store_html(shell(title, &inner))
 }
 
-async fn page(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>) -> axum::response::Response {
+async fn page(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>, headers: axum::http::HeaderMap) -> axum::response::Response {
     match resolve(&st, &code).await {
         Some((id, name, _)) => no_store_html(PAGE.replace("__BASE_CSS__", BASE_CSS).replace("__TITLE__", &escape_html(&name)).replace("__BASE__", &format!("/p/{}", project_code(&id)))).into_response(),
-        None => not_found().into_response(),
+        None => not_found(zh(&headers)),
     }
 }
 
@@ -501,7 +612,7 @@ async fn api_code(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String
 }
 
 async fn api_login(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>, Json(req): Json<LoginReq>) -> impl IntoResponse {
-    let bad = || json(StatusCode::FORBIDDEN, serde_json::json!({ "error": "驗證碼錯誤或已過期" }));
+    let bad = || json(StatusCode::FORBIDDEN, serde_json::json!({ "error": "驗證碼錯誤或已過期", "code": "bad_code" }));
     let Some((pid, _, cfg)) = resolve(&st, &code).await else { return bad() };
     match login(&st.pool, &pid, &cfg, &st.otps, now(), &req.email, &req.code).await {
         Ok(Some((token, email))) => json(StatusCode::OK, serde_json::json!({ "token": token, "email": email, "ttl": SESSION_TTL_SECS })),
@@ -518,21 +629,89 @@ async fn api_logout(State(st): State<Arc<WebState>>, UrlPath(_code): UrlPath<Str
     json(StatusCode::OK, serde_json::json!({ "ok": true }))
 }
 
-async fn api_submit(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>, Json(req): Json<SubmitReq>) -> impl IntoResponse {
+fn err(status: StatusCode, code: &str, msg: &str) -> axum::response::Response {
+    json(status, serde_json::json!({ "error": msg, "code": code })).into_response()
+}
+
+async fn api_submit(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>, Json(req): Json<SubmitReq>) -> axum::response::Response {
     let Some((pid, _, cfg)) = resolve(&st, &code).await else {
-        return json(StatusCode::SERVICE_UNAVAILABLE, serde_json::json!({ "error": "目前未開放" }));
+        return err(StatusCode::SERVICE_UNAVAILABLE, "disabled", "目前未開放");
     };
-    match submit(&st.pool, &pid, &cfg, &st.otps, now(), &req.token, &req.subject, &req.body, &st.attach_root, decode_files(req.files)).await {
+    let mut files = decode_files(req.files);
+    files.extend(st.otps.staged_for(&req.token, &req.uploads));
+    match submit(&st.pool, &pid, &cfg, &st.otps, now(), &req.token, &req.subject, &req.body, &st.attach_root, files).await {
         Ok(Submit::Accepted) => {
+            st.otps.clear_staged(&req.token, &req.uploads);
             (st.on_change)();
-            json(StatusCode::OK, serde_json::json!({ "ok": true, "ttl": SESSION_TTL_SECS }))
+            json(StatusCode::OK, serde_json::json!({ "ok": true, "ttl": SESSION_TTL_SECS })).into_response()
         }
-        Ok(Submit::NoSession) => json(StatusCode::UNAUTHORIZED, serde_json::json!({ "error": "登入已失效，請重新驗證" })),
-        Ok(Submit::Invalid(m)) => json(StatusCode::BAD_REQUEST, serde_json::json!({ "error": m })),
-        Ok(Submit::Disabled) => json(StatusCode::SERVICE_UNAVAILABLE, serde_json::json!({ "error": "目前未開放" })),
+        Ok(Submit::NoSession) => err(StatusCode::UNAUTHORIZED, "session", "登入已失效，請重新驗證"),
+        Ok(Submit::Invalid(m)) => {
+            let c = match m {
+                "內容不可為空" => "empty",
+                "內容太長" => "too_long",
+                "送出太頻繁，請稍後再試" => "rate",
+                _ => "unavailable",
+            };
+            err(StatusCode::BAD_REQUEST, c, m)
+        }
+        Ok(Submit::Disabled) => err(StatusCode::SERVICE_UNAVAILABLE, "disabled", "目前未開放"),
         Err(e) => {
             log::warn!("intake web: submit failed: {e}");
-            json(StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({ "error": "伺服器錯誤" }))
+            err(StatusCode::INTERNAL_SERVER_ERROR, "server", "伺服器錯誤")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct AttachQuery {
+    token: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// 附件單獨上傳（原始位元組，不用 base64）：每個檔案各一個請求，頁面才能顯示進度、失敗時只重傳那一個。
+async fn api_attach(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>, axum::extract::Query(q): axum::extract::Query<AttachQuery>, body: axum::body::Bytes) -> axum::response::Response {
+    let Some((pid, _, cfg)) = resolve(&st, &code).await else { return err(StatusCode::SERVICE_UNAVAILABLE, "disabled", "目前未開放") };
+    if cfg.web_mode == WebMode::Off {
+        return err(StatusCode::SERVICE_UNAVAILABLE, "disabled", "目前未開放");
+    }
+    let size = body.len();
+    match st.otps.stage(&q.token, &pid, now(), &q.name, body.to_vec()) {
+        Ok(id) => json(StatusCode::OK, serde_json::json!({ "id": id, "size": size })).into_response(),
+        Err("session") => err(StatusCode::UNAUTHORIZED, "session", "登入已失效，請重新驗證"),
+        Err("empty") => err(StatusCode::BAD_REQUEST, "file_empty", "這個檔案是空的"),
+        Err("too_big") => err(StatusCode::PAYLOAD_TOO_LARGE, "file_big", "單一檔案超過 20MB"),
+        Err(_) => err(StatusCode::BAD_REQUEST, "file_many", "附件個數或總量超過上限"),
+    }
+}
+
+async fn api_unattach(State(st): State<Arc<WebState>>, UrlPath(_code): UrlPath<String>, Json(req): Json<UnattachReq>) -> impl IntoResponse {
+    st.otps.unstage(&req.token, &req.id);
+    json(StatusCode::OK, serde_json::json!({ "ok": true }))
+}
+
+/// 提問者自己的題目與處理進度。只給粗略階段，不外露內部狀態與回覆內容（草稿還沒經人確認）。
+fn public_status(status: &str) -> &'static str {
+    match status {
+        store::PENDING | store::QUEUED => "received",
+        store::DONE => "replied",
+        store::REJECTED => "rejected",
+        _ => "working",
+    }
+}
+
+async fn api_status(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<String>, Json(req): Json<TokenReq>) -> axum::response::Response {
+    let Some((pid, _, _)) = resolve(&st, &code).await else { return err(StatusCode::SERVICE_UNAVAILABLE, "disabled", "目前未開放") };
+    let Some(addr) = st.otps.peek(&req.token, &pid, now()) else { return err(StatusCode::UNAUTHORIZED, "session", "登入已失效，請重新驗證") };
+    match store::list_web_items(&st.pool, &pid, &addr, 20).await {
+        Ok(rows) => {
+            let items: Vec<_> = rows.into_iter().map(|(id, subject, status, at)| serde_json::json!({ "id": id, "subject": subject, "status": public_status(&status), "at": at })).collect();
+            json(StatusCode::OK, serde_json::json!({ "items": items })).into_response()
+        }
+        Err(e) => {
+            log::warn!("intake web: status failed: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "server", "伺服器錯誤")
         }
     }
 }
@@ -540,11 +719,14 @@ async fn api_submit(State(st): State<Arc<WebState>>, UrlPath(code): UrlPath<Stri
 pub fn router(st: Arc<WebState>) -> Router {
     Router::new()
         .route("/", get(index))
-        .fallback(|| async { not_found() })
+        .fallback(|headers: axum::http::HeaderMap| async move { not_found(zh(&headers)) })
         .route("/p/{code}", get(page))
         // 要驗證碼的請求只有一個信箱，小上限；送出問題可能帶 5 張圖（base64 約 13MB）。
         .route("/p/{code}/api/code", post(api_code).layer(DefaultBodyLimit::max(4 * 1024)))
         .route("/p/{code}/api/login", post(api_login).layer(DefaultBodyLimit::max(4 * 1024)))
+        .route("/p/{code}/api/attach", post(api_attach).layer(DefaultBodyLimit::max(attach::MAX_BYTES + 1024)))
+        .route("/p/{code}/api/unattach", post(api_unattach).layer(DefaultBodyLimit::max(4 * 1024)))
+        .route("/p/{code}/api/status", post(api_status).layer(DefaultBodyLimit::max(4 * 1024)))
         .route("/p/{code}/api/logout", post(api_logout).layer(DefaultBodyLimit::max(4 * 1024)))
         .route("/p/{code}/api/submit", post(api_submit).layer(DefaultBodyLimit::max(MAX_SUBMIT_BYTES)))
         .with_state(st)
@@ -731,6 +913,70 @@ mod http_tests {
         assert!(it.body.contains("僅附件") && it.body.contains("1 個附件被略過"), "{}", it.body);
     }
 
+    async fn post_raw(r: &Router, path: &str, bytes: Vec<u8>) -> (StatusCode, String) {
+        let resp = r.clone().oneshot(Request::post(path).header("content-type", "application/octet-stream").body(Body::from(bytes)).unwrap()).await.unwrap();
+        let status = resp.status();
+        let b = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        (status, String::from_utf8_lossy(&b).into_owned())
+    }
+
+    #[tokio::test]
+    async fn files_can_be_uploaded_one_by_one_then_attached_to_the_question() {
+        let (r, pool, sent, _) = app(WebMode::Local).await;
+        let token = login_token(&r, &sent, "proj1").await;
+        let (st, _) = post_raw(&r, "/p/proj1/api/attach?token=bad&name=a.txt", b"hello".to_vec()).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+        let (st, out) = post_raw(&r, &format!("/p/proj1/api/attach?token={token}&name=a.txt"), b"hello".to_vec()).await;
+        assert_eq!(st, StatusCode::OK, "{out}");
+        let id1 = serde_json::from_str::<serde_json::Value>(&out).unwrap()["id"].as_str().unwrap().to_string();
+        let (_, out) = post_raw(&r, &format!("/p/proj1/api/attach?token={token}&name=b.txt"), b"world".to_vec()).await;
+        let id2 = serde_json::from_str::<serde_json::Value>(&out).unwrap()["id"].as_str().unwrap().to_string();
+        let (st, _) = post_raw(&r, &format!("/p/proj1/api/attach?token={token}&name=empty.txt"), vec![]).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        post(&r, "/p/proj1/api/unattach", serde_json::json!({"token":token,"id":id2})).await;
+        let (st, out) = post(&r, "/p/proj1/api/submit", serde_json::json!({"token":token,"body":"附檔","uploads":[id1,id2]})).await;
+        assert_eq!(st, StatusCode::OK, "{out}");
+        let it = &store::list_items(&pool, "proj1", None).await.unwrap()[0];
+        assert_eq!(store::list_attachments(&pool, &it.id).await.unwrap().len(), 1, "移除的那個不會被附上");
+    }
+
+    #[tokio::test]
+    async fn status_lists_only_the_askers_own_web_questions_with_coarse_stages() {
+        let (r, pool, sent, _) = app(WebMode::Local).await;
+        let token = login_token(&r, &sent, "proj1").await;
+        post(&r, "/p/proj1/api/submit", serde_json::json!({"token":token,"subject":"第一題","body":"a"})).await;
+        post(&r, "/p/proj1/api/submit", serde_json::json!({"token":token,"subject":"第二題","body":"b"})).await;
+        // 別人的題目不該出現
+        store::insert_item(&pool, store::NewItem { project_id: "proj1", id: None, source: "web", sender: "other@corp.com", level: Level::External, subject: "別人的", body: "x", message_id: "m-other", status: store::PENDING }).await.unwrap();
+        let first = store::list_items(&pool, "proj1", None).await.unwrap().into_iter().find(|i| i.sender == "bob@corp.com" && i.subject == "第一題").unwrap();
+        sqlx::query("UPDATE intake_items SET status = ? WHERE id = ?").bind(store::DRAFT).bind(&first.id).execute(&pool).await.unwrap();
+        let (st, out) = post(&r, "/p/proj1/api/status", serde_json::json!({"token":token})).await;
+        assert_eq!(st, StatusCode::OK);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2, "{out}");
+        assert!(!out.contains("別人的") && !out.contains("draft") && !out.contains("reply"), "不外露別人的題目、內部狀態與回覆內容：{out}");
+        let by = |s: &str| items.iter().find(|i| i["subject"] == s).unwrap()["status"].as_str().unwrap().to_string();
+        assert_eq!(by("第一題"), "working", "草稿（還沒經人確認）只顯示處理中");
+        assert_eq!(by("第二題"), "received");
+        let (st, _) = post(&r, "/p/proj1/api/status", serde_json::json!({"token":"bad"})).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+        let (st, _) = post(&r, "/p/proj2/api/status", serde_json::json!({"token":token})).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED, "別的專案不能查");
+    }
+
+    #[tokio::test]
+    async fn errors_carry_a_machine_readable_code_for_the_page_to_translate() {
+        let (r, _, sent, _) = app(WebMode::Local).await;
+        let (_, out) = post(&r, "/p/proj1/api/login", serde_json::json!({"email":"bob@corp.com","code":"000000"})).await;
+        assert!(out.contains("\"code\":\"bad_code\""), "{out}");
+        let token = login_token(&r, &sent, "proj1").await;
+        let (_, out) = post(&r, "/p/proj1/api/submit", serde_json::json!({"token":token,"body":"  "})).await;
+        assert!(out.contains("\"code\":\"empty\""), "{out}");
+        let (_, out) = post(&r, "/p/proj1/api/submit", serde_json::json!({"token":"x","body":"hi"})).await;
+        assert!(out.contains("\"code\":\"session\""), "{out}");
+    }
+
     #[tokio::test]
     async fn page_is_served_with_no_store_and_frame_protection() {
         let (r, _, _, _) = app(WebMode::Local).await;
@@ -754,11 +1000,17 @@ mod http_tests {
         assert_eq!(st, StatusCode::OK);
         assert!(home.contains("/p/proj1") && home.contains("專案一") && home.contains("/p/proj2"), "{home}");
         let (_, page) = get_text(&r, "/p/proj2").await;
-        assert!(page.contains("專案二") && page.contains("/p/proj2/api/submit") && !page.contains("__BASE__") && !page.contains("__BASE_CSS__"), "{page}");
+        assert!(page.contains("專案二") && page.contains("const BASE=\"/p/proj2\"") && !page.contains("__BASE__") && !page.contains("__BASE_CSS__"), "{page}");
         let (st, nf) = get_text(&r, "/p/nope").await;
         assert_eq!(st, StatusCode::NOT_FOUND);
         assert!(nf.contains("回到專案列表") && nf.contains("<style>"), "找不到頁面要有樣式與返回連結");
         assert_eq!(get_text(&r, "/whatever").await.0, StatusCode::NOT_FOUND);
+        let resp = r.clone().oneshot(Request::get("/p/nope").header("accept-language", "en-US,en;q=0.9").body(Body::empty()).unwrap()).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("Back to projects"), "英文瀏覽器看到英文");
+        let resp = r.clone().oneshot(Request::get("/").header("accept-language", "en").body(Body::empty()).unwrap()).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("Choose a project"));
     }
 
     #[tokio::test]

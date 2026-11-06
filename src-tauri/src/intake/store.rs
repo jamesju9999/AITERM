@@ -161,6 +161,12 @@ pub async fn set_recipients(pool: &SqlitePool, id: &str, to: &[String], cc: &[St
     Ok(())
 }
 
+/// 網頁提問者自己送出的題目（新的在前），給網頁上的「處理進度」用。
+pub async fn list_web_items(pool: &SqlitePool, project_id: &str, sender: &str, limit: i64) -> Result<Vec<(String, String, String, i64)>, sqlx::Error> {
+    sqlx::query_as("SELECT id, subject, status, created_at FROM intake_items WHERE project_id = ? AND source = 'web' AND sender = ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+        .bind(project_id).bind(sender).bind(limit).fetch_all(pool).await
+}
+
 pub async fn set_kind(pool: &SqlitePool, id: &str, kind: &str, snapshot_head: Option<&str>) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE intake_items SET kind = ?, snapshot_head = ?, updated_at = ? WHERE id = ?")
         .bind(kind).bind(snapshot_head).bind(now()).bind(id).execute(pool).await?;
