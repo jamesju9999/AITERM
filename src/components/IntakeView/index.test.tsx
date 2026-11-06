@@ -129,6 +129,20 @@ describe("IntakeView", () => {
     expect(time.textContent).toMatch(/\d/);
   });
 
+  it("each flow step carries a tooltip saying what it is and where this question stands", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "running" })]);
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    const steps = await screen.findAllByRole("tooltip");
+    expect(steps).toHaveLength(6);
+    const answer = steps[3];
+    expect(answer).toHaveTextContent(t.intake_flow_answer);
+    expect(answer).toHaveTextContent(t.intake_flow_desc_answer);
+    expect(answer).toHaveTextContent(t.intake_flow_state_current);
+    expect(steps[0]).toHaveTextContent(t.intake_flow_state_done);
+    expect(steps[5]).toHaveTextContent(t.intake_flow_state_todo);
+  });
+
   it("a running item cannot be deleted", async () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "running" })]);
     wrap();

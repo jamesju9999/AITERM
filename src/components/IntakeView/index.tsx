@@ -301,7 +301,17 @@ function FlowBar({ item }: { item: IntakeItem }) {
   return (
     <ol className="intake__flow" aria-label={t.intake_flow_label}>
       {steps.map((s, i) => (
-        <li key={s.key} className={`intake__flow-step intake__flow-step--${s.state}`} aria-current={s.state === "current" ? "step" : undefined}>
+        <li
+          key={s.key}
+          className={`intake__flow-step intake__flow-step--${s.state}`}
+          aria-current={s.state === "current" ? "step" : undefined}
+          tabIndex={0}
+        >
+          <span className="intake__flow-tip" role="tooltip">
+            <strong>{t[`intake_flow_${s.key}` as const]}</strong>
+            <span>{t[`intake_flow_desc_${s.key}` as const]}</span>
+            <em className={`intake__flow-tip-state intake__flow-tip-state--${s.state}`}>{t[`intake_flow_state_${s.state}` as const]}</em>
+          </span>
           <span className="intake__flow-dot">{s.state === "done" ? "✓" : s.state === "failed" ? "!" : s.state === "skipped" ? "–" : i + 1}</span>
           <span className="intake__flow-label">{t[`intake_flow_${s.key}` as const]}</span>
         </li>

@@ -122,3 +122,14 @@
 .intake__adopt { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .intake__adopt select { padding: 4px 8px; background: var(--bg-primary, #0a0b14); color: inherit; border: 1px solid var(--border, #333); border-radius: 6px; }
 .intake__footer select { padding: 6px 10px; background: var(--bg-primary, #0a0b14); color: inherit; border: 1px solid var(--border, #333); border-radius: 6px; }
+
+/* 流程條的說明氣泡：游標移上去（或用鍵盤聚焦）才顯示 */
+.intake__flow-step { cursor: default; outline: none; }
+.intake__flow-tip { position: absolute; top: 100%; left: 50%; transform: translate(-50%, 6px); z-index: 20; width: 220px; display: none; flex-direction: column; gap: 4px; padding: 10px 12px; font-size: 12px; line-height: 1.5; text-align: left; color: var(--text-primary, #e0e0e0); background: var(--bg-secondary, #1a1a2e); border: 1px solid var(--border, #333); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); pointer-events: none; }
+.intake__flow-step:hover .intake__flow-tip, .intake__flow-step:focus-visible .intake__flow-tip { display: flex; }
+.intake__flow-tip strong { font-size: 13px; }
+.intake__flow-tip-state { font-style: normal; font-weight: 600; color: var(--text-secondary, #888); }
+.intake__flow-tip-state--done, .intake__flow-tip-state--current { color: #14b8a6; }
+.intake__flow-tip-state--failed { color: #f87171; }
+.intake__flow-step:first-child .intake__flow-tip { left: 0; transform: translate(0, 6px); }
+.intake__flow-step:last-child .intake__flow-tip { left: auto; right: 0; transform: translate(0, 6px); }
