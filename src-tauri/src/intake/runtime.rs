@@ -208,7 +208,7 @@ async fn route_and_settle<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePoo
                         store::set_error(pool, &item.id, &format!("自動寄出失敗：{e}")).await.ok();
                     }
                 } else if auto {
-                    store::set_error(pool, &item.id, "看板卡片沒有成功，已保留為草稿，請確認後再寄出").await.ok();
+                    store::set_error(pool, &item.id, "卡片沒有成功，已保留為草稿，請確認後再寄出").await.ok();
                 }
             }
             Err(e) => log::warn!("intake: 收看板卡片失敗：{e}"),

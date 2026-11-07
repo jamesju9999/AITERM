@@ -96,6 +96,8 @@ describe("IntakeView", () => {
     wrap();
     fireEvent.click(await screen.findByText("壞掉了"));
     expect(await screen.findByText(`${t.intake_on_canvas_note}（abcdef12）`)).toBeTruthy();
+    expect(screen.getAllByText(t.intake_status_on_canvas).length).toBeGreaterThan(0);
+    expect(screen.queryByText(t.intake_status_on_board)).toBeNull();
   });
 
   it("names who asked, with their level, in both the list and the detail", async () => {

@@ -196,7 +196,7 @@ export function IntakeView() {
                 <option value="all">{t.intake_filter_all}</option>
                 {STATUSES.map((s) => (
                   <option key={s} value={s}>
-                    {t[`intake_status_${s}` as const]}
+                    {s === "on_board" ? t.intake_filter_on_card : t[`intake_status_${s}` as const]}
                   </option>
                 ))}
                     </select>
@@ -210,7 +210,7 @@ export function IntakeView() {
                     onClick={() => setSelectedId(i.id)}
                   >
                     <span className="intake__rowtop">
-                      <span className={`intake__badge intake__badge--${i.status}`}>{t[`intake_status_${i.status}` as const]}</span>
+                      <span className={`intake__badge intake__badge--${i.status}`}>{i.status === "on_board" && i.route_kind?.startsWith("canvas") ? t.intake_status_on_canvas : t[`intake_status_${i.status}` as const]}</span>
                       <time className="intake__time" dateTime={new Date(i.created_at * 1000).toISOString()}>{formatTime(i.created_at)}</time>
                     </span>
                     <span className="intake__subject">{i.subject || t.intake_no_subject}</span>
