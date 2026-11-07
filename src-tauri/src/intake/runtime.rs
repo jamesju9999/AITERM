@@ -176,32 +176,21 @@ async fn classify_item<R: Runtime>(app: &AppHandle<R>, item: &store::IntakeItem)
     }
 }
 
-/// 看板：把「要改程式」的新問題建成卡片，並收回已做完的卡片。回傳有沒有任何變動。
+/// 看板／桌布：把新問題建成卡片，並收回已做完的卡片。回傳有沒有任何變動。
 ///
-/// 只處理專案已開啟、開關打開、且有程式庫路徑的；其他一律不碰，照舊走終端機分頁。
+/// 只處理專案已開啟的；派送目標是終端機、或條件不足（看板要程式庫路徑）就一律不碰，照舊走終端機分頁。
 async fn route_and_settle<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool) -> bool {
     let Some(reg) = app.try_state::<crate::projects::ProjectRegistry>() else { return false };
     let mut touched = false;
     for handle in reg.all() {
         let cfg = config::load(pool, &handle.id).await;
-        if !cfg.route_to_board {
-            continue;
-        }
-        let Ok(Some(repo)) = crate::tasks::formations::repo_path(&handle.pool).await else { continue };
-        let Ok(items) = store::list_unrouted(pool, &handle.id).await else { continue };
-        for item in items {
-            let kind = classify_item(app, &item).await;
-            if kind == classify::Kind::CodeChange {
-                // 分類要先存：建卡失敗時項目留在原狀態，之後由分頁領取也不必再分類。
-                store::set_kind(pool, &item.id, kind.as_str(), None).await.ok();
-                match board::route_item(pool, &handle, &item, &repo).await {
-                    Ok(_) => touched = true,
-                    Err(e) => log::warn!("intake: 建看板卡失敗：{e}"),
-                }
-            } else {
-                store::set_kind(pool, &item.id, kind.as_str(), None).await.ok();
-                touched = true;
+        match cfg.route {
+            config::Route::Terminal => {}
+            config::Route::Canvas if board::pick_bug_assignee(&handle.pool).await.ok().flatten().is_some() => {
+                touched |= route_canvas(app, pool, &handle).await;
             }
+            // 桌布沒有可用的工程師，退回看板。
+            config::Route::Canvas | config::Route::Board => touched |= route_board(app, pool, &handle).await,
         }
     }
     let Ok(on_board) = store::list_on_board(pool).await else { return touched };
@@ -224,6 +213,72 @@ async fn route_and_settle<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePoo
             }
             Err(e) => log::warn!("intake: 收看板卡片失敗：{e}"),
         }
+    }
+    touched
+}
+
+/// 看板路線：「要改程式」的新問題建成看板卡片；提問留給終端機分頁。
+async fn route_board<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, handle: &crate::projects::ProjectHandle) -> bool {
+    let mut touched = false;
+    let Ok(Some(repo)) = crate::tasks::formations::repo_path(&handle.pool).await else { return false };
+    let Ok(items) = store::list_unrouted(pool, &handle.id).await else { return false };
+    for item in items {
+        let kind = classify_item(app, &item).await;
+        // 分類要先存：建卡失敗時項目留在原狀態，之後由分頁領取也不必再分類。
+        store::set_kind(pool, &item.id, kind.as_str(), None).await.ok();
+        if kind == classify::Kind::CodeChange {
+            match board::route_item(pool, handle, &item, &repo).await {
+                Ok(_) => touched = true,
+                Err(e) => log::warn!("intake: 建看板卡失敗：{e}"),
+            }
+        } else {
+            touched = true;
+        }
+    }
+    touched
+}
+
+/// 桌布路線：要改程式→bug 卡（指派給最閒的工程師，走審核）；提問→問答卡（交給最閒的 Agent 讀程式庫回答）。
+async fn route_canvas<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, handle: &crate::projects::ProjectHandle) -> bool {
+    let mut touched = false;
+    let Ok(items) = store::list_unrouted_canvas(pool, &handle.id).await else { return false };
+    for item in items {
+        let kind = match item.kind.as_deref() {
+            Some("question") => classify::Kind::Question,
+            Some(_) => classify::Kind::CodeChange,
+            None => {
+                let k = classify_item(app, &item).await;
+                store::set_kind(pool, &item.id, k.as_str(), None).await.ok();
+                touched = true;
+                k
+            }
+        };
+        match kind {
+            classify::Kind::CodeChange => {
+                let Ok(Some(agent)) = board::pick_bug_assignee(&handle.pool).await else { continue };
+                match board::route_canvas_bug(pool, handle, &item, &agent).await {
+                    Ok(_) => touched = true,
+                    Err(e) => log::warn!("intake: 建桌布 bug 卡失敗：{e}"),
+                }
+            }
+            // 手動模式的提問要等放行（queued）才建問答卡；放行前只存分類。
+            classify::Kind::Question if item.status == store::QUEUED => {
+                let all = crate::tasks::agents::list_agents(&handle.pool).await.unwrap_or_default();
+                let Ok(Some(agent)) = crate::tasks::workflow::pick_ask_agent(&handle.pool, &all).await else { continue };
+                match board::route_canvas_ask(pool, handle, &item, &agent).await {
+                    Ok(_) => touched = true,
+                    Err(e) => log::warn!("intake: 建桌布問答卡失敗：{e}"),
+                }
+            }
+            classify::Kind::Question => {}
+        }
+    }
+    if touched {
+        // 不等排程器 30 秒一輪的掃描，也讓畫面重讀。
+        if let Some(s) = app.try_state::<crate::tasks::scheduler::SchedulerHandle>() {
+            s.poke();
+        }
+        let _ = app.emit("tasks-updated", ());
     }
     touched
 }
@@ -438,11 +493,99 @@ mod board_wiring_tests {
         let project = reg.create(parent.path(), "demo", "").await.unwrap();
         crate::tasks::repo_check::save_project_repo(&project.pool, "/work/repo").await.unwrap();
         h.manage(reg);
-        config::save(&pool, &project.id, &config::Config { route_to_board: false, ..config::Config::default() }).await.unwrap();
+        config::save(&pool, &project.id, &config::Config { route: config::Route::Terminal, ..config::Config::default() }).await.unwrap();
         let item = insert_item(&pool, NewItem { project_id: &project.id, id: None, source: "email", sender: "a@corp.com", level: Level::Internal, subject: "s", body: "b", message_id: "m", status: store::QUEUED }).await.unwrap().unwrap();
         tick(&h).await;
         let got = store::get_item(&pool, &item.id).await.unwrap().unwrap();
         assert_eq!((got.status.as_str(), got.kind), (store::QUEUED, None));
         assert!(tasks::list_tasks(&project.pool).await.unwrap().is_empty());
+    }
+
+    async fn canvas_app() -> (tauri::App<tauri::test::MockRuntime>, sqlx::SqlitePool, crate::projects::ProjectHandle, tempfile::TempDir) {
+        let app = tauri::test::mock_app();
+        let h = app.handle().clone();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        store::init_schema(&pool).await.unwrap();
+        h.manage(IntakeDb { pool: pool.clone() });
+        h.manage(Arc::new(IntakeRuntime { registry: dispatcher::Registry::default(), tick_lock: tokio::sync::Mutex::new(()) }));
+        h.manage(Arc::new(PtyManager::new()));
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let project = reg.create(parent.path(), "demo", "").await.unwrap();
+        h.manage(reg);
+        config::save(&pool, &project.id, &config::Config { route: config::Route::Canvas, ..config::Config::default() }).await.unwrap();
+        (app, pool, project, parent)
+    }
+
+    async fn new_agent(p: &crate::projects::ProjectHandle, kind: &str, name: &str) -> String {
+        crate::tasks::agents::create_agent(&p.pool, &crate::tasks::agents::NewAgent { kind, name, role: "r", prompt_prefix: "", project_dir: "/repo", canvas_x: 0.0, canvas_y: 0.0 }).await.unwrap()
+    }
+
+    /// 桌布路線整條接線：bug 指派給工程師、提問建問答卡，做完後下一次 tick 收回成草稿。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tick_routes_to_the_canvas_and_settles_bug_and_question() {
+        let (app, pool, project, _d) = canvas_app().await;
+        let h = app.handle().clone();
+        let coder = new_agent(&project, "coder", "甲").await;
+        let bug = insert_item(&pool, NewItem { project_id: &project.id, id: None, source: "email", sender: "a@corp.com", level: Level::Internal, subject: "登入壞了", body: "請修", message_id: "m1", status: store::QUEUED }).await.unwrap().unwrap();
+        let ask = insert_item(&pool, NewItem { project_id: &project.id, id: None, source: "email", sender: "a@corp.com", level: Level::Internal, subject: "怎麼登入", body: "請問", message_id: "m2", status: store::QUEUED }).await.unwrap().unwrap();
+        store::set_kind(&pool, &ask.id, "question", None).await.unwrap();
+        tick(&h).await;
+
+        let b = store::get_item(&pool, &bug.id).await.unwrap().unwrap();
+        let q = store::get_item(&pool, &ask.id).await.unwrap().unwrap();
+        assert_eq!((b.status.as_str(), b.route_kind.as_deref()), (store::ON_BOARD, Some("canvas_bug")));
+        assert_eq!((q.status.as_str(), q.route_kind.as_deref()), (store::ON_BOARD, Some("canvas_ask")));
+        let bug_card = tasks::get_task(&project.pool, b.board_task_id.as_deref().unwrap()).await.unwrap().unwrap();
+        assert_eq!((bug_card.status.as_str(), bug_card.agent_id.as_deref()), ("queued", Some(coder.as_str())));
+        let ask_card = tasks::get_task(&project.pool, q.board_task_id.as_deref().unwrap()).await.unwrap().unwrap();
+        assert_eq!(ask_card.card_kind, "ask");
+
+        // 再 tick 不會重複建卡。
+        tick(&h).await;
+        assert_eq!(tasks::list_tasks(&project.pool).await.unwrap().len(), 2);
+
+        tasks::dispatch_for_test(&project.pool, &bug_card.id, "t1").await;
+        tasks::finish_task(&project.pool, &bug_card.id, "success", None, None).await.unwrap();
+        tasks::dispatch_for_test(&project.pool, &ask_card.id, "t2").await;
+        tasks::set_summary(&project.pool, &ask_card.id, "看 auth.rs").await.unwrap();
+        tasks::finish_task(&project.pool, &ask_card.id, "success", None, None).await.unwrap();
+        tick(&h).await;
+        let (b, q) = (store::get_item(&pool, &bug.id).await.unwrap().unwrap(), store::get_item(&pool, &ask.id).await.unwrap().unwrap());
+        assert_eq!((b.status.as_str(), q.status.as_str()), (store::DRAFT, store::DRAFT));
+        assert!(b.reply_draft.unwrap().contains("Agent 協作結果：成功"));
+        assert!(q.reply_draft.unwrap().starts_with("看 auth.rs"));
+    }
+
+    /// 選了桌布但沒有工程師：退回看板（要有程式庫路徑）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn canvas_without_a_coder_falls_back_to_the_board() {
+        let (app, pool, project, _d) = canvas_app().await;
+        let h = app.handle().clone();
+        new_agent(&project, "reviewer", "審核者").await;
+        crate::tasks::repo_check::save_project_repo(&project.pool, "/work/repo").await.unwrap();
+        let item = insert_item(&pool, NewItem { project_id: &project.id, id: None, source: "email", sender: "a@corp.com", level: Level::Internal, subject: "修", body: "b", message_id: "m1", status: store::QUEUED }).await.unwrap().unwrap();
+        tick(&h).await;
+        let got = store::get_item(&pool, &item.id).await.unwrap().unwrap();
+        assert_eq!((got.status.as_str(), got.route_kind.as_deref()), (store::ON_BOARD, Some("board")));
+    }
+
+    /// 手動模式：bug 卡留在規劃欄不指派；提問要等放行才建問答卡。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn canvas_manual_mode_keeps_the_bug_unassigned_and_holds_the_question() {
+        let (app, pool, project, _d) = canvas_app().await;
+        let h = app.handle().clone();
+        new_agent(&project, "coder", "甲").await;
+        let bug = insert_item(&pool, NewItem { project_id: &project.id, id: None, source: "email", sender: "a@corp.com", level: Level::External, subject: "修", body: "b", message_id: "m1", status: store::PENDING }).await.unwrap().unwrap();
+        let ask = insert_item(&pool, NewItem { project_id: &project.id, id: None, source: "email", sender: "a@corp.com", level: Level::External, subject: "問", body: "b", message_id: "m2", status: store::PENDING }).await.unwrap().unwrap();
+        store::set_kind(&pool, &ask.id, "question", None).await.unwrap();
+        tick(&h).await;
+        let b = store::get_item(&pool, &bug.id).await.unwrap().unwrap();
+        let card = tasks::get_task(&project.pool, b.board_task_id.as_deref().unwrap()).await.unwrap().unwrap();
+        assert_eq!((card.status.as_str(), card.agent_id), ("planning", None));
+        assert_eq!(store::get_item(&pool, &ask.id).await.unwrap().unwrap().status, store::PENDING, "提問放行前不建卡");
+        store::approve(&pool, &ask.id).await.unwrap();
+        tick(&h).await;
+        assert_eq!(store::get_item(&pool, &ask.id).await.unwrap().unwrap().route_kind.as_deref(), Some("canvas_ask"));
     }
 }

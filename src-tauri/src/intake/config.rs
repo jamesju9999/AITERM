@@ -11,6 +11,19 @@ pub enum DispatchMode {
     Manual,
 }
 
+/// 問題派送到哪裡處理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Route {
+    /// 只給終端機分頁裡的 Claude Code。
+    Terminal,
+    /// 「要改程式」的問題建成工作看板卡片（需專案有程式庫路徑）；提問仍給終端機分頁。
+    #[default]
+    Board,
+    /// 建成 Agent 協作桌布的卡：要改程式→bug 卡（審核者審查），提問→問答卡。沒有可用的工程師就退回看板。
+    Canvas,
+}
+
 /// 網頁表單的開放範圍。外網沒有獨立模式：`Lan` 綁 0.0.0.0，要從外網進來請自備反向代理／Tunnel。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,8 +58,8 @@ pub struct Config {
     pub telegram_enabled: bool,
     pub web_mode: WebMode,
     pub web_port: u16,
-    /// 「要改程式」的問題建成看板卡片（需專案有程式庫路徑）；關掉就全部走終端機分頁。
-    pub route_to_board: bool,
+    /// 問題派送到哪裡處理。
+    pub route: Route,
 }
 
 impl Default for Config {
@@ -69,7 +82,7 @@ impl Default for Config {
             telegram_enabled: false,
             web_mode: WebMode::Off,
             web_port: 8320,
-            route_to_board: true,
+            route: Route::Board,
         }
     }
 }

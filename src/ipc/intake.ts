@@ -5,6 +5,7 @@ export type IntakeStatus = "pending" | "queued" | "running" | "on_board" | "draf
 export type Level = "internal" | "external";
 export type MatchMode = "alias" | "subject_tag" | "alias_or_tag" | "dedicated";
 export type DispatchMode = "auto" | "manual";
+export type IntakeRoute = "terminal" | "board" | "canvas";
 
 export interface IntakeItem {
   id: string;
@@ -30,6 +31,8 @@ export interface IntakeItem {
   cc_addrs: string | null;
   /** 走看板時對應的卡片 id。 */
   board_task_id: string | null;
+  /** 走看板／桌布時卡片的種類。 */
+  route_kind: "board" | "canvas_bug" | "canvas_ask" | null;
 }
 
 export interface IntakeConfig {
@@ -50,8 +53,8 @@ export interface IntakeConfig {
   telegram_enabled: boolean;
   web_mode: "off" | "local" | "lan";
   web_port: number;
-  /** 「要改程式」的問題建成看板卡片（需專案有程式庫路徑）。 */
-  route_to_board: boolean;
+  /** 問題派送到哪裡處理。 */
+  route: IntakeRoute;
 }
 
 export interface IntakeSender {

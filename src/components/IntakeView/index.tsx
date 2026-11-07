@@ -479,7 +479,7 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
         </div>
       </header>
       {item.error && <div className="intake__banner">{item.error}</div>}
-      {item.board_task_id && <div className="intake__meta">{t.intake_on_board_note}（{item.board_task_id.slice(0, 8)}）</div>}
+      {item.board_task_id && <div className="intake__meta">{item.route_kind?.startsWith("canvas") ? t.intake_on_canvas_note : t.intake_on_board_note}（{item.board_task_id.slice(0, 8)}）</div>}
       <Recipients item={item} />
 
       <section className="intake__block">
@@ -804,10 +804,14 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       <section className="intake__card">
         <h3 className="intake__card-title">{t.intake_sec_verify}</h3>
       <label className="intake__field">
-        <input type="checkbox" checked={cfg.route_to_board} onChange={(e) => set("route_to_board", e.target.checked)} />
-        {t.intake_set_route_to_board}
+        {t.intake_set_route}
+        <select value={cfg.route} onChange={(e) => set("route", e.target.value as IntakeConfig["route"])}>
+          <option value="terminal">{t.intake_route_terminal}</option>
+          <option value="board">{t.intake_route_board}</option>
+          <option value="canvas">{t.intake_route_canvas}</option>
+        </select>
       </label>
-      <p className="intake__meta intake__hint">{t.intake_set_route_to_board_hint}</p>
+      <p className="intake__meta intake__hint">{t[`intake_route_hint_${cfg.route}` as const]}</p>
       <label className="intake__field">
         {t.intake_set_verify_command}
         <input
