@@ -790,6 +790,15 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         </div>
       ))}
       <label className="intake__field">
+        {t.intake_set_route}
+        <select value={cfg.route} onChange={(e) => set("route", e.target.value as IntakeConfig["route"])}>
+          <option value="terminal">{t.intake_route_terminal}</option>
+          <option value="board">{t.intake_route_board}</option>
+          <option value="canvas">{t.intake_route_canvas}</option>
+        </select>
+      </label>
+      <p className="intake__meta intake__hint">{t[`intake_route_hint_${cfg.route}` as const]}</p>
+      <label className="intake__field">
         {t.intake_set_rate}
         <input
           type="number"
@@ -803,15 +812,6 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       <div className="intake__col">
       <section className="intake__card">
         <h3 className="intake__card-title">{t.intake_sec_verify}</h3>
-      <label className="intake__field">
-        {t.intake_set_route}
-        <select value={cfg.route} onChange={(e) => set("route", e.target.value as IntakeConfig["route"])}>
-          <option value="terminal">{t.intake_route_terminal}</option>
-          <option value="board">{t.intake_route_board}</option>
-          <option value="canvas">{t.intake_route_canvas}</option>
-        </select>
-      </label>
-      <p className="intake__meta intake__hint">{t[`intake_route_hint_${cfg.route}` as const]}</p>
       <label className="intake__field">
         {t.intake_set_verify_command}
         <input
