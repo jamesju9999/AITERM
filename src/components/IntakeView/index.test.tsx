@@ -40,7 +40,7 @@ function item(over: Partial<IntakeItem>): IntakeItem {
   return {
     id: "1", source: "email", sender: "bob@corp.com", sender_level: "external", subject: "壞掉了", body: "請修",
     message_id: "m", status: "pending", tab_id: null, reply_draft: null, error: null, created_at: 0, updated_at: 0,
-    kind: null, snapshot_head: null, verification: null, verified: null, sender_name: null, project_id: "p1", to_addrs: null, cc_addrs: null, board_task_id: null, ...over,
+    kind: null, snapshot_head: null, verification: null, verified: null, sender_name: null, project_id: "p1", to_addrs: null, cc_addrs: null, board_task_id: null, route_kind: null, ...over,
   };
 }
 const wrap = () => render(<LocaleProvider><IntakeView /></LocaleProvider>);
@@ -54,7 +54,7 @@ function cfgView(over: Partial<ipc.IntakeConfig> = {}, extra: Partial<ipc.Intake
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320, route_to_board: true, ...over,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320, route: "board", ...over,
     },
     saved: true,
     telegram_default: false,
@@ -89,6 +89,15 @@ describe("IntakeView", () => {
     fireEvent.click(await screen.findByText("壞掉了"));
     expect(await screen.findByText(`${t.intake_on_board_note}（abcdef12）`)).toBeTruthy();
     expect(screen.getAllByText(t.intake_status_on_board).length).toBeGreaterThan(0);
+  });
+
+  it("an item sent to the agent canvas says so instead of mentioning the board", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([item({ status: "on_board", kind: "code_change", board_task_id: "abcdef12-3456", route_kind: "canvas_bug" })]);
+    wrap();
+    fireEvent.click(await screen.findByText("壞掉了"));
+    expect(await screen.findByText(`${t.intake_on_canvas_note}（abcdef12）`)).toBeTruthy();
+    expect(screen.getAllByText(t.intake_status_on_canvas).length).toBeGreaterThan(0);
+    expect(screen.queryByText(t.intake_status_on_board)).toBeNull();
   });
 
   it("names who asked, with their level, in both the list and the detail", async () => {
@@ -326,6 +335,20 @@ describe("IntakeView", () => {
     expect(screen.getByText(t.intake_verify_failed)).toBeInTheDocument();
     expect(screen.queryByText(t.intake_verify_passed)).toBeNull();
     expect(screen.getByText(t.intake_kind_code_change)).toBeInTheDocument();
+  });
+
+  it("settings: the dispatch target defaults to the board, explains each choice, and saves the agent canvas", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ enabled: true }));
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    const pick = (await screen.findByLabelText(t.intake_set_route)) as HTMLSelectElement;
+    expect(pick.value).toBe("board");
+    expect(screen.getByText(t.intake_route_hint_board)).toBeInTheDocument();
+    fireEvent.change(pick, { target: { value: "canvas" } });
+    expect(screen.getByText(t.intake_route_hint_canvas)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(t.intake_set_save));
+    await waitFor(() => expect(ipc.intakeSetConfig).toHaveBeenCalledWith("p1", expect.objectContaining({ route: "canvas" }), false));
   });
 
   it("settings: adds an allowlist sender only with a valid address and saves config", async () => {

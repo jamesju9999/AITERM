@@ -46,6 +46,8 @@ pub struct IntakeItem {
     pub cc_addrs: Option<String>,
     /// 走看板時對應的卡片 id；沒走看板為 `None`。
     pub board_task_id: Option<String>,
+    /// 走看板／桌布時卡片的種類：`board`｜`canvas_bug`｜`canvas_ask`；舊資料與沒走的為 `None`（視為 `board`）。
+    pub route_kind: Option<String>,
 }
 
 pub struct NewItem<'a> {
@@ -126,7 +128,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     }
     // 第 2 期新增的欄位。CREATE 是 IF NOT EXISTS，舊資料庫不會自動長出來，逐欄補。
     let have: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('intake_items')").fetch_all(pool).await?;
-    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT"), ("to_addrs", "TEXT"), ("cc_addrs", "TEXT"), ("board_task_id", "TEXT")] {
+    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT"), ("to_addrs", "TEXT"), ("cc_addrs", "TEXT"), ("board_task_id", "TEXT"), ("route_kind", "TEXT")] {
         if !have.iter().any(|c| c == col) {
             sqlx::query(&format!("ALTER TABLE intake_items ADD COLUMN {col} {ty}")).execute(pool).await?;
         }
@@ -185,10 +187,20 @@ pub async fn list_unrouted(pool: &SqlitePool, project_id: &str) -> Result<Vec<In
         .bind(project_id).bind(PENDING).bind(QUEUED).fetch_all(pool).await
 }
 
+/// 桌布用：除了未分類的，還包括「已分類為提問、已放行、還沒建卡」的（手動模式的提問要等放行才建問答卡）。
+pub async fn list_unrouted_canvas(pool: &SqlitePool, project_id: &str) -> Result<Vec<IntakeItem>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT * FROM intake_items WHERE project_id = ? AND board_task_id IS NULL
+           AND ((status IN (?, ?) AND kind IS NULL) OR (status = ? AND kind = 'question'))
+         ORDER BY created_at, rowid",
+    )
+    .bind(project_id).bind(PENDING).bind(QUEUED).bind(QUEUED).fetch_all(pool).await
+}
+
 /// 建卡成功後認領：`pending/queued → on_board` 並記卡片 id。已被別處領走（狀態變了或已有卡）就回 `false`。
-pub async fn mark_on_board(pool: &SqlitePool, id: &str, task_id: &str) -> Result<bool, sqlx::Error> {
-    let r = sqlx::query("UPDATE intake_items SET status = ?, board_task_id = ?, tab_id = NULL, error = NULL, updated_at = ? WHERE id = ? AND status IN (?, ?) AND board_task_id IS NULL")
-        .bind(ON_BOARD).bind(task_id).bind(now()).bind(id).bind(PENDING).bind(QUEUED)
+pub async fn mark_on_board(pool: &SqlitePool, id: &str, task_id: &str, route_kind: &str) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET status = ?, board_task_id = ?, route_kind = ?, tab_id = NULL, error = NULL, updated_at = ? WHERE id = ? AND status IN (?, ?) AND board_task_id IS NULL")
+        .bind(ON_BOARD).bind(task_id).bind(route_kind).bind(now()).bind(id).bind(PENDING).bind(QUEUED)
         .execute(pool).await?;
     Ok(r.rows_affected() > 0)
 }
@@ -199,7 +211,7 @@ pub async fn list_on_board(pool: &SqlitePool) -> Result<Vec<IntakeItem>, sqlx::E
 
 /// 卡片不見了：退回 `pending` 並記原因，不自動重派。
 pub async fn return_from_board(pool: &SqlitePool, id: &str, error: &str) -> Result<bool, sqlx::Error> {
-    let r = sqlx::query("UPDATE intake_items SET status = ?, board_task_id = NULL, error = ?, updated_at = ? WHERE id = ? AND status = ?")
+    let r = sqlx::query("UPDATE intake_items SET status = ?, board_task_id = NULL, route_kind = NULL, error = ?, updated_at = ? WHERE id = ? AND status = ?")
         .bind(PENDING).bind(error).bind(now()).bind(id).bind(ON_BOARD)
         .execute(pool).await?;
     Ok(r.rows_affected() > 0)
@@ -474,8 +486,8 @@ mod tests {
         let p = pool().await;
         let a = insert_item(&p, new("m1", QUEUED)).await.unwrap().unwrap();
         assert_eq!(list_unrouted(&p, "").await.unwrap().len(), 1);
-        assert!(mark_on_board(&p, &a.id, "card1").await.unwrap());
-        assert!(!mark_on_board(&p, &a.id, "card2").await.unwrap(), "已有卡不可重複認領");
+        assert!(mark_on_board(&p, &a.id, "card1", "board").await.unwrap());
+        assert!(!mark_on_board(&p, &a.id, "card2", "board").await.unwrap(), "已有卡不可重複認領");
         assert!(list_unrouted(&p, "").await.unwrap().is_empty());
         assert!(claim_next(&p, "", "t").await.unwrap().is_none(), "on_board 不會被分頁領走");
         let on = list_on_board(&p).await.unwrap();
@@ -483,7 +495,7 @@ mod tests {
         assert!(return_from_board(&p, &a.id, "沒了").await.unwrap());
         let back = get_item(&p, &a.id).await.unwrap().unwrap();
         assert_eq!((back.status.as_str(), back.board_task_id, back.error.as_deref()), (PENDING, None, Some("沒了")));
-        assert!(mark_on_board(&p, &a.id, "card3").await.unwrap());
+        assert!(mark_on_board(&p, &a.id, "card3", "board").await.unwrap());
         assert!(finish_from_board(&p, &a.id, "好了").await.unwrap());
         let done = get_item(&p, &a.id).await.unwrap().unwrap();
         assert_eq!((done.status.as_str(), done.reply_draft.as_deref()), (DRAFT, Some("好了")));
@@ -497,7 +509,7 @@ mod tests {
         set_kind(&p, &a.id, "question", None).await.unwrap();
         assert!(list_unrouted(&p, "").await.unwrap().is_empty());
         let b = insert_item(&p, new("m2", QUEUED)).await.unwrap().unwrap();
-        mark_on_board(&p, &b.id, "c").await.unwrap();
+        mark_on_board(&p, &b.id, "c", "board").await.unwrap();
         assert!(reject(&p, &b.id).await.unwrap());
     }
 
