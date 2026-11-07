@@ -192,7 +192,7 @@ pub async fn pick_bug_assignee(pool: &SqlitePool) -> Result<Option<AgentRow>, sq
             .bind(&a.id)
             .fetch_one(pool)
             .await?;
-        if best.as_ref().map_or(true, |(l, b)| (load, &a.created_at) < (*l, &b.created_at)) {
+        if best.as_ref().map_or(true, |(l, b)| (load, &a.created_at, &a.id) < (*l, &b.created_at, &b.id)) {
             best = Some((load, a));
         }
     }
@@ -525,6 +525,9 @@ mod tests {
         assert!(pick_bug_assignee(&h.pool).await.unwrap().is_none(), "規格站與審核者都不接 bug");
         let a = agent(&h, "coder", "甲").await;
         let b = agent(&h, "coder", "乙").await;
+        // created_at 只到秒：明確指定，才分得出「最早建立」，而不是靠同一秒內的排序碰運氣。
+        sqlx::query("UPDATE agents SET created_at = '2026-01-01 00:00:01' WHERE id = ?").bind(&a.id).execute(&h.pool).await.unwrap();
+        sqlx::query("UPDATE agents SET created_at = '2026-01-01 00:00:02' WHERE id = ?").bind(&b.id).execute(&h.pool).await.unwrap();
         assert_eq!(pick_bug_assignee(&h.pool).await.unwrap().unwrap().id, a.id, "一樣閒時取最早建立的");
         let busy = tasks::create_task(&h.pool, "x", "", "/repo", true, false).await.unwrap();
         agents::assign_task(&h.pool, &busy, Some(&a.id)).await.unwrap();
