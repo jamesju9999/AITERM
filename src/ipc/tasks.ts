@@ -242,7 +242,7 @@ export const stopTask = (projectId: string, id: string): Promise<void> =>
   invoke("tasks_stop", { projectId, id });
 
 /** 已完成的卡片「接著談」：用原本的 Claude session 重開分頁接回對話，回傳分頁 id。不改卡片狀態。 */
-export const continueChat = (projectId: string, id: string): Promise<string> =>
+export const continueChat = (projectId: string, id: string): Promise<{ dir: string; line: string }> =>
   invoke("tasks_continue_chat", { projectId, id });
 
 /** 執行中的卡片「補充一句」：直接把一句話送進它的 Claude session（不開分頁、不停掉重建）。 */

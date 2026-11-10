@@ -74,6 +74,19 @@ describe("quiet + prompt fallback completion (shell without OSC 133)", () => {
     expect(result.current.blocks[0].exitUnknown).toBe(true);
   });
 
+  it("跑著的 Claude Code 不會因為它自己的 ❯ 輸入行被當成「指令結束」", async () => {
+    // 實機：Claude 的輸入行是「❯」，安靜 1.5 秒後被當成提示字元，卡片在 2.6 秒就結案、畫面從此不再更新。
+    const { result } = renderHook(() => useTerminalBlocks("s", term));
+    const onComplete = vi.fn();
+    act(() => result.current.submitCommand("claude --resume abc", onComplete));
+    await act(async () => {
+      result.current.appendOutput("歡迎\r\n❯ ");
+      await vi.advanceTimersByTimeAsync(QUIET_PROMPT_MS * 3);
+    });
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(result.current.blocks[0].status).toBe("running");
+  });
+
   it("OSC 133 D still wins and carries the real exit code", async () => {
     // xterm 的 write callback 靠真的 setTimeout，這條要用真計時器。
     vi.useRealTimers();

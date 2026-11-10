@@ -380,6 +380,22 @@ pub async fn agents_abort_merge(
     Ok(())
 }
 
+/// 重試一個失敗的模組（做的那張卡沒成功、Agent 也沒有暫停可按「重試」時的出口）。
+#[tauri::command]
+pub async fn agents_retry_module(
+    project_id: String,
+    task_id: String,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+    scheduler: State<'_, SchedulerHandle>,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::tasks::workflow::retry_module(&p.pool, &task_id).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    scheduler.poke();
+    Ok(())
+}
+
 /// 手動放行一個卡住的模組（審查不通過超過上限，或審查卡本身失敗）。放行後
 /// 若所有模組都通過，會立即替 Orchestrator 建合併卡。
 #[tauri::command]

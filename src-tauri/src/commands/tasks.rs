@@ -370,17 +370,25 @@ pub async fn tasks_list_messages(project_id: String, reg: State<'_, ProjectRegis
     crate::tasks::messages::recent(&p.pool, 60).await.map_err(|e| e.to_string())
 }
 
-/// 已完成的卡片「接著談」：用原本的 Claude session 重開分頁接回對話。回傳分頁 id。
+/// 「接著談」要開的終端機：在 `dir` 裡執行 `line`。
+#[derive(serde::Serialize)]
+pub struct ContinueChatPlan {
+    pub dir: String,
+    pub line: String,
+}
+
+/// 已完成的卡片「接著談」：算出用原本的 Claude session 接回對話要執行的指令，由前端開終端機分頁執行。
 /// 不改卡片狀態、不重跑審核（見 `tasks::continue_chat`）。
+///
+/// 不在後端先開分頁：後端先寫指令、前端才接手的分頁會錯過 Claude 啟動時送出的模式訊號
+/// （鍵盤協定、游標隱藏…），畫面與輸入的行為就跟自己開的分頁不一樣（輸入框時有時無、注音預覽看不到）。
 #[tauri::command]
 pub async fn tasks_continue_chat(
     project_id: String,
     id: String,
     reg: State<'_, ProjectRegistry>,
     config: State<'_, Arc<crate::config::ConfigStore>>,
-    pty: State<'_, Arc<crate::pty::PtyManager>>,
-    app: AppHandle,
-) -> Result<String, String> {
+) -> Result<ContinueChatPlan, String> {
     use crate::tasks::continue_chat;
     let p = project(&reg, &project_id)?;
     let task = store::get_task(&p.pool, &id)
@@ -418,7 +426,7 @@ pub async fn tasks_continue_chat(
     fs::write(&settings, crate::tasks::method_discussion::settings_json(&refs)).map_err(|e| e.to_string())?;
     let extra = crate::tasks::method_discussion::extra_args(&settings, &refs, &dir)?;
     let line = crate::tasks::dispatch::launch_command_with(&claude_cmd, Some(&plan.session_id), true, Some(&extra));
-    crate::tasks::dispatch::spawn_plain_tab(&app, &pty, &plan.dir, &line, "claude").await
+    Ok(ContinueChatPlan { dir: plan.dir.to_string_lossy().into_owned(), line })
 }
 
 #[tauri::command]

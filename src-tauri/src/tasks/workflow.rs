@@ -1829,6 +1829,32 @@ pub async fn override_module(pool: &SqlitePool, module_id: &str) -> Result<(), s
     Ok(())
 }
 
+/// 重試一個失敗的模組：把鏈尾那張失敗／取消的卡原地排回它的 Agent 佇列最前面。
+/// 只接受 `Failed`（做的那張卡沒成功）；這種模組沒有暫停的 Agent 可以按「重試」時，這是唯一的出口。
+pub async fn retry_module(pool: &SqlitePool, module_id: &str) -> Result<(), sqlx::Error> {
+    let module = store::get_task(pool, module_id).await?.ok_or(sqlx::Error::RowNotFound)?;
+    if module.card_kind != KIND_WORK {
+        return Err(sqlx::Error::Protocol("只能重試模組卡".into()));
+    }
+    let chain: Vec<TaskRow> = store::list_tasks(pool)
+        .await?
+        .into_iter()
+        .filter(|t| t.module_id.as_deref() == Some(module_id))
+        .collect();
+    let has_reviewer = agents::list_agents(pool).await?.iter().any(|a| a.kind == "reviewer");
+    let state = module_state(&module, &chain, has_reviewer);
+    if state != ModuleState::Failed {
+        return Err(sqlx::Error::Protocol(format!("這個模組不是失敗狀態，不能重試（{state:?}）")));
+    }
+    let (path, _) = walk(&module, &chain);
+    let tip = *path.last().expect("path always holds the module");
+    let order = match tip.agent_id.as_deref() {
+        Some(agent) => agents::first_queued_order(pool, agent).await?.map_or(0.0, |first| first - 1.0),
+        None => 0.0,
+    };
+    store::requeue_failed(pool, &tip.id, order).await
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2016,6 +2042,28 @@ pub(crate) mod tests {
         assert!(crate::tasks::fix_choice::pending_fix_ids(&pool).await.unwrap().is_empty());
         assert!(blocked_cards(&pool).await.unwrap().is_empty());
         assert!(!crate::tasks::fix_choice::is_resume_fix(&pool, &fix.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_failed_module_can_be_retried_in_place_but_a_healthy_one_cannot() {
+        let pool = mem_pool().await;
+        let c = agent(&pool, "coder", "C1").await;
+        let id = store::create_task(&pool, "A", "做 X", "/repo", true, false).await.unwrap();
+        agents::assign_task(&pool, &id, Some(&c)).await.unwrap();
+        store::dispatch_for_test(&pool, &id, "tab").await;
+        store::finish_task(&pool, &id, "failed", None, Some("boom")).await.unwrap();
+        let chain = all(&pool).await;
+        assert_eq!(module_state(&chain[0], &chain, false), ModuleState::Failed);
+
+        retry_module(&pool, &id).await.unwrap();
+        let again = store::get_task(&pool, &id).await.unwrap().unwrap();
+        assert_eq!((again.status.as_str(), again.outcome.as_deref(), again.error_message.as_deref()), ("queued", None, None));
+        assert_eq!(all(&pool).await.len(), 1, "原地排回，不複製新卡");
+
+        // 已經排隊中的模組不是失敗狀態：不可再重試。
+        assert!(retry_module(&pool, &id).await.is_err());
+        let ok = done_module(&pool, &c, "B", "e1").await;
+        assert!(retry_module(&pool, &ok).await.is_err());
     }
 
     #[tokio::test]

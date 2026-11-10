@@ -102,6 +102,10 @@ export const askAgent = (projectId: string, question: string): Promise<{ task_id
   invoke("agents_ask", { projectId, question });
 
 /** 手動放行卡住的模組（審查不通過超過上限，或審查卡本身失敗）。 */
+/** 重試一個失敗的模組（鏈尾失敗的那張卡原地排回佇列最前面）。 */
+export const retryModule = (projectId: string, taskId: string): Promise<void> =>
+  invoke("agents_retry_module", { projectId, taskId });
+
 export const overrideModule = (projectId: string, taskId: string): Promise<void> =>
   invoke("agents_override_module", { projectId, taskId });
 

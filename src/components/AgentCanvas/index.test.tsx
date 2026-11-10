@@ -29,7 +29,7 @@ vi.mock("../../ipc/tasks", () => ({
   addAttachment: vi.fn().mockResolvedValue({ id: "att", task_id: "bug-1", filename: "x", stored_path: "x" }),
   markTaskDone: vi.fn().mockResolvedValue(undefined),
   stopTask: vi.fn().mockResolvedValue(undefined),
-  continueChat: vi.fn().mockResolvedValue("tab-cc"),
+  continueChat: vi.fn().mockResolvedValue({ dir: "/repo", line: "claude --resume s1" }),
   nudgeTask: vi.fn().mockResolvedValue(undefined),
   listCardMessages: vi.fn().mockResolvedValue([]),
   listFixChoices: vi.fn().mockResolvedValue([]),
@@ -1469,15 +1469,15 @@ describe("AgentCanvasView", () => {
       expect(within(node).getByText("排隊中，等待全域名額")).toBeTruthy();
     });
 
-    it("已完成、有對話記錄的模組 chip 有「接著談」：按了開分頁接回對話，並請終端機切過去", async () => {
+    it("已完成、有對話記錄的模組 chip 有「接著談」：按了請終端機頁開分頁執行接回對話的指令", async () => {
       vi.mocked(listAgents).mockResolvedValue([agent()]);
       vi.mocked(listTasks).mockResolvedValue([
         card({ id: "A", title: "A 登入", status: "done", outcome: "success", agent_id: "a1", session_id: "s-1" }),
         card({ id: "B", title: "B 沒對話", status: "done", outcome: "success", agent_id: "a1", session_id: null }),
       ]);
       const focus = vi.fn();
-      window.addEventListener("aiterm:focus-tab-when-ready", focus);
-      onTestFinished(() => window.removeEventListener("aiterm:focus-tab-when-ready", focus));
+      window.addEventListener("aiterm:open-terminal", focus);
+      onTestFinished(() => window.removeEventListener("aiterm:open-terminal", focus));
       view();
       await screen.findByTestId("chip-A");
       expect(screen.queryByTestId("chip-continue-B")).toBeNull();
@@ -1486,7 +1486,7 @@ describe("AgentCanvasView", () => {
 
       await waitFor(() => expect(continueChat).toHaveBeenCalledWith("p1", "A"));
       await waitFor(() => expect(focus).toHaveBeenCalled());
-      expect((focus.mock.calls[0][0] as CustomEvent).detail).toEqual({ tabId: "tab-cc" });
+      expect((focus.mock.calls[0][0] as CustomEvent).detail).toEqual({ cwd: "/repo", command: "claude --resume s1" });
       // 按「接著談」不該同時觸發 chip 本身的點擊（開對話記錄）。
       expect(readTranscript).not.toHaveBeenCalled();
     });

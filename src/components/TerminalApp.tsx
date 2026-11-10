@@ -452,6 +452,20 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   // 與腳本確認對話框使用者都看不到，所以先導回 "/"。pathname 放 ref：跟其它 ref 一樣
   // 在 effect 裡更新，handler 不必為它重建。
   const navigate = useNavigate();
+  // 其他畫面（例如 Agent 協作的「接著談」）請終端機頁開一個分頁並執行指令。
+  // 由這裡自己開分頁、自己執行（跟使用者手動打指令一樣），不是後端先開好再讓前端接手。
+  useEffect(() => {
+    const onOpenTerminal = (e: Event) => {
+      const d = (e as CustomEvent<{ cwd?: string; command?: string }>).detail;
+      if (!d?.command) return;
+      setHomeActive(false);
+      setBoardActive(false);
+      handlePickerSelect("terminal", { initialCwd: d.cwd, initialCommand: d.command });
+    };
+    window.addEventListener("aiterm:open-terminal", onOpenTerminal);
+    return () => window.removeEventListener("aiterm:open-terminal", onOpenTerminal);
+  }, [handlePickerSelect]);
+
   const { pathname } = useLocation();
   const pathnameRef = useRef(pathname);
   useEffect(() => {

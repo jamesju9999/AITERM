@@ -14,6 +14,7 @@ import {
   mergeAgent,
   openRepo,
   overrideModule,
+  retryModule,
   resolveAgent,
   manualPauseState,
   setManualPause,
@@ -952,13 +953,14 @@ export function AgentCanvasView({
     void run(() => markTaskDone(projectId, taskId));
   };
 
-  // 已完成的模組「接著談」：後端用原本的 Claude session 開分頁，開好就切過去（分頁可能還沒建好，
-  // 用 focus-tab-when-ready，跟方法討論同一條路）。不能接的原因由後端說明，顯示在提示列。
+  // 已完成的模組「接著談」：後端算出接回原本 Claude session 的指令，這裡請終端機頁開新分頁執行。
+  // 不能接的原因由後端說明，顯示在提示列。
   const continueModuleChat = async (moduleId: string) => {
     if (!projectId) return;
     try {
-      const tabId = await continueChat(projectId, moduleId);
-      window.dispatchEvent(new CustomEvent("aiterm:focus-tab-when-ready", { detail: { tabId } }));
+      const plan = await continueChat(projectId, moduleId);
+      // 前端自己開終端機再執行指令（跟使用者自己打 claude 一樣），不由後端先開分頁。
+      window.dispatchEvent(new CustomEvent("aiterm:open-terminal", { detail: { cwd: plan.dir, command: plan.line } }));
     } catch (e) {
       setToast(errText(e));
     }
@@ -1719,6 +1721,7 @@ export function AgentCanvasView({
                       onMerge={() => doMerge(a)}
                       onAbortMerge={() => doAbortMerge(a)}
                       onRelease={(moduleId) => projectId && void run(() => overrideModule(projectId, moduleId))}
+                      onRetryModule={(moduleId) => projectId && void run(() => retryModule(projectId, moduleId))}
                 onMarkDone={(taskId) => void markDone(taskId)}
                 question={questions.find((q) => q.project_id === projectId && q.agent_id === a.id) ?? null}
                 onOpenQuestion={(id) => setInbox({ open: true, focus: id })}

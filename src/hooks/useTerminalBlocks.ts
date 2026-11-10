@@ -6,6 +6,7 @@ import type { GitBlockInfo } from "../ipc/vcs";
 import { looksLikePrompt, lastNonEmptyLine } from "../lib/promptDetect";
 import { clearedStartRow, markerClearedByScreenErase, outputStartRow, snapshotRowsAbove, type RowsAboveSnapshot } from "../lib/liveStartRow";
 import { parseRemoteLogin, isLogoutCommand } from "../lib/remoteSession";
+import { isClaudeCommand } from "../lib/claudeCommand";
 
 /** 沒有 OSC 133 的 shell（ssh 進 NAS 等）收不到「指令結束」訊號時，等畫面
  *  安靜這麼久、且最後一行像提示字元，才當作指令已跑完。 */
@@ -285,6 +286,10 @@ export function useTerminalBlocks(
     const latest = blocksRef.current[blocksRef.current.length - 1];
     if (!latest || latest.status !== "running") return;
     if (term?.buffer.active.type === "alternate") return;
+    // Claude Code 自己的輸入行就是「❯」，靜下來時一定「長得像提示字元」——這個後備會把還在跑的它
+    // 當成已結束（實機：2.6 秒就結案，之後送什麼都不再更新畫面）。它不會自己回到 shell 提示字元，
+    // 結束時要靠 OSC 133 D 或下一個指令的結案。
+    if (isClaudeCommand(latest.command)) return;
     let line = "";
     if (term) {
       const buf = term.buffer.active;

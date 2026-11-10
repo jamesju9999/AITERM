@@ -79,6 +79,7 @@ export function AgentNode({
   onMerge,
   onAbortMerge,
   onRelease,
+  onRetryModule,
   onMarkDone,
   question,
   onOpenQuestion,
@@ -136,6 +137,8 @@ export function AgentNode({
   onMerge: () => void;
   onAbortMerge: () => void;
   onRelease: (moduleId: string) => void;
+  /** 失敗的模組（Agent 沒暫停、沒有卡片上的「重試」可按）原地重跑。 */
+  onRetryModule?: (moduleId: string) => void;
   /** 執行中的互動卡：手動標記完成（互動卡不會被完成標記結案）。 */
   onMarkDone: (taskId: string) => void;
   /** 這個 Agent 正在等人回答的問題（ask_human）。 */
@@ -582,6 +585,22 @@ export function AgentNode({
                       }}
                     >
                       💬
+                    </button>
+                  )}
+                  {s === "failed" && onRetryModule && !agent.paused_task_id && (
+                    <button
+                      type="button"
+                      className="ac-chip-continue"
+                      data-testid={`chip-retry-${m.id}`}
+                      title={t.ac_retry_module_tip}
+                      aria-label={t.ac_retry}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRetryModule(m.id);
+                      }}
+                    >
+                      ↻ {t.ac_retry}
                     </button>
                   )}
                   {icon} {m.title}
