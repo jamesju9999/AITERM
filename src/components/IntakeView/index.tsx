@@ -159,8 +159,8 @@ export function IntakeView() {
           {unassigned > 0 && <option value="">{t.intake_unassigned} ({unassigned})</option>}
         </select>
         {!inUnassigned && !noProject && (
-          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setShowSettings((v) => !v)}>
-            {t.intake_settings}
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showSettings} onClick={() => setShowSettings((v) => !v)}>
+            {showSettings ? t.intake_settings_back : t.intake_settings}
           </button>
         )}
       </div>
@@ -186,7 +186,7 @@ export function IntakeView() {
                 disabled={refreshing}
                 onClick={() => void refresh()}
               >
-                ⟳
+                <span className="intake__refresh-icon" aria-hidden="true">⟳</span>
               </button>
               <select
                 aria-label={t.intake_filter_label}

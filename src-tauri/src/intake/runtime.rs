@@ -217,7 +217,7 @@ async fn route_and_settle<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePoo
     touched
 }
 
-/// 看板路線：「要改程式」的新問題建成看板卡片；提問留給終端機分頁。
+/// 看板路線：新問題一律建成看板卡片；提問的卡片內文要求唯讀回答。
 async fn route_board<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, handle: &crate::projects::ProjectHandle) -> bool {
     let mut touched = false;
     let Ok(Some(repo)) = crate::tasks::formations::repo_path(&handle.pool).await else { return false };
@@ -226,13 +226,9 @@ async fn route_board<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, ha
         let kind = classify_item(app, &item).await;
         // 分類要先存：建卡失敗時項目留在原狀態，之後由分頁領取也不必再分類。
         store::set_kind(pool, &item.id, kind.as_str(), None).await.ok();
-        if kind == classify::Kind::CodeChange {
-            match board::route_item(pool, handle, &item, &repo).await {
-                Ok(_) => touched = true,
-                Err(e) => log::warn!("intake: 建看板卡失敗：{e}"),
-            }
-        } else {
-            touched = true;
+        match board::route_item(pool, handle, &item, &repo, kind == classify::Kind::Question).await {
+            Ok(_) => touched = true,
+            Err(e) => log::warn!("intake: 建看板卡失敗：{e}"),
         }
     }
     touched

@@ -164,7 +164,9 @@
 .intake__refresh { width: 26px; height: 26px; padding: 0; font-size: 16px; line-height: 1; color: var(--text-secondary, #aaa); background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; cursor: pointer; transition: var(--transition-smooth, all 0.2s); }
 .intake__refresh:hover:not(:disabled) { color: var(--text-primary, #e0e0e0); border-color: var(--accent, #14b8a6); }
 .intake__refresh:disabled { cursor: progress; }
-.intake__refresh--busy { animation: intake-spin 0.9s linear infinite; color: var(--accent, #14b8a6); }
+.intake__refresh-icon { display: inline-block; }
+.intake__refresh--busy { color: var(--accent, #14b8a6); }
+.intake__refresh--busy .intake__refresh-icon { animation: intake-spin 0.9s linear infinite; }
 @keyframes intake-spin { to { transform: rotate(360deg); } }
 .intake__refresh-msg { font-size: 12px; color: #34d399; white-space: nowrap; }
 

@@ -83,11 +83,32 @@ fn domain_of(addr: &str) -> &str {
     addr.rsplit('@').next().unwrap_or("")
 }
 
+/// 去掉主旨開頭一層層的回覆／轉寄前綴（`Re:`、`Fwd:`、`回覆：`、`轉寄:` 等，冒號半形全形皆可），
+/// 讓使用者按「回覆」之後的 `Re: [AITerm] ...` 仍是以標籤開頭。
+fn strip_reply_prefixes(subject: &str) -> &str {
+    const PREFIXES: [&str; 8] = ["re", "fw", "fwd", "回覆", "回复", "轉寄", "转发", "答覆"];
+    let mut s = subject.trim_start();
+    'outer: loop {
+        let lower = s.to_lowercase();
+        for p in PREFIXES {
+            let Some(rest) = lower.strip_prefix(p) else { continue };
+            let rest = rest.trim_start();
+            if rest.starts_with(':') || rest.starts_with('：') {
+                // 以小寫版量出已吃掉的位元組數，再回到原字串切（大小寫轉換不改變這些前綴的長度）。
+                let consumed = lower.len() - rest.len() + rest.chars().next().map_or(0, char::len_utf8);
+                s = s[consumed..].trim_start();
+                continue 'outer;
+            }
+        }
+        return s;
+    }
+}
+
 pub fn addressed_to_us(s: &Settings, h: &Headers) -> bool {
     let alias = normalize(&s.alias);
     let alias_hit = !alias.is_empty() && h.recipients.iter().any(|r| normalize(r) == alias);
     let tag = s.tag.trim().to_lowercase();
-    let tag_hit = !tag.is_empty() && h.subject.trim_start().to_lowercase().starts_with(&tag);
+    let tag_hit = !tag.is_empty() && strip_reply_prefixes(&h.subject).to_lowercase().starts_with(&tag);
     match s.mode {
         MatchMode::Dedicated => true,
         MatchMode::Alias => alias_hit,
@@ -199,7 +220,19 @@ mod tests {
     fn tag_matches_only_at_subject_start() {
         let s = settings(MatchMode::SubjectTag);
         assert!(addressed_to_us(&s, &hdr("a@b.c", &[], "  [aiterm] bug", &[])));
-        assert!(!addressed_to_us(&s, &hdr("a@b.c", &[], "re: [AITerm] bug", &[])));
+        assert!(!addressed_to_us(&s, &hdr("a@b.c", &[], "bug [AITerm]", &[])), "標籤前面有別的文字不收");
+        assert!(!addressed_to_us(&s, &hdr("a@b.c", &[], "請看 [AITerm] 這個", &[])));
+    }
+
+    #[test]
+    fn reply_and_forward_prefixes_do_not_hide_the_tag() {
+        let s = settings(MatchMode::SubjectTag);
+        for subject in ["re: [AITerm] bug", "RE: [aiterm] bug", "Re: Re: [AITerm] x", "Fwd: RE: [AITerm] x", "FW:[AITerm] x", "回覆: [AITerm] x", "回覆：[AITerm] x", "轉寄： 回覆： [AITerm] x", "  Re : [AITerm] x"] {
+            assert!(addressed_to_us(&s, &hdr("a@b.c", &[], subject, &[])), "{subject}");
+        }
+        for subject in ["Re: 問題 [AITerm]", "Re: hello", "Reply [AITerm] x", "Real: [AITerm] x", "[Re] AITerm"] {
+            assert!(!addressed_to_us(&s, &hdr("a@b.c", &[], subject, &[])), "{subject}");
+        }
     }
 
     #[test]
