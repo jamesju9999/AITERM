@@ -39,6 +39,7 @@ pub mod messages;
 pub mod method_discussion;
 pub mod notes;
 pub mod nudge;
+pub mod schedules;
 
 use std::path::{Path, PathBuf};
 
