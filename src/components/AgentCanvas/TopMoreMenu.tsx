@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 
 /** 頂列的「⋯」：不常用的資訊與說明，不跟每天要按的按鈕搶位置。 */
-export function TopMoreMenu({ cap, onHelp }: { cap: number | null; onHelp: () => void }) {
+export function TopMoreMenu({ cap, onHelp, onAddSchedule }: { cap: number | null; onHelp: () => void; onAddSchedule?: () => void }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -43,6 +43,19 @@ export function TopMoreMenu({ cap, onHelp }: { cap: number | null; onHelp: () =>
           >
             {t.ac_help_button}
           </button>
+          {onAddSchedule && (
+            <button
+              type="button"
+              role="menuitem"
+              className="ac-role-menu-item"
+              onClick={() => {
+                setOpen(false);
+                onAddSchedule();
+              }}
+            >
+              ⏰ {t.sched_add}
+            </button>
+          )}
           {cap !== null && (
             <>
               <div className="ac-role-menu-sep" />

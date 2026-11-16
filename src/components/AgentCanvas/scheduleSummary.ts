@@ -1,7 +1,7 @@
 import type { ScheduleKind, ScheduleSpec } from "../../ipc/schedules";
-import type { translations } from "../../lib/i18n";
+import type { Translations } from "../../lib/i18n";
 
-type T = (typeof translations)["zh-TW"];
+type T = Pick<Translations, "sched_weekdays" | "sched_sum_daily" | "sched_sum_every_hours" | "sched_sum_every_minutes">;
 
 /** 節點上的一行週期摘要，例如「每天 08:00」「週一、週二 09:00」「每 2 小時（09:00–18:00）」。 */
 export function summarizeSchedule(t: T, kind: ScheduleKind, spec: ScheduleSpec): string {

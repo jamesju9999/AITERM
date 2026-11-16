@@ -71,6 +71,20 @@ vi.mock("../../ipc/agents", () => ({
   setProjectRepo: vi.fn().mockResolvedValue(undefined),
   deleteAllAgents: vi.fn().mockResolvedValue(2),
 }));
+vi.mock("../../ipc/schedules", () => ({
+  listSchedules: vi.fn().mockResolvedValue([]),
+  saveSchedule: vi.fn().mockResolvedValue("s-new"),
+  deleteSchedule: vi.fn().mockResolvedValue(undefined),
+  setScheduleEnabled: vi.fn().mockResolvedValue(undefined),
+  runScheduleNow: vi.fn().mockResolvedValue(""),
+  parseSpec: (json: string) => {
+    try {
+      return JSON.parse(json);
+    } catch {
+      return {};
+    }
+  },
+}));
 vi.mock("../../ipc/formations", () => ({
   formationsState: vi.fn(),
   createFormation: vi.fn().mockResolvedValue("f-new"),
