@@ -554,6 +554,63 @@ pub async fn create_ask_card(
     Ok(id)
 }
 
+/// 定時器建一個模組（work 卡，`module_id` 為空）給工程師，排在佇列最後。
+pub async fn create_scheduled_work_card(pool: &SqlitePool, agent: &AgentRow, title: &str, body: &str) -> Result<String, sqlx::Error> {
+    insert_card(
+        pool,
+        &NewCard {
+            title,
+            body,
+            project_dir: &agent.project_dir,
+            agent_id: &agent.id,
+            card_kind: KIND_WORK,
+            module_id: None,
+            review_of: None,
+            start_sha: None,
+            end_sha: None,
+            sort_order: queued_tail(pool).await?,
+            from_spec: None,
+        },
+    )
+    .await
+}
+
+/// 定時器直接建一張驗收卡（沒有合併卡）：受驗版本是呼叫端給的 `head_sha`，
+/// 內文是標準驗收提示加上定時器的固定指令。
+pub async fn create_scheduled_verify_card(
+    pool: &SqlitePool,
+    project_path: &Path,
+    verifier: &AgentRow,
+    title: &str,
+    instruction: &str,
+    head_sha: &str,
+) -> Result<String, sqlx::Error> {
+    let all_agents = agents::list_agents(pool).await?;
+    let tasks = store::list_tasks(pool).await?;
+    let modules = coder_modules(&all_agents, &tasks);
+    let id = insert_card(
+        pool,
+        &NewCard {
+            title,
+            body: "",
+            project_dir: &verifier.project_dir,
+            agent_id: &verifier.id,
+            card_kind: KIND_VERIFY,
+            module_id: None,
+            review_of: None,
+            start_sha: None,
+            end_sha: Some(head_sha),
+            sort_order: queued_tail(pool).await?,
+            from_spec: None,
+        },
+    )
+    .await?;
+    let mut body = verify_body(&modules, "", &verify_json_path(project_path, &id), &evidence_dir(project_path, &id));
+    body.push_str(&format!("\n這是定時觸發的驗收。額外指示：\n{}\n", instruction.trim()));
+    sqlx::query("UPDATE tasks SET body = ? WHERE id = ?").bind(&body).bind(&id).execute(pool).await?;
+    Ok(id)
+}
+
 /// 挑誰來回答：名下排隊＋執行中的卡最少的 Agent（同數取最早建立）。
 pub async fn pick_ask_agent(pool: &SqlitePool, agents: &[AgentRow]) -> Result<Option<AgentRow>, sqlx::Error> {
     let mut best: Option<(i64, &AgentRow)> = None;
