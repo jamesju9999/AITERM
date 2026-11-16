@@ -1017,6 +1017,7 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-sched-node--enabled { border-color: #22c55e; }
 .ac-sched-node--disabled { opacity: 0.6; }
 .ac-sched-node--failed, .ac-sched-node--agent_gone { border-color: #ef4444; }
+.ac-sched-node--agent_paused { border-color: #f97316; }
 .ac-sched-node--stuck { border-color: #eab308; }
 .ac-sched-node-title { font-weight: 600; }
 .ac-sched-node-last--failed { color: #ef4444; }

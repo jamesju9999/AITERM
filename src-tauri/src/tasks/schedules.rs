@@ -120,6 +120,10 @@ use crate::tasks::{agents, store, workflow};
 
 pub const MAX_RUNS_KEPT: i64 = 5;
 pub const MAX_FAIL_STREAK: i64 = 3;
+/// `disabled_reason` 的值；前端 `scheduleStatus.ts` 要跟這些字串一致。
+pub const REASON_FAILURES: &str = "連續失敗";
+pub const REASON_AGENT_GONE: &str = "角色已不存在";
+pub const REASON_AGENT_PAUSED: &str = "角色已暫停";
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct ScheduleRow {
@@ -449,6 +453,17 @@ pub async fn round_open(pool: &SqlitePool, row: &ScheduleRow) -> Result<bool, St
     Ok(round_result(pool, row).await? == RoundResult::Pending)
 }
 
+/// 停用並記下原因（`set_enabled(.., true, ..)` 會清掉原因與連續失敗／跳過）。
+async fn disable(pool: &SqlitePool, id: &str, reason: &str) -> Result<(), String> {
+    sqlx::query("UPDATE schedules SET enabled = 0, disabled_reason = ? WHERE id = ?")
+        .bind(reason)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// 判定一輪並更新狀態。回傳這次發生的事（空＝還在進行，或沒有進行中的輪）。
 pub async fn settle(pool: &SqlitePool, id: &str, now: i64) -> Result<Vec<SettleEvent>, String> {
     let Some(row) = get(pool, id).await.map_err(|e| e.to_string())? else { return Ok(vec![]) };
@@ -481,7 +496,7 @@ pub async fn settle(pool: &SqlitePool, id: &str, now: i64) -> Result<Vec<SettleE
             record_run(pool, id, now, module_id.as_deref(), "failed").await.map_err(|e| e.to_string())?;
             events.push(SettleEvent::Failed);
             if streak >= MAX_FAIL_STREAK {
-                sqlx::query("UPDATE schedules SET enabled = 0, disabled_reason = '連續失敗' WHERE id = ?").bind(id).execute(pool).await.map_err(|e| e.to_string())?;
+                disable(pool, id, REASON_FAILURES).await?;
                 events.push(SettleEvent::AutoDisabled);
             }
         }
@@ -523,16 +538,20 @@ pub async fn tick(pool: &SqlitePool, ctx: &TickCtx, now: NaiveDateTime) -> Resul
         if !row.enabled {
             continue;
         }
-        if agents::get_agent(pool, &row.agent_id).await.map_err(|e| e.to_string())?.is_none() {
-            sqlx::query("UPDATE schedules SET enabled = 0, disabled_reason = '角色已不存在' WHERE id = ?")
-                .bind(&row.id)
-                .execute(pool)
-                .await
-                .map_err(|e| e.to_string())?;
+        let Some(agent) = agents::get_agent(pool, &row.agent_id).await.map_err(|e| e.to_string())? else {
+            disable(pool, &row.id, REASON_AGENT_GONE).await?;
             continue;
-        }
+        };
         let Ok(spec) = row.spec() else { continue };
         if !due(&row.schedule_kind, &spec, from_ts(row.last_fired_at), now) {
+            continue;
+        }
+        // 到點才檢查：Agent 因為卡片失敗被暫停（要人決定重試或跳過）時，它不會再做事，
+        // 建了卡也只會一直排著、下一輪被跳過。直接停用並通知，等人處理好再重新啟用。
+        // 這跟使用者按的「暫停」（manual_pause）是兩回事，那個不動定時器。
+        if agent.paused_task_id.is_some() {
+            disable(pool, &row.id, REASON_AGENT_PAUSED).await?;
+            report.events.push((row.id.clone(), SettleEvent::AutoDisabled));
             continue;
         }
         match fire(pool, &ctx.project_path, &row, now_ts, ctx.head_sha.as_deref()).await {
@@ -1064,5 +1083,60 @@ mod tests {
         let r = tick(&pool, &ctx(), at("2026-11-17 08:00")).await.unwrap();
         assert!(r.fired.is_empty());
         assert_eq!(get(&pool, &sid).await.unwrap().unwrap().skip_streak, 1);
+    }
+
+    #[tokio::test]
+    async fn tick_disables_a_due_schedule_whose_agent_is_paused_for_a_failed_card() {
+        let pool = pool().await;
+        let coder = make_agent(&pool, "coder").await;
+        let sid = create(&pool, &new_schedule(&coder), local_ts(at("2026-11-15 20:00"))).await.unwrap();
+        agents::set_paused(&pool, &coder, Some("some-failed-card")).await.unwrap();
+        let r = tick(&pool, &ctx(), at("2026-11-16 08:00")).await.unwrap();
+        assert!(r.fired.is_empty(), "被暫停的工程師不會做事，不建卡");
+        assert!(store::list_tasks(&pool).await.unwrap().is_empty());
+        let row = get(&pool, &sid).await.unwrap().unwrap();
+        assert!(!row.enabled);
+        assert_eq!(row.disabled_reason.as_deref(), Some(REASON_AGENT_PAUSED));
+        assert!(r.events.iter().any(|(id, e)| id == &sid && *e == SettleEvent::AutoDisabled), "要通知使用者");
+    }
+
+    #[tokio::test]
+    async fn a_paused_agent_does_not_disable_the_schedule_before_it_is_due() {
+        let pool = pool().await;
+        let coder = make_agent(&pool, "coder").await;
+        let sid = create(&pool, &new_schedule(&coder), local_ts(at("2026-11-15 20:00"))).await.unwrap();
+        agents::set_paused(&pool, &coder, Some("some-failed-card")).await.unwrap();
+        tick(&pool, &ctx(), at("2026-11-16 07:59")).await.unwrap();
+        assert!(get(&pool, &sid).await.unwrap().unwrap().enabled);
+    }
+
+    #[tokio::test]
+    async fn a_failed_round_that_paused_the_agent_is_counted_then_the_next_due_time_disables() {
+        let pool = pool().await;
+        let coder = make_agent(&pool, "coder").await;
+        let sid = create(&pool, &new_schedule(&coder), local_ts(at("2026-11-15 20:00"))).await.unwrap();
+        tick(&pool, &ctx(), at("2026-11-16 08:00")).await.unwrap();
+        let card = get(&pool, &sid).await.unwrap().unwrap().last_module_id.unwrap();
+        finish_card(&pool, &card, "failed", None).await;
+        agents::set_paused(&pool, &coder, Some(&card)).await.unwrap(); // 真實流程：失敗的卡會暫停 Agent
+        let r = tick(&pool, &ctx(), at("2026-11-17 08:00")).await.unwrap();
+        assert!(r.events.iter().any(|(_, e)| *e == SettleEvent::Failed));
+        let row = get(&pool, &sid).await.unwrap().unwrap();
+        assert_eq!(row.fail_streak, 1, "失敗那一輪照樣記帳");
+        assert!(!row.enabled);
+        assert_eq!(row.disabled_reason.as_deref(), Some(REASON_AGENT_PAUSED));
+        assert_eq!(store::list_tasks(&pool).await.unwrap().len(), 1, "沒有為被暫停的工程師再建卡");
+    }
+
+    #[tokio::test]
+    async fn re_enabling_after_unpausing_works_again() {
+        let pool = pool().await;
+        let coder = make_agent(&pool, "coder").await;
+        let sid = create(&pool, &new_schedule(&coder), local_ts(at("2026-11-15 20:00"))).await.unwrap();
+        agents::set_paused(&pool, &coder, Some("x")).await.unwrap();
+        tick(&pool, &ctx(), at("2026-11-16 08:00")).await.unwrap();
+        agents::set_paused(&pool, &coder, None).await.unwrap();
+        set_enabled(&pool, &sid, true, local_ts(at("2026-11-16 09:00"))).await.unwrap();
+        assert!(tick(&pool, &ctx(), at("2026-11-17 08:00")).await.unwrap().fired.contains(&sid));
     }
 }

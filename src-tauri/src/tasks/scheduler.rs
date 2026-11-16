@@ -2027,10 +2027,15 @@ fn spawn_schedule_loop(app: AppHandle, sched: SchedulerHandle) {
                     Ok(r) if !r.fired.is_empty() || !r.events.is_empty() => {
                         for (sid, ev) in &r.events {
                             if *ev == crate::tasks::schedules::SettleEvent::AutoDisabled {
-                                let name = crate::tasks::schedules::get(&project.pool, sid).await.ok().flatten().map(|s| s.name).unwrap_or_default();
+                                let row = crate::tasks::schedules::get(&project.pool, sid).await.ok().flatten();
+                                let name = row.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+                                let why = match row.as_ref().and_then(|s| s.disabled_reason.as_deref()) {
+                                    Some(crate::tasks::schedules::REASON_AGENT_PAUSED) => "因為負責的角色被暫停",
+                                    _ => "因連續失敗",
+                                };
                                 let _ = app.emit(
                                     "agent-reply-wait",
-                                    serde_json::json!({ "title": format!("定時器「{name}」已因連續失敗停用"), "project_name": project.name }),
+                                    serde_json::json!({ "title": format!("定時器「{name}」已{why}停用"), "project_name": project.name }),
                                 );
                             }
                         }

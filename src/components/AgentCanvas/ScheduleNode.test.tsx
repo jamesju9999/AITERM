@@ -37,6 +37,10 @@ describe("ScheduleNode", () => {
     mount(sched({ enabled: false, disabled_reason: "角色已不存在" }));
     expect(screen.getByText("角色已不存在，已停用")).toBeTruthy();
   });
+  it("角色因卡片失敗被暫停：說明原因與該怎麼辦", () => {
+    mount(sched({ enabled: false, disabled_reason: "角色已暫停" }));
+    expect(screen.getByText("負責的角色被暫停，已停用（處理好卡片後重新啟用）")).toBeTruthy();
+  });
   it("上一輪卡住顯示提示", () => {
     mount(sched({ skip_streak: 3 }));
     expect(screen.getByText("上一輪卡住了")).toBeTruthy();

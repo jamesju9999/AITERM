@@ -15,7 +15,9 @@ export function ScheduleNode({ schedule, x, y, onEdit }: { schedule: ScheduleVie
       ? t.sched_disabled_failures
       : status === "agent_gone"
         ? t.sched_disabled_agent_gone
-        : status === "stuck"
+        : status === "agent_paused"
+          ? t.sched_disabled_agent_paused
+          : status === "stuck"
           ? t.sched_stuck
           : status === "disabled"
             ? t.sched_status_disabled
