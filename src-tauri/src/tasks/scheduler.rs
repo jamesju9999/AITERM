@@ -2012,6 +2012,46 @@ impl SchedulerHandle {
     }
 }
 
+/// 每分鐘掃一次所有已開啟專案的定時器。建了新卡就叫醒派工並通知畫面重讀。
+fn spawn_schedule_loop(app: AppHandle, sched: SchedulerHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let reg = app.state::<ProjectRegistry>();
+            for project in reg.all() {
+                let head_sha = schedule_head_sha(&project.pool).await;
+                let ctx = crate::tasks::schedules::TickCtx { project_path: project.path.clone(), head_sha };
+                match crate::tasks::schedules::tick(&project.pool, &ctx, chrono::Local::now().naive_local()).await {
+                    Ok(r) if !r.fired.is_empty() || !r.events.is_empty() => {
+                        for (sid, ev) in &r.events {
+                            if *ev == crate::tasks::schedules::SettleEvent::AutoDisabled {
+                                let name = crate::tasks::schedules::get(&project.pool, sid).await.ok().flatten().map(|s| s.name).unwrap_or_default();
+                                let _ = app.emit(
+                                    "agent-reply-wait",
+                                    serde_json::json!({ "title": format!("定時器「{name}」已因連續失敗停用"), "project_name": project.name }),
+                                );
+                            }
+                        }
+                        sched.poke();
+                        let _ = app.emit("tasks-updated", ());
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("schedule tick ({}): {e}", project.name),
+                }
+            }
+        }
+    });
+}
+
+/// 驗收者起點需要受驗版本：用專案驗收者所屬 repo 的目前 HEAD。
+async fn schedule_head_sha(pool: &sqlx::SqlitePool) -> Option<String> {
+    let agents = crate::tasks::agents::list_agents(pool).await.ok()?;
+    let verifier = agents.iter().find(|a| a.kind == "verifier")?;
+    crate::vcs::git::GitClient::new(verifier.project_dir.clone(), None).head_sha().await.ok()
+}
+
 /// 沒人回答的問題：每分鐘檢查一次，該提醒的（見 `questions::due_reminders`）再通知一次。
 fn spawn_question_reminders(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -2045,6 +2085,7 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
     let wake = Arc::new(Notify::new());
     let cancels = Arc::new(parking_lot::Mutex::new(HashMap::new()));
     let handle = SchedulerHandle { wake: wake.clone(), cancels: cancels.clone() };
+    let sched_handle = handle.clone();
 
     tauri::async_runtime::spawn(async move {
         let config = app.state::<Arc<ConfigStore>>().inner().clone();
@@ -2138,6 +2179,7 @@ pub fn spawn(app: AppHandle) -> SchedulerHandle {
         // 答案要能從收件匣與 Telegram 送回來：讓指令拿得到這份狀態（解除等決策）。
         app.manage(quota.clone());
         spawn_question_reminders(app.clone());
+        spawn_schedule_loop(app.clone(), sched_handle);
         crate::tasks::quota::spawn_resumer(quota.clone(), pty.clone());
         let dispatcher = RealDispatcher {
             app: app.clone(),
