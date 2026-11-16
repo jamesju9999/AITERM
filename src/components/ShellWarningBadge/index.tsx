@@ -2,7 +2,25 @@ import { useEffect, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import { detectPowerShell7 } from "../../ipc/shell";
 import type { ShellIdentity } from "../../hooks/useShellIdentity";
+import { CloseConfirmDialog } from "../CloseConfirmDialog";
 import "./index.css";
+
+const DISMISS_KEY = "aiterm.shellwarn.dismissed";
+/** 每次啟動 App 只跳一次：多個分頁都是 5.1 時不要連跳。 */
+let shownThisLaunch = false;
+
+function isDismissed(): boolean {
+  try {
+    return localStorage.getItem(DISMISS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** 測試用：重設「本次啟動已提醒」旗標。 */
+export function resetShellStartupNoticeForTest() {
+  shownThisLaunch = false;
+}
 
 interface Props {
   identity: ShellIdentity | null;
@@ -24,6 +42,7 @@ export function ShellWarningBadge({ identity }: Props) {
   const [open, setOpen] = useState(false);
   const [pwsh7Path, setPwsh7Path] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [noticeOpen, setNoticeOpen] = useState(false);
 
   const isLegacy = identity?.shell === "PowerShell" && identity.edition === LEGACY_EDITION;
 
@@ -39,7 +58,24 @@ export function ShellWarningBadge({ identity }: Props) {
     };
   }, [isLegacy]);
 
+  // 啟動提醒：第一次偵測到舊版（Desktop edition 涵蓋 5.1 以及更舊的 3/4）時
+  // 跳一次對話框；使用者選「不再提醒」後永久不跳，徽章仍會留著。
+  useEffect(() => {
+    if (!isLegacy || shownThisLaunch || isDismissed()) return;
+    shownThisLaunch = true;
+    setNoticeOpen(true);
+  }, [isLegacy]);
+
   if (!isLegacy) return null;
+
+  function dismissForever() {
+    try {
+      localStorage.setItem(DISMISS_KEY, "1");
+    } catch {
+      /* 無法寫入就只關掉這一次 */
+    }
+    setNoticeOpen(false);
+  }
 
   async function onCopy() {
     await navigator.clipboard.writeText(t.shell_badge_install_command);
@@ -49,6 +85,28 @@ export function ShellWarningBadge({ identity }: Props) {
 
   return (
     <span className="aiterm-shellwarn">
+      {noticeOpen && (
+        <CloseConfirmDialog
+          title={t.shell_notice_title(identity?.version ?? "")}
+          body={
+            <>
+              <div>{t.shell_badge_why}</div>
+              <div>
+                {pwsh7Path ? t.shell_badge_found_intro(pwsh7Path) : t.shell_badge_missing_intro}
+              </div>
+              {pwsh7Path ? (
+                <div>{t.shell_badge_found_action}</div>
+              ) : (
+                <code>{t.shell_badge_install_command}</code>
+              )}
+            </>
+          }
+          confirmLabel={t.shell_notice_ok}
+          cancelLabel={t.shell_notice_dismiss}
+          onConfirm={() => setNoticeOpen(false)}
+          onCancel={dismissForever}
+        />
+      )}
       <button
         className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm aiterm-shellwarn__btn"
         title={t.shell_badge_title}

@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const detectMock = vi.fn();
 vi.mock("../../ipc/shell", () => ({
@@ -9,10 +9,19 @@ vi.mock("../../ipc/shell", () => ({
 
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import type { ShellIdentity } from "../../hooks/useShellIdentity";
-import { ShellWarningBadge } from "./index";
+import { ShellWarningBadge, resetShellStartupNoticeForTest } from "./index";
+
+const DISMISS_KEY = "aiterm.shellwarn.dismissed";
+
+beforeEach(() => {
+  resetShellStartupNoticeForTest();
+  // 既有測試只關心徽章；啟動對話框另外在最後一組測試驗證。
+  localStorage.setItem(DISMISS_KEY, "1");
+});
 
 afterEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
 const desktop: ShellIdentity = { shell: "PowerShell", edition: "Desktop", version: "5.1.26100.33158" };
@@ -72,5 +81,41 @@ describe("ShellWarningBadge", () => {
 
     await userEvent.click(badge);
     await waitFor(() => expect(screen.queryByText(/winget install/)).toBeNull());
+  });
+});
+
+describe("ShellWarningBadge 啟動提醒", () => {
+  beforeEach(() => localStorage.removeItem(DISMISS_KEY));
+
+  it("舊版 PowerShell 第一次出現時跳對話框", async () => {
+    detectMock.mockResolvedValue(null);
+    mount(desktop);
+    await screen.findByText(/偵測到舊版 PowerShell|Old PowerShell detected/);
+  });
+
+  it("PowerShell 7 不跳對話框", () => {
+    detectMock.mockResolvedValue(null);
+    mount(core);
+    expect(screen.queryByText(/偵測到舊版 PowerShell|Old PowerShell detected/)).toBeNull();
+  });
+
+  it("每次啟動只跳一次：第二個舊版分頁不再跳", async () => {
+    detectMock.mockResolvedValue(null);
+    const first = mount(desktop);
+    await screen.findByText(/偵測到舊版 PowerShell|Old PowerShell detected/);
+    first.unmount();
+    mount(desktop);
+    expect(screen.queryByText(/偵測到舊版 PowerShell|Old PowerShell detected/)).toBeNull();
+  });
+
+  it("按「不再提醒」後永久不跳", async () => {
+    detectMock.mockResolvedValue(null);
+    const first = mount(desktop);
+    await userEvent.click(await screen.findByRole("button", { name: /不再提醒|Don't remind me/ }));
+    expect(localStorage.getItem(DISMISS_KEY)).toBe("1");
+    first.unmount();
+    resetShellStartupNoticeForTest();
+    mount(desktop);
+    expect(screen.queryByText(/偵測到舊版 PowerShell|Old PowerShell detected/)).toBeNull();
   });
 });

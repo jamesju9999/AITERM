@@ -2839,6 +2839,9 @@ const zhTW = {
     shell_badge_install_command: "winget install --id Microsoft.PowerShell",
     shell_badge_copy: "複製",
     shell_badge_copied: "已複製",
+    shell_notice_title: (v: string) => `偵測到舊版 PowerShell${v ? " " + v : ""}`,
+    shell_notice_ok: "知道了",
+    shell_notice_dismiss: "不再提醒",
 } as const;
 
 const enRaw = {
@@ -5658,6 +5661,9 @@ const enRaw = {
     shell_badge_install_command: "winget install --id Microsoft.PowerShell",
     shell_badge_copy: "Copy",
     shell_badge_copied: "Copied",
+    shell_notice_title: (v: string) => `Old PowerShell detected${v ? " " + v : ""}`,
+    shell_notice_ok: "OK",
+    shell_notice_dismiss: "Don't remind me",
 } as const;
 
 export const translations = {
