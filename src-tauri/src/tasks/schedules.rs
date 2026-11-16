@@ -429,6 +429,16 @@ pub async fn round_result(pool: &SqlitePool, row: &ScheduleRow) -> Result<RoundR
     let has_reviewer = agents::list_agents(pool).await.map_err(|e| e.to_string())?.iter().any(|a| a.kind == "reviewer");
     use workflow::ModuleState as M;
     Ok(match workflow::module_state(&card, &chain, has_reviewer) {
+        // 工作卡剛完成、審查卡還沒建出來的空檔，`module_state` 會先判成通過（它只看鏈尾）。
+        // 有審核者（且不是快速路徑、也沒被人工放行）卻還沒有任何審查卡時，要等審查卡出現再判。
+        M::Passed
+            if has_reviewer
+                && !card.fast
+                && !card.module_override
+                && !chain.iter().any(|c| c.card_kind == workflow::KIND_REVIEW) =>
+        {
+            RoundResult::Pending
+        }
         M::Passed => RoundResult::Success,
         M::Attention | M::Failed | M::ReviewFailed | M::DispatchFailed => RoundResult::Failed,
         _ => RoundResult::Pending,
@@ -946,6 +956,50 @@ mod tests {
         let after = get(&pool, &sid).await.unwrap().unwrap();
         assert!(after.last_module_id.is_none());
         assert_eq!(after.fail_streak, 0);
+    }
+
+    #[tokio::test]
+    async fn with_a_reviewer_the_round_waits_for_the_review_and_succeeds_only_when_it_passes() {
+        let pool = pool().await;
+        let coder = make_agent(&pool, "coder").await;
+        make_agent(&pool, "reviewer").await;
+        let sid = create(&pool, &new_schedule(&coder), 0).await.unwrap();
+        let module = round(&pool, &sid, 10, None).await;
+        finish_card(&pool, &module, "success", None).await;
+        // 工作做完、審查還沒開始：還在進行中，不能當成功（也不能歸檔）。
+        assert!(settle(&pool, &sid, 20).await.unwrap().is_empty());
+        assert!(store::get_task(&pool, &module).await.unwrap().unwrap().archived_at.is_none());
+        // 審查通過 → 成功，模組與審查卡一起歸檔。
+        sqlx::query(
+            "INSERT INTO tasks (id, title, body, project_dir, status, outcome, verdict, module_id, review_of, card_kind)
+             VALUES ('rv1', 'r', '', '/tmp/repo', 'done', 'success', 'pass', ?1, ?1, 'review')",
+        )
+        .bind(&module)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(settle(&pool, &sid, 30).await.unwrap(), vec![SettleEvent::Succeeded]);
+        assert!(store::get_task(&pool, &module).await.unwrap().unwrap().archived_at.is_some());
+        assert!(store::get_task(&pool, "rv1").await.unwrap().unwrap().archived_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn with_a_reviewer_a_review_that_failed_without_a_verdict_is_a_failed_round() {
+        let pool = pool().await;
+        let coder = make_agent(&pool, "coder").await;
+        make_agent(&pool, "reviewer").await;
+        let sid = create(&pool, &new_schedule(&coder), 0).await.unwrap();
+        let module = round(&pool, &sid, 10, None).await;
+        finish_card(&pool, &module, "success", None).await;
+        sqlx::query(
+            "INSERT INTO tasks (id, title, body, project_dir, status, outcome, module_id, review_of, card_kind)
+             VALUES ('rv1', 'r', '', '/tmp/repo', 'done', 'failed', ?1, ?1, 'review')",
+        )
+        .bind(&module)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(settle(&pool, &sid, 30).await.unwrap(), vec![SettleEvent::Failed]);
     }
 
     // ── tick ──────────────────────────────────────────────────────────────
