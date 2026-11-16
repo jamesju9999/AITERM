@@ -71,6 +71,20 @@ vi.mock("../../ipc/agents", () => ({
   setProjectRepo: vi.fn().mockResolvedValue(undefined),
   deleteAllAgents: vi.fn().mockResolvedValue(2),
 }));
+vi.mock("../../ipc/schedules", () => ({
+  listSchedules: vi.fn().mockResolvedValue([]),
+  saveSchedule: vi.fn().mockResolvedValue("s-new"),
+  deleteSchedule: vi.fn().mockResolvedValue(undefined),
+  setScheduleEnabled: vi.fn().mockResolvedValue(undefined),
+  runScheduleNow: vi.fn().mockResolvedValue(""),
+  parseSpec: (json: string) => {
+    try {
+      return JSON.parse(json);
+    } catch {
+      return {};
+    }
+  },
+}));
 vi.mock("../../ipc/formations", () => ({
   formationsState: vi.fn(),
   createFormation: vi.fn().mockResolvedValue("f-new"),
@@ -162,6 +176,7 @@ import { writeTextFile } from "../../ipc/fs";
 import { createProject, listProjects, openProject } from "../../ipc/projects";
 import { invokeAiComplete } from "../../ipc/ai";
 import { listProviders } from "../../ipc/provider";
+import { listSchedules, type ScheduleView } from "../../ipc/schedules";
 import { createFormation, formationsState, listRetiredAgents, requestFormationSwitch, switchFormation, type FormationsState } from "../../ipc/formations";
 import { AgentCanvasView } from "./index";
 
@@ -276,7 +291,36 @@ beforeEach(() => {
 /** 頂列「⋯」選單。 */
 const openMore = () => fireEvent.click(screen.getByRole("button", { name: /更多|More/ }));
 
+const scheduleRow = (over: Partial<ScheduleView> = {}): ScheduleView => ({
+  id: "s1", name: "每日測試", agent_id: "a1", instruction: "跑測試", schedule_kind: "daily", schedule_json: '{"times":["08:00"]}',
+  enabled: true, failures_count_as_failed: false, canvas_x: null, canvas_y: null, last_fired_at: 0, last_module_id: null,
+  fail_streak: 0, skip_streak: 0, disabled_reason: null, runs: [], ...over,
+});
+
 describe("AgentCanvasView", () => {
+  it("有定時器時畫布上出現節點；點節點開設定對話框", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listSchedules).mockResolvedValue([scheduleRow()]);
+    view();
+    const node = await screen.findByTestId("schedule-node");
+    expect(node).toHaveTextContent("每日測試");
+    fireEvent.click(node);
+    expect(await screen.findByTestId("schedule-dialog")).toBeInTheDocument();
+    vi.mocked(listSchedules).mockResolvedValue([]);
+  });
+
+  it("「⋯」選單的「新增定時器」開出空白的設定對話框", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listSchedules).mockResolvedValue([]);
+    view();
+    await screen.findByRole("button", { name: /更多|More/ });
+    openMore();
+    fireEvent.click(await screen.findByRole("menuitem", { name: /新增定時器|Add scheduler/ }));
+    expect(await screen.findByTestId("schedule-dialog")).toBeInTheDocument();
+  });
+
   it("互動卡被退回後：桌布上出現修正方式選擇列，選了就送去後端並重新整理", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);

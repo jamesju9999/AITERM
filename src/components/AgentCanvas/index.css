@@ -1006,3 +1006,19 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-fixchoice-remember { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; opacity: 0.85; }
 .ac-fixchoice-note { margin-top: 6px; font-size: 11px; opacity: 0.6; }
 .ac-fixchoice-error { margin-top: 6px; font-size: 12px; color: var(--aiterm-danger, #e5534b); }
+
+/* 定時器 */
+.ac-sched-dialog { max-width: 460px; max-height: 90vh; overflow-y: auto; }
+.ac-sched-days { display: flex; flex-wrap: wrap; gap: 8px; }
+.ac-sched-time { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.ac-sched-check { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+.ac-sched-runs { margin: 0; padding-left: 18px; font-size: 12px; }
+.ac-sched-node { position: absolute; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--aiterm-border, #334155); background: var(--aiterm-surface-2, #1e293b); cursor: pointer; font-size: 12px; line-height: 1.5; }
+.ac-sched-node--enabled { border-color: #22c55e; }
+.ac-sched-node--disabled { opacity: 0.6; }
+.ac-sched-node--failed, .ac-sched-node--agent_gone { border-color: #ef4444; }
+.ac-sched-node--stuck { border-color: #eab308; }
+.ac-sched-node-title { font-weight: 600; }
+.ac-sched-node-last--failed { color: #ef4444; }
+.ac-sched-node-last--success { color: #22c55e; }
+.ac-sched-edges { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }

@@ -39,6 +39,7 @@ pub mod messages;
 pub mod method_discussion;
 pub mod notes;
 pub mod nudge;
+pub mod schedules;
 
 use std::path::{Path, PathBuf};
 
@@ -305,6 +306,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     notes::init_schema(pool).await?;
     messages::init_schema(pool).await?;
     fix_choice::init_schema(pool).await?;
+    schedules::init_schema(pool).await?;
     Ok(())
 }
 

@@ -57,6 +57,9 @@ import {
 } from "../../ipc/formations";
 import { FormationMenu } from "./FormationMenu";
 import { TopMoreMenu } from "./TopMoreMenu";
+import { ScheduleDialog } from "./ScheduleDialog";
+import { ScheduleNode, SCHEDULE_NODE_W } from "./ScheduleNode";
+import { deleteSchedule, listSchedules, runScheduleNow, saveSchedule, setScheduleEnabled, type ScheduleView } from "../../ipc/schedules";
 
 /** 編制還沒載入（或讀不到）時，選單照樣出現：團隊範本在裡面。 */
 const EMPTY_FORMATIONS: FormationsState = { formations: [], active: null, pending: null, busy: [], log: [] };
@@ -255,6 +258,8 @@ export function AgentCanvasView({
   /** 專案的參考資料夾；記著是哪個專案的。 */
   const [refsOf, setRefsOf] = useState<{ projectId: string; list: Reference[] } | null>(null);
   const [refsOpen, setRefsOpen] = useState(false);
+  const [schedulesOf, setSchedulesOf] = useState<{ projectId: string; rows: ScheduleView[] } | null>(null);
+  const [schedDialog, setSchedDialog] = useState<{ initial: ScheduleView | null } | null>(null);
   /** 這個專案的專案資料夾（使用者指定過的程式庫）；新增模組時帶入。記著是哪個專案的。 */
   const [projRepoOf, setProjRepoOf] = useState<{ projectId: string; path: string | null } | null>(null);
   /** 使用者手動暫停的現況（全部／個別）。 */
@@ -439,6 +444,9 @@ export function AgentCanvasView({
       getReferences(projectId)
         .then((list) => alive && setRefsOf({ projectId, list }))
         .catch(() => {});
+      listSchedules(projectId)
+        .then((rows) => alive && setSchedulesOf({ projectId, rows }))
+        .catch(() => {});
       projectRepo(projectId)
         .then((r) => alive && setProjRepoOf({ projectId, path: r?.path ?? null }))
         .catch(() => {});
@@ -586,6 +594,7 @@ export function AgentCanvasView({
   }, [isActive, dbSkillFor]);
   const dbQueries = useMemo(() => (dbQueriesOf?.projectId === projectId ? dbQueriesOf.rows : []), [dbQueriesOf, projectId]);
   const references = useMemo(() => (refsOf?.projectId === projectId ? refsOf.list : []), [refsOf, projectId]);
+  const schedules = useMemo(() => (schedulesOf?.projectId === projectId ? schedulesOf.rows : []), [schedulesOf, projectId]);
   const resources = useMemo(
     () => [...resourcesOf(agents, connNames), ...folderResources(references)],
     [agents, connNames, references],
@@ -1139,6 +1148,12 @@ export function AgentCanvasView({
     return () => el.removeEventListener("wheel", onWheel);
   }, [zoomAround, projects]);
 
+  /** 定時器節點預設放在目標角色左邊（不讓它超出畫布左緣）；沒有目標時放左上。 */
+  const schedulePos = (s: ScheduleView, target?: AgentRow) => ({
+    x: s.canvas_x ?? (target ? Math.max(8, target.canvas_x - SCHEDULE_NODE_W - 40) : 8),
+    y: s.canvas_y ?? (target ? target.canvas_y : 8),
+  });
+
   const world = useMemo(() => {
     let w = 0;
     let h = 0;
@@ -1418,7 +1433,7 @@ export function AgentCanvasView({
               {t.ac_inbox_button(questions.length)}
             </button>
           )}
-          <TopMoreMenu cap={cap} onHelp={() => setHelpOpen(true)} />
+          <TopMoreMenu cap={cap} onHelp={() => setHelpOpen(true)} onAddSchedule={projectId ? () => setSchedDialog({ initial: null }) : undefined} />
         </span>
       </div>
 
@@ -1642,6 +1657,33 @@ export function AgentCanvasView({
                   onAddFolder={projectId ? openRefs : undefined}
                   onRemoveFolder={projectId ? (r) => void removeFolder(r.id.slice("ref:".length), r.name) : undefined}
                 />
+                {schedules.length > 0 && (
+                  <svg className="ac-sched-edges" width={world.w} height={world.h} aria-hidden>
+                    {schedules.map((sch) => {
+                      const target = shownAgents.find((g) => g.id === sch.agent_id);
+                      if (!target) return null;
+                      const pos = schedulePos(sch, target);
+                      return (
+                        <line
+                          key={sch.id}
+                          x1={pos.x + SCHEDULE_NODE_W}
+                          y1={pos.y + 28}
+                          x2={target.canvas_x}
+                          y2={target.canvas_y + 30}
+                          stroke="#3b82f6"
+                          strokeWidth={2}
+                          strokeDasharray="6 4"
+                          opacity={sch.enabled ? 0.9 : 0.35}
+                        />
+                      );
+                    })}
+                  </svg>
+                )}
+                {schedules.map((sch) => {
+                  const target = shownAgents.find((g) => g.id === sch.agent_id);
+                  const pos = schedulePos(sch, target);
+                  return <ScheduleNode key={sch.id} schedule={sch} x={pos.x} y={pos.y} onEdit={() => setSchedDialog({ initial: sch })} />;
+                })}
                 {shownAgents.map((shown) => {
                   const a = agents.find((x) => x.id === shown.id) as AgentRow;
                   return (
@@ -1937,6 +1979,35 @@ export function AgentCanvasView({
             await setCustomSkills(projectId, customSkillsFor.id, paths);
             await refresh();
           }}
+        />
+      )}
+
+      {schedDialog && projectId && (
+        <ScheduleDialog
+          agents={agents}
+          initial={schedDialog.initial}
+          onClose={() => setSchedDialog(null)}
+          onSave={async (args) => {
+            await saveSchedule(projectId, schedDialog.initial?.id ?? null, args);
+            void refresh();
+          }}
+          onDelete={
+            schedDialog.initial
+              ? async () => {
+                  await deleteSchedule(projectId, schedDialog.initial!.id);
+                  void refresh();
+                }
+              : undefined
+          }
+          onRunNow={schedDialog.initial ? () => runScheduleNow(projectId, schedDialog.initial!.id) : undefined}
+          onToggleEnabled={
+            schedDialog.initial
+              ? async (v) => {
+                  await setScheduleEnabled(projectId, schedDialog.initial!.id, v);
+                  void refresh();
+                }
+              : undefined
+          }
         />
       )}
 
