@@ -10,6 +10,9 @@ export function RepoStatus({ repo, busy, onFix }: { repo: RepoCheck; busy: boole
       {repo.status === "ok" && repo.nested_in && (
         <span data-testid="repo-nested" className="ac-repo-nested">⚠ {t.ac_repo_nested(repo.nested_in)}</span>
       )}
+      {repo.status === "ok" && repo.dirty && (
+        <span data-testid="repo-dirty" className="ac-repo-nested">⚠ {t.ac_repo_dirty}</span>
+      )}
       {repo.status === "missing" && <span>✗ {t.ac_repo_missing}</span>}
       {repo.status === "board_folder" && <span>✗ {t.ac_repo_board_folder}</span>}
       {(repo.status === "not_repo" || repo.status === "no_commits") && (

@@ -16,7 +16,10 @@ pub enum RepoCheck {
     /// 可以用。`branch` 是目前分支（detached HEAD 時為 None）。
     /// `nested_in`：資料夾本身不是 git 最上層時，那個上層程式庫的路徑
     /// （合併、dirty 檢查都針對它，常讓人意外）。
-    Ok { branch: Option<String>, nested_in: Option<String> },
+    ///
+    /// `dirty`：程式庫有未提交的改動（看板資料夾不算）。最後一步把整合結果快轉回
+    /// 程式庫時這會被擋下（`workflow::fast_forward_repo`），所以建團隊時就要講。
+    Ok { branch: Option<String>, nested_in: Option<String>, dirty: bool },
     /// 資料夾不存在。
     Missing,
     /// 不是 git repo（或是 SVN）。可以一鍵初始化。
@@ -41,12 +44,14 @@ pub async fn check_repo(path: &str) -> RepoCheck {
         return RepoCheck::Missing;
     }
     let mut nested_in = None;
+    let mut repo_top = None;
     match VcsManager::detect_repo(path).await {
         Ok(info) if info.vcs_type == VcsType::Git => {
             let same = match (Path::new(path).canonicalize(), Path::new(&info.root).canonicalize()) {
                 (Ok(a), Ok(b)) => a == b,
                 _ => true,
             };
+            repo_top = Some(info.root.clone());
             if !same {
                 nested_in = Some(info.root);
             }
@@ -61,7 +66,21 @@ pub async fn check_repo(path: &str) -> RepoCheck {
         }
         return RepoCheck::NoCommits;
     }
-    RepoCheck::Ok { branch: client.current_branch().await.ok().filter(|b| !b.is_empty() && b != "HEAD"), nested_in }
+    let top = repo_top.unwrap_or_else(|| path.to_string());
+    let dirty = has_real_changes(&client, &top).await;
+    RepoCheck::Ok { branch: client.current_branch().await.ok().filter(|b| !b.is_empty() && b != "HEAD"), nested_in, dirty }
+}
+
+/// 跟 `fast_forward_repo` 同一個判斷（`git status --porcelain` 非空），但把看板專案資料夾
+/// （有 `.aitprj`）自己的項目排除：派工與合併時它會被 `exclude_inside` 排除，不該在這裡誤報。
+/// 查不到狀態時當作乾淨，只是不警告，不擋人。
+async fn has_real_changes(client: &GitClient, top: &str) -> bool {
+    let Ok(entries) = client.dirty_files().await else { return false };
+    entries.iter().any(|e| {
+        // porcelain 的路徑相對於 git 最上層，不是 `path`（資料夾在別人的程式庫裡時兩者不同）。
+        let full = Path::new(top).join(e.trim_matches('"').trim_end_matches('/'));
+        !(full.is_dir() && is_board_folder(&full))
+    })
 }
 
 /// 不是 repo 就 `git init`；沒有 commit 就把資料夾現有檔案建成第一個 commit
@@ -173,7 +192,7 @@ mod tests {
         git(dir.path(), &["add", "."]);
         git(dir.path(), &["commit", "-qm", "c"]);
         match check_repo(&p).await {
-            RepoCheck::Ok { branch, nested_in } => {
+            RepoCheck::Ok { branch, nested_in, .. } => {
                 assert!(branch.is_some());
                 assert!(nested_in.is_none(), "自己就是最上層，不算在別人的程式庫裡");
             }
@@ -202,6 +221,56 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    fn repo_with_commit() -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        git(d.path(), &["init", "-q"]);
+        git(d.path(), &["config", "user.email", "t@t"]);
+        git(d.path(), &["config", "user.name", "T"]);
+        fs::write(d.path().join("a.txt"), "x").unwrap();
+        git(d.path(), &["add", "."]);
+        git(d.path(), &["commit", "-qm", "c"]);
+        d
+    }
+
+    fn dirty_of(c: RepoCheck) -> bool {
+        match c {
+            RepoCheck::Ok { dirty, .. } => dirty,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// 建團隊時就講：程式庫有未提交的改動，最後一步快轉會被擋下（見 workflow::fast_forward_repo）。
+    #[tokio::test]
+    async fn reports_uncommitted_changes_so_the_user_hears_it_before_the_merge_step() {
+        let d = repo_with_commit();
+        let p = d.path().to_string_lossy().into_owned();
+        assert!(!dirty_of(check_repo(&p).await), "乾淨的程式庫不警告");
+
+        fs::write(d.path().join("a.txt"), "changed").unwrap();
+        assert!(dirty_of(check_repo(&p).await), "改過已追蹤檔案");
+        git(d.path(), &["checkout", "--", "a.txt"]);
+        assert!(!dirty_of(check_repo(&p).await));
+
+        fs::write(d.path().join("new.txt"), "n").unwrap();
+        assert!(dirty_of(check_repo(&p).await), "未追蹤檔案也會讓合併被擋，跟 fast_forward_repo 同一個判斷");
+    }
+
+    /// 看板專案資料夾在程式庫裡面：派工與合併時會被排除（exclude_inside），
+    /// 所以它不能讓建團隊時就誤報「有未提交的改動」。
+    #[tokio::test]
+    async fn a_board_folder_inside_the_repo_does_not_count_as_dirty() {
+        let d = repo_with_commit();
+        let board = d.path().join("Board");
+        fs::create_dir_all(&board).unwrap();
+        fs::write(board.join("X.aitprj"), "{}").unwrap();
+        fs::write(board.join("tasks.db"), "db").unwrap();
+        let p = d.path().to_string_lossy().into_owned();
+        assert!(!dirty_of(check_repo(&p).await));
+
+        fs::write(d.path().join("real.txt"), "n").unwrap();
+        assert!(dirty_of(check_repo(&p).await), "看板資料夾之外的改動照樣要警告");
     }
 
     #[tokio::test]
