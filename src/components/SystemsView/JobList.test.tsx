@@ -70,28 +70,54 @@ describe("JobList", () => {
     expect(p.onShowRuns).toHaveBeenCalled();
   });
 
-  it("creates a job with the schedule built from the form", async () => {
+  it("creates a job from a goal, with the name filled in from the goal when left blank", async () => {
     const p = mount({ jobs: [] });
     fireEvent.click(screen.getByText(t.sys_job_add));
-    const inputs = screen.getAllByRole("textbox");
-    fireEvent.change(inputs[0], { target: { value: "每日匯出" } });
-    fireEvent.change(inputs[1], { target: { value: "匯出昨天的訂單" } });
-    fireEvent.change(inputs[2], { target: { value: "09:00, 18:30" } });
+    fireEvent.change(screen.getByPlaceholderText(t.sys_job_goal_ph), { target: { value: "匯出昨天的訂單" } });
+    expect(screen.getByTestId("job-preview").textContent).toContain("每天 09:00");
     fireEvent.click(screen.getByText(t.sys_save));
     await waitFor(() => expect(p.onSave).toHaveBeenCalled());
     expect(p.onSave).toHaveBeenCalledWith(
-      { system_id: "s1", name: "每日匯出", goal: "匯出昨天的訂單", kind: "daily", spec: { times: ["09:00", "18:30"], days: [], every_minutes: 0, window: null } },
+      { system_id: "s1", name: "匯出昨天的訂單", goal: "匯出昨天的訂單", kind: "daily", spec: { times: ["09:00"], days: [], every_minutes: 0, window: null } },
       undefined,
     );
   });
 
-  it("shows the backend's validation error and keeps the form open", async () => {
-    mount({ jobs: [], onSave: vi.fn(() => Promise.reject("至少要設定一個時間點")) });
+  it("times are chips: add one, remove one, and the preview follows", () => {
+    mount({ jobs: [] });
     fireEvent.click(screen.getByText(t.sys_job_add));
-    const inputs = screen.getAllByRole("textbox");
-    fireEvent.change(inputs[0], { target: { value: "x" } });
-    fireEvent.change(inputs[1], { target: { value: "y" } });
+    fireEvent.change(screen.getByLabelText(t.sys_job_times, { selector: "input" }), { target: { value: "18:30" } });
+    fireEvent.click(screen.getByText(t.sys_job_add_time));
+    expect(screen.getAllByTestId("job-time").map((e) => e.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("09:00"), expect.stringContaining("18:30")]));
+    expect(screen.getByTestId("job-preview").textContent).toContain("09:00、18:30");
+    fireEvent.click(screen.getByLabelText(t.sys_job_time_remove("09:00")));
+    expect(screen.getByTestId("job-preview").textContent).not.toContain("09:00");
+    fireEvent.click(screen.getByLabelText(t.sys_job_time_remove("18:30")));
+    expect(screen.getByText(t.sys_job_no_times)).toBeInTheDocument();
+    expect((screen.getByText(t.sys_save) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("weekly needs at least one day, interval needs at least 5 minutes", () => {
+    mount({ jobs: [] });
+    fireEvent.click(screen.getByText(t.sys_job_add));
+    fireEvent.change(screen.getByPlaceholderText(t.sys_job_goal_ph), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("radio", { name: t.sys_job_kind_weekly }));
+    for (const d of [1, 2, 3, 4, 5]) fireEvent.click(screen.getByText(t.sys_job_weekday(d)));
+    expect((screen.getByText(t.sys_save) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText(t.sys_job_weekday(6)));
+    expect((screen.getByText(t.sys_save) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("radio", { name: t.sys_job_kind_interval }));
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "3" } });
+    expect((screen.getByText(t.sys_save) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "30" } });
+    expect((screen.getByText(t.sys_save) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("shows the backend's validation error and keeps the form open", async () => {
+    mount({ jobs: [], onSave: vi.fn(() => Promise.reject("後端說不行")) });
+    fireEvent.click(screen.getByText(t.sys_job_add));
+    fireEvent.change(screen.getByPlaceholderText(t.sys_job_goal_ph), { target: { value: "y" } });
     fireEvent.click(screen.getByText(t.sys_save));
-    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(await screen.findByText(t.sys_error("後端說不行"))).toBeTruthy();
   });
 });

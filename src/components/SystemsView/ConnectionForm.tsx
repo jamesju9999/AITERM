@@ -7,6 +7,7 @@ import { restoreWebviewFocus } from "../../lib/webviewFocus";
 import { hostOf, slug } from "./utils";
 
 const MODES: SystemMode[] = ["read_only", "approve_each", "rules", "autonomous"];
+const METHODS = ["*", "POST", "PUT", "PATCH", "DELETE"];
 
 interface Props {
   initial?: SystemConnection;
@@ -23,17 +24,21 @@ export function ConnectionForm({ initial, onSave, onCancel }: Props) {
   const [rules, setRules] = useState<SystemRule[]>(initial?.rules ?? []);
   const [error, setError] = useState<string | null>(null);
 
-  const modeLabel: Record<SystemMode, string> = {
-    read_only: t.sys_mode_read_only,
-    approve_each: t.sys_mode_approve_each,
-    rules: t.sys_mode_rules,
-    autonomous: t.sys_mode_autonomous,
+  const urlOk = /^https?:\/\//i.test(url.trim()) && hostOf(url) !== "";
+  const urlTouched = url.trim() !== "" && url.trim() !== "https://" && url.trim() !== "http://";
+  const host = hostOf(url);
+
+  const modeInfo: Record<SystemMode, { title: string; desc: string; risk: string; tone: string }> = {
+    read_only: { title: t.sys_mode_title_read_only, desc: t.sys_mode_desc_read_only, risk: t.sys_risk_safe, tone: "safe" },
+    approve_each: { title: t.sys_mode_title_approve_each, desc: t.sys_mode_desc_approve_each, risk: t.sys_risk_attended, tone: "info" },
+    rules: { title: t.sys_mode_title_rules, desc: t.sys_mode_desc_rules, risk: t.sys_risk_rules, tone: "warn" },
+    autonomous: { title: t.sys_mode_title_autonomous, desc: t.sys_mode_desc_autonomous, risk: t.sys_risk_high, tone: "danger" },
   };
 
   async function submit() {
     // 允許網域留空就帶入起始網址的網域，最常見的情況不用手填。
     const list = hosts.split(",").map((h) => h.trim()).filter(Boolean);
-    const allowed = list.length > 0 ? list : [hostOf(url)].filter(Boolean);
+    const allowed = list.length > 0 ? list : [host].filter(Boolean);
     if (mode === "autonomous" && initial?.mode !== "autonomous") {
       const ok = await confirm(t.sys_autonomous_confirm, { kind: "warning" });
       await restoreWebviewFocus();
@@ -67,52 +72,80 @@ export function ConnectionForm({ initial, onSave, onCancel }: Props) {
     >
       <label>
         {t.sys_name}
-        <input value={name} onChange={(e) => setName(e.target.value)} />
+        <input value={name} placeholder={t.sys_name_ph} onChange={(e) => setName(e.target.value)} />
       </label>
       <label>
         {t.sys_start_url}
-        <input value={url} placeholder="https://" onChange={(e) => setUrl(e.target.value)} />
+        <input value={url} placeholder={t.sys_url_ph} onChange={(e) => setUrl(e.target.value)} />
+        {urlTouched && !urlOk && <small className="systems__field-error">{t.sys_url_invalid}</small>}
+        {urlOk && <small>{t.sys_hosts_default(host)}</small>}
       </label>
-      <label>
-        {t.sys_allowed_hosts}
-        <input value={hosts} placeholder={hostOf(url)} onChange={(e) => setHosts(e.target.value)} />
-        <small>{t.sys_allowed_hosts_hint}</small>
-      </label>
-      <label>
-        {t.sys_mode}
-        <select value={mode} onChange={(e) => setMode(e.target.value as SystemMode)}>
+
+      <div className="systems__field-block">
+        <div className="systems__field-label" id="sys-mode-label">
+          {t.sys_mode}
+        </div>
+        <div className="systems__modes" role="radiogroup" aria-labelledby="sys-mode-label">
           {MODES.map((m) => (
-            <option key={m} value={m}>
-              {modeLabel[m]}
-            </option>
+            <label key={m} className={`systems__mode systems__mode--${modeInfo[m].tone}${mode === m ? " is-on" : ""}`}>
+              <input type="radio" name="sys-mode" value={m} checked={mode === m} onChange={() => setMode(m)} />
+              <span className="systems__mode-head">
+                <strong>{modeInfo[m].title}</strong>
+                <span className={`systems__risk systems__risk--${modeInfo[m].tone}`}>{modeInfo[m].risk}</span>
+              </span>
+              <span className="systems__mode-desc">{modeInfo[m].desc}</span>
+            </label>
           ))}
-        </select>
-      </label>
+        </div>
+      </div>
+
       {mode === "rules" && (
         <fieldset className="systems__rules">
           <legend>{t.sys_rules}</legend>
+          <p className="systems__muted">{t.sys_rules_help}</p>
           {rules.map((r, i) => (
             <div key={i} className="systems__rule" data-testid="rule-row">
-              <input aria-label={t.sys_rule_method} value={r.method} onChange={(e) => setRule(i, { method: e.target.value })} />
-              <input aria-label={t.sys_rule_pattern} value={r.url_pattern} onChange={(e) => setRule(i, { url_pattern: e.target.value })} />
+              <select aria-label={t.sys_rule_method} value={r.method} onChange={(e) => setRule(i, { method: e.target.value })}>
+                {METHODS.map((m) => (
+                  <option key={m} value={m}>
+                    {m === "*" ? t.sys_rule_method_any : m}
+                  </option>
+                ))}
+              </select>
+              <input aria-label={t.sys_rule_pattern} value={r.url_pattern} placeholder={t.sys_rule_pattern_ph} onChange={(e) => setRule(i, { url_pattern: e.target.value })} />
               <select aria-label="action" value={r.action} onChange={(e) => setRule(i, { action: e.target.value as SystemRule["action"] })}>
                 <option value="allow">{t.sys_rule_allow}</option>
                 <option value="ask">{t.sys_rule_ask}</option>
               </select>
+              <button type="button" className="systems__link" aria-label={t.sys_rule_remove} title={t.sys_rule_remove} onClick={() => setRules((rs) => rs.filter((_, j) => j !== i))}>
+                ✕
+              </button>
             </div>
           ))}
-          <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setRules((rs) => [...rs, { method: "*", url_pattern: "", action: "ask" }])}>
-            {t.sys_rule_add}
-          </button>
+          <div>
+            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setRules((rs) => [...rs, { method: "POST", url_pattern: "", action: "allow" }])}>
+              {t.sys_rule_add}
+            </button>
+          </div>
         </fieldset>
       )}
+
+      <details className="systems__advanced" open={Boolean(initial && hosts)}>
+        <summary>{t.sys_hosts_advanced}</summary>
+        <label>
+          {t.sys_allowed_hosts}
+          <input value={hosts} placeholder={host} onChange={(e) => setHosts(e.target.value)} />
+          <small>{t.sys_hosts_hint2}</small>
+        </label>
+      </details>
+
       {error && (
         <p className="systems__error" role="alert">
           {t.sys_error(error)}
         </p>
       )}
       <div className="systems__actions">
-        <button type="submit" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={!name.trim() || !url.trim()}>
+        <button type="submit" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={!name.trim() || !urlOk}>
           {t.sys_save}
         </button>
         <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={onCancel}>

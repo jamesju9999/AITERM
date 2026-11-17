@@ -1,6 +1,7 @@
 /* 系統連線：版面與字級對齊問題收集等其他分頁（13px 基準、圓角卡片、小標籤）。 */
 .systems { box-sizing: border-box; display: flex; flex-direction: column; height: 100%; padding: 16px 20px; gap: 12px; overflow: auto; font-family: inherit; font-size: 13px; line-height: 1.5; background: var(--bg-primary, #0a0b14); color: var(--text-primary, #e0e0e0); }
-.systems > * { width: 100%; max-width: 1080px; margin-left: auto; margin-right: auto; box-sizing: border-box; flex: none; }
+.systems__inner { width: 100%; max-width: 1080px; margin: 0 auto; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; }
+.systems__inner > * { flex: none; }
 .systems p, .systems h2, .systems h3 { font-family: inherit; }
 .systems p { margin: 0; font-size: 13px; }
 
@@ -67,7 +68,8 @@
 /* 表單：左標籤右欄位，與問題收集設定一致 */
 .systems__form label { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 4px; font-size: 13px; }
 .systems__form label > small { grid-column: 2; color: var(--text-secondary, #888); font-size: 12px; }
-.systems__form input:not([type="checkbox"]), .systems__form select, .systems__form textarea { box-sizing: border-box; width: 100%; min-width: 0; max-width: 560px; padding: 6px 10px; font: inherit; line-height: 1.5; color: inherit; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; resize: vertical; }
+.systems__form input:not([type="checkbox"]), .systems__form select, .systems__form textarea { box-sizing: border-box; width: 100%; min-width: 0; max-width: 560px; padding: 6px 10px; font: inherit; line-height: 1.5; color: inherit; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; resize: none; }
+.systems__form textarea { resize: vertical; }
 /* 下拉選單：原生樣式比輸入框矮、窄，這裡拿掉原生外觀，換成跟輸入框同高同寬的自繪箭頭。 */
 .systems__form select { -webkit-appearance: none; appearance: none; padding-right: 30px; cursor: pointer; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M3 4.5l3 3 3-3'/></svg>"); background-repeat: no-repeat; background-position: right 10px center; }
 .systems__form select option { background: var(--bg-secondary, #1a1a2e); color: var(--text-primary, #e0e0e0); }
@@ -87,3 +89,46 @@
 .systems__subtitle { margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--text-secondary, #aaa); }
 
 @media (max-width: 720px) { .systems__form > .systems__actions { padding-left: 0; } .systems__form label { grid-template-columns: 1fr; } .systems__form label > small { grid-column: 1; } .systems__head { flex-direction: column; } }
+
+/* 定時任務列 */
+.systems__jobhead { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.systems__jobhead strong { font-size: 13px; }
+.systems__hint { padding: 6px 10px; font-size: 12px; color: #38bdf8; background: rgba(56, 189, 248, 0.08); border-left: 3px solid #38bdf8; border-radius: 4px; }
+.systems__preview { font-size: 12px; color: #34d399; }
+
+/* 表單：欄位區塊、權限卡片、晶片 */
+.systems__field-block { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr); column-gap: 12px; row-gap: 6px; align-items: start; }
+.systems__field-block > :not(.systems__field-label) { grid-column: 2; }
+.systems__field-label { font-size: 13px; padding-top: 6px; }
+.systems__field-error { color: #f87171; font-size: 12px; }
+.systems__modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-width: 760px; }
+.systems__form label.systems__mode { display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 10px 12px; cursor: pointer; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 8px; transition: var(--transition-smooth, all 0.2s); }
+.systems__mode input { position: absolute; opacity: 0; pointer-events: none; }
+.systems__mode:hover { border-color: rgba(255, 255, 255, 0.25); }
+.systems__mode.is-on { border-color: var(--accent, #a855f7); background: var(--accent-dim, rgba(168, 85, 247, 0.1)); }
+.systems__mode-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.systems__mode-head strong { font-size: 13px; }
+.systems__mode-desc { font-size: 12px; line-height: 1.5; color: var(--text-secondary, #999); }
+.systems__risk { font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; white-space: nowrap; }
+.systems__risk--safe { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.systems__risk--info { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
+.systems__risk--warn { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+.systems__risk--danger { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+.systems__chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.systems__chip { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; padding: 3px 12px; color: var(--text-secondary, #999); background: none; border: 1px solid var(--border, #333); border-radius: 999px; cursor: pointer; }
+.systems__chip.is-on { color: var(--text-primary, #e0e0e0); background: var(--accent-dim, rgba(168, 85, 247, 0.15)); border-color: var(--accent, #a855f7); }
+.systems__chip-x { font: inherit; font-size: 11px; line-height: 1; padding: 0; color: inherit; background: none; border: 0; cursor: pointer; opacity: 0.7; }
+.systems__chip-x:hover { opacity: 1; }
+.systems__form input.systems__time, .systems__form input.systems__num { width: 110px; max-width: 110px; }
+.systems__advanced { font-size: 12px; }
+.systems__advanced > summary { cursor: pointer; color: var(--text-secondary, #888); padding: 2px 0; }
+.systems__advanced[open] > summary { margin-bottom: 8px; }
+.systems__rule { grid-template-columns: 120px 1fr 90px 28px; align-items: center; }
+.systems__rule select { max-width: none; }
+@media (max-width: 900px) { .systems__modes { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .systems__field-block { grid-template-columns: 1fr; } .systems__field-block > :not(.systems__field-label) { grid-column: 1; } }
+
+/* 分段控制放在表單裡時只佔自己的寬度；說明與錯誤對齊到欄位那一欄 */
+.systems__field-block > .systems__tabs { justify-self: start; }
+.systems__form > .systems__preview, .systems__form > .systems__warn, .systems__form > .systems__error { padding-left: 202px; }
+@media (max-width: 720px) { .systems__form > .systems__preview, .systems__form > .systems__warn, .systems__form > .systems__error { padding-left: 0; } }

@@ -65,7 +65,7 @@ export function JobList({ system, jobs, runs, onSave, onDelete, onToggle, onRunN
             const last = list[0];
             return (
               <li key={j.id} data-testid="job-row" className="systems__recipe">
-                <div className="systems__head">
+                <div className="systems__jobhead">
                   <strong>{j.name}</strong>
                   <span className="systems__badge">{scheduleText(j.kind, parseSpec(j), t)}</span>
                   {last && <span className={`systems__verdict systems__verdict--${last.status}`}>{statusLabel[last.status]}</span>}
@@ -127,16 +127,28 @@ function JobForm({ system, initial, onSave, onCancel }: { system: SystemConnecti
   const [name, setName] = useState(initial?.name ?? "");
   const [goal, setGoal] = useState(initial?.goal ?? "");
   const [kind, setKind] = useState<JobKind>(initial?.kind ?? "daily");
-  const [times, setTimes] = useState((spec?.times ?? ["09:00"]).join(", "));
+  const [times, setTimes] = useState<string[]>(spec?.times.length ? spec.times : ["09:00"]);
+  const [newTime, setNewTime] = useState("12:00");
   const [days, setDays] = useState<number[]>(spec?.days ?? [1, 2, 3, 4, 5]);
   const [every, setEvery] = useState(spec?.every_minutes || 60);
   const [error, setError] = useState<string | null>(null);
 
   const toggleDay = (d: number) => setDays((ds) => (ds.includes(d) ? ds.filter((x) => x !== d) : [...ds, d]));
+  const addTime = () => {
+    if (/^\d{2}:\d{2}$/.test(newTime) && !times.includes(newTime)) setTimes((ts) => [...ts, newTime].sort());
+  };
+
+  const built = buildSpec(kind, times.join(","), days, every);
+  const needsTimes = kind !== "interval" && times.length === 0;
+  const needsDays = kind === "weekly" && days.length === 0;
+  const preview = needsTimes || needsDays ? null : scheduleText(kind, built, t);
+  const canSave = goal.trim() !== "" && !needsTimes && !needsDays && (kind !== "interval" || every >= 5);
 
   async function submit() {
+    // 名稱留空時用目標的前幾個字，少一個一定要填的欄位。
+    const finalName = name.trim() || goal.trim().replace(/\s+/g, " ").slice(0, 16);
     try {
-      await onSave({ system_id: system.id, name: name.trim(), goal: goal.trim(), kind, spec: buildSpec(kind, times, days, every) }, initial?.id);
+      await onSave({ system_id: system.id, name: finalName, goal: goal.trim(), kind, spec: built }, initial?.id);
     } catch (e) {
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
     }
@@ -151,41 +163,78 @@ function JobForm({ system, initial, onSave, onCancel }: { system: SystemConnecti
       }}
     >
       <label>
-        {t.sys_job_name}
-        <input value={name} onChange={(e) => setName(e.target.value)} />
-      </label>
-      <label>
         {t.sys_job_goal}
-        <textarea rows={3} value={goal} onChange={(e) => setGoal(e.target.value)} />
+        <textarea rows={3} value={goal} placeholder={t.sys_job_goal_ph} onChange={(e) => setGoal(e.target.value)} />
+        <small>{t.sys_job_goal_hint}</small>
       </label>
       <label>
-        {t.sys_job_kind}
-        <select value={kind} onChange={(e) => setKind(e.target.value as JobKind)}>
-          <option value="daily">{t.sys_job_kind_daily}</option>
-          <option value="weekly">{t.sys_job_kind_weekly}</option>
-          <option value="interval">{t.sys_job_kind_interval}</option>
-        </select>
+        {t.sys_job_name}
+        <input value={name} placeholder={t.sys_job_name_ph} onChange={(e) => setName(e.target.value)} />
       </label>
-      {kind === "weekly" && (
-        <fieldset className="systems__rules">
-          <legend>{t.sys_job_days}</legend>
-          {[1, 2, 3, 4, 5, 6, 7].map((d) => (
-            <label key={d}>
-              <input type="checkbox" checked={days.includes(d)} onChange={() => toggleDay(d)} /> {t.sys_job_weekday(d)}
-            </label>
+
+      <div className="systems__field-block">
+        <div className="systems__field-label">{t.sys_job_kind}</div>
+        <div className="systems__tabs" role="radiogroup" aria-label={t.sys_job_kind}>
+          {(["daily", "weekly", "interval"] as const).map((k) => (
+            <button key={k} type="button" role="radio" aria-checked={kind === k} className={kind === k ? "is-on" : ""} onClick={() => setKind(k)}>
+              {k === "daily" ? t.sys_job_kind_daily : k === "weekly" ? t.sys_job_kind_weekly : t.sys_job_kind_interval}
+            </button>
           ))}
-        </fieldset>
+        </div>
+      </div>
+
+      {kind === "weekly" && (
+        <div className="systems__field-block">
+          <div className="systems__field-label">{t.sys_job_days}</div>
+          <div className="systems__chips">
+            {[1, 2, 3, 4, 5, 6, 7].map((d) => (
+              <button key={d} type="button" className={`systems__chip${days.includes(d) ? " is-on" : ""}`} aria-pressed={days.includes(d)} onClick={() => toggleDay(d)}>
+                {t.sys_job_weekday(d)}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
+
       {kind !== "interval" ? (
-        <label>
-          {t.sys_job_times}
-          <input value={times} onChange={(e) => setTimes(e.target.value)} />
-        </label>
+        <div className="systems__field-block">
+          <div className="systems__field-label">{t.sys_job_times}</div>
+          <div className="systems__chips">
+            {times.map((x) => (
+              <span key={x} className="systems__chip is-on" data-testid="job-time">
+                {x}
+                <button type="button" className="systems__chip-x" aria-label={t.sys_job_time_remove(x)} onClick={() => setTimes((ts) => ts.filter((y) => y !== x))}>
+                  ✕
+                </button>
+              </span>
+            ))}
+            <input type="time" className="systems__time" aria-label={t.sys_job_times} value={newTime} onChange={(e) => setNewTime(e.target.value)} />
+            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={addTime}>
+              {t.sys_job_add_time}
+            </button>
+          </div>
+          {needsTimes && <small className="systems__field-error">{t.sys_job_no_times}</small>}
+        </div>
       ) : (
-        <label>
-          {t.sys_job_every}
-          <input type="number" min={5} value={every} onChange={(e) => setEvery(Number(e.target.value))} />
-        </label>
+        <div className="systems__field-block">
+          <div className="systems__field-label">{t.sys_job_every}</div>
+          <div className="systems__chips">
+            <input type="number" min={5} className="systems__num" value={every} onChange={(e) => setEvery(Number(e.target.value))} />
+            <span>{t.sys_job_unit_min}</span>
+          </div>
+          <small className="systems__muted">{t.sys_job_every_hint}</small>
+        </div>
+      )}
+
+      {preview && (
+        <p className="systems__preview" data-testid="job-preview">
+          {t.sys_job_preview(preview)}
+        </p>
+      )}
+      {(system.mode === "read_only" || system.mode === "approve_each") && (
+        <p className="systems__warn" role="alert">
+          ⚠ {system.mode === "read_only" ? t.sys_job_unattended_read_only : t.sys_job_unattended_approve}
+        </p>
       )}
       {error && (
         <p className="systems__error" role="alert">
@@ -193,7 +242,7 @@ function JobForm({ system, initial, onSave, onCancel }: { system: SystemConnecti
         </p>
       )}
       <div className="systems__actions">
-        <button type="submit" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={!name.trim() || !goal.trim()}>
+        <button type="submit" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={!canSave}>
           {t.sys_save}
         </button>
         <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={onCancel}>

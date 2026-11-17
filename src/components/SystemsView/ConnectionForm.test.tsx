@@ -22,10 +22,10 @@ function mount(onSave = vi.fn(() => Promise.resolve())) {
 }
 
 const fill = () => {
-  const inputs = screen.getAllByRole("textbox");
-  fireEvent.change(inputs[0], { target: { value: "Orders" } });
-  fireEvent.change(inputs[1], { target: { value: "https://app.example.com/login" } });
+  fireEvent.change(screen.getByPlaceholderText(t.sys_name_ph), { target: { value: "Orders" } });
+  fireEvent.change(screen.getByPlaceholderText(t.sys_url_ph), { target: { value: "https://app.example.com/login" } });
 };
+const pickMode = (title: string) => fireEvent.click(screen.getByRole("radio", { name: new RegExp(title) }));
 
 beforeEach(() => confirmMock.mockReset());
 
@@ -43,7 +43,7 @@ describe("ConnectionForm", () => {
   it("will not save autonomous mode unless the user confirms", async () => {
     const onSave = mount();
     fill();
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "autonomous" } });
+    pickMode(t.sys_mode_title_autonomous);
     confirmMock.mockResolvedValueOnce(false);
     fireEvent.click(screen.getByText(t.sys_save));
     await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
@@ -57,7 +57,7 @@ describe("ConnectionForm", () => {
   it("only keeps rules in rules mode and drops blank patterns", async () => {
     const onSave = mount();
     fill();
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "rules" } });
+    pickMode(t.sys_mode_title_rules);
     fireEvent.click(screen.getByText(t.sys_rule_add));
     fireEvent.click(screen.getByText(t.sys_rule_add));
     const patterns = screen.getAllByLabelText(t.sys_rule_pattern);
@@ -65,7 +65,7 @@ describe("ConnectionForm", () => {
     fireEvent.click(screen.getByText(t.sys_save));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     const saved = (onSave.mock.calls as unknown as [{ rules: unknown[] }][])[0][0];
-    expect(saved.rules).toEqual([{ method: "*", url_pattern: "https://app.example.com/drafts/*", action: "ask" }]);
+    expect(saved.rules).toEqual([{ method: "POST", url_pattern: "https://app.example.com/drafts/*", action: "allow" }]);
   });
 
   it("shows the backend's validation error", async () => {
@@ -79,5 +79,33 @@ describe("ConnectionForm", () => {
     expect(hostOf("https://App.Example.com:8080/x")).toBe("app.example.com");
     expect(hostOf("not a url")).toBe("");
     expect(slug("My Orders!")).toBe("my-orders");
+  });
+
+  it("explains each permission mode in plain words and starts on the safest one", () => {
+    mount();
+    expect(screen.getByRole("radio", { name: new RegExp(t.sys_mode_title_read_only) })).toBeChecked();
+    expect(screen.getByText(t.sys_mode_desc_approve_each)).toBeInTheDocument();
+    expect(screen.getByText(t.sys_risk_high)).toBeInTheDocument();
+  });
+
+  it("only enables save for a proper http(s) URL and shows which domain will be allowed", () => {
+    mount();
+    fireEvent.change(screen.getByPlaceholderText(t.sys_name_ph), { target: { value: "X" } });
+    const save = screen.getByText(t.sys_save) as HTMLButtonElement;
+    fireEvent.change(screen.getByPlaceholderText(t.sys_url_ph), { target: { value: "app.example.com" } });
+    expect(save.disabled).toBe(true);
+    expect(screen.getByText(t.sys_url_invalid)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(t.sys_url_ph), { target: { value: "https://app.example.com/x" } });
+    expect(save.disabled).toBe(false);
+    expect(screen.getByText(t.sys_hosts_default("app.example.com"))).toBeInTheDocument();
+  });
+
+  it("a rule can be removed", () => {
+    mount();
+    pickMode(t.sys_mode_title_rules);
+    fireEvent.click(screen.getByText(t.sys_rule_add));
+    expect(screen.getAllByTestId("rule-row").length).toBe(1);
+    fireEvent.click(screen.getByLabelText(t.sys_rule_remove));
+    expect(screen.queryByTestId("rule-row")).toBeNull();
   });
 });

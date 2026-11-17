@@ -216,6 +216,7 @@ export function SystemsView() {
 
   return (
     <div className="systems">
+      <div className="systems__inner">
       <div className="systems__bar">
         <h2 className="systems__title">
           <LinkIcon size={18} /> {t.systems_tab}
@@ -321,6 +322,11 @@ export function SystemsView() {
                     </button>
                   )}
                 </div>
+                {s.enabled && !st?.running && (
+                  <p className="systems__hint" data-testid="login-hint">
+                    {t.sys_login_hint}
+                  </p>
+                )}
                 <div className="systems__tabs" role="group">
                   {(["audit", "recipes", "jobs"] as const).map((kind) => (
                     <button
@@ -387,6 +393,7 @@ export function SystemsView() {
           </>
         )}
       </details>
+      </div>
     </div>
   );
 }
