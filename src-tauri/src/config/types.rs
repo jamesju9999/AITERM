@@ -107,6 +107,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
 
+    /// 系統連線（外部網頁系統）。見 systems/。
+    #[serde(default)]
+    pub system_connections: Vec<crate::systems::types::SystemConnection>,
+
     /// Interpreter the user pointed us at when uv can't fetch one (offline or
     /// behind a proxy). The venv is still created under app data — this only
     /// changes which interpreter it's based on.
@@ -400,6 +404,7 @@ impl Default for AppConfig {
             enterprise_policy: None,
             mcp_enabled: true,
             mcp_servers: vec![],
+            system_connections: vec![],
             python_interpreter: None,
             python_index_url: None,
             claude_bridge: ClaudeBridgeConfig::default(),
@@ -714,6 +719,12 @@ pub struct McpServerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_configs_without_system_connections_still_parse_and_default_empty() {
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(cfg.system_connections.is_empty());
+    }
 
     #[test]
     fn suggestion_accept_key_defaults_to_tab_and_old_configs_without_it_still_parse() {

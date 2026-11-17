@@ -17,6 +17,7 @@ pub mod knowledge_base;
 pub mod loop_session;
 pub mod mail;
 pub mod mcp;
+pub mod systems;
 pub mod mcp_server;
 pub mod projects;
 pub mod provider;

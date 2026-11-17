@@ -784,6 +784,9 @@ pub fn run() {
             // MCP
             list_mcp_servers,
             add_mcp_server,
+            commands::systems::systems_list,
+            commands::systems::systems_save,
+            commands::systems::systems_remove,
             update_mcp_server,
             remove_mcp_server,
             get_mcp_tools,
