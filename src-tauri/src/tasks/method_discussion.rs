@@ -90,12 +90,29 @@ pub fn settings_json(refs: &[Reference]) -> String {
 mod tests {
     use super::*;
 
+    /// 把資料夾的修改時間設成 `when`。Windows 開資料夾要 FILE_FLAG_BACKUP_SEMANTICS
+    /// 加寫入權限，單純 File::open 會得到「拒絕存取」；Unix 的唯讀 open 即可。
+    fn set_dir_mtime(dir: &Path, when: std::time::SystemTime) {
+        #[cfg(windows)]
+        let f = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(0x0200_0000)
+                .open(dir)
+                .unwrap()
+        };
+        #[cfg(not(windows))]
+        let f = std::fs::File::open(dir).unwrap();
+        f.set_modified(when).unwrap();
+    }
+
     fn make_discussion(project: &Path, id: &str, age_days: u64) {
         let dir = discussion_dir(project, id);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("decision.json"), "{}").unwrap();
         let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_days * 86_400);
-        std::fs::File::open(&dir).unwrap().set_modified(when).unwrap();
+        set_dir_mtime(&dir, when);
     }
 
     #[test]
@@ -107,7 +124,7 @@ mod tests {
         let card = project.path().join("tasks").join("card-xyz");
         std::fs::create_dir_all(&card).unwrap();
         let when = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86_400);
-        std::fs::File::open(&card).unwrap().set_modified(when).unwrap();
+        set_dir_mtime(&card, when);
 
         let removed = prune_old(project.path(), std::time::Duration::from_secs(7 * 86_400));
 
