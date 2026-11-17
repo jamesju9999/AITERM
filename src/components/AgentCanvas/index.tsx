@@ -1134,7 +1134,7 @@ export function AgentCanvasView({
       ...schedules.map((sch) => {
         const el = root?.querySelector<HTMLElement>(`[data-schedule-id="${sch.id}"]`);
         const p = storedSchedulePos(sch, agents.find((g) => g.id === sch.agent_id));
-        return { id: `sched:${sch.id}`, kind: "schedule" as const, x: p.x, y: p.y, w: el?.offsetWidth || SCHEDULE_NODE_W, h: el?.offsetHeight || SCHEDULE_NODE_H };
+        return { id: `sched:${sch.id}`, kind: "schedule" as const, targetId: sch.agent_id, x: p.x, y: p.y, w: el?.offsetWidth || SCHEDULE_NODE_W, h: el?.offsetHeight || SCHEDULE_NODE_H };
       }),
     ]);
     const moved = agents.filter((a) => {
@@ -1802,12 +1802,10 @@ export function AgentCanvasView({
                       if (!target) return null;
                       const pos = schedulePos(sch, target);
                       return (
-                        <line
+                        <path
                           key={sch.id}
-                          x1={pos.x + SCHEDULE_NODE_W}
-                          y1={pos.y + 28}
-                          x2={target.canvas_x}
-                          y2={target.canvas_y + 30}
+                          d={`M ${pos.x + SCHEDULE_NODE_W} ${pos.y + 40} C ${pos.x + SCHEDULE_NODE_W + 50} ${pos.y + 40}, ${target.canvas_x - 50} ${target.canvas_y + 30}, ${target.canvas_x} ${target.canvas_y + 30}`}
+                          fill="none"
                           stroke="#3b82f6"
                           strokeWidth={2}
                           strokeDasharray="6 4"
