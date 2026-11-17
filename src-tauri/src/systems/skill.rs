@@ -130,4 +130,54 @@ mod tests {
         let raw: Option<String> = sqlx::query_scalar("SELECT systems FROM agents WHERE id='a1'").fetch_one(&pool).await.unwrap();
         assert_eq!(raw, None, "空清單＝移除");
     }
+
+    /// 真的 Claude Code：拿著限定 token，`sys_list` 只看得到被勾選的系統，用別的系統會被擋。
+    /// 會用到少量模型額度。`cargo test -p app --lib -- --ignored --test-threads=1 systems::skill::tests::real_claude`
+    #[tokio::test]
+    #[ignore]
+    async fn real_claude_with_a_scoped_token_sees_and_uses_only_its_systems() {
+        use crate::config::ConfigStore;
+        use crate::systems::endpoint::EndpointState;
+        use crate::systems::state::SystemsState;
+        use crate::systems::types::SystemConnection;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
+        let mk = |id: &str, name: &str| SystemConnection {
+            id: id.into(), name: name.into(), start_url: "http://127.0.0.1:1/".into(), allowed_hosts: vec!["127.0.0.1".into()],
+            mode: Mode::ReadOnly, rules: vec![], enabled: true,
+        };
+        cfg.update(|a| {
+            a.system_connections.push(mk("allowed1", "被授權的系統"));
+            a.system_connections.push(mk("secret9", "沒授權的系統"));
+        })
+        .unwrap();
+        let st = Arc::new(SystemsState::with_pool(cfg, crate::systems::audit::open_in_memory().await));
+        let ep = Arc::new(EndpointState::default());
+        let port = crate::systems::browser::pick_free_port().unwrap();
+        ep.start(st, "master-token".into(), port).await.unwrap();
+        let token = ep.issue_scoped_token(&["allowed1".to_string()]);
+
+        let mcp = dir.path().join("mcp.json");
+        std::fs::write(&mcp, add_server_to_mcp_json(None, port, &token)).unwrap();
+        let prompt = "請依序做兩件事，並把結果原樣回報：1) 呼叫 sys_list，列出你看到的系統 id；\
+                      2) 呼叫 sys_snapshot，system 填 secret9，回報工具回傳的完整文字。不要做別的。";
+        let mut child = tokio::process::Command::new("claude")
+            .args(["-p", "--model", "haiku", "--mcp-config", &mcp.to_string_lossy(), "--allowedTools", ALLOWED_TOOLS, "--output-format", "text"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("需要 claude");
+        use tokio::io::AsyncWriteExt;
+        child.stdin.take().unwrap().write_all(prompt.as_bytes()).await.unwrap();
+        let out = tokio::time::timeout(std::time::Duration::from_secs(180), child.wait_with_output()).await.unwrap().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        eprintln!("claude 的回報：\n{text}");
+        assert!(text.contains("allowed1"), "要看得到被授權的系統：{text}");
+        assert!(!text.contains("沒授權的系統"), "不能看得到沒授權的系統的名稱：{text}");
+        assert!(text.contains("沒有被授權"), "用別的系統要被擋下並回報：{text}");
+        ep.stop();
+    }
 }

@@ -23,6 +23,7 @@ import {
   updateAgent,
   checkTools,
   listDbQueries,
+  setAgentSystems,
   setDbSkill,
   getReferences,
   setReferences,
@@ -64,6 +65,8 @@ import { deleteSchedule, listSchedules, parseSpec, runScheduleNow, saveSchedule,
 /** 編制還沒載入（或讀不到）時，選單照樣出現：團隊範本在裡面。 */
 const EMPTY_FORMATIONS: FormationsState = { formations: [], active: null, pending: null, busy: [], log: [] };
 import { DbSkillDialog } from "./DbSkillDialog";
+import { systemsList } from "../../ipc/systems";
+import { SystemsSkillDialog } from "./SystemsSkillDialog";
 import { ResourceLayer } from "./ResourceLayer";
 import { accessLinks, folderLinks, folderResources, resourcesOf } from "./resources";
 import { ReferencesDialog } from "./ReferencesDialog";
@@ -334,6 +337,8 @@ export function AgentCanvasView({
   const [customSkillsFor, setCustomSkillsFor] = useState<AgentRow | null>(null);
   /** 正在設定資料庫技能的 Agent。 */
   const [dbSkillFor, setDbSkillFor] = useState<AgentRow | null>(null);
+  const [systemsSkillFor, setSystemsSkillFor] = useState<AgentRow | null>(null);
+  const [systemNames, setSystemNames] = useState<Record<string, string>>({});
   const [toolsBusy, setToolsBusy] = useState(false);
   const [tasks, setTasks] = useState<TaskWithAttachments[]>([]);
   /** 每張卡的 token 用量；記著是哪個專案的，切專案時舊的不會被拿來用。 */
@@ -622,6 +627,17 @@ export function AgentCanvasView({
       alive = false;
     };
   }, [isActive, dbSkillFor]);
+  // 系統連線技能的標籤顯示系統名稱；設定框關掉後再讀一次。
+  useEffect(() => {
+    if (!isActive || systemsSkillFor) return;
+    let alive = true;
+    systemsList()
+      .then((l) => alive && setSystemNames(Object.fromEntries(l.map((x) => [x.id, x.name]))))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [isActive, systemsSkillFor]);
   const dbQueries = useMemo(() => (dbQueriesOf?.projectId === projectId ? dbQueriesOf.rows : []), [dbQueriesOf, projectId]);
   const references = useMemo(() => (refsOf?.projectId === projectId ? refsOf.list : []), [refsOf, projectId]);
   const schedules = useMemo(() => (schedulesOf?.projectId === projectId ? schedulesOf.rows : []), [schedulesOf, projectId]);
@@ -864,6 +880,7 @@ export function AgentCanvasView({
       if (d.kind === "skill") {
         const a = target?.kind === "agent" ? agents.find((x) => x.id === target.agentId) : undefined;
         if (a && d.id === "custom") setCustomSkillsFor(a);
+        else if (a && d.id === "systems") setSystemsSkillFor(a);
         else if (a) setDbSkillFor(a);
         else setToast(t.ac_skill_only_agent);
         return;
@@ -1651,6 +1668,17 @@ export function AgentCanvasView({
           </span>
           <span className="ac-pool-name">{t.ac_skill_custom}</span>
         </div>
+        <div
+          className="ac-pool-item ac-pool-item--skill"
+          data-testid="skill-systems"
+          title={t.ac_skill_hint}
+          onMouseDown={(e) => beginDrag(e, "skill", "systems")}
+        >
+          <span className="ac-agent-ico" aria-hidden>
+            <RoleIcon name="globe" />
+          </span>
+          <span className="ac-pool-name">{t.ac_skill_systems}</span>
+        </div>
       </div>
 
       <div className={`ac-main${layout.libCollapsed ? " ac-main--lib-collapsed" : ""}`}>
@@ -1876,6 +1904,11 @@ export function AgentCanvasView({
                         return { names, missing, active: used?.skill ?? null };
                       })()}
                       onCustomSkills={() => setCustomSkillsFor(a)}
+                      systemsSkill={(() => {
+                        const ids = parseSkillPaths(a.systems);
+                        return ids.length === 0 ? null : { names: ids.map((id) => systemNames[id] ?? id) };
+                      })()}
+                      onSystemsSkill={() => setSystemsSkillFor(a)}
                       missingTool={
                         (a.cli ?? "claude") === "codex"
                           ? missing.includes("codex") ? "Codex" : null
@@ -2126,7 +2159,9 @@ export function AgentCanvasView({
               : ghost.kind === "skill"
                 ? ghost.id === "custom"
                   ? t.ac_skill_custom
-                  : t.ac_skill_db
+                  : ghost.id === "systems"
+                    ? t.ac_skill_systems
+                    : t.ac_skill_db
                 : (ghostCard?.title ?? "")}
           </div>,
           document.body,
@@ -2187,6 +2222,18 @@ export function AgentCanvasView({
           onSave={async (list) => {
             const saved = await setReferences(projectId, list);
             setRefsOf({ projectId, list: saved });
+          }}
+        />
+      )}
+
+      {systemsSkillFor && projectId && (
+        <SystemsSkillDialog
+          agentName={systemsSkillFor.name}
+          current={parseSkillPaths(systemsSkillFor.systems)}
+          onClose={() => setSystemsSkillFor(null)}
+          onSave={async (ids) => {
+            await setAgentSystems(projectId, systemsSkillFor.id, ids);
+            await refresh();
           }}
         />
       )}

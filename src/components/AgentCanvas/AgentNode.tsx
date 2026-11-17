@@ -56,6 +56,8 @@ export function AgentNode({
   onDbSkill,
   customSkills = null,
   onCustomSkills,
+  systemsSkill = null,
+  onSystemsSkill,
   status,
   nowSecs,
   dropState,
@@ -108,6 +110,9 @@ export function AgentNode({
   /** 自訂技能：名稱，與剛讀過的那個技能（亮起來用）。沒有是 null。 */
   customSkills?: { names: string[]; missing: string[]; active: string | null } | null;
   onCustomSkills?: () => void;
+  /** 系統連線技能：被勾選的系統名稱；沒有就是 null。 */
+  systemsSkill?: { names: string[] } | null;
+  onSystemsSkill?: () => void;
   status: AgentStatus;
   nowSecs: number;
   dropState: "ok" | "bad" | null;
@@ -479,6 +484,21 @@ export function AgentNode({
               {dbSkill.activity.sql}
             </span>
           )}
+        </button>
+      )}
+      {systemsSkill && (
+        <button
+          type="button"
+          className="ac-skill-row ac-skill-row--custom"
+          data-testid="agent-systems-skill"
+          title={`${t.ac_sys_chip_tip}\n${systemsSkill.names.join("\n")}`}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={onSystemsSkill}
+        >
+          <span className="ac-skill-row-line">
+            <RoleIcon name="globe" size={13} />
+            <span className="ac-skill-row-label">{systemsSkill.names.join("、")}</span>
+          </span>
         </button>
       )}
       {customSkills && (

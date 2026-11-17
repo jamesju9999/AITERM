@@ -58,6 +58,7 @@ vi.mock("../../ipc/agents", () => ({
   acceptVerification: vi.fn().mockResolvedValue(undefined),
   checkTools: vi.fn(),
   setDbSkill: vi.fn().mockResolvedValue(undefined),
+  setAgentSystems: vi.fn().mockResolvedValue(undefined),
   listDbQueries: vi.fn(),
   getReferences: vi.fn(),
   setReferences: vi.fn(),
@@ -70,6 +71,11 @@ vi.mock("../../ipc/agents", () => ({
   projectRepo: vi.fn(),
   setProjectRepo: vi.fn().mockResolvedValue(undefined),
   deleteAllAgents: vi.fn().mockResolvedValue(2),
+}));
+vi.mock("../../ipc/systems", () => ({
+  systemsList: vi.fn().mockResolvedValue([
+    { id: "sys1", name: "訂單系統", start_url: "https://x/", allowed_hosts: ["x"], mode: "autonomous", rules: [], enabled: true },
+  ]),
 }));
 vi.mock("../../ipc/schedules", () => ({
   listSchedules: vi.fn().mockResolvedValue([]),
@@ -147,6 +153,7 @@ import {
   createAgent,
   listDbQueries,
   setDbSkill,
+  setAgentSystems,
   getReferences,
   setReferences,
   listSkills,
@@ -491,6 +498,28 @@ describe("AgentCanvasView", () => {
     fireEvent.click(within(dlg).getByLabelText(/每次核准|Approve each/));
     fireEvent.click(within(dlg).getByRole("button", { name: /^儲存$|^Save$/ }));
     await waitFor(() => expect(setDbSkill).toHaveBeenCalledWith("p1", "a1", { connections: ["dev"], mode: "approve" }));
+  });
+
+  it("把系統連線技能拖到工程師上：勾選系統後存檔，節點顯示系統名稱", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const node = await screen.findByTestId("agent-a1");
+    drag(screen.getByTestId("skill-systems"), node);
+    const dlg = await screen.findByTestId("systems-skill-dialog");
+    fireEvent.click(await within(dlg).findByLabelText(/訂單系統/));
+    fireEvent.click(within(dlg).getByRole("button", { name: /^儲存$|^Save$/ }));
+    await waitFor(() => expect(setAgentSystems).toHaveBeenCalledWith("p1", "a1", ["sys1"]));
+  });
+
+  it("已勾選系統連線的 Agent 在節點上顯示系統名稱，點一下可以修改", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent({ systems: '["sys1"]' })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    view();
+    const chip = await within(await screen.findByTestId("agent-a1")).findByTestId("agent-systems-skill");
+    await waitFor(() => expect(chip.textContent).toContain("訂單系統"));
+    fireEvent.click(chip);
+    expect(await screen.findByTestId("systems-skill-dialog")).toBeInTheDocument();
   });
 
   it("裝了技能的工程師顯示連線與權限；查詢中顯示 SQL 開頭 40 字，活動記錄顯示完整 SQL", async () => {

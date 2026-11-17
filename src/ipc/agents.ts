@@ -34,6 +34,8 @@ export interface AgentRow {
   db_skill?: string | null;
   /** 自訂技能：技能資料夾路徑的 JSON 陣列。null／沒有 = 沒有。 */
   custom_skills?: string | null;
+  /** 系統連線技能：被勾選的系統 id（JSON 陣列）。null／沒有 = 沒有。 */
+  systems?: string | null;
 }
 
 export type AgentCli = "claude" | "codex";
@@ -211,6 +213,10 @@ export interface DbQueryRow {
 /** 裝上、修改或移除（null）Agent 的資料庫技能。 */
 export const setDbSkill = (projectId: string, agentId: string, skill: DbSkill | null): Promise<void> =>
   invoke("agents_set_db_skill", { projectId, agentId, skill });
+
+/** 設定 Agent 能用哪些系統連線（空陣列 = 移除）。下一張派出去的卡才生效。 */
+export const setAgentSystems = (projectId: string, agentId: string, systems: string[]): Promise<void> =>
+  invoke("agents_set_systems", { projectId, agentId, systems });
 
 export const listDbQueries = (projectId: string): Promise<DbQueryRow[]> => invoke("agents_db_queries", { projectId });
 
