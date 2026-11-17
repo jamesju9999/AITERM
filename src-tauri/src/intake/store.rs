@@ -15,7 +15,7 @@ pub const REJECTED: &str = "rejected";
 /// 已建成看板卡片，等看板處理；不佔用任何分頁。
 pub const ON_BOARD: &str = "on_board";
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, FromRow)]
 pub struct IntakeItem {
     pub id: String,
     pub source: String,

@@ -163,6 +163,16 @@ pub async fn list(pool: &SqlitePool, system_id: &str, limit: i64) -> Result<Vec<
     .await
 }
 
+/// 測試用：全新的記憶體資料庫，建好 systems.db 的所有表。
+#[cfg(test)]
+pub async fn open_in_memory() -> SqlitePool {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    init(&pool).await.unwrap();
+    super::recipes::init(&pool).await.unwrap();
+    super::jobs::init(&pool).await.unwrap();
+    pool
+}
+
 /// 某系統在 `since_ms` 之後被拒絕、被你拒絕、或等核准逾時的次數（定時任務用它判斷「寫入沒成功」）。
 pub async fn count_blocked_since(pool: &SqlitePool, system_id: &str, since_ms: i64) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(

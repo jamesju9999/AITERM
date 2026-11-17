@@ -310,7 +310,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
         cfg.update(|a| a.system_connections.push(conn(site_port, Mode::ReadOnly))).unwrap();
-        let st = Arc::new(SystemsState::new(cfg));
+        let st = Arc::new(SystemsState::with_pool(cfg, crate::systems::audit::open_in_memory().await));
         let ep = EndpointState::default();
         let port = crate::systems::browser::pick_free_port().unwrap();
         ep.start(st.clone(), "tok".into(), port).await.unwrap();

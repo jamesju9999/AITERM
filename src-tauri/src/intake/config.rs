@@ -22,6 +22,8 @@ pub enum Route {
     Board,
     /// 建成 Agent 協作桌布的卡：要改程式→bug 卡（審核者審查），提問→問答卡。沒有可用的工程師就退回看板。
     Canvas,
+    /// 交給系統連線：用 Claude Code 無人模式讓 AI 在指定的外部網頁系統上完成，回報當回覆。
+    System,
 }
 
 /// 網頁表單的開放範圍。外網沒有獨立模式：`Lan` 綁 0.0.0.0，要從外網進來請自備反向代理／Tunnel。
@@ -60,6 +62,8 @@ pub struct Config {
     pub web_port: u16,
     /// 問題派送到哪裡處理。
     pub route: Route,
+    /// 派送目標是系統連線時，要用哪個系統（`SystemConnection.id`）。
+    pub system_id: String,
 }
 
 impl Default for Config {
@@ -83,6 +87,7 @@ impl Default for Config {
             web_mode: WebMode::Off,
             web_port: 8320,
             route: Route::Board,
+            system_id: String::new(),
         }
     }
 }

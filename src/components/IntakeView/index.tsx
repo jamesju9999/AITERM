@@ -31,6 +31,7 @@ import {
 import { MailIcon } from "../Icons";
 import { MarkdownText } from "../../lib/markdown";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
+import { systemsList, type SystemConnection } from "../../ipc/systems";
 import { useIntakeChanged } from "../../hooks/useIntakeChanged";
 import { useLocale } from "../../contexts/LocaleContext";
 import { validAddress } from "../../lib/intakeAddress";
@@ -577,6 +578,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   const [chanTab, setChanTab] = useState<"mail" | "telegram" | "web">("mail");
   const [tgDefault, setTgDefault] = useState(false);
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
+  const [systems, setSystems] = useState<SystemConnection[]>([]);
   const [senders, setSenders] = useState<IntakeSender[]>([]);
   const [dropped, setDropped] = useState<[string, number][]>([]);
   const [newAddr, setNewAddr] = useState("");
@@ -597,6 +599,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       })
       .catch((e) => onError(errText(e)));
     mailListAccounts().then(setAccounts).catch(() => {});
+    systemsList().then(setSystems).catch(() => {});
     loadSenders();
   }, [loadSenders, onError, projectId]);
 
@@ -795,9 +798,24 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
           <option value="terminal">{t.intake_route_terminal}</option>
           <option value="board">{t.intake_route_board}</option>
           <option value="canvas">{t.intake_route_canvas}</option>
+          <option value="system">{t.intake_route_system}</option>
         </select>
       </label>
       <p className="intake__meta intake__hint">{t[`intake_route_hint_${cfg.route}` as const]}</p>
+      {cfg.route === "system" && (
+        <label className="intake__field">
+          {t.intake_set_system}
+          <select value={cfg.system_id} onChange={(e) => set("system_id", e.target.value)}>
+            <option value="">{t.intake_system_none}</option>
+            {systems.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {cfg.route === "system" && !cfg.system_id && <p className="intake__error">{t.intake_system_required}</p>}
       <label className="intake__field">
         {t.intake_set_rate}
         <input

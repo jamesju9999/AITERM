@@ -7,6 +7,7 @@ import { translations } from "../../lib/i18n";
 import type { IntakeItem } from "../../ipc/intake";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+vi.mock("../../ipc/systems", () => ({ systemsList: vi.fn(() => Promise.resolve([{ id: "sys1", name: "訂單系統", start_url: "https://x/", allowed_hosts: ["x"], mode: "autonomous", rules: [], enabled: true }])) }));
 vi.mock("../../ipc/mail", () => ({ mailListAccounts: vi.fn(() => Promise.resolve([])) }));
 vi.mock("../../ipc/intake", async (orig) => ({
   ...(await orig<typeof import("../../ipc/intake")>()),
@@ -54,7 +55,7 @@ function cfgView(over: Partial<ipc.IntakeConfig> = {}, extra: Partial<ipc.Intake
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320, route: "board", ...over,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
     },
     saved: true,
     telegram_default: false,
@@ -349,6 +350,22 @@ describe("IntakeView", () => {
     expect(screen.getByText(t.intake_route_hint_canvas)).toBeInTheDocument();
     fireEvent.click(screen.getByText(t.intake_set_save));
     await waitFor(() => expect(ipc.intakeSetConfig).toHaveBeenCalledWith("p1", expect.objectContaining({ route: "canvas" }), false));
+  });
+
+  it("settings: the system route asks which system to use, warns until one is chosen, and saves it", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ enabled: true }));
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    fireEvent.change(await screen.findByLabelText(t.intake_set_route), { target: { value: "system" } });
+    expect(screen.getByText(t.intake_route_hint_system)).toBeInTheDocument();
+    expect(screen.getByText(t.intake_system_required)).toBeInTheDocument();
+    const pick = (await screen.findByLabelText(t.intake_set_system)) as HTMLSelectElement;
+    await screen.findByText("訂單系統");
+    fireEvent.change(pick, { target: { value: "sys1" } });
+    expect(screen.queryByText(t.intake_system_required)).toBeNull();
+    fireEvent.click(screen.getByText(t.intake_set_save));
+    await waitFor(() => expect(ipc.intakeSetConfig).toHaveBeenCalledWith("p1", expect.objectContaining({ route: "system", system_id: "sys1" }), false));
   });
 
   it("settings: adds an allowlist sender only with a valid address and saves config", async () => {

@@ -22,6 +22,11 @@ pub const RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const SUMMARY_LIMIT: usize = 4000;
 pub const REASON_FAILURES: &str = "連續失敗";
 
+/// 同一個系統一次只做一件事用的鎖名稱。
+pub fn system_key(system_id: &str) -> String {
+    format!("system:{system_id}")
+}
+
 // ── 純函式 ─────────────────────────────────────────────────────────────────
 
 /// 給 Claude 的提示：在哪個系統、要做什麼，以及做事的規矩。
@@ -412,7 +417,8 @@ impl JobsRuntime {
             }
             let system_on = ctx.systems.connection(&job.system_id).map(|c| c.enabled).unwrap_or(false);
             let _ = mark_fired(&pool, &job.id, schedules::local_ts(now) * 1000).await;
-            match should_run(true, system_on, self.is_running(&job.id)) {
+            let busy = self.is_running(&job.id) || self.is_running(&system_key(&job.system_id));
+            match should_run(true, system_on, busy) {
                 Decision::Skip(why) => {
                     let _ = record_skip(&pool, &job.id, why).await;
                 }
@@ -432,41 +438,65 @@ impl JobsRuntime {
     pub async fn run_job(self: &Arc<Self>, ctx: &Arc<JobsCtx>, id: &str) -> Result<Outcome, String> {
         let pool = ctx.systems.audit_pool().await.ok_or("systems.db 不可用")?;
         let job = get(&pool, id).await.map_err(|e| e.to_string())?.ok_or("找不到這個任務")?;
-        if !self.running.lock().insert(id.to_string()) {
+        if !self.try_lock(id) {
             return Err("這個任務正在執行".into());
         }
+        let key = system_key(&job.system_id);
+        if !self.try_lock(&key) {
+            self.unlock(id);
+            return Err("這個系統正在處理別的事".into());
+        }
         let outcome = self.run_inner(ctx, &pool, &job).await;
-        self.running.lock().remove(id);
+        self.unlock(&key);
+        self.unlock(id);
         outcome
     }
 
+    /// 同一個系統一次只做一件事（定時任務與問題收集共用）。拿到鎖回 `true`。
+    pub fn try_lock(&self, key: &str) -> bool {
+        self.running.lock().insert(key.to_string())
+    }
+
+    pub fn unlock(&self, key: &str) {
+        self.running.lock().remove(key);
+    }
+
     async fn run_inner(&self, ctx: &Arc<JobsCtx>, pool: &SqlitePool, job: &Job) -> Result<Outcome, String> {
-        let conn: SystemConnection = ctx.systems.connection(&job.system_id)?;
         let started_ms = now_ms();
         let run_id = start_run(pool, &job.id, started_ms).await.map_err(|e| e.to_string())?;
-        let outcome = match (conn.enabled, (ctx.endpoint)()) {
-            (false, _) => Outcome { status: "failed", summary: "系統連線已停用".into() },
-            (_, None) => Outcome { status: "failed", summary: "系統連線端點沒有在執行".into() },
-            (true, Some((port, token))) => {
-                let prompt = build_prompt(&conn.name, &conn.id, &job.goal);
-                let command = ctx.config.get().task_board.claude_command;
-                run_claude(&command, &mcp_config_json(port, &token), &prompt, &ctx.work_dir, ctx.timeout).await
-            }
-        };
-        // claude 自己結束碼是 0，不代表事情做成了：這段時間裡有寫入被閘門拒絕、被拒絕或逾時，就算失敗。
-        let outcome = match super::audit::count_blocked_since(pool, &job.system_id, started_ms).await {
-            Ok(n) if n > 0 && outcome.status == "ok" => Outcome {
-                status: "failed",
-                summary: format!("執行期間有 {n} 次寫入被拒絕或等核准逾時（這個系統的權限不允許無人執行這件事）。AI 的回報：\n{}", outcome.summary),
-            },
-            _ => outcome,
-        };
+        let outcome = self.run_goal(ctx, pool, &job.system_id, &job.goal).await;
         let disabled = settle(pool, &job.id, run_id, &outcome).await.map_err(|e| e.to_string())?;
         (ctx.emit)("systems://job-finished", json!({ "job_id": job.id, "system_id": job.system_id, "status": outcome.status }));
         if disabled {
             (ctx.emit)("systems://job-disabled", json!({ "job_id": job.id, "name": job.name, "reason": REASON_FAILURES }));
         }
         Ok(outcome)
+    }
+
+    /// 讓 AI 在某個系統上完成一段目標（定時任務與問題收集共用）：組提示、跑 claude，
+    /// 並把「執行期間有寫入被拒絕或逾時」判成失敗（claude 自己結束碼是 0 也一樣）。
+    pub async fn run_goal(&self, ctx: &Arc<JobsCtx>, pool: &SqlitePool, system_id: &str, goal: &str) -> Outcome {
+        let started_ms = now_ms();
+        let conn: SystemConnection = match ctx.systems.connection(system_id) {
+            Ok(c) => c,
+            Err(e) => return Outcome { status: "failed", summary: e },
+        };
+        let outcome = match (conn.enabled, (ctx.endpoint)()) {
+            (false, _) => Outcome { status: "failed", summary: "系統連線已停用".into() },
+            (_, None) => Outcome { status: "failed", summary: "系統連線端點沒有在執行".into() },
+            (true, Some((port, token))) => {
+                let prompt = build_prompt(&conn.name, &conn.id, goal);
+                let command = ctx.config.get().task_board.claude_command;
+                run_claude(&command, &mcp_config_json(port, &token), &prompt, &ctx.work_dir, ctx.timeout).await
+            }
+        };
+        match super::audit::count_blocked_since(pool, system_id, started_ms).await {
+            Ok(n) if n > 0 && outcome.status == "ok" => Outcome {
+                status: "failed",
+                summary: format!("執行期間有 {n} 次寫入被拒絕或等核准逾時（這個系統的權限不允許無人執行這件事）。AI 的回報：\n{}", outcome.summary),
+            },
+            _ => outcome,
+        }
     }
 }
 
@@ -675,7 +705,7 @@ mod tests {
         let mut c = conn(port, Mode::Autonomous);
         c.id = "t".into();
         cfg.update(|a| a.system_connections.push(c.clone())).unwrap();
-        let st = Arc::new(SystemsState::new(cfg.clone()));
+        let st = Arc::new(SystemsState::with_pool(cfg.clone(), crate::systems::audit::open_in_memory().await));
         let text = |v: &Value| v["content"].as_array().unwrap().iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
 
         // 先手動錄一個配方（全部自主，免核准）。

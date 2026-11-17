@@ -5,7 +5,7 @@ export type IntakeStatus = "pending" | "queued" | "running" | "on_board" | "draf
 export type Level = "internal" | "external";
 export type MatchMode = "alias" | "subject_tag" | "alias_or_tag" | "dedicated";
 export type DispatchMode = "auto" | "manual";
-export type IntakeRoute = "terminal" | "board" | "canvas";
+export type IntakeRoute = "terminal" | "board" | "canvas" | "system";
 
 export interface IntakeItem {
   id: string;
@@ -55,6 +55,8 @@ export interface IntakeConfig {
   web_port: number;
   /** 問題派送到哪裡處理。 */
   route: IntakeRoute;
+  /** 派送目標是系統連線時，要用哪個系統（SystemConnection.id）。 */
+  system_id: string;
 }
 
 export interface IntakeSender {

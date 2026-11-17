@@ -85,6 +85,13 @@ impl SystemsState {
         }
     }
 
+    /// 用指定的資料庫（測試用記憶體資料庫，免得測試把記錄寫進使用者真正的 systems.db）。
+    pub fn with_pool(config: Arc<ConfigStore>, pool: SqlitePool) -> Self {
+        let s = Self::new(config);
+        let _ = s.audit.set(Some(pool));
+        s
+    }
+
     pub fn set_emitter(&self, e: Emitter) {
         *self.emitter.lock() = Some(e);
     }
@@ -445,7 +452,7 @@ mod tests {
         let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
         let c = conn(port, Mode::ReadOnly);
         cfg.update(|a| a.system_connections.push(c.clone())).unwrap();
-        let st = Arc::new(SystemsState::new(cfg.clone()));
+        let st = Arc::new(SystemsState::with_pool(cfg.clone(), crate::systems::audit::open_in_memory().await));
         let text = |v: &Value| v["content"].as_array().unwrap().iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
 
         let url = format!("http://127.0.0.1:{port}/");
@@ -494,7 +501,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
         cfg.update(|a| a.system_connections.push(conn(port, Mode::ApproveEach))).unwrap();
-        let st = Arc::new(SystemsState::new(cfg.clone()));
+        let st = Arc::new(SystemsState::with_pool(cfg.clone(), crate::systems::audit::open_in_memory().await));
         // 自動核准：每 200ms 看一次有沒有等待中的。
         let approver = st.clone();
         let auto = tokio::spawn(async move {
