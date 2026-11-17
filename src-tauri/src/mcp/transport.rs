@@ -87,7 +87,7 @@ impl StdioTransport {
 }
 
 #[cfg(target_os = "windows")]
-fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
+pub(crate) fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
     use std::os::windows::process::CommandExt;
     let mut cmd = tokio::process::Command::new("cmd");
     cmd.arg("/C").arg(command);
@@ -100,7 +100,7 @@ fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) 
 }
 
 #[cfg(target_os = "macos")]
-fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
+pub(crate) fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
     // macOS GUI apps don't inherit the user's shell PATH (e.g. Homebrew, nvm).
     // Wrap in a zsh login shell so /etc/paths and ~/.zprofile are sourced.
     let mut parts = vec![command.to_string()];
@@ -116,7 +116,7 @@ fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) 
 }
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
+pub(crate) fn build_command(command: &str, args: &[String], env: &HashMap<String, String>) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(command);
     cmd.args(args);
     // Only on this arm because AppImage is Linux-only. AppRun exports

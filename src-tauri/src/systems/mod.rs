@@ -6,4 +6,8 @@ pub mod audit;
 pub mod browser;
 pub mod cdp;
 pub mod gate;
+pub mod proxy;
 pub mod types;
+
+#[cfg(test)]
+pub mod testsite;
