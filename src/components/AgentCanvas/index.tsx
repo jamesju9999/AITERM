@@ -350,6 +350,9 @@ export function AgentCanvasView({
   const [movePos, setMovePos] = useState<{ id: string; x: number; y: number } | null>(null);
   const [ghost, setGhost] = useState<{ kind: DragKind; id: string | null; x: number; y: number } | null>(null);
   const [hover, setHover] = useState<DropTarget | null>(null);
+  /** 拖曳幽靈的 DOM 節點：游標每動一下只改它的位置，不要讓整張桌布重畫。 */
+  const ghostElRef = useRef<HTMLDivElement>(null);
+  const ghostShownRef = useRef(false);
   const dragRef = useRef<DragState | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const onCanvasPan = useCanvasPan(canvasRef);
@@ -811,12 +814,21 @@ export function AgentCanvasView({
         setMovePos({ id: d.id, x: Math.max(0, p.x - d.offX), y: Math.max(0, p.y - d.offY) });
         return;
       }
-      setGhost({ kind: d.kind, id: d.id, x: e.clientX, y: e.clientY });
-      setHover(hitTest(e.clientX, e.clientY));
+      // 幽靈只在開始拖的那一下進 state；之後直接改 DOM 位置。落點沒變也不重畫（整張桌布很大，
+      // 每次 mousemove 都重畫會讓拖曳與放開時一頓一頓的）。
+      if (ghostShownRef.current && ghostElRef.current) {
+        ghostElRef.current.style.transform = `translate(${e.clientX + 10}px, ${e.clientY + 10}px)`;
+      } else {
+        ghostShownRef.current = true;
+        setGhost({ kind: d.kind, id: d.id, x: e.clientX, y: e.clientY });
+      }
+      const next = hitTest(e.clientX, e.clientY);
+      setHover((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
     };
     const onUp = (e: MouseEvent) => {
       const d = dragRef.current;
       dragRef.current = null;
+      ghostShownRef.current = false;
       setGhost(null);
       setHover(null);
       if (!d || !d.started || !projectId) return;
@@ -2095,7 +2107,7 @@ export function AgentCanvasView({
 
       {ghost &&
         createPortal(
-          <div className="task-card-ghost ac-ghost" style={{ transform: `translate(${ghost.x + 10}px, ${ghost.y + 10}px)` }}>
+          <div ref={ghostElRef} className="task-card-ghost ac-ghost" style={{ transform: `translate(${ghost.x + 10}px, ${ghost.y + 10}px)` }}>
             {ghost.kind === "pool"
               ? ghost.id === "schedule"
                 ? `⏰ ${t.sched_title}`
