@@ -67,7 +67,10 @@
 /* 表單：左標籤右欄位，與問題收集設定一致 */
 .systems__form label { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 4px; font-size: 13px; }
 .systems__form label > small { grid-column: 2; color: var(--text-secondary, #888); font-size: 12px; }
-.systems__form input:not([type="checkbox"]), .systems__form select, .systems__form textarea { min-width: 0; max-width: 560px; padding: 6px 10px; font: inherit; color: inherit; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; resize: vertical; }
+.systems__form input:not([type="checkbox"]), .systems__form select, .systems__form textarea { box-sizing: border-box; width: 100%; min-width: 0; max-width: 560px; padding: 6px 10px; font: inherit; line-height: 1.5; color: inherit; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; resize: vertical; }
+/* 下拉選單：原生樣式比輸入框矮、窄，這裡拿掉原生外觀，換成跟輸入框同高同寬的自繪箭頭。 */
+.systems__form select { -webkit-appearance: none; appearance: none; padding-right: 30px; cursor: pointer; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M3 4.5l3 3 3-3'/></svg>"); background-repeat: no-repeat; background-position: right 10px center; }
+.systems__form select option { background: var(--bg-secondary, #1a1a2e); color: var(--text-primary, #e0e0e0); }
 .systems__form input:focus, .systems__form select:focus, .systems__form textarea:focus { outline: none; border-color: var(--accent, #a855f7); }
 .systems__form input[type="checkbox"] { accent-color: var(--accent, #a855f7); }
 .systems__form > .systems__actions { padding: 4px 0 0 202px; }
