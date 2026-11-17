@@ -820,6 +820,8 @@ pub fn run() {
             commands::systems::systems_takeover,
             commands::systems::systems_handback,
             commands::systems::systems_audit,
+            commands::systems::systems_recipes,
+            commands::systems::systems_recipe_delete,
             commands::systems::systems_mcp_config,
             update_mcp_server,
             remove_mcp_server,

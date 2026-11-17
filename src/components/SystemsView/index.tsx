@@ -14,6 +14,8 @@ import {
   systemsMcpConfig,
   systemsOpenLogin,
   systemsPending,
+  systemsRecipeDelete,
+  systemsRecipes,
   systemsRemove,
   systemsSave,
   systemsStatus,
@@ -21,6 +23,7 @@ import {
   systemsTakeover,
   type AuditRow,
   type PendingApproval,
+  type Recipe,
   type SystemConnection,
   type SystemStatus,
 } from "../../ipc/systems";
@@ -30,6 +33,7 @@ import { LinkIcon } from "../Icons";
 import { ApprovalCards } from "./ApprovalCards";
 import { AuditLog } from "./AuditLog";
 import { ConnectionForm } from "./ConnectionForm";
+import { RecipeList } from "./RecipeList";
 import "./index.css";
 
 const errText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
@@ -42,6 +46,8 @@ export function SystemsView() {
   const [editing, setEditing] = useState<SystemConnection | "new" | null>(null);
   const [auditFor, setAuditFor] = useState<string | null>(null);
   const [audit, setAudit] = useState<AuditRow[]>([]);
+  const [recipesFor, setRecipesFor] = useState<string | null>(null);
+  const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [mcpConfig, setMcpConfig] = useState("");
   const [error, setError] = useState<string | null>(null);
   const aliveRef = useRef(true);
@@ -60,6 +66,15 @@ export function SystemsView() {
       setStatus(Object.fromEntries(statuses));
       // 第一次儲存連線之後才會有 token，設定要跟著更新。
       void systemsMcpConfig().then((c) => aliveRef.current && setMcpConfig(c)).catch(() => {});
+    } catch (e) {
+      if (aliveRef.current) setError(errText(e));
+    }
+  }, []);
+
+  const loadRecipes = useCallback(async (id: string) => {
+    try {
+      const rows = await systemsRecipes(id);
+      if (aliveRef.current) setRecipes(rows);
     } catch (e) {
       if (aliveRef.current) setError(errText(e));
     }
@@ -231,11 +246,37 @@ export function SystemsView() {
                   >
                     {t.sys_audit_title}
                   </button>
+                  <button
+                    type="button"
+                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                    aria-pressed={recipesFor === s.id}
+                    onClick={() => {
+                      const next = recipesFor === s.id ? null : s.id;
+                      setRecipesFor(next);
+                      setRecipes([]);
+                      if (next) void loadRecipes(next);
+                    }}
+                  >
+                    {t.sys_recipes_title}
+                  </button>
                   <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void remove(s)}>
                     {t.sys_delete}
                   </button>
                 </div>
                 {auditFor === s.id && <AuditLog rows={audit} />}
+                {recipesFor === s.id && (
+                  <RecipeList
+                    recipes={recipes}
+                    onDelete={async (r) => {
+                      const ok = await confirm(t.sys_recipe_delete_confirm(r.name), { kind: "warning" });
+                      await restoreWebviewFocus();
+                      if (ok) {
+                        await run(() => systemsRecipeDelete(r.id));
+                        await loadRecipes(s.id);
+                      }
+                    }}
+                  />
+                )}
               </li>
             );
           })}

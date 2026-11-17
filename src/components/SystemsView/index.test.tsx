@@ -32,6 +32,8 @@ vi.mock("../../ipc/systems", async (orig) => ({
   systemsHandback: vi.fn(() => Promise.resolve()),
   systemsOpenLogin: vi.fn(() => Promise.resolve()),
   systemsRemove: vi.fn(() => Promise.resolve()),
+  systemsRecipes: vi.fn(() => Promise.resolve([])),
+  systemsRecipeDelete: vi.fn(() => Promise.resolve(true)),
 }));
 
 const conn = (over: Partial<SystemConnection> = {}): SystemConnection => ({
@@ -124,5 +126,18 @@ describe("SystemsView", () => {
     setup();
     fireEvent.click(await screen.findByText(t.sys_disable));
     await waitFor(() => expect(ipc.systemsSave).toHaveBeenCalledWith(expect.objectContaining({ id: "s1", enabled: false })));
+  });
+
+  it("the recipes button loads and shows that system's recipes, and deleting asks then calls the command", async () => {
+    vi.mocked(ipc.systemsRecipes).mockResolvedValue([
+      { id: 9, system_id: "s1", name: "送單", description: "", params: [], steps: [], ok_count: 0, fail_count: 0, last_run_ms: null },
+    ]);
+    setup();
+    fireEvent.click(await screen.findByText(t.sys_recipes_title));
+    expect(await screen.findByTestId("recipe-row")).toBeTruthy();
+    expect(ipc.systemsRecipes).toHaveBeenCalledWith("s1");
+    const row = await screen.findByTestId("recipe-row");
+    fireEvent.click(row.querySelectorAll("button")[1]);
+    await waitFor(() => expect(ipc.systemsRecipeDelete).toHaveBeenCalledWith(9));
   });
 });

@@ -50,6 +50,24 @@ export interface AuditRow {
   ts_ms: number;
 }
 
+export interface RecipeStep {
+  tool: string;
+  args: unknown;
+  intent: string;
+}
+
+export interface Recipe {
+  id: number;
+  system_id: string;
+  name: string;
+  description: string;
+  params: { name: string; example: string }[];
+  steps: RecipeStep[];
+  ok_count: number;
+  fail_count: number;
+  last_run_ms: number | null;
+}
+
 export const systemsList = () => invoke<SystemConnection[]>("systems_list");
 export const systemsSave = (conn: SystemConnection) => invoke<void>("systems_save", { conn });
 export const systemsRemove = (id: string) => invoke<void>("systems_remove", { id });
@@ -75,3 +93,6 @@ export const onSystemsResolved = (cb: (id: string) => void): Promise<UnlistenFn>
 export const onSystemsState = (cb: (systemId: string) => void): Promise<UnlistenFn> =>
   listen<{ system_id: string }>("systems://state", (e) => cb(e.payload.system_id));
 export const onSystemsDenied = (cb: () => void): Promise<UnlistenFn> => listen("systems://denied", () => cb());
+
+export const systemsRecipes = (id: string) => invoke<Recipe[]>("systems_recipes", { id });
+export const systemsRecipeDelete = (recipeId: number) => invoke<boolean>("systems_recipe_delete", { recipeId });

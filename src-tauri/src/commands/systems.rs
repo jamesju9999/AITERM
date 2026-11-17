@@ -166,6 +166,16 @@ pub async fn systems_audit(id: String, limit: Option<i64>, systems: State<'_, Ar
     audit::list(&pool, &id, limit.unwrap_or(100).clamp(1, 500)).await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn systems_recipes(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<Vec<crate::systems::recipes::Recipe>, String> {
+    systems.recipe_list(&id).await
+}
+
+#[tauri::command]
+pub async fn systems_recipe_delete(recipe_id: i64, systems: State<'_, Arc<SystemsState>>) -> Result<bool, String> {
+    systems.recipe_delete(recipe_id).await
+}
+
 /// 給 Claude Code 貼的 MCP 設定。
 #[tauri::command]
 pub async fn systems_mcp_config(secrets: State<'_, Arc<SecretStore>>) -> Result<String, String> {
