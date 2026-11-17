@@ -47,6 +47,8 @@ import { JobList } from "./JobList";
 import { RecipeList } from "./RecipeList";
 import "./index.css";
 
+type PanelKind = "audit" | "recipes" | "jobs";
+
 const errText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
 
 export function SystemsView() {
@@ -55,11 +57,10 @@ export function SystemsView() {
   const [status, setStatus] = useState<Record<string, SystemStatus>>({});
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [editing, setEditing] = useState<SystemConnection | "new" | null>(null);
-  const [auditFor, setAuditFor] = useState<string | null>(null);
+  // 每個系統卡片底下一次只展開一個面板（操作記錄／配方／定時任務）。
+  const [panel, setPanel] = useState<{ id: string; kind: PanelKind } | null>(null);
   const [audit, setAudit] = useState<AuditRow[]>([]);
-  const [recipesFor, setRecipesFor] = useState<string | null>(null);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [jobsFor, setJobsFor] = useState<string | null>(null);
   const [jobs, setJobs] = useState<SystemJob[]>([]);
   const [jobRuns, setJobRuns] = useState<Record<string, JobRun[]>>({});
   const [notice, setNotice] = useState<string | null>(null);
@@ -67,6 +68,7 @@ export function SystemsView() {
   const [error, setError] = useState<string | null>(null);
   const aliveRef = useRef(true);
   const auditForRef = useRef<string | null>(null);
+  const jobsForRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -95,7 +97,6 @@ export function SystemsView() {
     }
   }, []);
 
-  const jobsForRef = useRef<string | null>(null);
   const loadJobs = useCallback(async (id: string) => {
     try {
       const list = await systemsJobs(id);
@@ -183,6 +184,30 @@ export function SystemsView() {
     return t.sys_status_running;
   };
 
+  const badgeKind = (s: SystemConnection) => {
+    const st = status[s.id];
+    if (!s.enabled) return "off";
+    if (st?.needs_login) return "warn";
+    if (st?.manual) return "info";
+    return st?.running ? "on" : "idle";
+  };
+
+  const openPanel = (id: string, kind: PanelKind) => {
+    const closing = panel?.id === id && panel.kind === kind;
+    const next = closing ? null : { id, kind };
+    setPanel(next);
+    auditForRef.current = next?.kind === "audit" ? id : null;
+    jobsForRef.current = next?.kind === "jobs" ? id : null;
+    setAudit([]);
+    setRecipes([]);
+    setJobs([]);
+    setJobRuns({});
+    if (!next) return;
+    if (kind === "audit") void loadAudit(id);
+    else if (kind === "recipes") void loadRecipes(id);
+    else void loadJobs(id);
+  };
+
   const remove = async (s: SystemConnection) => {
     const ok = await confirm(t.sys_delete_confirm(s.name), { kind: "warning" });
     await restoreWebviewFocus();
@@ -240,7 +265,12 @@ export function SystemsView() {
       )}
 
       {systems.length === 0 && !editing ? (
-        <p className="systems__muted">{t.sys_empty}</p>
+        <div className="systems__empty">
+          <p>{t.sys_empty}</p>
+          <button type="button" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={() => setEditing("new")}>
+            {t.sys_add}
+          </button>
+        </div>
       ) : (
         <ul className="systems__list">
           {systems.map((s) => {
@@ -248,14 +278,31 @@ export function SystemsView() {
             return (
               <li key={s.id} className="systems__item" data-testid="system-item">
                 <div className="systems__head">
-                  <strong>{s.name}</strong>
-                  <span className="systems__badge" data-testid="system-status">
-                    {statusLabel(s)}
-                  </span>
-                  {st && st.pending > 0 && <span className="systems__badge systems__badge--warn">{t.sys_pending_n(st.pending)}</span>}
-                </div>
-                <div className="systems__muted">
-                  {s.start_url} · {{ read_only: t.sys_mode_read_only, approve_each: t.sys_mode_approve_each, rules: t.sys_mode_rules, autonomous: t.sys_mode_autonomous }[s.mode]}
+                  <div className="systems__titleblock">
+                    <div className="systems__name">
+                      <strong>{s.name}</strong>
+                      <span className={`systems__badge systems__badge--${badgeKind(s)}`} data-testid="system-status">
+                        {statusLabel(s)}
+                      </span>
+                      {st && st.pending > 0 && <span className="systems__badge systems__badge--warn">{t.sys_pending_n(st.pending)}</span>}
+                    </div>
+                    <div className="systems__url">
+                      {s.start_url}
+                      <span className="systems__dot">·</span>
+                      {{ read_only: t.sys_mode_read_only, approve_each: t.sys_mode_approve_each, rules: t.sys_mode_rules, autonomous: t.sys_mode_autonomous }[s.mode]}
+                    </div>
+                  </div>
+                  <div className="systems__manage">
+                    <button type="button" className="systems__link" onClick={() => void run(() => systemsSave({ ...s, enabled: !s.enabled }))}>
+                      {s.enabled ? t.sys_disable : t.sys_enable}
+                    </button>
+                    <button type="button" className="systems__link" onClick={() => setEditing(s)}>
+                      {t.sys_edit}
+                    </button>
+                    <button type="button" className="systems__link systems__link--danger" onClick={() => void remove(s)}>
+                      {t.sys_delete}
+                    </button>
+                  </div>
                 </div>
                 <div className="systems__actions">
                   <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={!s.enabled} onClick={() => void run(() => systemsOpenLogin(s.id))}>
@@ -273,60 +320,22 @@ export function SystemsView() {
                       {t.sys_takeover}
                     </button>
                   )}
-                  <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void run(() => systemsSave({ ...s, enabled: !s.enabled }))}>
-                    {s.enabled ? t.sys_disable : t.sys_enable}
-                  </button>
-                  <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setEditing(s)}>
-                    {t.sys_edit}
-                  </button>
-                  <button
-                    type="button"
-                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
-                    aria-pressed={auditFor === s.id}
-                    onClick={() => {
-                      const next = auditFor === s.id ? null : s.id;
-                      setAuditFor(next);
-                      auditForRef.current = next;
-                      setAudit([]);
-                      if (next) void loadAudit(next);
-                    }}
-                  >
-                    {t.sys_audit_title}
-                  </button>
-                  <button
-                    type="button"
-                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
-                    aria-pressed={recipesFor === s.id}
-                    onClick={() => {
-                      const next = recipesFor === s.id ? null : s.id;
-                      setRecipesFor(next);
-                      setRecipes([]);
-                      if (next) void loadRecipes(next);
-                    }}
-                  >
-                    {t.sys_recipes_title}
-                  </button>
-                  <button
-                    type="button"
-                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
-                    aria-pressed={jobsFor === s.id}
-                    onClick={() => {
-                      const next = jobsFor === s.id ? null : s.id;
-                      setJobsFor(next);
-                      jobsForRef.current = next;
-                      setJobs([]);
-                      setJobRuns({});
-                      if (next) void loadJobs(next);
-                    }}
-                  >
-                    {t.sys_jobs_title}
-                  </button>
-                  <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void remove(s)}>
-                    {t.sys_delete}
-                  </button>
                 </div>
-                {auditFor === s.id && <AuditLog rows={audit} />}
-                {jobsFor === s.id && (
+                <div className="systems__tabs" role="group">
+                  {(["audit", "recipes", "jobs"] as const).map((kind) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      className={panel?.id === s.id && panel.kind === kind ? "is-on" : ""}
+                      aria-pressed={panel?.id === s.id && panel.kind === kind}
+                      onClick={() => openPanel(s.id, kind)}
+                    >
+                      {kind === "audit" ? t.sys_audit_title : kind === "recipes" ? t.sys_recipes_title : t.sys_jobs_title}
+                    </button>
+                  ))}
+                </div>
+                {panel?.id === s.id && panel.kind === "audit" && <AuditLog rows={audit} />}
+                {panel?.id === s.id && panel.kind === "jobs" && (
                   <JobList
                     system={s}
                     jobs={jobs}
@@ -348,7 +357,7 @@ export function SystemsView() {
                     onShowRuns={() => void loadJobs(s.id)}
                   />
                 )}
-                {recipesFor === s.id && (
+                {panel?.id === s.id && panel.kind === "recipes" && (
                   <RecipeList
                     recipes={recipes}
                     onDelete={async (r) => {
@@ -367,17 +376,17 @@ export function SystemsView() {
         </ul>
       )}
 
-      <section className="systems__note">
-        <h3>{t.sys_limits_title}</h3>
+      <details className="systems__note">
+        <summary>{t.sys_limits_title}</summary>
         <p>{t.sys_limits_body}</p>
         {mcpConfig && (
           <>
-            <h3>{t.sys_mcp_title}</h3>
+            <div className="systems__subtitle">{t.sys_mcp_title}</div>
             <p className="systems__muted">{t.sys_mcp_hint}</p>
             <pre className="systems__pre">{mcpConfig}</pre>
           </>
         )}
-      </section>
+      </details>
     </div>
   );
 }

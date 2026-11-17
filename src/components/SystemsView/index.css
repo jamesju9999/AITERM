@@ -1,30 +1,86 @@
-.systems { box-sizing: border-box; display: flex; flex-direction: column; height: 100%; padding: 16px 20px; gap: 12px; overflow: auto; background: var(--bg-primary, #0a0b14); color: var(--text-primary, #e0e0e0); }
+/* 系統連線：版面與字級對齊問題收集等其他分頁（13px 基準、圓角卡片、小標籤）。 */
+.systems { box-sizing: border-box; display: flex; flex-direction: column; height: 100%; padding: 16px 20px; gap: 12px; overflow: auto; font-family: inherit; font-size: 13px; line-height: 1.5; background: var(--bg-primary, #0a0b14); color: var(--text-primary, #e0e0e0); }
+.systems > * { width: 100%; max-width: 1080px; margin-left: auto; margin-right: auto; box-sizing: border-box; flex: none; }
+.systems p, .systems h2, .systems h3 { font-family: inherit; }
+.systems p { margin: 0; font-size: 13px; }
+
 .systems__bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .systems__title { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; }
-.systems__muted { color: var(--text-secondary, #888); font-size: 13px; margin: 0; }
-.systems__error { color: #f87171; font-size: 13px; margin: 0; }
-.systems__warn { color: #fbbf24; font-size: 13px; margin: 4px 0; }
-.systems__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.systems__item, .systems__approval, .systems__form, .systems__note { background: var(--bg-secondary, #1a1a2e); border: 1px solid var(--border, #2a2a2a); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-.systems__approvals { display: flex; flex-direction: column; gap: 8px; }
-.systems__approvals h3, .systems__note h3, .systems__audit h3 { margin: 0; font-size: 13px; color: var(--text-secondary, #aaa); }
-.systems__approval { border-color: #fbbf24; }
-.systems__approval-system { font-size: 12px; color: var(--text-secondary, #888); }
-.systems__request, .systems__pre { font-size: 12px; word-break: break-all; white-space: pre-wrap; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #2a2a2a); border-radius: 6px; padding: 6px 8px; margin: 0; }
-.systems__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.systems__badge { font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+.systems__title svg { color: #38bdf8; flex: none; }
+.systems__muted { color: var(--text-secondary, #888); font-size: 12px; }
+.systems__error { color: #f87171; }
+.systems__warn { color: #fbbf24; font-size: 12px; }
+
+/* 空狀態 */
+.systems__empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 36px 24px; text-align: center; border: 1px dashed var(--border, #333); border-radius: 10px; color: var(--text-secondary, #888); }
+
+/* 系統卡片 */
+.systems__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.systems__item, .systems__approval, .systems__form, .systems__note { box-sizing: border-box; background: var(--bg-secondary, #1a1a2e); border: 1px solid var(--border, #2a2a2a); border-radius: 10px; padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
+.systems__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.systems__titleblock { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.systems__name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.systems__name strong { font-size: 15px; font-weight: 600; }
+.systems__url { font-size: 12px; color: var(--text-secondary, #888); word-break: break-all; }
+.systems__dot { margin: 0 6px; opacity: 0.6; }
+.systems__manage { display: flex; align-items: center; gap: 4px; flex: none; }
+.systems__link { font: inherit; font-size: 12px; padding: 2px 8px; color: var(--text-secondary, #888); background: none; border: 1px solid transparent; border-radius: 6px; cursor: pointer; transition: var(--transition-smooth, all 0.2s); }
+.systems__link:hover { color: var(--text-primary, #e0e0e0); background: rgba(255, 255, 255, 0.05); }
+.systems__link--danger:hover { color: #f87171; border-color: rgba(248, 113, 113, 0.5); background: none; }
+.systems__actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+/* 狀態標籤 */
+.systems__badge { font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; background: rgba(148, 163, 184, 0.15); color: #94a3b8; white-space: nowrap; }
+.systems__badge--on { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.systems__badge--info { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
 .systems__badge--warn { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
-.systems__actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.systems__form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-.systems__form input, .systems__form select { padding: 6px 10px; background: var(--bg-primary, #0a0b14); color: inherit; border: 1px solid var(--border, #333); border-radius: 6px; font: inherit; }
-.systems__form small { color: var(--text-secondary, #888); }
-.systems__rules { border: 1px solid var(--border, #2a2a2a); border-radius: 8px; display: flex; flex-direction: column; gap: 6px; }
-.systems__rule { display: grid; grid-template-columns: 90px 1fr 90px; gap: 6px; }
-.systems__audit ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
-.systems__audit li { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
-.systems__verdict { padding: 0 6px; border-radius: 4px; background: rgba(148, 163, 184, 0.15); }
+.systems__badge--off { background: rgba(248, 113, 113, 0.12); color: #f87171; }
+
+/* 分段控制：操作記錄／配方／定時任務 */
+.systems__tabs { display: inline-flex; align-self: flex-start; border: 1px solid var(--border, #333); border-radius: 6px; overflow: hidden; }
+.systems__tabs button { font: inherit; font-size: 12px; padding: 3px 14px; color: var(--text-secondary, #888); background: none; border: 0; border-right: 1px solid var(--border, #333); cursor: pointer; }
+.systems__tabs button:last-child { border-right: 0; }
+.systems__tabs button:hover { color: var(--text-primary, #e0e0e0); }
+.systems__tabs button.is-on { background: var(--accent-dim, rgba(168, 85, 247, 0.15)); color: var(--text-primary, #e0e0e0); }
+
+/* 展開的面板 */
+.systems__audit { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border, #2a2a2a); }
+.systems__audit ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.systems__audit li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 12px; }
+.systems__panelbar { display: flex; justify-content: flex-end; }
+.systems__recipe { display: flex !important; flex-direction: column; align-items: stretch !important; gap: 6px !important; padding: 10px 12px; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #2a2a2a); border-radius: 8px; }
+.systems__recipe ol, .systems__recipe ul { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+.systems__verdict { font-size: 11px; line-height: 1.6; padding: 0 6px; border-radius: 4px; background: rgba(148, 163, 184, 0.15); white-space: nowrap; }
 .systems__verdict--deny, .systems__verdict--rejected, .systems__verdict--timeout, .systems__verdict--failed { color: #f87171; }
 .systems__verdict--approved, .systems__verdict--allow, .systems__verdict--ok { color: #34d399; }
 .systems__verdict--running { color: #38bdf8; }
-.systems__form textarea { padding: 6px 10px; background: var(--bg-primary, #0a0b14); color: inherit; border: 1px solid var(--border, #333); border-radius: 6px; font: inherit; resize: vertical; }
 .systems__verdict--manual { color: #38bdf8; }
+.systems code, .systems__request, .systems__pre { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; }
+.systems__request, .systems__pre { word-break: break-all; white-space: pre-wrap; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #2a2a2a); border-radius: 6px; padding: 6px 10px; margin: 0; }
+
+/* 核准卡 */
+.systems__approvals { display: flex; flex-direction: column; gap: 8px; }
+.systems__approvals h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--text-secondary, #aaa); }
+.systems__approval { border-color: #fbbf24; }
+.systems__approval-system { font-size: 12px; color: var(--text-secondary, #888); }
+
+/* 表單：左標籤右欄位，與問題收集設定一致 */
+.systems__form label { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 4px; font-size: 13px; }
+.systems__form label > small { grid-column: 2; color: var(--text-secondary, #888); font-size: 12px; }
+.systems__form input:not([type="checkbox"]), .systems__form select, .systems__form textarea { min-width: 0; max-width: 560px; padding: 6px 10px; font: inherit; color: inherit; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; resize: vertical; }
+.systems__form input:focus, .systems__form select:focus, .systems__form textarea:focus { outline: none; border-color: var(--accent, #a855f7); }
+.systems__form input[type="checkbox"] { accent-color: var(--accent, #a855f7); }
+.systems__form > .systems__actions { padding: 4px 0 0 202px; }
+.systems__rules { border: 1px solid var(--border, #2a2a2a); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.systems__rules legend { padding: 0 6px; font-size: 12px; color: var(--text-secondary, #888); }
+.systems__rule { display: grid; grid-template-columns: 90px 1fr 90px; gap: 6px; }
+.systems__rules label { display: inline-flex; grid-template-columns: none; gap: 4px; margin-right: 10px; }
+
+/* 說明（預設收合） */
+.systems__note { padding: 10px 18px; }
+.systems__note summary { cursor: pointer; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; color: var(--text-secondary, #888); }
+.systems__note[open] { gap: 8px; }
+.systems__note p { color: var(--text-secondary, #aaa); font-size: 12px; }
+.systems__subtitle { margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--text-secondary, #aaa); }
+
+@media (max-width: 720px) { .systems__form > .systems__actions { padding-left: 0; } .systems__form label { grid-template-columns: 1fr; } .systems__form label > small { grid-column: 1; } .systems__head { flex-direction: column; } }

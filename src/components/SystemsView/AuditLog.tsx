@@ -13,7 +13,6 @@ export function AuditLog({ rows }: { rows: AuditRow[] }) {
   };
   return (
     <section className="systems__audit">
-      <h3>{t.sys_audit_title}</h3>
       {rows.length === 0 ? (
         <p className="systems__muted">{t.sys_audit_empty}</p>
       ) : (

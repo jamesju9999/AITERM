@@ -14,7 +14,6 @@ export function RecipeList({ recipes, onDelete }: Props) {
   const [open, setOpen] = useState<number | null>(null);
   return (
     <section className="systems__audit">
-      <h3>{t.sys_recipes_title}</h3>
       {recipes.length === 0 ? (
         <p className="systems__muted">{t.sys_recipes_empty}</p>
       ) : (

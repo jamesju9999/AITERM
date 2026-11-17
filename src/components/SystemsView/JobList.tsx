@@ -34,8 +34,7 @@ export function JobList({ system, jobs, runs, onSave, onDelete, onToggle, onRunN
 
   return (
     <section className="systems__audit">
-      <div className="systems__head">
-        <h3>{t.sys_jobs_title}</h3>
+      <div className="systems__panelbar">
         <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setEditing("new")}>
           {t.sys_job_add}
         </button>
