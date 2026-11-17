@@ -33,6 +33,7 @@ import { AgentCanvasView } from "./AgentCanvas";
 import { ArchitectureView } from "./ArchitectureView";
 import { MailView } from "./MailView";
 import { IntakeView } from "./IntakeView";
+import { SystemsView } from "./SystemsView";
 import { RemoteTerminalView } from "./RemoteTerminalView";
 import { HomeView } from "./HomeView";
 import { TaskBoardView } from "./TaskBoard";
@@ -411,6 +412,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
     if (type === "knowledge-base") title = t.knowledge_base_tab;
     if (type === "mail") title = t.mail_tab;
     if (type === "intake") title = t.intake_tab;
+    if (type === "systems") title = t.systems_tab;
     if (type === "agent-canvas") title = t.agent_canvas_tab;
     if (type === "architecture") title = t.arch_tab;
     // 兩種來源要分得出來：選單挑「Claude Code」是使用者當下的意圖，換整顆圖示
@@ -992,6 +994,8 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
                 />
               ) : tab.type === "intake" ? (
                 <IntakeView />
+              ) : tab.type === "systems" ? (
+                <SystemsView />
               ) : tab.type === "mail" ? (
                 <MailView isActive={isActive} onMessageRead={refreshMailUnread} />
               ) : tab.type === "remote-terminal" ? (
