@@ -299,27 +299,36 @@ pub struct ProviderInput {
     pub auth_method: Option<String>,
 }
 
+/// 同步的 Tauri 指令會跑在主執行緒上；這裡每個供應商都要讀一次系統鑰匙圈
+/// （`secrets.has`），供應商一多、鑰匙圈一慢，介面就會卡住（拖出定時器對話框時
+/// 隔一陣子才跳出就是這個）。放到 blocking 執行緒，主執行緒照常畫畫面。
 #[tauri::command]
-pub fn list_providers(
-    config: State<Arc<ConfigStore>>,
-    secrets: State<Arc<SecretStore>>,
-) -> Vec<ProviderInfo> {
-    let cfg = config.get();
-    cfg.providers
-        .iter()
-        .map(|p| ProviderInfo {
-            id: p.id.clone(),
-            display_name: p.display_name.clone(),
-            provider_type: p.provider_type,
-            base_url: p.base_url.clone(),
-            oauth_client_id: p.oauth_client_id.clone(),
-            model: p.model.clone(),
-            supports_json_mode: p.supports_json_mode,
-            has_api_key: secrets.has(&p.id),
-            is_default: cfg.default_provider.as_deref() == Some(&p.id),
-            auth_method: p.auth_method.clone(),
-        })
-        .collect()
+pub async fn list_providers(
+    config: State<'_, Arc<ConfigStore>>,
+    secrets: State<'_, Arc<SecretStore>>,
+) -> Result<Vec<ProviderInfo>, String> {
+    let config = Arc::clone(&config);
+    let secrets = Arc::clone(&secrets);
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = config.get();
+        cfg.providers
+            .iter()
+            .map(|p| ProviderInfo {
+                id: p.id.clone(),
+                display_name: p.display_name.clone(),
+                provider_type: p.provider_type,
+                base_url: p.base_url.clone(),
+                oauth_client_id: p.oauth_client_id.clone(),
+                model: p.model.clone(),
+                supports_json_mode: p.supports_json_mode,
+                has_api_key: secrets.has(&p.id),
+                is_default: cfg.default_provider.as_deref() == Some(&p.id),
+                auth_method: p.auth_method.clone(),
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
