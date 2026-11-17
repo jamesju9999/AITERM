@@ -36,7 +36,7 @@ pub fn build_prompt(system_name: &str, system_id: &str, goal: &str) -> String {
          目標：\n{goal}\n\n\
          規矩：\n\
          1. 只使用 sys_* 工具，每次呼叫都要帶 system=\"{system_id}\"。\n\
-         2. 先呼叫 sys_recipe_list 看有沒有適用的配方，有就用 sys_recipe_run，不要重新摸索。\n\
+         2. 先呼叫 sys_recipe_list 看有沒有適用的配方（使用者也叫它「操作流程」），有就用 sys_recipe_run，不要重新摸索。\n\
          3. 每個動作都要帶 intent，並以「讀：」或「寫：」開頭說明要做什麼。\n\
          4. 動作被閘門拒絕（回覆含「被閘門拒絕」）時不可重試；停下來，回報需要開放什麼權限。\n\
          5. 登入失效、找不到元素、頁面不是預期的樣子時，不要亂試；停下來回報。\n\

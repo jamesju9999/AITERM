@@ -37,7 +37,7 @@
 .systems__badge--warn { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
 .systems__badge--off { background: rgba(248, 113, 113, 0.12); color: #f87171; }
 
-/* 分段控制：操作記錄／配方／定時任務 */
+/* 分段控制：操作記錄／操作流程／定時任務 */
 .systems__tabs { display: inline-flex; align-self: flex-start; border: 1px solid var(--border, #333); border-radius: 6px; overflow: hidden; }
 .systems__tabs button { font: inherit; font-size: 12px; padding: 3px 14px; color: var(--text-secondary, #888); background: none; border: 0; border-right: 1px solid var(--border, #333); cursor: pointer; }
 .systems__tabs button:last-child { border-right: 0; }

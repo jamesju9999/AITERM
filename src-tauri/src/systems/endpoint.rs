@@ -47,7 +47,7 @@ fn recipe_tools() -> Vec<Value> {
     vec![
         json!({
             "name": "sys_recipe_list",
-            "description": "列出這個系統已存的配方（名稱、說明、參數、步數、成功／失敗次數）。",
+            "description": "列出這個系統已存的配方，也就是使用者說的「操作流程」（名稱、說明、參數、步數、成功／失敗次數）。",
             "inputSchema": { "type": "object", "properties": { "system": sys }, "required": ["system"] }
         }),
         json!({
@@ -65,7 +65,7 @@ fn recipe_tools() -> Vec<Value> {
         }),
         json!({
             "name": "sys_recipe_run",
-            "description": "重播一個配方。每一步仍照該系統的寫入權限判定，需要核准的照樣等使用者。任何一步失敗就停下並回報是哪一步。",
+            "description": "重播一個配方（使用者說的「操作流程」）。每一步仍照該系統的寫入權限判定，需要核准的照樣等使用者。任何一步失敗就停下並回報是哪一步。",
             "inputSchema": { "type": "object", "properties": {
                 "system": sys,
                 "name": { "type": "string" },

@@ -62,7 +62,7 @@ export function SystemsView() {
   const [status, setStatus] = useState<Record<string, SystemStatus>>({});
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [editing, setEditing] = useState<SystemConnection | "new" | null>(null);
-  // 每個系統卡片底下一次只展開一個面板（操作記錄／配方／定時任務）。
+  // 每個系統卡片底下一次只展開一個面板（操作記錄／操作流程／定時任務）。
   const [panel, setPanel] = useState<{ id: string; kind: PanelKind } | null>(null);
   const [audit, setAudit] = useState<AuditRow[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);

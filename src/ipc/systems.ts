@@ -151,7 +151,7 @@ export const onSystemsJobFinished = (cb: () => void): Promise<UnlistenFn> => lis
 export const onSystemsJobDisabled = (cb: (name: string) => void): Promise<UnlistenFn> =>
   listen<{ name: string }>("systems://job-disabled", (e) => cb(e.payload.name));
 
-// ── 請 AI 操作／存配方 ─────────────────────────────────────────────────────
+// ── 請 AI 操作／存操作流程 ─────────────────────────────────────────────────────
 
 export interface StepView {
   tool: string;

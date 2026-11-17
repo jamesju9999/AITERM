@@ -10,7 +10,7 @@ interface Props {
   onRun: (r: Recipe, values: Record<string, string>) => Promise<string>;
 }
 
-/** 這個系統已存的配方：名稱、說明、參數、步數、成功／失敗次數，可展開看步驟與刪除。 */
+/** 這個系統已存的操作流程：名稱、說明、參數、步數、成功／失敗次數，可展開看步驟與刪除。 */
 export function RecipeList({ recipes, onDelete, onRun }: Props) {
   const { t } = useLocale();
   const [open, setOpen] = useState<number | null>(null);

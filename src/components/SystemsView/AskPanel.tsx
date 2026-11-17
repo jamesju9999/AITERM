@@ -19,7 +19,7 @@ interface Props {
 
 const errText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
 
-/** 「請 AI 操作」：打一句話讓 AI 在這個系統上做事；成功後可以把剛才的步驟存成配方。 */
+/** 「請 AI 操作」：打一句話讓 AI 在這個系統上做事；成功後可以把剛才的步驟存成操作流程。 */
 export function AskPanel({ system, onRun, onSaveRecipe, onDiscard }: Props) {
   const { t } = useLocale();
   const [goal, setGoal] = useState("");
@@ -28,7 +28,7 @@ export function AskPanel({ system, onRun, onSaveRecipe, onDiscard }: Props) {
   const [report, setReport] = useState<AdhocReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
-  // 存配方的表單
+  // 存操作流程的表單
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [params, setParams] = useState<Param[]>([]);
