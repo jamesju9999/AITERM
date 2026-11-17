@@ -150,6 +150,54 @@ pub struct Step {
     pub intent: String,
 }
 
+fn locator_name(args: &Value) -> Option<String> {
+    let n = args["target"]["$locator"]["name"].as_str()?.trim();
+    (!n.is_empty()).then(|| n.to_string())
+}
+
+/// 從一串步驟猜出「可能每次會變」的值：輸入的文字（`text`／`value`）與下拉選的值（`values`）。
+/// 參數名稱取自欄位名稱（沒有就 `value1`…），重複的值只列一次。給畫面當預設，使用者可改名或取消。
+pub fn suggest_params(steps: &[Step]) -> Vec<Param> {
+    fn add(out: &mut Vec<Param>, hint: Option<&str>, value: &str) {
+        let v = value.trim();
+        if v.is_empty() || v.chars().count() > 200 || v.contains("{{") || out.iter().any(|p| p.example == v) {
+            return;
+        }
+        let base = hint.map(|h| h.replace(['{', '}'], "")).filter(|h| !h.is_empty()).unwrap_or_else(|| format!("value{}", out.len() + 1));
+        let mut name = base.clone();
+        let mut i = 2;
+        while out.iter().any(|p| p.name == name) {
+            name = format!("{base}_{i}");
+            i += 1;
+        }
+        out.push(Param { name, example: v.to_string() });
+    }
+    fn walk(v: &Value, hint: Option<String>, out: &mut Vec<Param>) {
+        let Value::Object(m) = v else { return };
+        let here = locator_name(v).or_else(|| m.get("name").and_then(|n| n.as_str()).map(String::from)).or(hint);
+        for key in ["text", "value"] {
+            if let Some(Value::String(s)) = m.get(key) {
+                add(out, here.as_deref(), s);
+            }
+        }
+        if let Some(Value::Array(a)) = m.get("values") {
+            for x in a.iter().filter_map(|x| x.as_str()) {
+                add(out, here.as_deref(), x);
+            }
+        }
+        if let Some(Value::Array(a)) = m.get("fields") {
+            for f in a {
+                walk(f, None, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for s in steps.iter().filter(|s| s.tool != "sys_navigate") {
+        walk(&s.args, locator_name(&s.args), &mut out);
+    }
+    out
+}
+
 /// 存配方時：字串值等於某參數的範例就換成佔位符；`url` 欄位用子字串取代（參數常在查詢字串裡）。
 pub fn parameterize(args: &Value, params: &[Param]) -> Value {
     fn walk(v: &Value, key: Option<&str>, params: &[Param]) -> Value {
@@ -418,6 +466,44 @@ mod tests {
         assert_eq!(apply_params(&saved, &HashMap::new()).unwrap_err(), "缺少參數：order_no");
         assert_eq!(missing_params(&params, &HashMap::new()), vec!["order_no".to_string()]);
         assert!(missing_params(&params, &values).is_empty());
+    }
+
+    fn st(tool: &str, args: Value) -> Step {
+        Step { tool: tool.into(), args, intent: "寫：x".into() }
+    }
+
+    #[test]
+    fn typed_text_and_selected_values_become_parameter_candidates_named_after_the_field() {
+        let steps = vec![
+            st("sys_navigate", json!({"url":"http://x/?a=1"})),
+            st("sys_type", json!({"target":{"$locator":{"role":"textbox","name":"單號","nth":0}},"text":"A-102"})),
+            st("sys_type", json!({"target":{"$locator":{"role":"textbox","name":"備註","nth":0}},"text":"急件"})),
+            st("sys_select_option", json!({"target":{"$locator":{"role":"combobox","name":"狀態","nth":0}},"values":["待處理"]})),
+            st("sys_click", json!({"target":{"$locator":{"role":"button","name":"送出","nth":0}}})),
+        ];
+        let p = suggest_params(&steps);
+        let got: Vec<(&str, &str)> = p.iter().map(|x| (x.name.as_str(), x.example.as_str())).collect();
+        assert_eq!(got, vec![("單號", "A-102"), ("備註", "急件"), ("狀態", "待處理")], "點擊與導覽的網址不算");
+    }
+
+    #[test]
+    fn fill_form_fields_are_walked_duplicates_are_listed_once_and_junk_is_skipped() {
+        let steps = vec![
+            st("sys_fill_form", json!({"fields":[{"name":"姓名","target":"x","value":"王小明"},{"name":"暱稱","value":"王小明"},{"value":"b"},{"value":"c"}]})),
+            st("sys_type", json!({"target":{"$locator":{"role":"textbox","name":"","nth":0}},"text":"   "})),
+            st("sys_type", json!({"text":"{{已經是佔位符}}"})),
+            st("sys_type", json!({"text":"x".repeat(201)})),
+        ];
+        let p = suggest_params(&steps);
+        let got: Vec<(&str, &str)> = p.iter().map(|x| (x.name.as_str(), x.example.as_str())).collect();
+        assert_eq!(got, vec![("姓名", "王小明"), ("value2", "b"), ("value3", "c")], "同一個值只列一次；空白、佔位符、過長的不算");
+    }
+
+    #[test]
+    fn two_fields_with_the_same_name_get_distinct_parameter_names() {
+        let loc = json!({"$locator":{"role":"textbox","name":"數量","nth":0}});
+        let p = suggest_params(&[st("sys_type", json!({"target":loc,"text":"1"})), st("sys_type", json!({"target":loc,"text":"2"}))]);
+        assert_eq!(p.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), vec!["數量", "數量_2"]);
     }
 
     #[test]

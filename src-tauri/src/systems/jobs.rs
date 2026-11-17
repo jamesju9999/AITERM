@@ -532,6 +532,88 @@ impl JobsRuntime {
     }
 }
 
+/// 一次性執行的結果：AI 的回報、做了哪些步驟，以及能不能存成配方（成功且有步驟）。
+#[derive(Debug, Clone, Serialize)]
+pub struct AdhocReport {
+    pub status: &'static str,
+    /// AI 的回報（已拿掉給程式看的「結果：」行）；失敗時是原因。
+    pub summary: String,
+    pub steps: Vec<StepView>,
+    /// 系統猜到的參數候選，給存配方的畫面當預設。
+    pub params: Vec<super::recipes::Param>,
+    pub can_save: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StepView {
+    pub tool: String,
+    pub intent: String,
+    /// 這一步的重點（欄位名稱與輸入的值），給畫面顯示。
+    pub detail: String,
+    pub write: bool,
+}
+
+fn step_view(s: &super::recipes::Step) -> StepView {
+    let mut bits: Vec<String> = Vec::new();
+    if let Some(n) = s.args["target"]["$locator"]["name"].as_str().filter(|n| !n.is_empty()) {
+        bits.push(n.to_string());
+    }
+    for k in ["text", "url", "key"] {
+        if let Some(v) = s.args[k].as_str().filter(|v| !v.is_empty()) {
+            bits.push(v.chars().take(80).collect());
+        }
+    }
+    StepView { tool: s.tool.clone(), intent: s.intent.clone(), detail: bits.join(" · "), write: s.intent.trim_start().starts_with('寫') }
+}
+
+impl JobsRuntime {
+    /// 「請 AI 操作」：跑一次目標，回傳結果與這次錄到的步驟。同一個系統一次只做一件事。
+    /// 成功且有步驟時日誌保留（等使用者決定要不要存成配方）；其他情況清空。
+    pub async fn run_adhoc(&self, ctx: &Arc<JobsCtx>, system_id: &str, goal: &str) -> Result<AdhocReport, String> {
+        if goal.trim().is_empty() {
+            return Err("請先寫下要 AI 做什麼".into());
+        }
+        let pool = ctx.systems.audit_pool().await.ok_or("systems.db 不可用")?;
+        let key = system_key(system_id);
+        if !self.try_lock(&key) {
+            return Err("這個系統正在處理別的事".into());
+        }
+        ctx.systems.journal_clear(system_id).await;
+        let outcome = self.run_goal(ctx, &pool, system_id, goal).await;
+        let steps = ctx.systems.journal_steps(system_id).await;
+        self.unlock(&key);
+        let ok = outcome.status == "ok";
+        let can_save = ok && !steps.is_empty();
+        if !can_save {
+            ctx.systems.journal_clear(system_id).await;
+        }
+        Ok(AdhocReport {
+            status: outcome.status,
+            summary: if ok { strip_verdict_line(&outcome.summary) } else { outcome.summary },
+            steps: steps.iter().map(step_view).collect(),
+            params: if can_save { super::recipes::suggest_params(&steps) } else { Vec::new() },
+            can_save,
+        })
+    }
+
+    /// 配方的「執行」：與其他操作共用同一把系統鎖。
+    pub async fn run_recipe_locked(
+        &self,
+        ctx: &Arc<JobsCtx>,
+        system_id: &str,
+        name: &str,
+        values: std::collections::HashMap<String, String>,
+    ) -> Result<String, String> {
+        let key = system_key(system_id);
+        if !self.try_lock(&key) {
+            return Err("這個系統正在處理別的事".into());
+        }
+        let r = ctx.systems.recipe_run(system_id, name, values).await;
+        self.unlock(&key);
+        r
+    }
+}
+
 /// 啟動背景排程：每 30 秒掃一次。
 pub fn spawn(rt: Arc<JobsRuntime>, ctx: Arc<JobsCtx>) {
     tauri::async_runtime::spawn(async move {
@@ -823,6 +905,99 @@ mod tests {
         assert_eq!(out.status, "failed", "{}", out.summary);
         assert!(out.summary.contains("被拒絕"), "{}", out.summary);
         assert_eq!(posts.load(Ordering::SeqCst), 2);
+
+        ep.stop();
+        st.close("t").await;
+    }
+
+    /// 「請 AI 操作」整條：假 claude 以 HTTP 操作端點（填單號並送出）→ 回傳步驟與參數候選 →
+    /// 依候選存成配方 → 用新值重播。需要真的 Chrome：`cargo test -p app --lib -- --ignored --test-threads=1 systems::jobs`
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore]
+    async fn an_adhoc_run_reports_its_steps_and_the_recorded_steps_can_be_saved_and_replayed() {
+        use crate::config::ConfigStore;
+        use crate::systems::endpoint::EndpointState;
+        use crate::systems::recipes::Param;
+        use crate::systems::testsite::{conn, fake_site_with_bodies};
+        use std::sync::atomic::Ordering;
+
+        let (port, posts, bodies) = fake_site_with_bodies().await;
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
+        let mut c = conn(port, Mode::Autonomous);
+        c.id = "t".into();
+        cfg.update(|a| a.system_connections.push(c.clone())).unwrap();
+        let st = Arc::new(SystemsState::with_pool(cfg.clone(), crate::systems::audit::open_in_memory().await));
+        let ep = Arc::new(EndpointState::default());
+        let ep_port = crate::systems::browser::pick_free_port().unwrap();
+        ep.start(st.clone(), "tok".into(), ep_port).await.unwrap();
+
+        let call = |tool: &str, args: &str| {
+            format!(r#"curl -s -H "Authorization: Bearer $TOK" -H 'content-type: application/json' -d '{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{tool}","arguments":{args}}}}}' "$URL""#)
+        };
+        let snapshot = call("sys_snapshot", r#"{"system":"t"}"#);
+        let type_it = call("sys_type", r#"{"system":"t","target":"'$IN'","text":"A-102","intent":"寫：填單號"}"#);
+        let click_it = call("sys_click", r#"{"system":"t","target":"'$BT'","intent":"寫：送出"}"#);
+        let script = format!(
+            "CFG=\"\"; while [ $# -gt 0 ]; do [ \"$1\" = \"--mcp-config\" ] && CFG=\"$2\"; shift; done\n\
+             cat > /dev/null\n\
+             URL=$(grep -o '\"url\":\"[^\"]*\"' \"$CFG\" | cut -d'\"' -f4)\n\
+             TOK=$(grep -o 'Bearer [^\"]*' \"$CFG\" | cut -d' ' -f2)\n\
+             IN=\"\"; BT=\"\"; i=0\n\
+             while [ -z \"$IN\" ] && [ $i -lt 30 ]; do\n\
+               SNAP=$({snapshot})\n\
+               IN=$(echo \"$SNAP\" | grep -o 'textbox[^[]*\\[ref=[a-z0-9]*\\]' | head -1 | sed 's/.*ref=\\([a-z0-9]*\\)\\]/\\1/')\n\
+               BT=$(echo \"$SNAP\" | grep -o 'button[^[]*\\[ref=[a-z0-9]*\\]' | head -1 | sed 's/.*ref=\\([a-z0-9]*\\)\\]/\\1/')\n\
+               i=$((i+1)); [ -z \"$IN\" ] && sleep 0.5\n\
+             done\n\
+             {type_it} > /dev/null\n\
+             {click_it} > /dev/null\n\
+             echo 已送出單號 A-102\n\
+             echo 結果：成功"
+        );
+        cfg.update(|a| a.task_board.claude_command = fake_claude(dir.path(), &script)).unwrap();
+        let ctx = Arc::new(JobsCtx {
+            systems: st.clone(),
+            config: cfg.clone(),
+            endpoint: { let ep = ep.clone(); Arc::new(move || ep.port().zip(ep.token())) },
+            emit: Arc::new(|_, _| {}),
+            work_dir: dir.path().join("jobs"),
+            timeout: Duration::from_secs(120),
+        });
+        let rt = Arc::new(JobsRuntime::default());
+
+        assert!(rt.run_adhoc(&ctx, "t", "  ").await.is_err(), "空白的目標不跑");
+        assert!(rt.try_lock(&system_key("t")));
+        assert_eq!(rt.run_adhoc(&ctx, "t", "填單號 A-102 並送出").await.unwrap_err(), "這個系統正在處理別的事");
+        rt.unlock(&system_key("t"));
+
+        let report = rt.run_adhoc(&ctx, "t", "填單號 A-102 並送出").await.unwrap();
+        assert_eq!(report.status, "ok", "{}", report.summary);
+        assert!(report.summary.contains("已送出單號 A-102") && !report.summary.contains("結果："), "{}", report.summary);
+        assert!(report.can_save);
+        assert_eq!(report.steps.iter().map(|s| s.tool.as_str()).collect::<Vec<_>>(), vec!["sys_type", "sys_click"]);
+        assert!(report.steps.iter().all(|s| s.write));
+        assert_eq!(report.params, vec![Param { name: "value1".into(), example: "A-102".into() }], "輸入的值是參數候選");
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+        assert!(!rt.is_running(&system_key("t")), "做完要放掉系統的鎖");
+
+        // 依候選存成配方（參數改個好記的名字），再用新值重播。
+        let msg = st.recipe_save("t", "送單", "", vec![Param { name: "單號".into(), example: "A-102".into() }], None).await.unwrap();
+        assert!(msg.contains("3 步"), "補上回到起始頁的導覽：{msg}");
+        assert!(st.journal_steps("t").await.is_empty(), "存完日誌清空");
+        let vals: std::collections::HashMap<String, String> = [("單號".to_string(), "B-7".to_string())].into();
+        let out = rt.run_recipe_locked(&ctx, "t", "送單", vals).await.unwrap();
+        assert!(out.contains("已完成"), "{out}");
+        assert_eq!(posts.load(Ordering::SeqCst), 2);
+        assert!(bodies.lock()[1].contains("a=B-7"), "{:?}", bodies.lock());
+
+        // 失敗的一輪不留日誌、不能存。
+        cfg.update(|a| a.task_board.claude_command = fake_claude(dir.path(), "cat > /dev/null\necho 做不到\necho 結果：失敗：找不到欄位")).unwrap();
+        let bad = rt.run_adhoc(&ctx, "t", "做某件事").await.unwrap();
+        assert_eq!(bad.status, "failed");
+        assert!(!bad.can_save && bad.params.is_empty());
+        assert!(st.journal_steps("t").await.is_empty());
 
         ep.stop();
         st.close("t").await;

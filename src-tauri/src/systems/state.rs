@@ -267,6 +267,22 @@ impl SystemsState {
         Ok(res)
     }
 
+    /// 目前的操作日誌（成功的動作）。系統沒開就是空的。
+    pub async fn journal_steps(&self, system: &str) -> Vec<Step> {
+        match self.running.lock().await.get(system) {
+            Some(r) => r.journal.lock().clone(),
+            None => Vec::new(),
+        }
+    }
+
+    /// 清空操作日誌（一次性執行前、或使用者決定不存配方時）。
+    pub async fn journal_clear(&self, system: &str) {
+        if let Some(r) = self.running.lock().await.get(system) {
+            r.journal.lock().clear();
+            *r.journal_start_url.lock() = None;
+        }
+    }
+
     /// 把操作日誌（可只取最後 `last_n` 步）存成配方，並清空日誌。
     pub async fn recipe_save(
         &self,

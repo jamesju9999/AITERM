@@ -228,6 +228,51 @@ pub async fn systems_job_run_now(
     Ok(())
 }
 
+/// 「請 AI 操作」：跑一次，回傳結果與錄到的步驟（可存成配方時日誌會保留）。
+#[tauri::command]
+pub async fn systems_run_goal(
+    system_id: String,
+    goal: String,
+    rt: State<'_, Arc<JobsRuntime>>,
+    ctx: State<'_, Arc<JobsCtx>>,
+) -> Result<jobs::AdhocReport, String> {
+    let (rt, ctx) = (rt.inner().clone(), ctx.inner().clone());
+    rt.run_adhoc(&ctx, &system_id, &goal).await
+}
+
+/// 把剛剛一次性執行錄到的步驟存成配方（使用者確認過名稱與參數）。
+#[tauri::command]
+pub async fn systems_recipe_save_from_journal(
+    system_id: String,
+    name: String,
+    description: String,
+    params: Vec<crate::systems::recipes::Param>,
+    systems: State<'_, Arc<SystemsState>>,
+) -> Result<String, String> {
+    let params: Vec<_> = params.into_iter().filter(|p| !p.name.trim().is_empty() && !p.example.is_empty()).collect();
+    systems.recipe_save(&system_id, &name, &description, params, None).await
+}
+
+/// 不存配方：清掉錄到的步驟。
+#[tauri::command]
+pub async fn systems_journal_discard(system_id: String, systems: State<'_, Arc<SystemsState>>) -> Result<(), String> {
+    systems.journal_clear(&system_id).await;
+    Ok(())
+}
+
+/// 配方的「執行」：帶入參數值直接重播。
+#[tauri::command]
+pub async fn systems_recipe_run(
+    system_id: String,
+    name: String,
+    params: std::collections::HashMap<String, String>,
+    rt: State<'_, Arc<JobsRuntime>>,
+    ctx: State<'_, Arc<JobsCtx>>,
+) -> Result<String, String> {
+    let (rt, ctx) = (rt.inner().clone(), ctx.inner().clone());
+    rt.run_recipe_locked(&ctx, &system_id, &name, params).await
+}
+
 #[tauri::command]
 pub async fn systems_job_runs(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<Vec<JobRun>, String> {
     let pool = systems.audit_pool().await.ok_or("systems.db 不可用")?;
