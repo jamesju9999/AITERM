@@ -121,13 +121,27 @@ AI 宣告為「讀」卻觸發非 GET 請求，核准卡上標示警示（宣告
 macOS／Windows／Linux 都要能用：Chrome 啟動參數、設定檔路徑、行程清理都走既有的平台抽象；
 不使用平台專屬 API。Playwright MCP 版本沿用 `tasks::ask::PLAYWRIGHT_MCP`（釘死）。
 
-## 開工前必須探勘的項目（寫進計畫的第一步，用真的 Chrome 驗證）
+## 探勘結果（2026-11-17，macOS、真的 Chrome、`npx -y @playwright/mcp@0.0.83`，腳本在 scratchpad 的 `probe/probe.mjs`）
 
-規格裡的下列假設**尚未驗證**，計畫要先用實測確認，錯了就回頭改設計：
-1. `@playwright/mcp@0.0.83` 的 `--cdp-endpoint` 能連上 AITerm 啟動的有頭 Chrome（含獨立 `--user-data-dir`）。
-2. 同一個 Chrome 同時有 Playwright MCP 與 AITerm 兩個 CDP 用戶端時，AITerm 的 `Fetch.requestPaused` 確實能攔住並保留 Playwright 觸發的 click 所產生的 POST，且能對新開的分頁自動附加（`Target.setAutoAttach`）。
-3. 請求被保留期間，Playwright MCP 的 click／navigate 會怎麼回覆（逾時？卡住？），決定「改寫逾時錯誤」的作法。
-4. 0.0.83 實際的工具清單與參數，決定代理的白名單與 `intent` 參數怎麼加。
+已證實：
+1. `--cdp-endpoint http://127.0.0.1:<埠>` 能連上 AITerm 自己啟動的 Chrome（`--remote-debugging-port`＋獨立 `--user-data-dir`）。
+2. 同一個 Chrome 有 Playwright MCP 與 AITerm 兩個 CDP 用戶端時，AITerm 用 `Target.setAutoAttach`（flatten）＋ `Fetch.enable` 能攔到 Playwright 觸發的 POST：
+   - 回 `Fetch.failRequest(BlockedByClient)` → **伺服器的計數器維持 0**，被拒絕的寫入確實沒有送出。
+   - 回 `Fetch.continueRequest` → 伺服器收到 1 次。
+   - 實作注意：同一個分頁不可重複附加（探勘時對既有分頁附加了兩次，同一個 POST 被看到兩次）；每個 target 只建一個 session。
+3. 請求被保留（等核准）期間，`browser_click` 會在約 5 秒後回 `TimeoutError`（Playwright 內部逾時，無法調長），請求仍被保留著。
+   → 閘門代理必須：工具回 `TimeoutError` 且該系統有等待中的核准時，**不要把逾時回給 AI**；改成等核准結果
+   （上限＝核准逾時），之後回覆「已核准／已拒絕」加上最新的畫面快照。
+4. 被拒絕的 POST 會讓分頁落到 `chrome-error://chromewebdata/`。代理要偵測這種結果並改寫成
+   「這個動作被閘門拒絕，不可重試」，並把分頁導回上一頁，免得 AI 看到一頁 Chrome 錯誤畫面而困惑。
+5. 工具清單（0.0.83）：`browser_navigate`、`_click`（參數是 `target`，不是 `ref`／`element`）、`_type`、`_fill_form`、
+   `_press_key`、`_select_option`、`_hover`、`_drag`、`_snapshot`、`_take_screenshot`、`_find`、`_wait_for`、`_tabs`、
+   `_navigate_back`、`_handle_dialog`、`_console_messages`、`_network_requests`、`_network_request`、`_resize`、
+   `_emulate_media`、`_close`，以及會繞過畫面操作的 `_evaluate`、`_run_code_unsafe`、`_file_upload`、`_drop`。
+   最後四個預設不開放。代理從子行程的 `tools/list` 動態取得工具與 schema，只多加 `system`、`intent` 兩個參數，
+   不寫死參數名稱。
+
+尚未驗證（計畫的第一步要補）：Windows／Linux 上的 Chrome 啟動與偵錯埠；有頭模式下的行為（探勘用 headless）。
 
 ## 測試
 
