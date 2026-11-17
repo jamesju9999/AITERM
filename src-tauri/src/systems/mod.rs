@@ -7,6 +7,7 @@ pub mod browser;
 pub mod cdp;
 pub mod endpoint;
 pub mod gate;
+pub mod jobs;
 pub mod proxy;
 pub mod recipes;
 pub mod state;

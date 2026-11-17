@@ -127,6 +127,7 @@ pub async fn open() -> Result<SqlitePool, sqlx::Error> {
     let pool = SqlitePool::connect_with(options).await?;
     init(&pool).await?;
     super::recipes::init(&pool).await?;
+    super::jobs::init(&pool).await?;
     Ok(pool)
 }
 
@@ -162,6 +163,17 @@ pub async fn list(pool: &SqlitePool, system_id: &str, limit: i64) -> Result<Vec<
     .await
 }
 
+/// 某系統在 `since_ms` 之後被拒絕、被你拒絕、或等核准逾時的次數（定時任務用它判斷「寫入沒成功」）。
+pub async fn count_blocked_since(pool: &SqlitePool, system_id: &str, since_ms: i64) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM system_audit WHERE system_id = ? AND ts_ms >= ? AND verdict IN ('deny', 'rejected', 'timeout')",
+    )
+    .bind(system_id)
+    .bind(since_ms)
+    .fetch_one(pool)
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +201,17 @@ mod tests {
         assert_eq!(rows[0].tool, "sys_navigate", "最新的在前");
         assert_eq!(rows[1].verdict, "approved");
         assert_eq!(rows[1].source, "user");
+    }
+
+    #[tokio::test]
+    async fn blocked_writes_since_a_time_are_counted_per_system() {
+        let pool = memory().await;
+        for (sys, v, ts) in [("a", Verdict::Deny, 10), ("a", Verdict::Rejected, 20), ("a", Verdict::Timeout, 30), ("a", Verdict::Approved, 40), ("a", Verdict::Allow, 50), ("a", Verdict::Deny, 5), ("b", Verdict::Deny, 25)] {
+            record(&pool, &at(Entry::new(sys, "gate", "i", Some("POST"), Some("u"), v, "rule"), ts)).await.unwrap();
+        }
+        assert_eq!(count_blocked_since(&pool, "a", 10).await.unwrap(), 3, "deny、rejected、timeout 算；approved、allow 不算；更早的不算");
+        assert_eq!(count_blocked_since(&pool, "a", 31).await.unwrap(), 0);
+        assert_eq!(count_blocked_since(&pool, "b", 0).await.unwrap(), 1);
     }
 
     #[tokio::test]
