@@ -41,6 +41,72 @@ fn list_tool() -> Value {
     })
 }
 
+/// 配方相關的工具（不經 Playwright，由我們自己處理）。
+fn recipe_tools() -> Vec<Value> {
+    let sys = json!({ "type": "string", "description": "系統連線的 id" });
+    vec![
+        json!({
+            "name": "sys_recipe_list",
+            "description": "列出這個系統已存的配方（名稱、說明、參數、步數、成功／失敗次數）。",
+            "inputSchema": { "type": "object", "properties": { "system": sys }, "required": ["system"] }
+        }),
+        json!({
+            "name": "sys_recipe_save",
+            "description": "把你剛剛成功完成的一串操作存成配方，之後可用 sys_recipe_run 直接重播。只會存成功的動作；存完後操作日誌清空。\
+                            有會變的值（例如單號）就用 params 宣告：name 是參數名稱，example 是你剛才實際用的值。",
+            "inputSchema": { "type": "object", "properties": {
+                "system": sys,
+                "name": { "type": "string", "description": "配方名稱，同系統內唯一，同名會覆蓋" },
+                "description": { "type": "string", "description": "這個配方做什麼" },
+                "params": { "type": "array", "items": { "type": "object", "properties": {
+                    "name": { "type": "string" }, "example": { "type": "string" } }, "required": ["name", "example"] } },
+                "last_n": { "type": "integer", "description": "只取最後幾步；不填就是上次存配方之後的全部" }
+            }, "required": ["system", "name"] }
+        }),
+        json!({
+            "name": "sys_recipe_run",
+            "description": "重播一個配方。每一步仍照該系統的寫入權限判定，需要核准的照樣等使用者。任何一步失敗就停下並回報是哪一步。",
+            "inputSchema": { "type": "object", "properties": {
+                "system": sys,
+                "name": { "type": "string" },
+                "params": { "type": "object", "description": "參數名稱 → 值", "additionalProperties": { "type": "string" } }
+            }, "required": ["system", "name"] }
+        }),
+    ]
+}
+
+/// 處理配方工具；不是配方工具就回 `None`。
+async fn handle_recipe_tool(state: &Arc<SystemsState>, name: &str, args: &Value) -> Option<Result<String, String>> {
+    let system = args["system"].as_str().unwrap_or("").to_string();
+    let rname = args["name"].as_str().unwrap_or("").to_string();
+    match name {
+        "sys_recipe_list" => Some(state.recipe_list(&system).await.map(|l| {
+            if l.is_empty() {
+                "這個系統還沒有配方。".to_string()
+            } else {
+                serde_json::to_string_pretty(&l.iter().map(|r| json!({
+                    "name": r.name, "description": r.description, "params": r.params,
+                    "steps": r.steps.len(), "ok": r.ok_count, "failed": r.fail_count
+                })).collect::<Vec<_>>()).unwrap_or_default()
+            }
+        })),
+        "sys_recipe_save" => {
+            let params: Vec<super::recipes::Param> = serde_json::from_value(args["params"].clone()).unwrap_or_default();
+            let last_n = args["last_n"].as_u64().map(|n| n as usize);
+            let desc = args["description"].as_str().unwrap_or("");
+            Some(state.recipe_save(&system, &rname, desc, params, last_n).await)
+        }
+        "sys_recipe_run" => {
+            let values: std::collections::HashMap<String, String> = args["params"]
+                .as_object()
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str().map(String::from).unwrap_or_else(|| v.to_string()))).collect())
+                .unwrap_or_default();
+            Some(state.recipe_run(&system, &rname, values).await)
+        }
+        _ => None,
+    }
+}
+
 fn describe_systems(state: &SystemsState, config_conns: Vec<super::types::SystemConnection>) -> String {
     let _ = state;
     if config_conns.is_empty() {
@@ -68,7 +134,7 @@ pub async fn handle_rpc(state: &Arc<SystemsState>, req: Value) -> Option<Value> 
         ),
         "tools/list" => match state.catalog().await {
             Ok(mut tools) => {
-                tools.insert(0, list_tool());
+                tools.splice(0..0, std::iter::once(list_tool()).chain(recipe_tools()));
                 rpc_result(&id, json!({ "tools": tools }))
             }
             Err(e) => rpc_error(&id, -32603, &e),
@@ -80,7 +146,12 @@ pub async fn handle_rpc(state: &Arc<SystemsState>, req: Value) -> Option<Value> 
                 rpc_result(&id, tool_text(describe_systems(state, state.connections()), false))
             } else {
                 let system = args["system"].as_str().unwrap_or("").to_string();
-                if system.is_empty() {
+                if let Some(r) = if system.is_empty() { None } else { handle_recipe_tool(state, &name, &args).await } {
+                    match r {
+                        Ok(t) => rpc_result(&id, tool_text(t, false)),
+                        Err(e) => rpc_result(&id, tool_text(e, true)),
+                    }
+                } else if system.is_empty() {
                     rpc_result(&id, tool_text("缺少 system 參數（先用 sys_list 查看可用的系統 id）".into(), true))
                 } else {
                     match state.call(&system, &name, args).await {
@@ -189,11 +260,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_has_sys_list_first_then_the_catalog() {
+    async fn tools_list_has_sys_list_and_the_recipe_tools_first_then_the_catalog() {
         let s = state_with_catalog();
         let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).await.unwrap();
         let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, vec!["sys_list", "sys_snapshot"]);
+        assert_eq!(names, vec!["sys_list", "sys_recipe_list", "sys_recipe_save", "sys_recipe_run", "sys_snapshot"]);
     }
 
     #[tokio::test]

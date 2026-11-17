@@ -126,6 +126,7 @@ pub async fn open() -> Result<SqlitePool, sqlx::Error> {
         .busy_timeout(Duration::from_secs(5));
     let pool = SqlitePool::connect_with(options).await?;
     init(&pool).await?;
+    super::recipes::init(&pool).await?;
     Ok(pool)
 }
 

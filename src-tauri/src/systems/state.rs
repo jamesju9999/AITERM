@@ -17,6 +17,7 @@ use super::browser::{self, RunningBrowser};
 use super::cdp::{run_gate, GateCtx, GateEvent};
 use super::gate::host_of;
 use super::proxy::{fetch_catalog, Proxy, Upstream};
+use super::recipes::{self, Param, Step};
 use super::types::SystemConnection;
 use crate::config::ConfigStore;
 
@@ -29,6 +30,10 @@ pub struct Running {
     pub proxy: Arc<Proxy>,
     pub ctx: GateCtx,
     needs_login: AtomicBool,
+    /// 最近一次畫面快照的文字（把元素參照換成定位器用）。
+    last_snapshot: Mutex<String>,
+    /// 成功的動作類呼叫，給 `sys_recipe_save` 存成配方。上限 200 步。
+    journal: Mutex<Vec<Step>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -188,6 +193,8 @@ impl SystemsState {
             proxy: Arc::new(proxy),
             ctx,
             needs_login: AtomicBool::new(false),
+            last_snapshot: Mutex::new(String::new()),
+            journal: Mutex::new(Vec::new()),
         });
         map.insert(id.to_string(), run.clone());
         drop(map);
@@ -197,6 +204,11 @@ impl SystemsState {
 
     /// AI 的一次工具呼叫。
     pub async fn call(self: &Arc<Self>, system: &str, tool: &str, args: Value) -> Result<Value, String> {
+        self.call_inner(system, tool, args, true).await
+    }
+
+    /// `record`：成功的動作要不要進操作日誌（重播配方時不記，免得存下重播本身）。
+    async fn call_inner(self: &Arc<Self>, system: &str, tool: &str, args: Value, record: bool) -> Result<Value, String> {
         let run = self.ensure_running(system).await?;
         let conn = self.connection(system)?;
         if !conn.enabled {
@@ -204,8 +216,31 @@ impl SystemsState {
             return Err("這個系統連線已停用".into());
         }
         *run.ctx.conn.lock() = conn.clone(); // 模式、規則改了立刻生效
+        // 日誌用的步驟：把元素參照換成定位器（要在呼叫前用「呼叫當下看到的快照」換）。
+        let journal_step = (record && recipes::is_replayable(tool)).then(|| {
+            let entries = recipes::parse_snapshot(&run.last_snapshot.lock());
+            let mut a = recipes::to_locators(&args, &entries);
+            let intent = a["intent"].as_str().unwrap_or("").to_string();
+            if let Some(o) = a.as_object_mut() {
+                o.remove("system");
+                o.remove("intent");
+            }
+            Step { tool: tool.to_string(), args: a, intent }
+        });
         let mut res = run.proxy.call(tool, args).await?;
         let text = res["content"].as_array().map(|a| a.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+        if text.contains("[ref=") {
+            *run.last_snapshot.lock() = text.clone();
+        }
+        if let Some(step) = journal_step {
+            if res["isError"] != true {
+                let mut j = run.journal.lock();
+                j.push(step);
+                if j.len() > 200 {
+                    j.remove(0);
+                }
+            }
+        }
         let logged_out = looks_logged_out(&conn, &text);
         if run.needs_login.swap(logged_out, Ordering::SeqCst) != logged_out {
             self.emit("systems://state", json!({ "system_id": system, "needs_login": logged_out }));
@@ -216,6 +251,110 @@ impl SystemsState {
             }
         }
         Ok(res)
+    }
+
+    /// 把操作日誌（可只取最後 `last_n` 步）存成配方，並清空日誌。
+    pub async fn recipe_save(
+        &self,
+        system: &str,
+        name: &str,
+        description: &str,
+        params: Vec<Param>,
+        last_n: Option<usize>,
+    ) -> Result<String, String> {
+        self.connection(system)?;
+        if name.trim().is_empty() {
+            return Err("配方需要名稱".into());
+        }
+        let run = self.running.lock().await.get(system).cloned().ok_or("這個系統目前沒有開啟，沒有可存的操作")?;
+        let mut steps: Vec<Step> = run.journal.lock().clone();
+        if let Some(n) = last_n {
+            let skip = steps.len().saturating_sub(n);
+            steps.drain(..skip);
+        }
+        if steps.is_empty() {
+            return Err("操作日誌是空的：先成功完成一串操作，再存成配方".into());
+        }
+        for s in &mut steps {
+            s.args = recipes::parameterize(&s.args, &params);
+        }
+        let pool = self.audit_pool().await.ok_or("審計資料庫不可用，無法儲存配方")?;
+        recipes::save(&pool, system, name.trim(), description, &params, &steps).await.map_err(|e| e.to_string())?;
+        run.journal.lock().clear();
+        Ok(format!("已存成配方「{}」，共 {} 步、{} 個參數。", name.trim(), steps.len(), params.len()))
+    }
+
+    pub async fn recipe_list(&self, system: &str) -> Result<Vec<recipes::Recipe>, String> {
+        self.connection(system)?;
+        let pool = self.audit_pool().await.ok_or("審計資料庫不可用")?;
+        recipes::list(&pool, system).await.map_err(|e| e.to_string())
+    }
+
+    pub async fn recipe_delete(&self, id: i64) -> Result<bool, String> {
+        let pool = self.audit_pool().await.ok_or("審計資料庫不可用")?;
+        recipes::delete(&pool, id).await.map_err(|e| e.to_string())
+    }
+
+    /// 重播配方。每一步都走一般的呼叫流程（intent、閘門、核准、審計都照常）；
+    /// 任何一步失敗就停下並回報。
+    pub async fn recipe_run(
+        self: &Arc<Self>,
+        system: &str,
+        name: &str,
+        values: std::collections::HashMap<String, String>,
+    ) -> Result<String, String> {
+        self.connection(system)?;
+        let pool = self.audit_pool().await.ok_or("審計資料庫不可用")?;
+        let recipe = recipes::get(&pool, system, name)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("找不到配方：{name}"))?;
+        let missing = recipes::missing_params(&recipe.params, &values);
+        if !missing.is_empty() {
+            return Err(format!("缺少參數：{}", missing.join("、")));
+        }
+        let total = recipe.steps.len();
+        let text_of = |v: &Value| -> String {
+            v["content"].as_array().map(|a| a.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default()
+        };
+        for (i, step) in recipe.steps.iter().enumerate() {
+            let n = i + 1;
+            let fail = |why: String| format!("配方「{name}」在第 {n}/{total} 步停下：{why}（步驟：{}）", step.intent);
+            let prepared: Result<Value, String> = async {
+                let args = recipes::apply_params(&step.args, &values)?;
+                if step.tool == "sys_navigate" {
+                    return Ok(args);
+                }
+                let snap = self.call_inner(system, "sys_snapshot", json!({ "system": system }), false).await?;
+                let entries = recipes::parse_snapshot(&text_of(&snap));
+                recipes::resolve_locators(&args, &entries)
+            }
+            .await;
+            let mut args = match prepared {
+                Ok(a) => a,
+                Err(e) => {
+                    let _ = recipes::record_run(&pool, recipe.id, false).await;
+                    return Err(fail(e));
+                }
+            };
+            if let Some(o) = args.as_object_mut() {
+                o.insert("system".into(), json!(system));
+                o.insert("intent".into(), json!(step.intent));
+            }
+            match self.call_inner(system, &step.tool, args, false).await {
+                Ok(r) if r["isError"] != true => {}
+                Ok(r) => {
+                    let _ = recipes::record_run(&pool, recipe.id, false).await;
+                    return Err(fail(text_of(&r)));
+                }
+                Err(e) => {
+                    let _ = recipes::record_run(&pool, recipe.id, false).await;
+                    return Err(fail(e));
+                }
+            }
+        }
+        let _ = recipes::record_run(&pool, recipe.id, true).await;
+        Ok(format!("配方「{name}」已完成，共 {total} 步。"))
     }
 
     /// 停止：拒絕這個系統所有等待中的核准，並讓 AI 的工具呼叫暫停（瀏覽器保持開著），
@@ -339,5 +478,74 @@ mod tests {
         st.close("t").await;
         assert!(!st.status("t").await.running);
         assert!(st.call("t", "sys_snapshot", json!({"system":"t"})).await.is_err());
+    }
+
+    /// 配方：AI 成功填單送出（逐次核准）→ 存成配方 → 換參數重播 → 伺服器收到新值；
+    /// 改成只讀後重播被拒、伺服器沒再收到。需要真的 Chrome 與網路：
+    /// `cargo test -p app --lib -- --ignored --test-threads=1 systems::state`
+    #[tokio::test]
+    #[ignore]
+    async fn a_recipe_is_recorded_replayed_with_new_params_and_still_obeys_the_gate() {
+        use crate::systems::testsite::{conn, fake_site_with_bodies};
+        use std::collections::HashMap;
+        use std::sync::atomic::Ordering;
+
+        let (port, posts, bodies) = fake_site_with_bodies().await;
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
+        cfg.update(|a| a.system_connections.push(conn(port, Mode::ApproveEach))).unwrap();
+        let st = Arc::new(SystemsState::new(cfg.clone()));
+        // 自動核准：每 200ms 看一次有沒有等待中的。
+        let approver = st.clone();
+        let auto = tokio::spawn(async move {
+            loop {
+                for p in approver.approvals.list() {
+                    approver.approvals.decide(&p.id, true);
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        });
+        let text = |v: &Value| v["content"].as_array().unwrap().iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+
+        let url = format!("http://127.0.0.1:{port}/");
+        st.call("t", "sys_navigate", json!({"system":"t","url":url,"intent":"讀：開表單"})).await.unwrap();
+        let snap = st.call("t", "sys_snapshot", json!({"system":"t"})).await.unwrap();
+        let entries = recipes::parse_snapshot(&text(&snap));
+        let input = entries.iter().find(|e| e.role == "textbox").unwrap().reference.clone();
+        let button = entries.iter().find(|e| e.role == "button").unwrap().reference.clone();
+        st.call("t", "sys_type", json!({"system":"t","target":input,"text":"A-102","intent":"寫：填單號"})).await.unwrap();
+        let click = st.call("t", "sys_click", json!({"system":"t","target":button,"intent":"寫：送出表單"})).await.unwrap();
+        assert!(click["isError"] != true, "{}", text(&click));
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+        assert!(bodies.lock()[0].contains("a=A-102"), "{:?}", bodies.lock());
+
+        let msg = st
+            .recipe_save("t", "送單", "填單號並送出", vec![Param { name: "order_no".into(), example: "A-102".into() }], None)
+            .await
+            .unwrap();
+        assert!(msg.contains("3 步"), "{msg}");
+        assert!(st.recipe_save("t", "空", "", vec![], None).await.is_err(), "日誌清空後不能再存");
+
+        // 重播：換參數，伺服器收到新值。
+        let vals: HashMap<String, String> = [("order_no".to_string(), "B-7".to_string())].into();
+        let out = st.recipe_run("t", "送單", vals.clone()).await.unwrap();
+        assert!(out.contains("已完成"), "{out}");
+        assert_eq!(posts.load(Ordering::SeqCst), 2);
+        assert!(bodies.lock()[1].contains("a=B-7"), "{:?}", bodies.lock());
+        assert!(st.recipe_run("t", "送單", HashMap::new()).await.unwrap_err().contains("缺少參數"));
+
+        // 改成只讀：重播在寫入那一步被閘門拒絕，伺服器沒再收到。
+        let mut ro = conn(port, Mode::ReadOnly);
+        ro.id = "t".into();
+        cfg.update(|a| a.system_connections[0] = ro.clone()).unwrap();
+        let err = st.recipe_run("t", "送單", vals).await.unwrap_err();
+        assert!(err.contains("停下") && err.contains("被閘門拒絕"), "{err}");
+        assert_eq!(posts.load(Ordering::SeqCst), 2);
+
+        let list = st.recipe_list("t").await.unwrap();
+        assert_eq!((list[0].ok_count, list[0].fail_count), (1, 1));
+
+        auto.abort();
+        st.close("t").await;
     }
 }
