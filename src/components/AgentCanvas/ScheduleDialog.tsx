@@ -271,7 +271,7 @@ export function ScheduleDialog({
               <input type="number" className="task-field-input" min={MIN_INTERVAL} aria-label={t.sched_minutes} value={every} onChange={(e) => setEvery(e.target.value)} />
               <span>{t.sched_minutes}</span>
             </div>
-            <label>
+            <label className="ac-sched-check">
               <input type="checkbox" checked={useWindow} onChange={(e) => setUseWindow(e.target.checked)} /> {t.sched_window}
             </label>
             {useWindow && (

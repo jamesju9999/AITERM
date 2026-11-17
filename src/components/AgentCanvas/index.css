@@ -1011,8 +1011,10 @@ button.ac-log-title:hover { color: var(--text-primary); }
 /* 定時器 */
 .ac-sched-dialog { max-width: 460px; max-height: 90vh; overflow-y: auto; }
 .ac-sched-days { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 勾選項的文字跟其他對話框的勾選（.ac-produces-spec）同大小同色 */
+.ac-sched-days label, .ac-sched-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-secondary); cursor: pointer; }
 .ac-sched-time { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-.ac-sched-check { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+.ac-sched-check { margin: 8px 0; }
 .ac-sched-runs { margin: 0; padding-left: 18px; font-size: 12px; }
 .ac-sched-node { position: absolute; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border-color, #2a2a2a); background: var(--bg-secondary, #141414); font-size: 12px; line-height: 1.5; }
 .ac-sched-node--enabled { border-color: #22c55e; }
