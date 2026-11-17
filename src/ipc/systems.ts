@@ -96,3 +96,57 @@ export const onSystemsDenied = (cb: () => void): Promise<UnlistenFn> => listen("
 
 export const systemsRecipes = (id: string) => invoke<Recipe[]>("systems_recipes", { id });
 export const systemsRecipeDelete = (recipeId: number) => invoke<boolean>("systems_recipe_delete", { recipeId });
+
+// ── 定時任務 ───────────────────────────────────────────────────────────────
+
+export type JobKind = "daily" | "weekly" | "interval";
+
+export interface JobSpec {
+  times: string[];
+  /** 1=週一 … 7=週日。 */
+  days: number[];
+  every_minutes: number;
+  window?: { from: string; to: string } | null;
+}
+
+export interface SystemJob {
+  id: string;
+  system_id: string;
+  name: string;
+  goal: string;
+  kind: JobKind;
+  spec_json: string;
+  enabled: boolean;
+  created_ms: number;
+  last_fired_ms: number;
+  fail_streak: number;
+  disabled_reason: string | null;
+}
+
+export interface JobRun {
+  id: number;
+  job_id: string;
+  started_ms: number;
+  finished_ms: number | null;
+  status: "running" | "ok" | "failed" | "timeout" | "skipped";
+  summary: string;
+}
+
+export interface NewJob {
+  system_id: string;
+  name: string;
+  goal: string;
+  kind: JobKind;
+  spec: JobSpec;
+}
+
+export const systemsJobs = (systemId?: string) => invoke<SystemJob[]>("systems_jobs", { systemId });
+export const systemsJobSave = (job: NewJob, id?: string) => invoke<string>("systems_job_save", { id, job });
+export const systemsJobDelete = (id: string) => invoke<void>("systems_job_delete", { id });
+export const systemsJobSetEnabled = (id: string, enabled: boolean) => invoke<void>("systems_job_set_enabled", { id, enabled });
+export const systemsJobRunNow = (id: string) => invoke<void>("systems_job_run_now", { id });
+export const systemsJobRuns = (id: string) => invoke<JobRun[]>("systems_job_runs", { id });
+
+export const onSystemsJobFinished = (cb: () => void): Promise<UnlistenFn> => listen("systems://job-finished", () => cb());
+export const onSystemsJobDisabled = (cb: (name: string) => void): Promise<UnlistenFn> =>
+  listen<{ name: string }>("systems://job-disabled", (e) => cb(e.payload.name));

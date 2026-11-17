@@ -4,12 +4,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import {
   onSystemsDenied,
+  onSystemsJobDisabled,
+  onSystemsJobFinished,
   onSystemsNeedApproval,
   onSystemsResolved,
   onSystemsState,
   systemsAudit,
   systemsDecide,
   systemsHandback,
+  systemsJobDelete,
+  systemsJobRunNow,
+  systemsJobRuns,
+  systemsJobs,
+  systemsJobSave,
+  systemsJobSetEnabled,
   systemsList,
   systemsMcpConfig,
   systemsOpenLogin,
@@ -22,9 +30,11 @@ import {
   systemsStop,
   systemsTakeover,
   type AuditRow,
+  type JobRun,
   type PendingApproval,
   type Recipe,
   type SystemConnection,
+  type SystemJob,
   type SystemStatus,
 } from "../../ipc/systems";
 import { unlistenOnCleanup } from "../../lib/eventSubscription";
@@ -33,6 +43,7 @@ import { LinkIcon } from "../Icons";
 import { ApprovalCards } from "./ApprovalCards";
 import { AuditLog } from "./AuditLog";
 import { ConnectionForm } from "./ConnectionForm";
+import { JobList } from "./JobList";
 import { RecipeList } from "./RecipeList";
 import "./index.css";
 
@@ -48,6 +59,10 @@ export function SystemsView() {
   const [audit, setAudit] = useState<AuditRow[]>([]);
   const [recipesFor, setRecipesFor] = useState<string | null>(null);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [jobsFor, setJobsFor] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<SystemJob[]>([]);
+  const [jobRuns, setJobRuns] = useState<Record<string, JobRun[]>>({});
+  const [notice, setNotice] = useState<string | null>(null);
   const [mcpConfig, setMcpConfig] = useState("");
   const [error, setError] = useState<string | null>(null);
   const aliveRef = useRef(true);
@@ -80,6 +95,20 @@ export function SystemsView() {
     }
   }, []);
 
+  const jobsForRef = useRef<string | null>(null);
+  const loadJobs = useCallback(async (id: string) => {
+    try {
+      const list = await systemsJobs(id);
+      const entries = await Promise.all(list.map(async (j) => [j.id, await systemsJobRuns(j.id)] as const));
+      if (aliveRef.current && jobsForRef.current === id) {
+        setJobs(list);
+        setJobRuns(Object.fromEntries(entries));
+      }
+    } catch (e) {
+      if (aliveRef.current) setError(errText(e));
+    }
+  }, []);
+
   const loadAudit = useCallback(async (id: string) => {
     try {
       const rows = await systemsAudit(id, 100);
@@ -107,6 +136,19 @@ export function SystemsView() {
       ),
       unlistenOnCleanup(onSystemsState(() => void refresh()), "systems://state"),
       unlistenOnCleanup(
+        onSystemsJobFinished(() => {
+          if (jobsForRef.current) void loadJobs(jobsForRef.current);
+        }),
+        "systems://job-finished",
+      ),
+      unlistenOnCleanup(
+        onSystemsJobDisabled((name) => {
+          if (aliveRef.current) setNotice(t.sys_job_disabled_toast(name));
+          if (jobsForRef.current) void loadJobs(jobsForRef.current);
+        }),
+        "systems://job-disabled",
+      ),
+      unlistenOnCleanup(
         onSystemsDenied(() => {
           if (auditForRef.current) void loadAudit(auditForRef.current);
         }),
@@ -118,7 +160,7 @@ export function SystemsView() {
       aliveRef.current = false;
       offs.forEach((off) => off());
     };
-  }, [refresh, loadAudit]);
+  }, [refresh, loadAudit, loadJobs, t]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setError(null);
@@ -160,6 +202,11 @@ export function SystemsView() {
       {error && (
         <p className="systems__error" role="alert">
           {t.sys_error(error)}
+        </p>
+      )}
+      {notice && (
+        <p className="systems__warn" role="status" data-testid="job-notice">
+          {notice}
         </p>
       )}
 
@@ -259,11 +306,48 @@ export function SystemsView() {
                   >
                     {t.sys_recipes_title}
                   </button>
+                  <button
+                    type="button"
+                    className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                    aria-pressed={jobsFor === s.id}
+                    onClick={() => {
+                      const next = jobsFor === s.id ? null : s.id;
+                      setJobsFor(next);
+                      jobsForRef.current = next;
+                      setJobs([]);
+                      setJobRuns({});
+                      if (next) void loadJobs(next);
+                    }}
+                  >
+                    {t.sys_jobs_title}
+                  </button>
                   <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void remove(s)}>
                     {t.sys_delete}
                   </button>
                 </div>
                 {auditFor === s.id && <AuditLog rows={audit} />}
+                {jobsFor === s.id && (
+                  <JobList
+                    system={s}
+                    jobs={jobs}
+                    runs={jobRuns}
+                    onSave={async (job, id) => {
+                      await systemsJobSave(job, id);
+                      await loadJobs(s.id);
+                    }}
+                    onDelete={async (j) => {
+                      const ok = await confirm(t.sys_delete_confirm(j.name), { kind: "warning" });
+                      await restoreWebviewFocus();
+                      if (ok) {
+                        await run(() => systemsJobDelete(j.id));
+                        await loadJobs(s.id);
+                      }
+                    }}
+                    onToggle={(j) => void run(() => systemsJobSetEnabled(j.id, !j.enabled)).then(() => loadJobs(s.id))}
+                    onRunNow={(j) => void run(() => systemsJobRunNow(j.id)).then(() => loadJobs(s.id))}
+                    onShowRuns={() => void loadJobs(s.id)}
+                  />
+                )}
                 {recipesFor === s.id && (
                   <RecipeList
                     recipes={recipes}

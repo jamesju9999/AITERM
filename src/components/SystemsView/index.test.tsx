@@ -33,6 +33,12 @@ vi.mock("../../ipc/systems", async (orig) => ({
   systemsOpenLogin: vi.fn(() => Promise.resolve()),
   systemsRemove: vi.fn(() => Promise.resolve()),
   systemsRecipes: vi.fn(() => Promise.resolve([])),
+  systemsJobs: vi.fn(() => Promise.resolve([])),
+  systemsJobRuns: vi.fn(() => Promise.resolve([])),
+  systemsJobSave: vi.fn(() => Promise.resolve("j1")),
+  systemsJobDelete: vi.fn(() => Promise.resolve()),
+  systemsJobSetEnabled: vi.fn(() => Promise.resolve()),
+  systemsJobRunNow: vi.fn(() => Promise.resolve()),
   systemsRecipeDelete: vi.fn(() => Promise.resolve(true)),
 }));
 
@@ -139,5 +145,18 @@ describe("SystemsView", () => {
     const row = await screen.findByTestId("recipe-row");
     fireEvent.click(row.querySelectorAll("button")[1]);
     await waitFor(() => expect(ipc.systemsRecipeDelete).toHaveBeenCalledWith(9));
+  });
+
+  it("the jobs button loads that system's jobs, and a job-disabled event shows a notice", async () => {
+    vi.mocked(ipc.systemsJobs).mockResolvedValue([
+      { id: "j1", system_id: "s1", name: "每日匯出", goal: "g", kind: "daily", spec_json: '{"times":["09:00"]}', enabled: true, created_ms: 1, last_fired_ms: 1, fail_streak: 0, disabled_reason: null },
+    ]);
+    setup();
+    fireEvent.click(await screen.findByText(t.sys_jobs_title, { selector: "button" }));
+    expect(await screen.findByTestId("job-row")).toBeTruthy();
+    expect(ipc.systemsJobs).toHaveBeenCalledWith("s1");
+    await waitFor(() => expect(handlers["systems://job-disabled"]).toBeTruthy());
+    act(() => handlers["systems://job-disabled"]({ name: "每日匯出" }));
+    expect((await screen.findByTestId("job-notice")).textContent).toBe(t.sys_job_disabled_toast("每日匯出"));
   });
 });

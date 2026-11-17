@@ -23,6 +23,8 @@
 .systems__audit ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .systems__audit li { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
 .systems__verdict { padding: 0 6px; border-radius: 4px; background: rgba(148, 163, 184, 0.15); }
-.systems__verdict--deny, .systems__verdict--rejected, .systems__verdict--timeout { color: #f87171; }
-.systems__verdict--approved, .systems__verdict--allow { color: #34d399; }
+.systems__verdict--deny, .systems__verdict--rejected, .systems__verdict--timeout, .systems__verdict--failed { color: #f87171; }
+.systems__verdict--approved, .systems__verdict--allow, .systems__verdict--ok { color: #34d399; }
+.systems__verdict--running { color: #38bdf8; }
+.systems__form textarea { padding: 6px 10px; background: var(--bg-primary, #0a0b14); color: inherit; border: 1px solid var(--border, #333); border-radius: 6px; font: inherit; resize: vertical; }
 .systems__verdict--manual { color: #38bdf8; }

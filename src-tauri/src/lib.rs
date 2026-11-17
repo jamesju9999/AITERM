@@ -330,6 +330,26 @@ pub fn run() {
                 systems.set_emitter(Arc::new(move |name, payload| {
                     let _ = h2.emit(name, payload);
                 }));
+                {
+                    // 定時任務：排程器與「現在執行」共用同一組狀態。
+                    let config = handle.state::<Arc<ConfigStore>>().inner().clone();
+                    let endpoint = handle.state::<Arc<systems::endpoint::EndpointState>>().inner().clone();
+                    let h3 = handle.clone();
+                    let ctx = Arc::new(systems::jobs::JobsCtx {
+                        systems: systems.clone(),
+                        config,
+                        endpoint: Arc::new(move || endpoint.port().zip(endpoint.token())),
+                        emit: Arc::new(move |name, payload| {
+                            let _ = h3.emit(name, payload);
+                        }),
+                        work_dir: dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("AITERM").join("system-jobs"),
+                        timeout: systems::jobs::RUN_TIMEOUT,
+                    });
+                    let rt = Arc::new(systems::jobs::JobsRuntime::default());
+                    app.manage(ctx.clone());
+                    app.manage(rt.clone());
+                    systems::jobs::spawn(rt, ctx);
+                }
                 tauri::async_runtime::spawn(async move {
                     let config = handle.state::<Arc<ConfigStore>>().inner().clone();
                     if config.get().system_connections.is_empty() {
@@ -821,6 +841,12 @@ pub fn run() {
             commands::systems::systems_handback,
             commands::systems::systems_audit,
             commands::systems::systems_recipes,
+            commands::systems::systems_jobs,
+            commands::systems::systems_job_save,
+            commands::systems::systems_job_delete,
+            commands::systems::systems_job_set_enabled,
+            commands::systems::systems_job_run_now,
+            commands::systems::systems_job_runs,
             commands::systems::systems_recipe_delete,
             commands::systems::systems_mcp_config,
             update_mcp_server,

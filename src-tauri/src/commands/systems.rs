@@ -176,6 +176,64 @@ pub async fn systems_recipe_delete(recipe_id: i64, systems: State<'_, Arc<System
     systems.recipe_delete(recipe_id).await
 }
 
+// ── 定時任務 ────────────────────────────────────────────────────────────────
+
+use crate::systems::jobs::{self, Job, JobRun, JobsCtx, JobsRuntime, NewJob};
+
+#[tauri::command]
+pub async fn systems_jobs(system_id: Option<String>, systems: State<'_, Arc<SystemsState>>) -> Result<Vec<Job>, String> {
+    let pool = systems.audit_pool().await.ok_or("systems.db 不可用")?;
+    jobs::list(&pool, system_id.as_deref()).await.map_err(|e| e.to_string())
+}
+
+/// 新增（`id` 為空）或更新。回傳任務 id。
+#[tauri::command]
+pub async fn systems_job_save(id: Option<String>, job: NewJob, systems: State<'_, Arc<SystemsState>>) -> Result<String, String> {
+    systems.connection(&job.system_id)?;
+    let pool = systems.audit_pool().await.ok_or("systems.db 不可用")?;
+    match id {
+        Some(id) => jobs::update(&pool, &id, &job).await.map(|_| id),
+        None => jobs::create(&pool, &job).await,
+    }
+}
+
+#[tauri::command]
+pub async fn systems_job_delete(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<(), String> {
+    let pool = systems.audit_pool().await.ok_or("systems.db 不可用")?;
+    jobs::delete(&pool, &id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn systems_job_set_enabled(id: String, enabled: bool, systems: State<'_, Arc<SystemsState>>) -> Result<(), String> {
+    let pool = systems.audit_pool().await.ok_or("systems.db 不可用")?;
+    jobs::set_enabled(&pool, &id, enabled).await.map_err(|e| e.to_string())
+}
+
+/// 現在執行：丟到背景，完成時畫面會收到 `systems://job-finished`。
+#[tauri::command]
+pub async fn systems_job_run_now(
+    id: String,
+    rt: State<'_, Arc<JobsRuntime>>,
+    ctx: State<'_, Arc<JobsCtx>>,
+) -> Result<(), String> {
+    if rt.is_running(&id) {
+        return Err("這個任務正在執行".into());
+    }
+    let (rt, ctx) = (rt.inner().clone(), ctx.inner().clone());
+    tokio::spawn(async move {
+        if let Err(e) = rt.run_job(&ctx, &id).await {
+            log::warn!("systems job {id}: {e}");
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn systems_job_runs(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<Vec<JobRun>, String> {
+    let pool = systems.audit_pool().await.ok_or("systems.db 不可用")?;
+    jobs::list_runs(&pool, &id).await.map_err(|e| e.to_string())
+}
+
 /// 給 Claude Code 貼的 MCP 設定。
 #[tauri::command]
 pub async fn systems_mcp_config(secrets: State<'_, Arc<SecretStore>>) -> Result<String, String> {
