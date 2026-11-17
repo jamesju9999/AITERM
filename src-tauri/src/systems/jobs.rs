@@ -110,6 +110,18 @@ pub fn final_verdict(summary: &str) -> Option<bool> {
     }
 }
 
+/// 回覆給寄件者的內容不需要那行給程式看的「結果：…」：拿掉最後一個結果行（沒有就原樣）。
+pub fn strip_verdict_line(summary: &str) -> String {
+    let lines: Vec<&str> = summary.trim_end().lines().collect();
+    match lines.iter().rposition(|l| {
+        let t = l.trim();
+        t.starts_with("結果：") || t.starts_with("結果:")
+    }) {
+        Some(i) if lines[i + 1..].iter().all(|l| l.trim().is_empty()) => lines[..i].join("\n").trim_end().to_string(),
+        _ => summary.trim_end().to_string(),
+    }
+}
+
 fn tail_chars(s: &str, n: usize) -> String {
     let chars: Vec<char> = s.trim().chars().collect();
     chars[chars.len().saturating_sub(n)..].iter().collect()
@@ -569,6 +581,14 @@ mod tests {
         assert_eq!(final_verdict("只是一般回報，沒寫結果行"), None);
         assert_eq!(final_verdict("這一行含有結果：成功 但不是行首"), None);
         assert!(build_prompt("s", "id", "g").contains("結果：成功"), "提示要要求 AI 寫結果行");
+    }
+
+    #[test]
+    fn the_verdict_line_is_removed_from_replies_only_when_it_is_the_last_line() {
+        assert_eq!(strip_verdict_line("單號 C-5 已送出。\n\n結果：成功\n"), "單號 C-5 已送出。");
+        assert_eq!(strip_verdict_line("結果：成功"), "");
+        assert_eq!(strip_verdict_line("沒有結果行的回報"), "沒有結果行的回報");
+        assert_eq!(strip_verdict_line("結果：成功\n後面還有內容"), "結果：成功\n後面還有內容", "不是最後一行就不動");
     }
 
     #[test]

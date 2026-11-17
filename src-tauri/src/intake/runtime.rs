@@ -263,7 +263,7 @@ async fn route_system<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, p
         if let Some(sys_pool) = ctx.systems.audit_pool().await {
             let outcome = jobs.run_goal(&ctx, &sys_pool, &system_id, &system_goal(&item)).await;
             if outcome.status == "ok" {
-                complete(&app, &tab, &item.id, Some(outcome.summary)).await;
+                complete(&app, &tab, &item.id, Some(crate::systems::jobs::strip_verdict_line(&outcome.summary))).await;
             } else {
                 store::fail(&pool, &item.id, &format!("系統連線沒有完成：{}", outcome.summary)).await.ok();
             }
@@ -729,13 +729,14 @@ mod board_wiring_tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_queued_item_is_answered_by_the_system_runner() {
-        let env = system_env("cat > \"$(dirname \"$0\")/stdin.txt\"\necho 今天有 12 筆訂單", "t").await;
+        let env = system_env("cat > \"$(dirname \"$0\")/stdin.txt\"\necho 今天有 12 筆訂單\necho 結果：成功", "t").await;
         let h = env.app.handle().clone();
         let item = queued(&env, "查單").await;
         tick(&h).await;
         let got = wait_status(&env.pool, &item.id, store::QUEUED).await;
         assert_eq!(got.status, store::DRAFT, "{:?}", got.error);
-        assert!(got.reply_draft.unwrap().contains("今天有 12 筆訂單"));
+        let draft = got.reply_draft.unwrap();
+        assert!(draft.contains("今天有 12 筆訂單") && !draft.contains("結果："), "給寄件者的回覆不能帶程式用的結果行：{draft}");
         let prompt = std::fs::read_to_string(env.dir.path().join("stdin.txt")).unwrap();
         assert!(prompt.contains("查單") && prompt.contains("請查詢今天的訂單數") && prompt.contains("訂單系統"), "{prompt}");
         assert!(!env.jobs.is_running(&crate::systems::jobs::system_key("t")), "做完要放掉系統的鎖");
