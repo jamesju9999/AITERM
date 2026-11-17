@@ -27,6 +27,7 @@ pub mod projects;
 pub mod python_env;
 pub mod secret;
 pub mod share;
+pub mod systems;
 pub mod tasks;
 pub mod terminal_tool;
 pub mod telegram;
