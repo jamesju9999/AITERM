@@ -9,6 +9,8 @@ export interface MailAccount {
   smtp_port: number;
   username: string;
   poll_interval_secs: number;
+  /** false = no connection is opened for this account. */
+  enabled: boolean;
 }
 
 export interface MailAccountInput {
@@ -70,6 +72,10 @@ export function mailAddAccount(input: MailAccountInput): Promise<MailAccount> {
 
 export function mailRemoveAccount(id: string): Promise<void> {
   return invoke<void>("mail_remove_account", { id });
+}
+
+export function mailSetEnabled(id: string, enabled: boolean): Promise<void> {
+  return invoke<void>("mail_set_enabled", { id, enabled });
 }
 
 export function mailListAccounts(): Promise<MailAccount[]> {

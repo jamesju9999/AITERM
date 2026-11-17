@@ -657,6 +657,10 @@ pub struct MailAccountConfig {
     /// How often to poll while the app is open. Defaults to 5 minutes.
     #[serde(default = "default_mail_poll_interval_secs")]
     pub poll_interval_secs: u32,
+    /// 關閉後不會連線收信（也不會有 Intake 的郵件來源）；帳號與密碼仍保留。
+    /// 舊設定檔沒有這個欄位，一律視為啟用。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 fn default_mail_poll_interval_secs() -> u32 { 300 }

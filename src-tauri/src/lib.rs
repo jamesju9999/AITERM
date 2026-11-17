@@ -84,7 +84,7 @@ use commands::{
     exec::agent_exec,
     loop_session::{loop_session_save, loop_session_list, loop_session_load, loop_session_delete, loop_session_clear_all, loop_project_pick_open, loop_project_pick_save},
     mail::{
-        mail_add_account, mail_remove_account, mail_list_accounts,
+        mail_add_account, mail_remove_account, mail_set_enabled, mail_list_accounts,
         mail_list_messages, mail_mark_read, mail_count_unread, mail_test_connection,
         mail_delete_message,
     },
@@ -640,6 +640,7 @@ pub fn run() {
             // Mail
             mail_add_account,
             mail_remove_account,
+            mail_set_enabled,
             mail_list_accounts,
             mail_list_messages,
             mail_mark_read,

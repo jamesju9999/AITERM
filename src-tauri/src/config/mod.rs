@@ -344,6 +344,7 @@ mod tests {
             smtp_port: 587,
             username: "me@example.com".into(),
             poll_interval_secs: 300,
+            enabled: true,
         };
 
         store.add_mail_account(account.clone()).unwrap();
@@ -352,6 +353,16 @@ mod tests {
 
         store.remove_mail_account("acct-1").unwrap();
         assert!(store.get().mail_accounts.is_empty());
+    }
+
+    #[test]
+    fn mail_account_without_enabled_field_defaults_to_enabled() {
+        use crate::config::types::MailAccountConfig;
+        let legacy = r#"{"id":"a","email":"e","imap_host":"h","imap_port":993,"smtp_host":"s","smtp_port":587,"username":"u"}"#;
+        let acc: MailAccountConfig = serde_json::from_str(legacy).unwrap();
+        assert!(acc.enabled);
+        let off = r#"{"id":"a","email":"e","imap_host":"h","imap_port":993,"smtp_host":"s","smtp_port":587,"username":"u","enabled":false}"#;
+        assert!(!serde_json::from_str::<MailAccountConfig>(off).unwrap().enabled);
     }
 
     #[test]

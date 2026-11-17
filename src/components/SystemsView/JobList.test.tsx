@@ -84,9 +84,20 @@ describe("JobList", () => {
     fireEvent.click(screen.getByText(t.sys_save));
     await waitFor(() => expect(p.onSave).toHaveBeenCalled());
     expect(p.onSave).toHaveBeenCalledWith(
-      { system_id: "s1", name: "匯出昨天的訂單", goal: "匯出昨天的訂單", kind: "daily", spec: { times: ["09:00"], days: [], every_minutes: 0, window: null } },
+      { system_id: "s1", name: "匯出昨天的訂單", goal: "匯出昨天的訂單", kind: "daily", spec: { times: ["09:00"], days: [], every_minutes: 0, window: null }, model: null },
       undefined,
     );
+  });
+
+  it("a job can pick its own model, defaulting to the system's", async () => {
+    const p = mount({ jobs: [], system: { ...system(), model: "sonnet" } });
+    fireEvent.click(screen.getByText(t.sys_job_add));
+    const select = screen.getByLabelText(t.sys_model) as HTMLSelectElement;
+    expect(select.options[0].textContent).toBe(t.sys_model_inherit_system("Sonnet"));
+    fireEvent.change(select, { target: { value: "haiku" } });
+    fireEvent.change(screen.getByPlaceholderText(t.sys_job_goal_ph), { target: { value: "查訂單" } });
+    fireEvent.click(screen.getByText(t.sys_save));
+    await waitFor(() => expect(p.onSave).toHaveBeenCalledWith(expect.objectContaining({ model: "haiku" }), undefined));
   });
 
   it("times are chips: add one, remove one, and the preview follows", () => {

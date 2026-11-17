@@ -261,7 +261,7 @@ async fn route_system<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, p
     let (app, pool, system_id) = (app.clone(), pool.clone(), system_id.to_string());
     tauri::async_runtime::spawn(async move {
         if let Some(sys_pool) = ctx.systems.audit_pool().await {
-            let outcome = jobs.run_goal(&ctx, &sys_pool, &system_id, &system_goal(&item)).await;
+            let outcome = jobs.run_goal(&ctx, &sys_pool, &system_id, &system_goal(&item), None).await;
             if outcome.status == "ok" {
                 complete(&app, &tab, &item.id, Some(crate::systems::jobs::strip_verdict_line(&outcome.summary))).await;
             } else {
@@ -683,7 +683,7 @@ mod board_wiring_tests {
             a.task_board.claude_command = script_path.clone();
             a.system_connections.push(crate::systems::types::SystemConnection {
                 id: "t".into(), name: "訂單系統".into(), start_url: "http://127.0.0.1:1/".into(), allowed_hosts: vec!["127.0.0.1".into()],
-                mode: crate::systems::types::Mode::Autonomous, rules: vec![], enabled: true,
+                mode: crate::systems::types::Mode::Autonomous, rules: vec![], enabled: true, model: None,
             });
         }).unwrap();
         let systems = Arc::new(crate::systems::state::SystemsState::with_pool(cfg.clone(), crate::systems::audit::open_in_memory().await));

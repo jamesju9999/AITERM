@@ -3,6 +3,8 @@ import { useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { AdhocReport, SystemConnection } from "../../ipc/systems";
 import { GoalRefineBar } from "./GoalRefineBar";
+import { ModelSelect } from "./ModelSelect";
+import { modelName } from "./utils";
 
 interface Param {
   name: string;
@@ -12,7 +14,7 @@ interface Param {
 
 interface Props {
   system: SystemConnection;
-  onRun: (goal: string) => Promise<AdhocReport>;
+  onRun: (goal: string, model: string | null) => Promise<AdhocReport>;
   onSaveRecipe: (name: string, description: string, params: { name: string; example: string }[]) => Promise<string>;
   onDiscard: () => Promise<void>;
 }
@@ -23,6 +25,7 @@ const errText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error 
 export function AskPanel({ system, onRun, onSaveRecipe, onDiscard }: Props) {
   const { t } = useLocale();
   const [goal, setGoal] = useState("");
+  const [model, setModel] = useState<string | null>(null);
   const [refining, setRefining] = useState(false);
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<AdhocReport | null>(null);
@@ -45,7 +48,7 @@ export function AskPanel({ system, onRun, onSaveRecipe, onDiscard }: Props) {
     setSaved(null);
     setReport(null);
     try {
-      const r = await onRun(goal.trim());
+      const r = await onRun(goal.trim(), model);
       setReport(r);
       setParams(r.params.map((p) => ({ ...p, use: true })));
       setName("");
@@ -95,6 +98,10 @@ export function AskPanel({ system, onRun, onSaveRecipe, onDiscard }: Props) {
           <textarea rows={3} value={goal} placeholder={t.sys_ask_goal_ph} disabled={running || refining} onChange={(e) => setGoal(e.target.value)} />
         </label>
         <p className="systems__muted">{t.sys_ask_hint}</p>
+        <label className="systems__asklabel systems__askmodel">
+          {t.sys_model}
+          <ModelSelect value={model} onChange={setModel} disabled={running} inheritLabel={t.sys_model_inherit_system(modelName(t, system.model))} />
+        </label>
         <div className="systems__askbar">
           <GoalRefineBar systemName={system.name} goal={goal} onGoal={setGoal} onBusy={setRefining} disabled={running} onError={setError} />
           <button type="submit" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={running || refining || !goal.trim()}>

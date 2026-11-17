@@ -108,4 +108,28 @@ describe("ConnectionForm", () => {
     fireEvent.click(screen.getByLabelText(t.sys_rule_remove));
     expect(screen.queryByTestId("rule-row")).toBeNull();
   });
+
+  it("saves the chosen model for the system, and keeps a custom model name that is already stored", async () => {
+    const onSave = mount();
+    fill();
+    fireEvent.change(screen.getByLabelText(t.sys_model), { target: { value: "haiku" } });
+    fireEvent.click(screen.getByText(t.sys_save));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ model: "haiku" })));
+  });
+
+  it("a system saved with a full model name shows it and does not lose it", async () => {
+    const onSave = vi.fn(() => Promise.resolve());
+    render(
+      <LocaleProvider>
+        <ConnectionForm
+          initial={{ id: "s", name: "S", start_url: "https://a.test/", allowed_hosts: ["a.test"], mode: "read_only", rules: [], enabled: true, model: "claude-sonnet-5-5" }}
+          onSave={onSave}
+          onCancel={() => {}}
+        />
+      </LocaleProvider>,
+    );
+    expect((screen.getByLabelText(t.sys_model) as HTMLSelectElement).value).toBe("claude-sonnet-5-5");
+    fireEvent.click(screen.getByText(t.sys_save));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ model: "claude-sonnet-5-5" })));
+  });
 });

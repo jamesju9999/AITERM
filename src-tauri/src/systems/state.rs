@@ -457,7 +457,7 @@ mod tests {
             allowed_hosts: vec!["example.com".into()],
             mode: Mode::ReadOnly,
             rules: vec![],
-            enabled: true,
+            enabled: true, model: None,
         }
     }
 

@@ -70,6 +70,7 @@ pub async fn mail_add_account(
         // command is callable by anything in the webview — and clamping here
         // also keeps the persisted config honest about what the poller does.
         poll_interval_secs: input.poll_interval_secs.map(|s| s.max(60)).unwrap_or(300),
+        enabled: true,
     };
 
     secret_store.set(&mail_secret_key(&id), &input.password).map_err(|e| e.to_string())?;
@@ -77,6 +78,33 @@ pub async fn mail_add_account(
     restart_account(&app, &id).await;
 
     Ok(account)
+}
+
+/// 開關單一帳號的收信。關閉會優雅登出並停掉背景連線；開啟則重新連線。
+/// 設定先存檔再動連線，這樣下次啟動的 `restart_all` 看到的就是最新狀態。
+#[tauri::command]
+pub async fn mail_set_enabled(
+    app: AppHandle,
+    id: String,
+    enabled: bool,
+    config_store: State<'_, Arc<ConfigStore>>,
+) -> Result<(), String> {
+    if !config_store.get().mail_accounts.iter().any(|a| a.id == id) {
+        return Err("mail account not found".to_string());
+    }
+    config_store
+        .update(|cfg| {
+            if let Some(a) = cfg.mail_accounts.iter_mut().find(|a| a.id == id) {
+                a.enabled = enabled;
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    if enabled {
+        restart_account(&app, &id).await;
+    } else {
+        stop_account(&app, &id).await;
+    }
+    Ok(())
 }
 
 #[tauri::command]

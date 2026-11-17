@@ -349,7 +349,7 @@ export function SystemsView() {
                 {panel?.id === s.id && panel.kind === "ask" && (
                   <AskPanel
                     system={s}
-                    onRun={(goal) => systemsRunGoal(s.id, goal).finally(() => void refresh())}
+                    onRun={(goal, model) => systemsRunGoal(s.id, goal, model).finally(() => void refresh())}
                     onSaveRecipe={(name, description, params) => systemsRecipeSaveFromJournal(s.id, name, description, params)}
                     onDiscard={() => systemsJournalDiscard(s.id)}
                   />

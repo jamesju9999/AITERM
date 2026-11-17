@@ -82,7 +82,7 @@ mod tests {
             allowed_hosts: vec!["example.com".into()],
             mode,
             rules: vec![],
-            enabled: true,
+            enabled: true, model: None,
         }
     }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import {
-  mailAddAccount, mailListAccounts, mailRemoveAccount, mailTestConnection,
+  mailAddAccount, mailListAccounts, mailRemoveAccount, mailSetEnabled, mailTestConnection,
   type MailAccount, type MailAccountInput,
 } from "../../ipc/mail";
 import { useLocale } from "../../contexts/LocaleContext";
@@ -152,6 +152,17 @@ export function MailAccountsPage() {
     }
   };
 
+  const handleToggle = async (acc: MailAccount) => {
+    setError(null);
+    try {
+      await mailSetEnabled(acc.id, !(acc.enabled ?? true));
+      if (mountedRef.current) load();
+    } catch (err) {
+      console.error("[mail] failed to toggle account:", err);
+      if (mountedRef.current) setError(`${t.mail_toggle_failed}${String(err)}`);
+    }
+  };
+
   return (
     <div style={{ width: "100%", padding: "24px 32px", boxSizing: "border-box" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -184,9 +195,13 @@ export function MailAccountsPage() {
                 <div style={{ color: "#e6e6e6", fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{acc.email}</div>
                 <div style={{ color: "#888", fontSize: 11, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   IMAP {acc.imap_host}:{acc.imap_port} · SMTP {acc.smtp_host}:{acc.smtp_port} · {acc.poll_interval_secs}s
+                  {acc.enabled === false && <span style={{ color: "#f59e0b", marginLeft: 8 }}>{t.mail_disabled_badge}</span>}
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, marginLeft: 12 }}>
+                <button onClick={() => handleToggle(acc)} className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm">
+                  {acc.enabled === false ? t.mail_enable : t.mail_disable}
+                </button>
                 {confirmingDelete === acc.id ? (
                   <>
                     <button onClick={() => setConfirmingDelete(null)} className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm">{t.cancel}</button>

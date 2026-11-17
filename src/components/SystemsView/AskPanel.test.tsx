@@ -50,7 +50,7 @@ describe("AskPanel", () => {
     const p = mount();
     expect((screen.getByText(t.sys_ask_send) as HTMLButtonElement).disabled).toBe(true);
     await ask();
-    expect(p.onRun).toHaveBeenCalledWith("填單號 A-102 並送出");
+    expect(p.onRun).toHaveBeenCalledWith("填單號 A-102 並送出", null);
     expect(screen.getByText("單號 A-102 已送出。")).toBeInTheDocument();
     const steps = screen.getByTestId("ask-steps");
     expect(steps.textContent).toContain(t.sys_tool_type);
@@ -116,5 +116,15 @@ describe("AskPanel", () => {
     fireEvent.change(screen.getByPlaceholderText(t.sys_ask_goal_ph), { target: { value: "x" } });
     fireEvent.click(screen.getByText(t.sys_ask_send));
     expect(await screen.findByText(t.sys_error("這個系統正在處理別的事"))).toBeInTheDocument();
+  });
+
+  it("uses the system's model by default and lets this run pick another one", async () => {
+    const p = mount({ system: { ...system, model: "haiku" } });
+    const select = screen.getByLabelText(t.sys_model) as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(select.options[0].textContent).toBe(t.sys_model_inherit_system("Haiku"));
+    fireEvent.change(select, { target: { value: "opus" } });
+    await ask("做一件複雜的事");
+    expect(p.onRun).toHaveBeenCalledWith("做一件複雜的事", "opus");
   });
 });

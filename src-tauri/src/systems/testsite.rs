@@ -57,6 +57,7 @@ pub fn conn(port: u16, mode: Mode) -> SystemConnection {
         mode,
         rules: vec![],
         enabled: true,
+        model: None,
     }
 }
 

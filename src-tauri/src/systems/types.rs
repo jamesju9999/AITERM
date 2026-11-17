@@ -44,6 +44,10 @@ pub struct SystemConnection {
     pub rules: Vec<Rule>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// AI 操作這個系統用的 Claude 模型（`haiku`／`sonnet`／`opus` 或完整名稱）。`None`＝沿用 Claude Code 的預設。
+    /// 定時任務與「請 AI 操作」可以個別覆蓋；問題收集一律用這個。
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 fn default_true() -> bool {

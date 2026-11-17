@@ -3,6 +3,8 @@ import { useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { JobKind, JobRun, NewJob, SystemConnection, SystemJob } from "../../ipc/systems";
 import { GoalRefineBar } from "./GoalRefineBar";
+import { ModelSelect } from "./ModelSelect";
+import { modelName } from "./utils";
 import { buildSpec, parseSpec, scheduleText } from "./jobSchedule";
 
 
@@ -133,6 +135,7 @@ function JobForm({ system, initial, onSave, onCancel }: { system: SystemConnecti
   const [newTime, setNewTime] = useState("12:00");
   const [days, setDays] = useState<number[]>(spec?.days ?? [1, 2, 3, 4, 5]);
   const [every, setEvery] = useState(spec?.every_minutes || 60);
+  const [model, setModel] = useState<string | null>(initial?.model ?? null);
   const [error, setError] = useState<string | null>(null);
   const [refining, setRefining] = useState(false);
 
@@ -151,7 +154,7 @@ function JobForm({ system, initial, onSave, onCancel }: { system: SystemConnecti
     // 名稱留空時用目標的前幾個字，少一個一定要填的欄位。
     const finalName = name.trim() || goal.trim().replace(/\s+/g, " ").slice(0, 16);
     try {
-      await onSave({ system_id: system.id, name: finalName, goal: goal.trim(), kind, spec: built }, initial?.id);
+      await onSave({ system_id: system.id, name: finalName, goal: goal.trim(), kind, spec: built, model }, initial?.id);
     } catch (e) {
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
     }
@@ -174,6 +177,12 @@ function JobForm({ system, initial, onSave, onCancel }: { system: SystemConnecti
       <label>
         {t.sys_job_name}
         <input value={name} placeholder={t.sys_job_name_ph} onChange={(e) => setName(e.target.value)} />
+      </label>
+
+      <label>
+        {t.sys_model}
+        <ModelSelect value={model} onChange={setModel} inheritLabel={t.sys_model_inherit_system(modelName(t, system.model))} />
+        <small>{t.sys_model_hint}</small>
       </label>
 
       <div className="systems__field-block">

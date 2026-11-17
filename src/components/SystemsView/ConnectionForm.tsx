@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useLocale } from "../../contexts/LocaleContext";
 import type { SystemConnection, SystemMode, SystemRule } from "../../ipc/systems";
 import { restoreWebviewFocus } from "../../lib/webviewFocus";
+import { ModelSelect } from "./ModelSelect";
 import { hostOf, slug } from "./utils";
 
 const MODES: SystemMode[] = ["read_only", "approve_each", "rules", "autonomous"];
@@ -21,6 +22,7 @@ export function ConnectionForm({ initial, onSave, onCancel }: Props) {
   const [url, setUrl] = useState(initial?.start_url ?? "");
   const [hosts, setHosts] = useState((initial?.allowed_hosts ?? []).join(", "));
   const [mode, setMode] = useState<SystemMode>(initial?.mode ?? "read_only");
+  const [model, setModel] = useState<string | null>(initial?.model ?? null);
   const [rules, setRules] = useState<SystemRule[]>(initial?.rules ?? []);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,6 +55,7 @@ export function ConnectionForm({ initial, onSave, onCancel }: Props) {
         mode,
         rules: mode === "rules" ? rules.filter((r) => r.url_pattern.trim()) : [],
         enabled: initial?.enabled ?? true,
+        model,
       });
     } catch (e) {
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
@@ -129,6 +132,12 @@ export function ConnectionForm({ initial, onSave, onCancel }: Props) {
           </div>
         </fieldset>
       )}
+
+      <label>
+        {t.sys_model}
+        <ModelSelect value={model} onChange={setModel} inheritLabel={t.sys_model_inherit_claude} />
+        <small>{t.sys_model_system_default_hint}</small>
+      </label>
 
       <details className="systems__advanced" open={Boolean(initial && hosts)}>
         <summary>{t.sys_hosts_advanced}</summary>

@@ -92,7 +92,13 @@ pub const MAIL_SYNC_EVENT: &str = "mail-sync-event";
 /// from `lib.rs`'s `.setup()` on app launch.
 pub async fn restart_all(app: &AppHandle) {
     let config_store = app.state::<Arc<ConfigStore>>();
-    let account_ids: Vec<String> = config_store.get().mail_accounts.into_iter().map(|a| a.id).collect();
+    let account_ids: Vec<String> = config_store
+        .get()
+        .mail_accounts
+        .into_iter()
+        .filter(|a| a.enabled)
+        .map(|a| a.id)
+        .collect();
     for account_id in account_ids {
         restart_account(app, &account_id).await;
     }
@@ -123,6 +129,9 @@ pub async fn restart_account(app: &AppHandle, account_id: &str) {
     let Some(account) = config_store.get().mail_accounts.into_iter().find(|a| a.id == account_id) else {
         return;
     };
+    if !account.enabled {
+        return;
+    }
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (delete_tx, delete_rx) = mpsc::channel::<DeleteRequest>(DELETE_QUEUE_DEPTH);

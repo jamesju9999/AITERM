@@ -45,6 +45,30 @@ pub fn build_prompt(system_name: &str, system_id: &str, goal: &str) -> String {
     )
 }
 
+/// 這次要用的模型名稱：只接受英數與 `._-[]:`（跟看板派工同一套規則），不合法就沿用預設。
+pub fn clean_model(m: Option<&str>) -> Option<String> {
+    let m = m?.trim();
+    (!m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric() || "._-[]:".contains(c))).then(|| m.to_string())
+}
+
+/// 把模型接到 Claude 指令上：指令裡原本有 `--model …` 就換掉，沒有就加在後面；`None` 不動。
+pub fn with_model(command: &str, model: Option<&str>) -> String {
+    let Some(m) = clean_model(model) else { return command.to_string() };
+    let mut parts = shell_words::split(command).unwrap_or_else(|_| vec![command.to_string()]);
+    let mut i = 0;
+    while i < parts.len() {
+        if parts[i] == "--model" {
+            parts.drain(i..(i + 2).min(parts.len()));
+        } else if parts[i].starts_with("--model=") {
+            parts.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    parts.extend(["--model".to_string(), m]);
+    shell_words::join(&parts)
+}
+
 /// `--mcp-config` 的內容：指向本機的系統連線端點。
 pub fn mcp_config_json(port: u16, token: &str) -> String {
     json!({ "mcpServers": { MCP_SERVER_ID: {
@@ -142,6 +166,9 @@ pub struct Job {
     pub last_fired_ms: i64,
     pub fail_streak: i64,
     pub disabled_reason: Option<String>,
+    /// 這個任務用的模型；`None`＝沿用系統的預設模型。
+    #[sqlx(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -161,6 +188,8 @@ pub struct NewJob {
     pub goal: String,
     pub kind: String,
     pub spec: Spec,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 pub async fn init(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -181,6 +210,7 @@ pub async fn init(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+    let _ = sqlx::query("ALTER TABLE system_jobs ADD COLUMN model TEXT").execute(pool).await;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS system_job_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -215,8 +245,8 @@ pub async fn create(pool: &SqlitePool, j: &NewJob) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_ms();
     sqlx::query(
-        "INSERT INTO system_jobs (id, system_id, name, goal, kind, spec_json, enabled, created_ms, last_fired_ms)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+        "INSERT INTO system_jobs (id, system_id, name, goal, kind, spec_json, enabled, created_ms, last_fired_ms, model)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&j.system_id)
@@ -226,6 +256,7 @@ pub async fn create(pool: &SqlitePool, j: &NewJob) -> Result<String, String> {
     .bind(serde_json::to_string(&j.spec).map_err(|e| e.to_string())?)
     .bind(now)
     .bind(now)
+    .bind(clean_model(j.model.as_deref()))
     .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -234,12 +265,13 @@ pub async fn create(pool: &SqlitePool, j: &NewJob) -> Result<String, String> {
 
 pub async fn update(pool: &SqlitePool, id: &str, j: &NewJob) -> Result<(), String> {
     validate_new(j)?;
-    let r = sqlx::query("UPDATE system_jobs SET name = ?, goal = ?, kind = ?, spec_json = ?, last_fired_ms = ? WHERE id = ?")
+    let r = sqlx::query("UPDATE system_jobs SET name = ?, goal = ?, kind = ?, spec_json = ?, last_fired_ms = ?, model = ? WHERE id = ?")
         .bind(j.name.trim())
         .bind(j.goal.trim())
         .bind(&j.kind)
         .bind(serde_json::to_string(&j.spec).map_err(|e| e.to_string())?)
         .bind(now_ms()) // 改了週期就從現在起算，不補跑
+        .bind(clean_model(j.model.as_deref()))
         .bind(id)
         .execute(pool)
         .await
@@ -490,7 +522,7 @@ impl JobsRuntime {
     async fn run_inner(&self, ctx: &Arc<JobsCtx>, pool: &SqlitePool, job: &Job) -> Result<Outcome, String> {
         let started_ms = now_ms();
         let run_id = start_run(pool, &job.id, started_ms).await.map_err(|e| e.to_string())?;
-        let outcome = self.run_goal(ctx, pool, &job.system_id, &job.goal).await;
+        let outcome = self.run_goal(ctx, pool, &job.system_id, &job.goal, job.model.as_deref()).await;
         let disabled = settle(pool, &job.id, run_id, &outcome).await.map_err(|e| e.to_string())?;
         (ctx.emit)("systems://job-finished", json!({ "job_id": job.id, "system_id": job.system_id, "status": outcome.status }));
         if disabled {
@@ -501,7 +533,7 @@ impl JobsRuntime {
 
     /// 讓 AI 在某個系統上完成一段目標（定時任務與問題收集共用）：組提示、跑 claude，
     /// 並把「執行期間有寫入被拒絕或逾時」判成失敗（claude 自己結束碼是 0 也一樣）。
-    pub async fn run_goal(&self, ctx: &Arc<JobsCtx>, pool: &SqlitePool, system_id: &str, goal: &str) -> Outcome {
+    pub async fn run_goal(&self, ctx: &Arc<JobsCtx>, pool: &SqlitePool, system_id: &str, goal: &str, model: Option<&str>) -> Outcome {
         let started_ms = now_ms();
         let conn: SystemConnection = match ctx.systems.connection(system_id) {
             Ok(c) => c,
@@ -512,7 +544,9 @@ impl JobsRuntime {
             (_, None) => Outcome { status: "failed", summary: "系統連線端點沒有在執行".into() },
             (true, Some((port, token))) => {
                 let prompt = build_prompt(&conn.name, &conn.id, goal);
-                let command = ctx.config.get().task_board.claude_command;
+                // 模型：這次指定的 → 系統的預設 → Claude Code 自己的預設。
+                let chosen = clean_model(model).or_else(|| clean_model(conn.model.as_deref()));
+                let command = with_model(&ctx.config.get().task_board.claude_command, chosen.as_deref());
                 run_claude(&command, &mcp_config_json(port, &token), &prompt, &ctx.work_dir, ctx.timeout).await
             }
         };
@@ -569,7 +603,7 @@ fn step_view(s: &super::recipes::Step) -> StepView {
 impl JobsRuntime {
     /// 「請 AI 操作」：跑一次目標，回傳結果與這次錄到的步驟。同一個系統一次只做一件事。
     /// 成功且有步驟時日誌保留（等使用者決定要不要存成配方）；其他情況清空。
-    pub async fn run_adhoc(&self, ctx: &Arc<JobsCtx>, system_id: &str, goal: &str) -> Result<AdhocReport, String> {
+    pub async fn run_adhoc(&self, ctx: &Arc<JobsCtx>, system_id: &str, goal: &str, model: Option<&str>) -> Result<AdhocReport, String> {
         if goal.trim().is_empty() {
             return Err("請先寫下要 AI 做什麼".into());
         }
@@ -579,7 +613,7 @@ impl JobsRuntime {
             return Err("這個系統正在處理別的事".into());
         }
         ctx.systems.journal_clear(system_id).await;
-        let outcome = self.run_goal(ctx, &pool, system_id, goal).await;
+        let outcome = self.run_goal(ctx, &pool, system_id, goal, model).await;
         let steps = ctx.systems.journal_steps(system_id).await;
         self.unlock(&key);
         let ok = outcome.status == "ok";
@@ -639,6 +673,7 @@ mod tests {
 
     fn new_job(system: &str) -> NewJob {
         NewJob {
+            model: None,
             system_id: system.into(),
             name: "每日匯出".into(),
             goal: "匯出昨天的待處理訂單".into(),
@@ -663,6 +698,89 @@ mod tests {
         assert_eq!(final_verdict("只是一般回報，沒寫結果行"), None);
         assert_eq!(final_verdict("這一行含有結果：成功 但不是行首"), None);
         assert!(build_prompt("s", "id", "g").contains("結果：成功"), "提示要要求 AI 寫結果行");
+    }
+
+    #[test]
+    fn the_model_is_attached_to_the_claude_command_replacing_any_existing_one() {
+        assert_eq!(with_model("claude", Some("haiku")), "claude --model haiku");
+        assert_eq!(with_model("claude --model sonnet --verbose", Some("opus")), "claude --verbose --model opus", "原本的 --model 要換掉，不能留兩個");
+        assert_eq!(with_model("claude --model=sonnet", Some("haiku")), "claude --model haiku");
+        assert_eq!(with_model("claude --model sonnet", None), "claude --model sonnet", "沒指定就不動");
+        assert_eq!(with_model("claude", Some("bad name; rm -rf")), "claude", "不合法的名稱不加");
+        assert_eq!(with_model("claude", Some("  ")), "claude");
+        assert_eq!(with_model("\"/Users/a b/bin/claude\" -x", Some("opus[1m]")), "'/Users/a b/bin/claude' -x --model 'opus[1m]'", "路徑含空白與特殊字元要保留可執行");
+        assert_eq!(clean_model(Some(" claude-sonnet-5-5 ")).as_deref(), Some("claude-sonnet-5-5"));
+        assert_eq!(clean_model(Some("a b")), None);
+    }
+
+    #[tokio::test]
+    async fn a_jobs_model_is_stored_cleaned_and_updatable() {
+        let p = pool().await;
+        let mut j = new_job("s1");
+        j.model = Some(" sonnet ".into());
+        let id = create(&p, &j).await.unwrap();
+        assert_eq!(get(&p, &id).await.unwrap().unwrap().model.as_deref(), Some("sonnet"));
+        j.model = Some("bad name".into());
+        update(&p, &id, &j).await.unwrap();
+        assert_eq!(get(&p, &id).await.unwrap().unwrap().model, None, "不合法的模型名稱存成沿用預設");
+        j.model = None;
+        let id2 = create(&p, &j).await.unwrap();
+        assert_eq!(get(&p, &id2).await.unwrap().unwrap().model, None);
+    }
+
+    /// 模型的優先順序：這次指定的 → 系統的預設 → 指令本身帶的 → Claude Code 的預設。用假 claude 看實際收到的引數。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_model_precedence_reaches_the_claude_command_line() {
+        use crate::config::ConfigStore;
+        let dir = tempfile::tempdir().unwrap();
+        let rec = dir.path().join("args.txt");
+        let script = fake_claude(dir.path(), &format!("echo \"$@\" > {}\ncat > /dev/null\necho ok", rec.display()));
+        let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
+        let mk = |model: Option<&str>| SystemConnection {
+            id: "t".into(), name: "T".into(), start_url: "http://127.0.0.1:1/".into(), allowed_hosts: vec!["127.0.0.1".into()],
+            mode: Mode::Autonomous, rules: vec![], enabled: true, model: model.map(String::from),
+        };
+        let st = Arc::new(SystemsState::with_pool(cfg.clone(), crate::systems::audit::open_in_memory().await));
+        let ctx = Arc::new(JobsCtx {
+            systems: st,
+            config: cfg.clone(),
+            endpoint: Arc::new(|| Some((1, "x".to_string()))),
+            emit: Arc::new(|_, _| {}),
+            work_dir: dir.path().join("jobs"),
+            timeout: Duration::from_secs(20),
+        });
+        let rt = Arc::new(JobsRuntime::default());
+        let args = |rt: &Arc<JobsRuntime>| {
+            let _ = rt;
+            std::fs::read_to_string(&rec).unwrap()
+        };
+        let set = |command: &str, sys_model: Option<&str>| {
+            cfg.update(|a| {
+                a.task_board.claude_command = command.to_string();
+                a.system_connections = vec![mk(sys_model)];
+            })
+            .unwrap();
+        };
+
+        set(&script, Some("haiku"));
+        rt.run_adhoc(&ctx, "t", "x", None).await.unwrap();
+        assert!(args(&rt).contains("--model haiku"), "沒指定就用系統的預設：{}", args(&rt));
+        rt.run_adhoc(&ctx, "t", "x", Some("opus")).await.unwrap();
+        let a = args(&rt);
+        assert!(a.contains("--model opus") && !a.contains("haiku"), "這次指定的優先：{a}");
+
+        set(&script, None);
+        rt.run_adhoc(&ctx, "t", "x", None).await.unwrap();
+        assert!(!args(&rt).contains("--model"), "都沒指定就不加，交給 Claude Code 的預設：{}", args(&rt));
+
+        set(&format!("{script} --model sonnet"), None);
+        rt.run_adhoc(&ctx, "t", "x", None).await.unwrap();
+        assert!(args(&rt).contains("--model sonnet"), "指令本身帶的模型要保留：{}", args(&rt));
+        set(&format!("{script} --model sonnet"), Some("haiku"));
+        rt.run_adhoc(&ctx, "t", "x", None).await.unwrap();
+        let a = args(&rt);
+        assert!(a.contains("--model haiku") && !a.contains("sonnet"), "系統預設蓋過指令帶的：{a}");
     }
 
     #[test]
@@ -879,7 +997,7 @@ mod tests {
         let pool = st.audit_pool().await.unwrap();
         let now = chrono::Local::now().naive_local();
         let slot = (now - chrono::Duration::minutes(1)).format("%H:%M").to_string();
-        let id = create(&pool, &NewJob { system_id: "t".into(), name: "每日送單".into(), goal: "送出今天的單".into(), kind: "daily".into(), spec: Spec { times: vec![slot], ..Default::default() } }).await.unwrap();
+        let id = create(&pool, &NewJob { system_id: "t".into(), name: "每日送單".into(), goal: "送出今天的單".into(), kind: "daily".into(), spec: Spec { times: vec![slot], ..Default::default() }, model: None }).await.unwrap();
         mark_fired(&pool, &id, super::now_ms() - 10 * 60 * 1000).await.unwrap();
 
         let rt = Arc::new(JobsRuntime::default());
@@ -967,12 +1085,12 @@ mod tests {
         });
         let rt = Arc::new(JobsRuntime::default());
 
-        assert!(rt.run_adhoc(&ctx, "t", "  ").await.is_err(), "空白的目標不跑");
+        assert!(rt.run_adhoc(&ctx, "t", "  ", None).await.is_err(), "空白的目標不跑");
         assert!(rt.try_lock(&system_key("t")));
-        assert_eq!(rt.run_adhoc(&ctx, "t", "填單號 A-102 並送出").await.unwrap_err(), "這個系統正在處理別的事");
+        assert_eq!(rt.run_adhoc(&ctx, "t", "填單號 A-102 並送出", None).await.unwrap_err(), "這個系統正在處理別的事");
         rt.unlock(&system_key("t"));
 
-        let report = rt.run_adhoc(&ctx, "t", "填單號 A-102 並送出").await.unwrap();
+        let report = rt.run_adhoc(&ctx, "t", "填單號 A-102 並送出", None).await.unwrap();
         assert_eq!(report.status, "ok", "{}", report.summary);
         assert!(report.summary.contains("已送出單號 A-102") && !report.summary.contains("結果："), "{}", report.summary);
         assert!(report.can_save);
@@ -994,7 +1112,7 @@ mod tests {
 
         // 失敗的一輪不留日誌、不能存。
         cfg.update(|a| a.task_board.claude_command = fake_claude(dir.path(), "cat > /dev/null\necho 做不到\necho 結果：失敗：找不到欄位")).unwrap();
-        let bad = rt.run_adhoc(&ctx, "t", "做某件事").await.unwrap();
+        let bad = rt.run_adhoc(&ctx, "t", "做某件事", None).await.unwrap();
         assert_eq!(bad.status, "failed");
         assert!(!bad.can_save && bad.params.is_empty());
         assert!(st.journal_steps("t").await.is_empty());

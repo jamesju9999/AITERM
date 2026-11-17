@@ -31,6 +31,11 @@ pub fn validate(conn: &SystemConnection) -> Result<(), String> {
     if !covered {
         return Err("允許的網域必須包含起始網址的網域".into());
     }
+    if let Some(m) = conn.model.as_deref().filter(|m| !m.trim().is_empty()) {
+        if crate::systems::jobs::clean_model(Some(m)).is_none() {
+            return Err("模型名稱只能用英數與 . _ - [ ] :".into());
+        }
+    }
     Ok(())
 }
 
@@ -233,11 +238,12 @@ pub async fn systems_job_run_now(
 pub async fn systems_run_goal(
     system_id: String,
     goal: String,
+    model: Option<String>,
     rt: State<'_, Arc<JobsRuntime>>,
     ctx: State<'_, Arc<JobsCtx>>,
 ) -> Result<jobs::AdhocReport, String> {
     let (rt, ctx) = (rt.inner().clone(), ctx.inner().clone());
-    rt.run_adhoc(&ctx, &system_id, &goal).await
+    rt.run_adhoc(&ctx, &system_id, &goal, model.as_deref()).await
 }
 
 /// 把剛剛一次性執行錄到的步驟存成配方（使用者確認過名稱與參數）。
@@ -310,7 +316,7 @@ mod tests {
             allowed_hosts: vec!["example.com".into()],
             mode: Mode::ReadOnly,
             rules: vec![],
-            enabled: true,
+            enabled: true, model: None,
         }
     }
 
@@ -336,5 +342,11 @@ mod tests {
         let mut c = ok();
         c.allowed_hosts = vec![];
         assert!(validate(&c).is_err(), "白名單空的不能存");
+
+        let mut c = ok();
+        c.model = Some("sonnet".into());
+        assert!(validate(&c).is_ok());
+        c.model = Some("a b; rm".into());
+        assert!(validate(&c).unwrap_err().contains("模型"));
     }
 }

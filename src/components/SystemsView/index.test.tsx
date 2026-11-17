@@ -173,7 +173,7 @@ describe("SystemsView", () => {
     fireEvent.click(await screen.findByText(t.sys_ask_title, { selector: "button" }));
     fireEvent.change(await screen.findByPlaceholderText(t.sys_ask_goal_ph), { target: { value: "查今天的訂單" } });
     fireEvent.click(screen.getByText(t.sys_ask_send));
-    await waitFor(() => expect(ipc.systemsRunGoal).toHaveBeenCalledWith("s1", "查今天的訂單"));
+    await waitFor(() => expect(ipc.systemsRunGoal).toHaveBeenCalledWith("s1", "查今天的訂單", null));
     expect(await screen.findByText("做好了")).toBeTruthy();
 
     fireEvent.click(screen.getByText(t.sys_recipes_title, { selector: "button" }));

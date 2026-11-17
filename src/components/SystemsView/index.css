@@ -153,3 +153,5 @@
 .systems__param { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .systems__form .systems__param input:not([type="checkbox"]) { width: 200px; max-width: 200px; }
 .systems__runform { background: transparent; border: 0; padding: 4px 0 0; }
+
+.systems__askmodel select { box-sizing: border-box; max-width: 460px; padding: 6px 30px 6px 10px; font: inherit; color: inherit; background-color: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; -webkit-appearance: none; appearance: none; cursor: pointer; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M3 4.5l3 3 3-3'/></svg>"); background-repeat: no-repeat; background-position: right 10px center; }

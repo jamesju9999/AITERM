@@ -9,6 +9,7 @@ vi.mock("../../ipc/mail", () => ({
   mailAddAccount: vi.fn(),
   mailRemoveAccount: vi.fn(),
   mailTestConnection: vi.fn(),
+  mailSetEnabled: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-notification", () => ({
@@ -16,7 +17,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
   requestPermission: vi.fn(),
 }));
 
-import { mailListAccounts, mailAddAccount, mailRemoveAccount, mailTestConnection } from "../../ipc/mail";
+import { mailListAccounts, mailAddAccount, mailRemoveAccount, mailTestConnection, mailSetEnabled } from "../../ipc/mail";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 
 // Pinned explicitly rather than relying on LocaleProvider's fallback: if the
@@ -34,6 +35,7 @@ const ACCOUNT = {
   smtp_port: 465,
   username: "me",
   poll_interval_secs: 300,
+  enabled: true,
 };
 
 function renderPage() {
@@ -86,12 +88,46 @@ describe("MailAccountsPage", () => {
     vi.mocked(mailAddAccount).mockResolvedValue(ACCOUNT as never);
     vi.mocked(mailTestConnection).mockResolvedValue(undefined as never);
     vi.mocked(mailRemoveAccount).mockResolvedValue(undefined as never);
+    vi.mocked(mailSetEnabled).mockResolvedValue(undefined as never);
     vi.mocked(isPermissionGranted).mockResolvedValue(true as never);
     vi.mocked(requestPermission).mockResolvedValue("granted" as never);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  describe("enable switch", () => {
+    it("disables an enabled account and shows the disabled badge after reload", async () => {
+      vi.mocked(mailListAccounts).mockResolvedValueOnce([ACCOUNT] as never);
+      renderPage();
+      vi.mocked(mailListAccounts).mockResolvedValue([{ ...ACCOUNT, enabled: false }] as never);
+
+      fireEvent.click(await screen.findByRole("button", { name: t.mail_disable }));
+
+      await waitFor(() => expect(mailSetEnabled).toHaveBeenCalledWith("acc-1", false));
+      expect(await screen.findByText(t.mail_disabled_badge)).toBeTruthy();
+      expect(screen.getByRole("button", { name: t.mail_enable })).toBeTruthy();
+    });
+
+    it("re-enables a disabled account", async () => {
+      vi.mocked(mailListAccounts).mockResolvedValue([{ ...ACCOUNT, enabled: false }] as never);
+      renderPage();
+
+      fireEvent.click(await screen.findByRole("button", { name: t.mail_enable }));
+
+      await waitFor(() => expect(mailSetEnabled).toHaveBeenCalledWith("acc-1", true));
+    });
+
+    it("surfaces a toggle failure", async () => {
+      vi.mocked(mailListAccounts).mockResolvedValue([ACCOUNT] as never);
+      vi.mocked(mailSetEnabled).mockRejectedValue("boom" as never);
+      renderPage();
+
+      fireEvent.click(await screen.findByRole("button", { name: t.mail_disable }));
+
+      expect(await screen.findByText(`${t.mail_toggle_failed}boom`)).toBeTruthy();
+    });
   });
 
   describe("listing", () => {

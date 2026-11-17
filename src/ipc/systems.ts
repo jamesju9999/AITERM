@@ -19,6 +19,8 @@ export interface SystemConnection {
   mode: SystemMode;
   rules: SystemRule[];
   enabled: boolean;
+  /** AI 操作這個系統用的模型；null／沒有 = 沿用 Claude Code 的預設。 */
+  model?: string | null;
 }
 
 export interface SystemStatus {
@@ -121,6 +123,8 @@ export interface SystemJob {
   last_fired_ms: number;
   fail_streak: number;
   disabled_reason: string | null;
+  /** 這個任務用的模型；null = 沿用系統的預設。 */
+  model?: string | null;
 }
 
 export interface JobRun {
@@ -138,6 +142,7 @@ export interface NewJob {
   goal: string;
   kind: JobKind;
   spec: JobSpec;
+  model?: string | null;
 }
 
 export const systemsJobs = (systemId?: string) => invoke<SystemJob[]>("systems_jobs", { systemId });
@@ -169,7 +174,8 @@ export interface AdhocReport {
   can_save: boolean;
 }
 
-export const systemsRunGoal = (systemId: string, goal: string) => invoke<AdhocReport>("systems_run_goal", { systemId, goal });
+export const systemsRunGoal = (systemId: string, goal: string, model?: string | null) =>
+  invoke<AdhocReport>("systems_run_goal", { systemId, goal, model: model || null });
 export const systemsRecipeSaveFromJournal = (systemId: string, name: string, description: string, params: { name: string; example: string }[]) =>
   invoke<string>("systems_recipe_save_from_journal", { systemId, name, description, params });
 export const systemsJournalDiscard = (systemId: string) => invoke<void>("systems_journal_discard", { systemId });

@@ -91,7 +91,7 @@ mod tests {
         use super::super::types::SystemConnection;
         let c = |id: &str, enabled: bool| SystemConnection {
             id: id.into(), name: format!("名{id}"), start_url: "https://x/".into(), allowed_hosts: vec!["x".into()],
-            mode: Mode::Rules, rules: vec![], enabled,
+            mode: Mode::Rules, rules: vec![], enabled, model: None,
         };
         let got = resolve(&["a".into(), "gone".into(), "off".into(), "b".into()], &[c("a", true), c("b", true), c("off", false)]);
         assert_eq!(got.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
@@ -146,7 +146,7 @@ mod tests {
         let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
         let mk = |id: &str, name: &str| SystemConnection {
             id: id.into(), name: name.into(), start_url: "http://127.0.0.1:1/".into(), allowed_hosts: vec!["127.0.0.1".into()],
-            mode: Mode::ReadOnly, rules: vec![], enabled: true,
+            mode: Mode::ReadOnly, rules: vec![], enabled: true, model: None,
         };
         cfg.update(|a| {
             a.system_connections.push(mk("allowed1", "被授權的系統"));
