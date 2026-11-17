@@ -17,6 +17,7 @@ const REFINE_PROVIDER_KEY = "aiterm_refine_provider";
 export function ScheduleDialog({
   agents,
   initial,
+  defaultAgentId,
   onSave,
   onDelete,
   onRunNow,
@@ -25,6 +26,8 @@ export function ScheduleDialog({
 }: {
   agents: AgentRow[];
   initial: ScheduleView | null;
+  /** 新增時預先選好的角色（把定時器拖到角色方塊上時帶入）。 */
+  defaultAgentId?: string;
   onSave: (s: NewSchedule) => Promise<void>;
   onDelete?: () => Promise<void>;
   onRunNow?: () => Promise<string>;
@@ -35,7 +38,7 @@ export function ScheduleDialog({
   const targets = agents.filter((a) => a.kind === "coder" || a.kind === "verifier");
   const init = initial ? parseSpec(initial.schedule_json) : {};
   const [name, setName] = useState(initial?.name ?? "");
-  const [agentId, setAgentId] = useState(initial?.agent_id ?? targets[0]?.id ?? "");
+  const [agentId, setAgentId] = useState(initial?.agent_id ?? (targets.some((a) => a.id === defaultAgentId) ? defaultAgentId : undefined) ?? targets[0]?.id ?? "");
   const [instruction, setInstruction] = useState(initial?.instruction ?? "");
   const [kind, setKind] = useState<ScheduleKind>(initial?.schedule_kind ?? "daily");
   const [times, setTimes] = useState<string[]>(init.times?.length ? init.times : ["08:00"]);

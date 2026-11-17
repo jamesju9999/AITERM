@@ -368,6 +368,27 @@ describe("AgentCanvasView", () => {
     );
   });
 
+  it("把「定時器」拖到工程師方塊上放開：設定框的角色自動選那一位", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "a2", name: "工程師2" })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listSchedules).mockResolvedValue([]);
+    view();
+    const chip = await screen.findByTestId("pool-schedule");
+    drag(chip, await screen.findByTestId("agent-a2"));
+    const dlg = await screen.findByTestId("schedule-dialog");
+    expect((within(dlg).getByLabelText("叫起的角色") as HTMLSelectElement).value).toBe("a2");
+  });
+
+  it("把「定時器」拖到審核者方塊上：不能指定，不開設定框", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent(), agent({ id: "r1", kind: "reviewer", name: "R" })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listSchedules).mockResolvedValue([]);
+    view();
+    const chip = await screen.findByTestId("pool-schedule");
+    drag(chip, await screen.findByTestId("agent-r1"));
+    expect(screen.queryByTestId("schedule-dialog")).toBeNull();
+  });
+
   it("「⋯」選單的「新增定時器」開出空白的設定對話框", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);

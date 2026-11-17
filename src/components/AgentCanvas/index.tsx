@@ -273,7 +273,7 @@ export function AgentCanvasView({
   const [schedMove, setSchedMove] = useState<{ id: string; x: number; y: number } | null>(null);
   /** 剛拖完的那一下 click 不要當成「點開設定」。 */
   const schedDraggedRef = useRef(false);
-  const [schedDialog, setSchedDialog] = useState<{ initial: ScheduleView | null; pos?: { x: number; y: number } } | null>(null);
+  const [schedDialog, setSchedDialog] = useState<{ initial: ScheduleView | null; pos?: { x: number; y: number }; agentId?: string } | null>(null);
   /** 這個專案的專案資料夾（使用者指定過的程式庫）；新增模組時帶入。記著是哪個專案的。 */
   const [projRepoOf, setProjRepoOf] = useState<{ projectId: string; path: string | null } | null>(null);
   /** 使用者手動暫停的現況（全部／個別）。 */
@@ -843,6 +843,13 @@ export function AgentCanvasView({
         else setToast(t.ac_skill_only_agent);
         return;
       }
+      if (d.kind === "pool" && d.id === "schedule" && target?.kind === "agent") {
+        // 放在角色方塊上：設定框的角色直接指定那一位（只有工程師與驗收者能被定時叫起）。
+        const a = agents.find((x) => x.id === target.agentId);
+        if (a && (a.kind === "coder" || a.kind === "verifier")) setSchedDialog({ initial: null, agentId: a.id });
+        else setToast(t.sched_drop_only_worker);
+        return;
+      }
       if (d.kind === "pool") {
         if (target?.kind !== "canvas") return;
         const p = canvasPoint(e.clientX, e.clientY);
@@ -1024,6 +1031,9 @@ export function AgentCanvasView({
   };
 
   const dropStateFor = (a: AgentRow): "ok" | "bad" | null => {
+    if (ghost?.kind === "pool" && ghost.id === "schedule" && hover?.kind === "agent" && hover.agentId === a.id) {
+      return a.kind === "coder" || a.kind === "verifier" ? "ok" : "bad";
+    }
     if (ghost?.kind === "skill" && hover?.kind === "agent" && hover.agentId === a.id) return "ok";
     if (!ghost || ghost.kind !== "module" || hover?.kind !== "agent" || hover.agentId !== a.id) return null;
     return a.kind === "coder" ? "ok" : "bad";
@@ -2116,6 +2126,7 @@ export function AgentCanvasView({
         <ScheduleDialog
           agents={agents}
           initial={schedDialog.initial}
+          defaultAgentId={schedDialog.agentId}
           onClose={() => setSchedDialog(null)}
           onSave={async (args) => {
             // 從頂列拖出來的新定時器：用放開的位置；其餘照對話框送出的值。
