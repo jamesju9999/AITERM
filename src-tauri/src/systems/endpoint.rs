@@ -216,4 +216,54 @@ mod tests {
         assert_eq!(ok.status(), 200);
         ep.stop();
     }
+
+    /// 整條後端：HTTP（bearer）→ MCP 端點 → 狀態 → 代理 → 閘門 → 真 Chrome。
+    /// `cargo test -p app --lib -- --ignored --test-threads=1 systems::endpoint`
+    #[tokio::test]
+    #[ignore]
+    async fn over_http_a_write_is_refused_and_the_server_sees_nothing() {
+        use crate::systems::testsite::{conn, fake_site};
+        use crate::systems::types::Mode;
+        use std::sync::atomic::Ordering;
+
+        let (site_port, posts) = fake_site().await;
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
+        cfg.update(|a| a.system_connections.push(conn(site_port, Mode::ReadOnly))).unwrap();
+        let st = Arc::new(SystemsState::new(cfg));
+        let ep = EndpointState::default();
+        let port = crate::systems::browser::pick_free_port().unwrap();
+        ep.start(st.clone(), "tok".into(), port).await.unwrap();
+
+        let url = format!("http://127.0.0.1:{port}/systems/mcp");
+        let c = reqwest::Client::new();
+        let rpc = |id: u64, method: &str, params: Value| {
+            let c = c.clone();
+            let url = url.clone();
+            let body = json!({"jsonrpc":"2.0","id":id,"method":method,"params":params});
+            async move { c.post(&url).bearer_auth("tok").json(&body).send().await.unwrap().json::<Value>().await.unwrap() }
+        };
+        let text = |v: &Value| v["result"]["content"].as_array().unwrap().iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+
+        let list = rpc(1, "tools/list", json!({})).await;
+        let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"sys_click") && names.contains(&"sys_list") && !names.contains(&"sys_evaluate"), "{names:?}");
+
+        let listed = rpc(2, "tools/call", json!({"name":"sys_list","arguments":{}})).await;
+        assert!(text(&listed).contains("\"id\": \"t\""));
+
+        let site = format!("http://127.0.0.1:{site_port}/");
+        rpc(3, "tools/call", json!({"name":"sys_navigate","arguments":{"system":"t","url":site,"intent":"讀：開首頁"}})).await;
+        let snap = rpc(4, "tools/call", json!({"name":"sys_snapshot","arguments":{"system":"t"}})).await;
+        let t = text(&snap);
+        let r = t.split("button \"Save\" [ref=").nth(1).and_then(|s| s.split(']').next()).expect(&t).to_string();
+        let no_intent = rpc(5, "tools/call", json!({"name":"sys_click","arguments":{"system":"t","target":r}})).await;
+        assert_eq!(no_intent["result"]["isError"], true, "沒帶 intent 要被拒絕");
+        let click = rpc(6, "tools/call", json!({"name":"sys_click","arguments":{"system":"t","target":r,"intent":"寫：按儲存"}})).await;
+        assert!(text(&click).contains("被閘門拒絕"), "{}", text(&click));
+        assert_eq!(posts.load(Ordering::SeqCst), 0);
+
+        st.close("t").await;
+        ep.stop();
+    }
 }

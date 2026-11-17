@@ -140,7 +140,7 @@ pub async fn systems_decide(approval_id: String, approve: bool, systems: State<'
 
 #[tauri::command]
 pub async fn systems_stop(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<usize, String> {
-    Ok(systems.stop(&id))
+    Ok(systems.stop(&id).await)
 }
 
 #[tauri::command]

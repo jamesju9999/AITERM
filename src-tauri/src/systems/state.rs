@@ -217,10 +217,14 @@ impl SystemsState {
         Ok(res)
     }
 
-    /// 停止：拒絕這個系統所有等待中的核准（瀏覽器保持開著）。
-    pub fn stop(&self, id: &str) -> usize {
+    /// 停止：拒絕這個系統所有等待中的核准，並讓 AI 的工具呼叫暫停（瀏覽器保持開著），
+    /// 直到使用者按「交還 AI」。回傳拒絕了幾筆。
+    pub async fn stop(&self, id: &str) -> usize {
         let n = self.approvals.reject_all(id);
-        self.emit("systems://state", json!({ "system_id": id }));
+        if let Some(r) = self.running.lock().await.get(id) {
+            r.ctx.manual.store(true, Ordering::SeqCst);
+        }
+        self.emit("systems://state", json!({ "system_id": id, "manual": true }));
         n
     }
 
@@ -312,6 +316,13 @@ mod tests {
         let click = st.call("t", "sys_click", json!({"system":"t","target":r,"intent":"寫：按儲存"})).await.unwrap();
         assert!(text(&click).contains("被閘門拒絕"));
         assert_eq!(posts.load(Ordering::SeqCst), 0);
+
+        // 停止：AI 的呼叫被擋下，直到交還。
+        st.stop("t").await;
+        assert!(st.status("t").await.manual);
+        let stopped = st.call("t", "sys_snapshot", json!({"system":"t"})).await.unwrap();
+        assert!(text(&stopped).contains("接手"), "{}", text(&stopped));
+        st.set_manual("t", false).await.unwrap();
 
         // 接手期間 AI 的呼叫被擋下。
         st.set_manual("t", true).await.unwrap();
