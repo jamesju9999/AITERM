@@ -974,6 +974,26 @@ pub struct RealDispatcher {
 }
 
 impl RealDispatcher {
+    /// 這位 Agent 被勾選的系統連線：(埠, 限定 token, 提示附註)。codex、沒勾、端點沒在跑都回 `None`。
+    fn systems_skill(&self, agent: Option<&crate::tasks::agents::AgentRow>, codex: bool, managed: bool) -> Option<(u16, String, String)> {
+        if codex || !managed {
+            return None;
+        }
+        let ids = crate::systems::skill::parse(agent?.systems.as_deref());
+        if ids.is_empty() {
+            return None;
+        }
+        let resolved = crate::systems::skill::resolve(&ids, &self.config.get().system_connections);
+        if resolved.is_empty() {
+            return None;
+        }
+        let ep = self.app.try_state::<Arc<crate::systems::endpoint::EndpointState>>()?;
+        let port = ep.port()?;
+        let allowed: Vec<String> = resolved.iter().map(|r| r.0.clone()).collect();
+        let token = ep.issue_scoped_token(&allowed);
+        Some((port, token, crate::systems::skill::prompt_note(&resolved)))
+    }
+
     /// Codex 卡片的整行指令；提示詞寫進 `tasks/<id>/prompt.md`。
     #[allow(clippy::too_many_arguments)]
     async fn codex_launch(
@@ -1115,6 +1135,13 @@ impl Dispatcher for RealDispatcher {
         }
         // Claude 用 `--mcp-config` 檔；Codex 的 MCP 從 `-c` 給（見 codex::launch_command）。
         let claude_mcp = if codex { None } else { crate::tasks::ask::mcp_config_json_for(ask_url.as_deref(), evidence.as_deref(), browser) };
+        // 系統連線技能（只有 claude 的 Agent 卡）：掛上限定 token 的端點，只含這位 Agent 被勾選的系統。
+        let systems_skill = self.systems_skill(agent.as_ref(), codex, managed);
+        let claude_mcp = match &systems_skill {
+            Some((port, token, _)) if !codex => Some(crate::systems::skill::add_server_to_mcp_json(claude_mcp, *port, token)),
+            _ => claude_mcp,
+        };
+        let systems_note = systems_skill.as_ref().map(|(_, _, n)| n.clone()).unwrap_or_default();
         let ask_args = match claude_mcp {
             Some(json) => {
                 let dir = crate::tasks::task_dir(&project.path, &task.id);
@@ -1124,8 +1151,7 @@ impl Dispatcher for RealDispatcher {
                     .and_then(|_| std::fs::write(&path, json));
                 match written {
                     Ok(()) => crate::tasks::quota::path_flag("--mcp-config", &path).and_then(|f| {
-                        crate::tasks::ask::allowed_tools(ask_url.is_some(), evidence.is_some())
-                            .map(|t| if db_skill.is_some() { format!("{t} {}", crate::tasks::ask::DB_ALLOWED_TOOLS) } else { t })
+                        crate::tasks::ask::compose_allowed_tools(ask_url.is_some(), evidence.is_some(), db_skill.is_some(), systems_skill.is_some())
                             .map(|t| format!("{f} --allowedTools {t}"))
                     }),
                     Err(e) => {
@@ -1152,6 +1178,7 @@ impl Dispatcher for RealDispatcher {
             // 審查卡、拆解卡、驗收卡：在受審版本的唯讀目錄跑，不記 start_sha（那兩欄存的是受審範圍）。
             let wt = prepare_review_worktree(&project.path, &agent.id, task).await?;
             prompt = agent_card_prompt(&project.pool, task, &agent.prompt_prefix, &prompt, can_ask).await;
+            prompt.push_str(&systems_note);
             if is_verify {
                 // 埠在這時才挑：建卡到開工之間可能隔很久。結案時收掉還佔著這些埠的行程。
                 let ports = crate::tasks::verify_ports::pick_free_ports(3);
@@ -1206,6 +1233,7 @@ impl Dispatcher for RealDispatcher {
                 }
             }
             prompt = agent_card_prompt(&project.pool, task, &agent.prompt_prefix, &prompt, can_ask).await;
+            prompt.push_str(&systems_note);
             if let Some(conflict) = &premerge.conflict {
                 prompt.push_str(&premerge_conflict_note(conflict));
             }

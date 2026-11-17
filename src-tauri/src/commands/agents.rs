@@ -524,6 +524,21 @@ pub async fn agents_set_db_skill(
     Ok(())
 }
 
+/// 設定 Agent 能用哪些系統連線（空清單＝移除）。下一張派出去的卡才生效。
+#[tauri::command]
+pub async fn agents_set_systems(
+    project_id: String,
+    agent_id: String,
+    systems: Vec<String>,
+    reg: State<'_, ProjectRegistry>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let p = project(&reg, &project_id)?;
+    crate::systems::skill::set_agent_systems(&p.pool, &agent_id, &systems).await.map_err(|e| e.to_string())?;
+    emit_updated(&app);
+    Ok(())
+}
+
 /// 專案最近的資料庫查詢（活動記錄與「使用中」用）。
 #[tauri::command]
 pub async fn agents_db_queries(

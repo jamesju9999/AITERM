@@ -107,8 +107,7 @@ async fn handle_recipe_tool(state: &Arc<SystemsState>, name: &str, args: &Value)
     }
 }
 
-fn describe_systems(state: &SystemsState, config_conns: Vec<super::types::SystemConnection>) -> String {
-    let _ = state;
+fn describe_systems(config_conns: Vec<super::types::SystemConnection>) -> String {
     if config_conns.is_empty() {
         return "目前沒有設定任何系統連線。".into();
     }
@@ -120,7 +119,7 @@ fn describe_systems(state: &SystemsState, config_conns: Vec<super::types::System
 }
 
 /// 處理一則 JSON-RPC 訊息；通知（沒有 id）回 `None`。
-pub async fn handle_rpc(state: &Arc<SystemsState>, req: Value) -> Option<Value> {
+pub async fn handle_rpc(state: &Arc<SystemsState>, req: Value, scope: &Scope) -> Option<Value> {
     let id = req.get("id").cloned()?;
     let method = req["method"].as_str().unwrap_or("");
     Some(match method {
@@ -143,9 +142,12 @@ pub async fn handle_rpc(state: &Arc<SystemsState>, req: Value) -> Option<Value> 
             let name = req["params"]["name"].as_str().unwrap_or("").to_string();
             let args = req["params"]["arguments"].clone();
             if name == "sys_list" {
-                rpc_result(&id, tool_text(describe_systems(state, state.connections()), false))
+                rpc_result(&id, tool_text(describe_systems(scope.filter(state.connections())), false))
             } else {
                 let system = args["system"].as_str().unwrap_or("").to_string();
+                if !system.is_empty() && !scope.allows(&system) {
+                    return Some(rpc_result(&id, tool_text(format!("這個工作沒有被授權使用系統連線「{system}」（先用 sys_list 看可用的系統）"), true)));
+                }
                 if let Some(r) = if system.is_empty() { None } else { handle_recipe_tool(state, &name, &args).await } {
                     match r {
                         Ok(t) => rpc_result(&id, tool_text(t, false)),
@@ -166,10 +168,31 @@ pub async fn handle_rpc(state: &Arc<SystemsState>, req: Value) -> Option<Value> 
     })
 }
 
+/// 呼叫者能碰哪些系統：主 token＝全部；Agent 卡片拿到的是只含被授權系統的限定 token。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Scope {
+    All,
+    Only(Vec<String>),
+}
+
+impl Scope {
+    pub fn allows(&self, system: &str) -> bool {
+        match self {
+            Scope::All => true,
+            Scope::Only(ids) => ids.iter().any(|i| i == system),
+        }
+    }
+
+    pub fn filter(&self, conns: Vec<super::types::SystemConnection>) -> Vec<super::types::SystemConnection> {
+        conns.into_iter().filter(|c| self.allows(&c.id)).collect()
+    }
+}
+
 #[derive(Clone)]
 struct AppState {
     systems: Arc<SystemsState>,
     token: Arc<String>,
+    scoped: Arc<Mutex<std::collections::HashMap<String, Vec<String>>>>,
 }
 
 async fn mcp_handler(
@@ -178,11 +201,15 @@ async fn mcp_handler(
     Json(req): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), StatusCode> {
     let authorization = headers.get("authorization").and_then(|v| v.to_str().ok());
-    match bridge_auth::extract_token(authorization, None) {
-        Some(p) if bridge_auth::token_matches(&app.token, &p) => {}
-        _ => return Err(StatusCode::UNAUTHORIZED),
-    }
-    match handle_rpc(&app.systems, req).await {
+    let scope = match bridge_auth::extract_token(authorization, None) {
+        Some(p) if bridge_auth::token_matches(&app.token, &p) => Scope::All,
+        Some(p) => match app.scoped.lock().get(&p) {
+            Some(ids) => Scope::Only(ids.clone()),
+            None => return Err(StatusCode::UNAUTHORIZED),
+        },
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
+    match handle_rpc(&app.systems, req, &scope).await {
         Some(resp) => Ok((StatusCode::OK, Json(resp))),
         None => Ok((StatusCode::ACCEPTED, Json(Value::Null))),
     }
@@ -190,11 +217,13 @@ async fn mcp_handler(
 
 pub struct EndpointState {
     running: Mutex<Option<(u16, String, tokio::sync::oneshot::Sender<()>)>>,
+    /// 限定 token → 可用的系統 id。給 Agent 卡片用，只存在記憶體，App 重啟就失效。
+    scoped: Arc<Mutex<std::collections::HashMap<String, Vec<String>>>>,
 }
 
 impl Default for EndpointState {
     fn default() -> Self {
-        Self { running: Mutex::new(None) }
+        Self { running: Mutex::new(None), scoped: Arc::new(Mutex::new(std::collections::HashMap::new())) }
     }
 }
 
@@ -222,13 +251,27 @@ impl EndpointState {
             .map_err(|e| format!("無法綁定 127.0.0.1:{port}（{e}）"))?;
         let app = Router::new()
             .route("/systems/mcp", post(mcp_handler))
-            .with_state(AppState { systems, token: Arc::new(token) });
+            .with_state(AppState { systems, token: Arc::new(token), scoped: self.scoped.clone() });
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).with_graceful_shutdown(async { let _ = rx.await; }).await;
         });
         *self.running.lock() = Some((port, token_for_state, tx));
         Ok(())
+    }
+
+    /// 發一個只能用這幾個系統的 token（Agent 卡片派工時用）。同一組系統重複要會拿到同一個。
+    pub fn issue_scoped_token(&self, systems: &[String]) -> String {
+        let mut ids: Vec<String> = systems.to_vec();
+        ids.sort();
+        ids.dedup();
+        let mut map = self.scoped.lock();
+        if let Some((tok, _)) = map.iter().find(|(_, v)| **v == ids) {
+            return tok.clone();
+        }
+        let tok = crate::bridge::auth::generate_token();
+        map.insert(tok.clone(), ids);
+        tok
     }
 
     pub fn stop(&self) {
@@ -254,15 +297,15 @@ mod tests {
     #[tokio::test]
     async fn initialize_and_notifications() {
         let s = state_with_catalog();
-        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})).await.unwrap();
+        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}), &Scope::All).await.unwrap();
         assert_eq!(r["result"]["serverInfo"]["name"], "aiterm-systems");
-        assert!(handle_rpc(&s, json!({"jsonrpc":"2.0","method":"notifications/initialized"})).await.is_none());
+        assert!(handle_rpc(&s, json!({"jsonrpc":"2.0","method":"notifications/initialized"}), &Scope::All).await.is_none());
     }
 
     #[tokio::test]
     async fn tools_list_has_sys_list_and_the_recipe_tools_first_then_the_catalog() {
         let s = state_with_catalog();
-        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).await.unwrap();
+        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}), &Scope::All).await.unwrap();
         let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(names, vec!["sys_list", "sys_recipe_list", "sys_recipe_save", "sys_recipe_run", "sys_snapshot"]);
     }
@@ -270,12 +313,12 @@ mod tests {
     #[tokio::test]
     async fn unknown_method_and_missing_system_are_reported() {
         let s = state_with_catalog();
-        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":3,"method":"nope"})).await.unwrap();
+        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":3,"method":"nope"}), &Scope::All).await.unwrap();
         assert_eq!(r["error"]["code"], -32601);
-        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"sys_click","arguments":{}}})).await.unwrap();
+        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"sys_click","arguments":{}}}), &Scope::All).await.unwrap();
         assert_eq!(r["result"]["isError"], true);
         assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("system"));
-        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"sys_snapshot","arguments":{"system":"ghost"}}})).await.unwrap();
+        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"sys_snapshot","arguments":{"system":"ghost"}}}), &Scope::All).await.unwrap();
         assert_eq!(r["result"]["isError"], true, "不存在的系統回工具層錯誤，不是 JSON-RPC 錯誤");
     }
 
@@ -344,6 +387,42 @@ mod tests {
         assert_eq!(posts.load(Ordering::SeqCst), 0);
 
         st.close("t").await;
+        ep.stop();
+    }
+
+    #[tokio::test]
+    async fn a_scoped_caller_only_sees_and_uses_the_systems_it_was_granted() {
+        let s = state_with_catalog();
+        let only_a = Scope::Only(vec!["a".into()]);
+        assert!(only_a.allows("a") && !only_a.allows("b") && Scope::All.allows("anything"));
+        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sys_snapshot","arguments":{"system":"b"}}}), &only_a).await.unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("沒有被授權"), "別的系統一律擋下");
+        // 配方工具也一樣。
+        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sys_recipe_list","arguments":{"system":"b"}}}), &only_a).await.unwrap();
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("沒有被授權"));
+        // sys_list 只列被授權的。
+        let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sys_list","arguments":{}}}), &only_a).await.unwrap();
+        assert!(!r["result"]["content"][0]["text"].as_str().unwrap().contains("\"b\""));
+    }
+
+    #[tokio::test]
+    async fn scoped_tokens_authenticate_but_only_for_their_systems() {
+        let s = state_with_catalog();
+        let ep = EndpointState::default();
+        let port = crate::systems::browser::pick_free_port().unwrap();
+        ep.start(s, "master".into(), port).await.unwrap();
+        let tok = ep.issue_scoped_token(&["a".to_string(), "b".to_string()]);
+        assert_eq!(tok, ep.issue_scoped_token(&["b".to_string(), "a".to_string()]), "同一組系統拿到同一個 token");
+        assert_ne!(tok, ep.issue_scoped_token(&["a".to_string()]));
+        let url = format!("http://127.0.0.1:{port}/systems/mcp");
+        let c = reqwest::Client::new();
+        let body = json!({"jsonrpc":"2.0","id":1,"method":"ping"});
+        assert_eq!(c.post(&url).bearer_auth(&tok).json(&body).send().await.unwrap().status(), 200);
+        assert_eq!(c.post(&url).bearer_auth("made-up").json(&body).send().await.unwrap().status(), 401);
+        let denied = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sys_snapshot","arguments":{"system":"z"}}});
+        let r: Value = c.post(&url).bearer_auth(&tok).json(&denied).send().await.unwrap().json().await.unwrap();
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("沒有被授權"), "{r}");
         ep.stop();
     }
 }

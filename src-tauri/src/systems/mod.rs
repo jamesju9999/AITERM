@@ -10,6 +10,7 @@ pub mod gate;
 pub mod jobs;
 pub mod proxy;
 pub mod recipes;
+pub mod skill;
 pub mod state;
 pub mod types;
 

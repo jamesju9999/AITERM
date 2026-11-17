@@ -304,9 +304,37 @@ pub fn allowed_tools(ask: bool, browser: bool) -> Option<String> {
     (!tools.is_empty()).then(|| tools.join(" "))
 }
 
+/// 派工時完整的 `--allowedTools` 值：ask_human／瀏覽器＋資料庫技能＋系統連線技能。都沒有就是 `None`。
+pub fn compose_allowed_tools(ask: bool, browser: bool, db: bool, systems: bool) -> Option<String> {
+    let mut tools: Vec<String> = Vec::new();
+    if let Some(t) = allowed_tools(ask, browser) {
+        tools.push(t);
+    }
+    if db {
+        tools.push(DB_ALLOWED_TOOLS.to_string());
+    }
+    if systems {
+        tools.push(crate::systems::skill::ALLOWED_TOOLS.to_string());
+    }
+    (!tools.is_empty()).then(|| tools.join(" "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composed_tools_add_the_skills_only_when_present_and_work_without_ask() {
+        assert_eq!(compose_allowed_tools(false, false, false, false), None);
+        assert_eq!(compose_allowed_tools(false, false, false, true).as_deref(), Some("mcp__aiterm-systems"), "只有系統連線也要能掛");
+        assert_eq!(
+            compose_allowed_tools(true, false, false, true).as_deref(),
+            Some("mcp__aiterm__ask_human mcp__aiterm__remember mcp__aiterm__tell_agent mcp__aiterm-systems")
+        );
+        let all = compose_allowed_tools(true, true, true, true).unwrap();
+        assert!(all.contains("mcp__playwright") && all.contains("mcp__aiterm__db_query") && all.ends_with("mcp__aiterm-systems"));
+        assert_eq!(compose_allowed_tools(true, false, false, false), allowed_tools(true, false));
+    }
 
     #[test]
     fn db_tools_are_listed_only_for_cards_with_the_skill() {

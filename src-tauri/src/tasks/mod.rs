@@ -277,6 +277,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     questions::init_schema(pool).await?;
     // Agent 的資料庫技能與查詢記錄，見 docs/superpowers/specs/2026-10-19-agent-db-skill-design.md。
     db_skill::init_schema(pool).await?;
+    // Agent 的系統連線技能（被勾選的系統），見 systems/skill.rs。
+    crate::systems::skill::init_schema(pool).await?;
     // Agent 的自訂技能與使用記錄，見 tasks/custom_skills.rs。
     custom_skills::init_schema(pool).await?;
     // 團隊編制，見 docs/superpowers/specs/2026-10-20-agent-canvas-team-formations-design.md。

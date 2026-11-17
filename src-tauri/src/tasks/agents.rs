@@ -44,6 +44,9 @@ pub struct AgentRow {
     /// 自訂技能（技能資料夾路徑的 JSON 陣列，見 `tasks::custom_skills`）。NULL＝沒有。
     #[sqlx(default)]
     pub custom_skills: Option<String>,
+    /// 系統連線技能：被勾選的系統 id（JSON 陣列，見 `systems::skill`）。NULL＝沒有。
+    #[sqlx(default)]
+    pub systems: Option<String>,
 }
 
 pub struct NewAgent<'a> {
