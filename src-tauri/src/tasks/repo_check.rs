@@ -14,7 +14,9 @@ use crate::vcs::VcsManager;
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum RepoCheck {
     /// 可以用。`branch` 是目前分支（detached HEAD 時為 None）。
-    Ok { branch: Option<String> },
+    /// `nested_in`：資料夾本身不是 git 最上層時，那個上層程式庫的路徑
+    /// （合併、dirty 檢查都針對它，常讓人意外）。
+    Ok { branch: Option<String>, nested_in: Option<String> },
     /// 資料夾不存在。
     Missing,
     /// 不是 git repo（或是 SVN）。可以一鍵初始化。
@@ -38,8 +40,17 @@ pub async fn check_repo(path: &str) -> RepoCheck {
     if path.trim().is_empty() || !Path::new(path).is_dir() {
         return RepoCheck::Missing;
     }
+    let mut nested_in = None;
     match VcsManager::detect_repo(path).await {
-        Ok(info) if info.vcs_type == VcsType::Git => {}
+        Ok(info) if info.vcs_type == VcsType::Git => {
+            let same = match (Path::new(path).canonicalize(), Path::new(&info.root).canonicalize()) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => true,
+            };
+            if !same {
+                nested_in = Some(info.root);
+            }
+        }
         _ if is_board_folder(Path::new(path)) => return RepoCheck::BoardFolder,
         _ => return RepoCheck::NotRepo,
     }
@@ -50,7 +61,7 @@ pub async fn check_repo(path: &str) -> RepoCheck {
         }
         return RepoCheck::NoCommits;
     }
-    RepoCheck::Ok { branch: client.current_branch().await.ok().filter(|b| !b.is_empty() && b != "HEAD") }
+    RepoCheck::Ok { branch: client.current_branch().await.ok().filter(|b| !b.is_empty() && b != "HEAD"), nested_in }
 }
 
 /// 不是 repo 就 `git init`；沒有 commit 就把資料夾現有檔案建成第一個 commit
@@ -162,7 +173,33 @@ mod tests {
         git(dir.path(), &["add", "."]);
         git(dir.path(), &["commit", "-qm", "c"]);
         match check_repo(&p).await {
-            RepoCheck::Ok { branch } => assert!(branch.is_some()),
+            RepoCheck::Ok { branch, nested_in } => {
+                assert!(branch.is_some());
+                assert!(nested_in.is_none(), "自己就是最上層，不算在別人的程式庫裡");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// TESTTIME 實機：資料夾本身沒有 .git，往上找到別的專案的程式庫；
+    /// 合併時才報「程式庫有未提交的改動」。要在選資料夾時就講出是哪一個程式庫。
+    #[tokio::test]
+    async fn a_folder_inside_someone_elses_repo_reports_that_repo() {
+        let top = tempfile::tempdir().unwrap();
+        git(top.path(), &["init", "-q"]);
+        git(top.path(), &["config", "user.email", "t@t"]);
+        git(top.path(), &["config", "user.name", "T"]);
+        fs::write(top.path().join("a.txt"), "x").unwrap();
+        git(top.path(), &["add", "."]);
+        git(top.path(), &["commit", "-qm", "c"]);
+        let sub = top.path().join("TESTTIME");
+        fs::create_dir_all(&sub).unwrap();
+
+        match check_repo(&sub.to_string_lossy()).await {
+            RepoCheck::Ok { nested_in, .. } => {
+                let got = Path::new(&nested_in.expect("要回報上層程式庫")).canonicalize().unwrap();
+                assert_eq!(got, top.path().canonicalize().unwrap());
+            }
             other => panic!("{other:?}"),
         }
     }

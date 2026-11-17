@@ -111,7 +111,7 @@ export const overrideModule = (projectId: string, taskId: string): Promise<void>
 
 /** 程式庫可不可以給 Agent 用（見 tasks/repo_check.rs）。 */
 export type RepoCheck =
-  | { status: "ok"; branch: string | null }
+  | { status: "ok"; branch: string | null; nested_in?: string | null }
   | { status: "missing" }
   | { status: "not_repo" }
   | { status: "no_commits" }
