@@ -288,4 +288,44 @@ mod tests {
         assert!(!looks_logged_out(&c, "- Page URL: https://app.example.com/orders\n"));
         assert!(!looks_logged_out(&c, "沒有網址的結果"));
     }
+
+    /// 需要真的 Chrome 與網路：`cargo test -p app --lib -- --ignored --test-threads=1 systems::state`。
+    #[tokio::test]
+    #[ignore]
+    async fn end_to_end_call_refusal_takeover_and_disable() {
+        use crate::systems::testsite::{conn, fake_site};
+        use std::sync::atomic::Ordering;
+
+        let (port, posts) = fake_site().await;
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
+        let c = conn(port, Mode::ReadOnly);
+        cfg.update(|a| a.system_connections.push(c.clone())).unwrap();
+        let st = Arc::new(SystemsState::new(cfg.clone()));
+        let text = |v: &Value| v["content"].as_array().unwrap().iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+
+        let url = format!("http://127.0.0.1:{port}/");
+        st.call("t", "sys_navigate", json!({"system":"t","url":url,"intent":"讀：開首頁"})).await.unwrap();
+        let snap = st.call("t", "sys_snapshot", json!({"system":"t"})).await.unwrap();
+        let t = text(&snap);
+        let r = t.split("button \"Save\" [ref=").nth(1).and_then(|s| s.split(']').next()).expect(&t).to_string();
+        let click = st.call("t", "sys_click", json!({"system":"t","target":r,"intent":"寫：按儲存"})).await.unwrap();
+        assert!(text(&click).contains("被閘門拒絕"));
+        assert_eq!(posts.load(Ordering::SeqCst), 0);
+
+        // 接手期間 AI 的呼叫被擋下。
+        st.set_manual("t", true).await.unwrap();
+        let during = st.call("t", "sys_snapshot", json!({"system":"t"})).await.unwrap();
+        assert!(text(&during).contains("接手"), "{}", text(&during));
+        st.set_manual("t", false).await.unwrap();
+        assert!(!text(&st.call("t", "sys_snapshot", json!({"system":"t"})).await.unwrap()).contains("接手操作中"));
+
+        // 停用：關掉瀏覽器，之後的呼叫被拒絕。
+        let mut off = c.clone();
+        off.enabled = false;
+        cfg.update(|a| a.system_connections[0] = off.clone()).unwrap();
+        st.close("t").await;
+        assert!(!st.status("t").await.running);
+        assert!(st.call("t", "sys_snapshot", json!({"system":"t"})).await.is_err());
+    }
 }

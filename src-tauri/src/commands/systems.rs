@@ -5,8 +5,14 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::config::types::{McpServerConfig, McpTransport};
 use crate::config::ConfigStore;
+use crate::secret::SecretStore;
+use crate::systems::approvals::PendingView;
+use crate::systems::audit;
+use crate::systems::endpoint::{EndpointState, DEFAULT_PORT, ENDPOINT_TOKEN_KEY, MCP_SERVER_ID};
 use crate::systems::gate::host_of;
+use crate::systems::state::{SystemStatus, SystemsState};
 use crate::systems::types::SystemConnection;
 
 /// 儲存前的檢查：網址要是 http(s)；名稱不可空白；允許的網域必須包含起始網址的網域。
@@ -28,26 +34,143 @@ pub fn validate(conn: &SystemConnection) -> Result<(), String> {
     Ok(())
 }
 
+type McpState = crate::commands::mcp::McpManagerState;
+
+/// 啟動端點、確保 token，並在 `mcp_servers` 維護一筆自動管理的項目（讓 Ask AI 迴圈看得到 `sys_*` 工具）。
+pub async fn ensure_endpoint(
+    endpoint: &EndpointState,
+    systems: &Arc<SystemsState>,
+    secrets: &Arc<SecretStore>,
+    config: &Arc<ConfigStore>,
+    mcp: &McpState,
+) -> Result<(), String> {
+    let token = match secrets.get(ENDPOINT_TOKEN_KEY).map_err(|e| e.to_string())? {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            let t = crate::bridge::auth::generate_token();
+            secrets.set(ENDPOINT_TOKEN_KEY, &t).map_err(|e| e.to_string())?;
+            t
+        }
+    };
+    endpoint.start(systems.clone(), token.clone(), DEFAULT_PORT).await?;
+    let desired = McpServerConfig {
+        id: MCP_SERVER_ID.into(),
+        name: "AITerm Systems".into(),
+        enabled: true,
+        transport: McpTransport::Http,
+        command: None,
+        args: vec![],
+        env: Default::default(),
+        url: Some(format!("http://127.0.0.1:{DEFAULT_PORT}/systems/mcp")),
+        headers: [("Authorization".to_string(), format!("Bearer {token}"))].into_iter().collect(),
+    };
+    let current = config.get().mcp_servers.into_iter().find(|s| s.id == MCP_SERVER_ID);
+    let same = current.as_ref().is_some_and(|c| c.url == desired.url && c.headers == desired.headers && c.enabled);
+    if !same {
+        config
+            .update(|cfg| match cfg.mcp_servers.iter().position(|s| s.id == MCP_SERVER_ID) {
+                Some(i) => cfg.mcp_servers[i] = desired.clone(),
+                None => cfg.mcp_servers.push(desired.clone()),
+            })
+            .map_err(|e| e.to_string())?;
+        mcp.lock().await.reconnect(&desired).await;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn systems_list(config: State<'_, Arc<ConfigStore>>) -> Result<Vec<SystemConnection>, String> {
     Ok(config.get().system_connections)
 }
 
-/// 新增或取代（同 id）。
+/// 新增或取代（同 id）。存好後確保端點在跑；系統被停用時立刻關掉它的瀏覽器。
 #[tauri::command]
-pub async fn systems_save(conn: SystemConnection, config: State<'_, Arc<ConfigStore>>) -> Result<(), String> {
+#[allow(clippy::too_many_arguments)]
+pub async fn systems_save(
+    conn: SystemConnection,
+    config: State<'_, Arc<ConfigStore>>,
+    systems: State<'_, Arc<SystemsState>>,
+    endpoint: State<'_, Arc<EndpointState>>,
+    secrets: State<'_, Arc<SecretStore>>,
+    mcp: State<'_, McpState>,
+) -> Result<(), String> {
     validate(&conn)?;
     config
         .update(|cfg| match cfg.system_connections.iter().position(|c| c.id == conn.id) {
             Some(i) => cfg.system_connections[i] = conn.clone(),
             None => cfg.system_connections.push(conn.clone()),
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if !conn.enabled {
+        systems.close(&conn.id).await;
+    }
+    ensure_endpoint(&endpoint, &systems, &secrets, &config, &mcp).await
 }
 
 #[tauri::command]
-pub async fn systems_remove(id: String, config: State<'_, Arc<ConfigStore>>) -> Result<(), String> {
+pub async fn systems_remove(
+    id: String,
+    config: State<'_, Arc<ConfigStore>>,
+    systems: State<'_, Arc<SystemsState>>,
+) -> Result<(), String> {
+    systems.close(&id).await;
     config.update(|cfg| cfg.system_connections.retain(|c| c.id != id)).map_err(|e| e.to_string())
+}
+
+/// 開啟這個系統的瀏覽器視窗（沒開就開），讓使用者手動登入。
+#[tauri::command]
+pub async fn systems_open_login(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<(), String> {
+    systems.inner().clone().ensure_running(&id).await.map(|_| ())
+}
+
+#[tauri::command]
+pub async fn systems_status(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<SystemStatus, String> {
+    Ok(systems.status(&id).await)
+}
+
+#[tauri::command]
+pub async fn systems_pending(systems: State<'_, Arc<SystemsState>>) -> Result<Vec<PendingView>, String> {
+    Ok(systems.pending())
+}
+
+#[tauri::command]
+pub async fn systems_decide(approval_id: String, approve: bool, systems: State<'_, Arc<SystemsState>>) -> Result<bool, String> {
+    Ok(systems.approvals.decide(&approval_id, approve))
+}
+
+#[tauri::command]
+pub async fn systems_stop(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<usize, String> {
+    Ok(systems.stop(&id))
+}
+
+#[tauri::command]
+pub async fn systems_takeover(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<(), String> {
+    systems.set_manual(&id, true).await
+}
+
+#[tauri::command]
+pub async fn systems_handback(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<(), String> {
+    systems.set_manual(&id, false).await
+}
+
+#[tauri::command]
+pub async fn systems_audit(id: String, limit: Option<i64>, systems: State<'_, Arc<SystemsState>>) -> Result<Vec<audit::Row>, String> {
+    let Some(pool) = systems.audit_pool().await else { return Ok(vec![]) };
+    audit::list(&pool, &id, limit.unwrap_or(100).clamp(1, 500)).await.map_err(|e| e.to_string())
+}
+
+/// 給 Claude Code 貼的 MCP 設定。
+#[tauri::command]
+pub async fn systems_mcp_config(secrets: State<'_, Arc<SecretStore>>) -> Result<String, String> {
+    let token = secrets.get(ENDPOINT_TOKEN_KEY).map_err(|e| e.to_string())?.unwrap_or_default();
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "mcpServers": { MCP_SERVER_ID: {
+            "type": "http",
+            "url": format!("http://127.0.0.1:{DEFAULT_PORT}/systems/mcp"),
+            "headers": { "Authorization": format!("Bearer {token}") }
+        } }
+    }))
+    .unwrap_or_default())
 }
 
 #[cfg(test)]

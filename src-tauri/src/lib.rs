@@ -252,6 +252,7 @@ pub fn run() {
     // mcp_enabled 預設是 true，這一步原本是本函式最大宗的啟動延遲來源：
     // 只要設定裡有任何 MCP 伺服器，視窗要等它們全部連完才會出現。
     let mcp_manager: McpManagerState = Arc::new(tokio::sync::Mutex::new(mcp::McpManager::new()));
+    let systems_state = Arc::new(systems::state::SystemsState::new(config.clone()));
 
     let sidecar_path = db::resolve_db2_sidecar_path();
 
@@ -315,9 +316,33 @@ pub fn run() {
         .manage(Arc::new(bridge::BridgeState::new()))
         .manage(Arc::new(bridge::openai_server::OpenAiServerState::new()))
         .manage(Arc::new(mcp_server::McpToolServerState::new()))
+        .manage(systems_state)
+        .manage(Arc::new(systems::endpoint::EndpointState::default()))
         .manage(Arc::new(share::ShareServerState::new()))
         .manage(Arc::new(share::viewer_manager::ViewerManager::new()))
         .setup(|app| {
+            {
+                // 系統連線：畫面事件送出，並在已有連線時啟動動態 MCP 端點。
+                use tauri::{Emitter as _, Manager as _};
+                let handle = app.handle().clone();
+                let systems = handle.state::<Arc<systems::state::SystemsState>>().inner().clone();
+                let h2 = handle.clone();
+                systems.set_emitter(Arc::new(move |name, payload| {
+                    let _ = h2.emit(name, payload);
+                }));
+                tauri::async_runtime::spawn(async move {
+                    let config = handle.state::<Arc<ConfigStore>>().inner().clone();
+                    if config.get().system_connections.is_empty() {
+                        return;
+                    }
+                    let endpoint = handle.state::<Arc<systems::endpoint::EndpointState>>().inner().clone();
+                    let secrets = handle.state::<Arc<SecretStore>>().inner().clone();
+                    let mcp = handle.state::<McpManagerState>().inner().clone();
+                    if let Err(e) = commands::systems::ensure_endpoint(&endpoint, &systems, &secrets, &config, &mcp).await {
+                        log::error!("systems 端點啟動失敗：{e}");
+                    }
+                });
+            }
             {
                 use tauri::{Emitter as _, Manager as _};
                 let handle = app.handle().clone();
@@ -787,6 +812,15 @@ pub fn run() {
             commands::systems::systems_list,
             commands::systems::systems_save,
             commands::systems::systems_remove,
+            commands::systems::systems_open_login,
+            commands::systems::systems_status,
+            commands::systems::systems_pending,
+            commands::systems::systems_decide,
+            commands::systems::systems_stop,
+            commands::systems::systems_takeover,
+            commands::systems::systems_handback,
+            commands::systems::systems_audit,
+            commands::systems::systems_mcp_config,
             update_mcp_server,
             remove_mcp_server,
             get_mcp_tools,
