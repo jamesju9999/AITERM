@@ -143,6 +143,19 @@ function storedSchedulePos(s: ScheduleView, target?: AgentRow) {
     y: s.canvas_y ?? (target ? target.canvas_y : 8),
   };
 }
+/**
+ * 定時器連到目標角色的虛線。疊在目標正上方時（自動排列的排法）畫一條直線往下接；
+ * 其他位置（預設放在目標左邊、或使用者自己拖的）畫成橫向的曲線。線畫在節點底下，
+ * 起點多伸進節點裡一點，被節點蓋住就看不出估計高度的誤差。
+ */
+function scheduleLinkPath(pos: { x: number; y: number }, target: AgentRow): string {
+  const cx = pos.x + SCHEDULE_NODE_W / 2;
+  const isAbove = pos.y + SCHEDULE_NODE_H <= target.canvas_y + 4 && cx >= target.canvas_x && cx <= target.canvas_x + SCHEDULE_NODE_W;
+  if (isAbove) return `M ${cx} ${pos.y + 40} L ${cx} ${target.canvas_y}`;
+  const sx = pos.x + SCHEDULE_NODE_W;
+  const sy = pos.y + 40;
+  return `M ${sx} ${sy} C ${sx + 50} ${sy}, ${target.canvas_x - 50} ${target.canvas_y + 30}, ${target.canvas_x} ${target.canvas_y + 30}`;
+}
 /** 定時器節點沒量到實際高度時的估計值。 */
 const SCHEDULE_NODE_H = 90;
 const PROJECT_KEY = "aiterm.agentCanvas.project";
@@ -1804,7 +1817,7 @@ export function AgentCanvasView({
                       return (
                         <path
                           key={sch.id}
-                          d={`M ${pos.x + SCHEDULE_NODE_W} ${pos.y + 40} C ${pos.x + SCHEDULE_NODE_W + 50} ${pos.y + 40}, ${target.canvas_x - 50} ${target.canvas_y + 30}, ${target.canvas_x} ${target.canvas_y + 30}`}
+                          d={scheduleLinkPath(pos, target)}
                           fill="none"
                           stroke="#3b82f6"
                           strokeWidth={2}

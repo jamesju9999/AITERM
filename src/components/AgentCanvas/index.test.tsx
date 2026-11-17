@@ -2053,7 +2053,7 @@ describe("AgentCanvasView", () => {
     expect(x("r1")).toBeLessThan(x("v1"));
   });
 
-  it("自動排列也會排定時器：寫回位置，且排在所有角色的左邊（不再被角色蓋住）", async () => {
+  it("自動排列也會排定時器：寫回位置，疊在目標角色正上方（不壓在交件連線上、也不被蓋住）", async () => {
     vi.mocked(updateAgent).mockClear();
     vi.mocked(saveSchedule).mockClear();
     vi.mocked(listAgents).mockResolvedValue([
@@ -2067,8 +2067,9 @@ describe("AgentCanvasView", () => {
     fireEvent.click(screen.getByRole("button", { name: /自動排列|Arrange/ }));
     await waitFor(() => expect(saveSchedule).toHaveBeenCalledTimes(1));
     const saved = vi.mocked(saveSchedule).mock.calls[0][2];
-    const coderX = vi.mocked(updateAgent).mock.calls.find(([, a]) => a.id === "a1")![1].canvas_x;
-    expect(saved.canvas_x).toBeLessThan(coderX);
+    const coder = vi.mocked(updateAgent).mock.calls.find(([, a]) => a.id === "a1")![1];
+    expect(saved.canvas_x).toBe(coder.canvas_x);
+    expect(saved.canvas_y!).toBeLessThan(coder.canvas_y);
     vi.mocked(listSchedules).mockResolvedValue([]);
   });
 
