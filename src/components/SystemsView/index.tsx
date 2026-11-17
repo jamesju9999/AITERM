@@ -10,6 +10,10 @@ import {
   onSystemsResolved,
   onSystemsState,
   systemsAudit,
+  systemsJournalDiscard,
+  systemsRecipeRun,
+  systemsRecipeSaveFromJournal,
+  systemsRunGoal,
   systemsDecide,
   systemsHandback,
   systemsJobDelete,
@@ -41,13 +45,14 @@ import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { restoreWebviewFocus } from "../../lib/webviewFocus";
 import { LinkIcon } from "../Icons";
 import { ApprovalCards } from "./ApprovalCards";
+import { AskPanel } from "./AskPanel";
 import { AuditLog } from "./AuditLog";
 import { ConnectionForm } from "./ConnectionForm";
 import { JobList } from "./JobList";
 import { RecipeList } from "./RecipeList";
 import "./index.css";
 
-type PanelKind = "audit" | "recipes" | "jobs";
+type PanelKind = "ask" | "audit" | "recipes" | "jobs";
 
 const errText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
 
@@ -203,6 +208,7 @@ export function SystemsView() {
     setJobs([]);
     setJobRuns({});
     if (!next) return;
+    if (kind === "ask") return;
     if (kind === "audit") void loadAudit(id);
     else if (kind === "recipes") void loadRecipes(id);
     else void loadJobs(id);
@@ -328,7 +334,7 @@ export function SystemsView() {
                   </p>
                 )}
                 <div className="systems__tabs" role="group">
-                  {(["audit", "recipes", "jobs"] as const).map((kind) => (
+                  {(["ask", "audit", "recipes", "jobs"] as const).map((kind) => (
                     <button
                       key={kind}
                       type="button"
@@ -336,10 +342,18 @@ export function SystemsView() {
                       aria-pressed={panel?.id === s.id && panel.kind === kind}
                       onClick={() => openPanel(s.id, kind)}
                     >
-                      {kind === "audit" ? t.sys_audit_title : kind === "recipes" ? t.sys_recipes_title : t.sys_jobs_title}
+                      {kind === "ask" ? t.sys_ask_title : kind === "audit" ? t.sys_audit_title : kind === "recipes" ? t.sys_recipes_title : t.sys_jobs_title}
                     </button>
                   ))}
                 </div>
+                {panel?.id === s.id && panel.kind === "ask" && (
+                  <AskPanel
+                    system={s}
+                    onRun={(goal) => systemsRunGoal(s.id, goal).finally(() => void refresh())}
+                    onSaveRecipe={(name, description, params) => systemsRecipeSaveFromJournal(s.id, name, description, params)}
+                    onDiscard={() => systemsJournalDiscard(s.id)}
+                  />
+                )}
                 {panel?.id === s.id && panel.kind === "audit" && <AuditLog rows={audit} />}
                 {panel?.id === s.id && panel.kind === "jobs" && (
                   <JobList
@@ -366,6 +380,7 @@ export function SystemsView() {
                 {panel?.id === s.id && panel.kind === "recipes" && (
                   <RecipeList
                     recipes={recipes}
+                    onRun={(r, values) => systemsRecipeRun(s.id, r.name, values).finally(() => void loadRecipes(s.id))}
                     onDelete={async (r) => {
                       const ok = await confirm(t.sys_recipe_delete_confirm(r.name), { kind: "warning" });
                       await restoreWebviewFocus();

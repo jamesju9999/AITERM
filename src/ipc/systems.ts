@@ -150,3 +150,28 @@ export const systemsJobRuns = (id: string) => invoke<JobRun[]>("systems_job_runs
 export const onSystemsJobFinished = (cb: () => void): Promise<UnlistenFn> => listen("systems://job-finished", () => cb());
 export const onSystemsJobDisabled = (cb: (name: string) => void): Promise<UnlistenFn> =>
   listen<{ name: string }>("systems://job-disabled", (e) => cb(e.payload.name));
+
+// ── 請 AI 操作／存配方 ─────────────────────────────────────────────────────
+
+export interface StepView {
+  tool: string;
+  intent: string;
+  detail: string;
+  write: boolean;
+}
+
+export interface AdhocReport {
+  status: "ok" | "failed" | "timeout";
+  summary: string;
+  steps: StepView[];
+  /** 系統猜到的參數候選（輸入的文字、下拉選的值）。 */
+  params: { name: string; example: string }[];
+  can_save: boolean;
+}
+
+export const systemsRunGoal = (systemId: string, goal: string) => invoke<AdhocReport>("systems_run_goal", { systemId, goal });
+export const systemsRecipeSaveFromJournal = (systemId: string, name: string, description: string, params: { name: string; example: string }[]) =>
+  invoke<string>("systems_recipe_save_from_journal", { systemId, name, description, params });
+export const systemsJournalDiscard = (systemId: string) => invoke<void>("systems_journal_discard", { systemId });
+export const systemsRecipeRun = (systemId: string, name: string, params: Record<string, string>) =>
+  invoke<string>("systems_recipe_run", { systemId, name, params });

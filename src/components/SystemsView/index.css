@@ -136,3 +136,20 @@
 /* 目標欄下方的「AI 潤飾」列：對齊到欄位那一欄 */
 .systems__refinebar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-left: 202px; margin-top: -4px; }
 @media (max-width: 720px) { .systems__refinebar { padding-left: 0; } }
+
+/* 請 AI 操作 */
+.systems__askform { display: flex; flex-direction: column; gap: 8px; }
+.systems__asklabel { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.systems__asklabel textarea { box-sizing: border-box; width: 100%; padding: 8px 10px; font: inherit; line-height: 1.5; color: inherit; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; resize: vertical; }
+.systems__asklabel textarea:focus { outline: none; border-color: var(--accent, #a855f7); }
+.systems__askbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.systems__askbar .systems__refinebar { padding-left: 0; margin-top: 0; }
+.systems__result { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #2a2a2a); border-radius: 8px; }
+.systems__report { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.6; }
+.systems__steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.systems__steps li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.systems__saveform { background: transparent; border: 0; border-top: 1px solid var(--border, #2a2a2a); border-radius: 0; padding: 12px 0 0; }
+.systems__params { display: flex; flex-direction: column; gap: 6px; }
+.systems__param { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.systems__form .systems__param input:not([type="checkbox"]) { width: 200px; max-width: 200px; }
+.systems__runform { background: transparent; border: 0; padding: 4px 0 0; }

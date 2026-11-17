@@ -33,6 +33,10 @@ vi.mock("../../ipc/systems", async (orig) => ({
   systemsOpenLogin: vi.fn(() => Promise.resolve()),
   systemsRemove: vi.fn(() => Promise.resolve()),
   systemsRecipes: vi.fn(() => Promise.resolve([])),
+  systemsRunGoal: vi.fn(),
+  systemsJournalDiscard: vi.fn(() => Promise.resolve()),
+  systemsRecipeSaveFromJournal: vi.fn(() => Promise.resolve("ok")),
+  systemsRecipeRun: vi.fn(() => Promise.resolve("已完成")),
   systemsJobs: vi.fn(() => Promise.resolve([])),
   systemsJobRuns: vi.fn(() => Promise.resolve([])),
   systemsJobSave: vi.fn(() => Promise.resolve("j1")),
@@ -143,7 +147,7 @@ describe("SystemsView", () => {
     expect(await screen.findByTestId("recipe-row")).toBeTruthy();
     expect(ipc.systemsRecipes).toHaveBeenCalledWith("s1");
     const row = await screen.findByTestId("recipe-row");
-    fireEvent.click(row.querySelectorAll("button")[1]);
+    fireEvent.click(row.querySelectorAll("button")[2]);
     await waitFor(() => expect(ipc.systemsRecipeDelete).toHaveBeenCalledWith(9));
   });
 
@@ -158,5 +162,23 @@ describe("SystemsView", () => {
     await waitFor(() => expect(handlers["systems://job-disabled"]).toBeTruthy());
     act(() => handlers["systems://job-disabled"]({ name: "每日匯出" }));
     expect((await screen.findByTestId("job-notice")).textContent).toBe(t.sys_job_disabled_toast("每日匯出"));
+  });
+
+  it("the Ask AI tab runs a goal on that system, and a recipe can be run from the recipes tab", async () => {
+    vi.mocked(ipc.systemsRunGoal).mockResolvedValue({ status: "ok", summary: "做好了", steps: [], params: [], can_save: false });
+    vi.mocked(ipc.systemsRecipes).mockResolvedValue([
+      { id: 9, system_id: "s1", name: "送單", description: "", params: [], steps: [], ok_count: 0, fail_count: 0, last_run_ms: null },
+    ]);
+    setup();
+    fireEvent.click(await screen.findByText(t.sys_ask_title, { selector: "button" }));
+    fireEvent.change(await screen.findByPlaceholderText(t.sys_ask_goal_ph), { target: { value: "查今天的訂單" } });
+    fireEvent.click(screen.getByText(t.sys_ask_send));
+    await waitFor(() => expect(ipc.systemsRunGoal).toHaveBeenCalledWith("s1", "查今天的訂單"));
+    expect(await screen.findByText("做好了")).toBeTruthy();
+
+    fireEvent.click(screen.getByText(t.sys_recipes_title, { selector: "button" }));
+    fireEvent.click(await screen.findByTestId("recipe-run"));
+    fireEvent.click(screen.getByText(t.sys_recipe_run_go));
+    await waitFor(() => expect(ipc.systemsRecipeRun).toHaveBeenCalledWith("s1", "送單", {}));
   });
 });
