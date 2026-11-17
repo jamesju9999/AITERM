@@ -106,6 +106,7 @@ pub async fn add_mcp_server(
         args: input.args,
         env: input.env,
         url: input.url,
+        headers: Default::default(),
     };
 
     config.update(|cfg| {
@@ -143,6 +144,7 @@ pub async fn update_mcp_server(
         .map(|s| s.env.clone())
         .unwrap_or_default();
     let env = if input.env.is_empty() { existing_env } else { input.env };
+    let existing_headers = config.get().mcp_servers.iter().find(|s| s.id == id).map(|s| s.headers.clone()).unwrap_or_default();
 
     let server_cfg = McpServerConfig {
         id: id.clone(),
@@ -153,6 +155,7 @@ pub async fn update_mcp_server(
         args: input.args,
         env,
         url: input.url,
+        headers: existing_headers,
     };
 
     config.update(|cfg| {
@@ -252,6 +255,7 @@ pub async fn import_claude_desktop_mcp() -> Result<Vec<McpServerConfig>, String>
                     .collect())
                 .unwrap_or_default(),
             url: None,
+            headers: Default::default(),
         }
     }).collect();
 

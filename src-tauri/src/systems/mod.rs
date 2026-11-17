@@ -5,8 +5,10 @@ pub mod approvals;
 pub mod audit;
 pub mod browser;
 pub mod cdp;
+pub mod endpoint;
 pub mod gate;
 pub mod proxy;
+pub mod state;
 pub mod types;
 
 #[cfg(test)]

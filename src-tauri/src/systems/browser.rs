@@ -62,6 +62,11 @@ impl RunningBrowser {
         format!("http://127.0.0.1:{}", self.port)
     }
 
+    /// 行程還在不在（使用者可能自己把視窗關了）。
+    pub fn is_alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
     pub async fn close(&mut self) {
         let _ = self.child.kill().await;
     }

@@ -136,6 +136,7 @@ pub struct HttpTransport {
     base_url: String,
     client: reqwest::Client,
     next_id: AtomicU64,
+    headers: HashMap<String, String>,
 }
 
 impl HttpTransport {
@@ -144,7 +145,14 @@ impl HttpTransport {
             base_url,
             client: reqwest::Client::new(),
             next_id: AtomicU64::new(1),
+            headers: HashMap::new(),
         }
+    }
+
+    /// 每個請求都帶上的標頭（例如 `Authorization: Bearer …`）。
+    pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = headers;
+        self
     }
 
     pub async fn send_request(
@@ -152,9 +160,11 @@ impl HttpTransport {
         mut req: JsonRpcRequest,
     ) -> Result<JsonRpcResponse, TransportError> {
         req.id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let resp = self.client
-            .post(&self.base_url)
-            .json(&req)
+        let mut builder = self.client.post(&self.base_url).json(&req);
+        for (k, v) in &self.headers {
+            builder = builder.header(k, v);
+        }
+        let resp = builder
             .send()
             .await
             .map_err(|e| TransportError::Http(e.to_string()))?;
@@ -196,6 +206,10 @@ pub enum McpTransport {
 impl McpTransport {
     pub fn new_http(url: String) -> Self {
         Self::Http(HttpTransport::new(url))
+    }
+
+    pub fn new_http_with_headers(url: String, headers: HashMap<String, String>) -> Self {
+        Self::Http(HttpTransport::new(url).with_headers(headers))
     }
 
     pub async fn send_request(

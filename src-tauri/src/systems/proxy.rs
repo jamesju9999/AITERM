@@ -110,15 +110,13 @@ pub struct Upstream {
 }
 
 impl Upstream {
-    pub async fn spawn(cdp_http: &str, output_dir: &std::path::Path) -> Result<Self, String> {
-        let args = vec![
-            "-y".to_string(),
-            crate::tasks::ask::PLAYWRIGHT_MCP.to_string(),
-            "--cdp-endpoint".into(),
-            cdp_http.into(),
-            "--output-dir".into(),
-            output_dir.to_string_lossy().into_owned(),
-        ];
+    /// `cdp_http` 為 `None` 時不連瀏覽器（只用來取得工具清單）。
+    pub async fn spawn(cdp_http: Option<&str>, output_dir: &std::path::Path) -> Result<Self, String> {
+        let mut args = vec!["-y".to_string(), crate::tasks::ask::PLAYWRIGHT_MCP.to_string()];
+        if let Some(c) = cdp_http {
+            args.extend(["--cdp-endpoint".to_string(), c.to_string()]);
+        }
+        args.extend(["--output-dir".to_string(), output_dir.to_string_lossy().into_owned()]);
         let mut cmd = crate::mcp::transport::build_command("npx", &args, &HashMap::new());
         cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| format!("無法啟動 Playwright MCP：{e}"))?;
@@ -171,6 +169,15 @@ impl Upstream {
     pub async fn kill(&self) {
         let _ = self.child.lock().await.kill().await;
     }
+}
+
+/// 取得對外的工具清單：啟動一個不連瀏覽器的 Playwright MCP 讀 `tools/list` 後關掉。
+pub async fn fetch_catalog(output_dir: &std::path::Path) -> Result<Vec<Value>, String> {
+    let up = Upstream::spawn(None, output_dir).await?;
+    let list = up.request("tools/list", json!({}), Duration::from_secs(30)).await;
+    up.kill().await;
+    let list = list?;
+    Ok(expose_tools(list["tools"].as_array().map(Vec::as_slice).unwrap_or(&[])))
 }
 
 /// 一個系統的代理：持有上游連線與閘門共享的狀態。
@@ -335,7 +342,7 @@ mod tests {
         let gate = tokio::spawn(async move { run_gate(&ws, ctx).await });
         tokio::time::sleep(Duration::from_millis(800)).await;
 
-        let up = Upstream::spawn(&b.cdp_http(), dir.path()).await.unwrap();
+        let up = Upstream::spawn(Some(&b.cdp_http()), dir.path()).await.unwrap();
         let proxy = Proxy::start("t", up, approvals, intent, manual, last_denied).await.unwrap();
         assert!(proxy.tools().iter().any(|t| t["name"] == "sys_click"));
 
@@ -383,7 +390,7 @@ mod tests {
         let ws = b.ws_url.clone();
         let gate = tokio::spawn(async move { run_gate(&ws, ctx).await });
         tokio::time::sleep(Duration::from_millis(800)).await;
-        let up = Upstream::spawn(&b.cdp_http(), dir.path()).await.unwrap();
+        let up = Upstream::spawn(Some(&b.cdp_http()), dir.path()).await.unwrap();
         let proxy = Proxy::start("t", up, approvals, intent, manual, Arc::new(Mutex::new(None))).await.unwrap();
 
         let url = format!("http://127.0.0.1:{port}/");

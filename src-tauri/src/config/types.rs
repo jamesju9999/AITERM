@@ -714,6 +714,9 @@ pub struct McpServerConfig {
     /// Base URL for http/sse transport. http/sse only.
     #[serde(default)]
     pub url: Option<String>,
+    /// 額外標頭（例如 `Authorization`）。http/sse only。
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
 }
 
 #[cfg(test)]
@@ -1049,6 +1052,7 @@ mod tests {
                     m
                 },
                 url: None,
+                headers: Default::default(),
             },
         };
         let s = toml::to_string(&w).unwrap();

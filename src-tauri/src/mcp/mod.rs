@@ -88,7 +88,7 @@ impl McpManager {
             }
             CfgTransport::Http | CfgTransport::Sse => {
                 let url = cfg.url.clone().unwrap_or_default();
-                McpTransport::new_http(url)
+                McpTransport::new_http_with_headers(url, cfg.headers.clone())
             }
         };
 
