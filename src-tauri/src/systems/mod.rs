@@ -2,5 +2,6 @@
 //! docs/superpowers/specs/2026-11-17-system-connections-design.md。
 
 pub mod audit;
+pub mod browser;
 pub mod gate;
 pub mod types;
