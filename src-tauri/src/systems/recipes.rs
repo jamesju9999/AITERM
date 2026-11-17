@@ -72,6 +72,11 @@ pub fn parse_snapshot(text: &str) -> Vec<Entry> {
     out
 }
 
+/// 快照文字裡的 `Page URL: ...`（目前這一頁的網址）。
+pub fn page_url_of(text: &str) -> Option<String> {
+    text.split("Page URL: ").nth(1)?.split_whitespace().next().map(String::from)
+}
+
 pub fn locator_for(entries: &[Entry], reference: &str) -> Option<Locator> {
     let idx = entries.iter().position(|e| e.reference == reference)?;
     let e = &entries[idx];
@@ -339,6 +344,13 @@ mod tests {
     use super::*;
 
     const SNAP: &str = "### Page\n- Page URL: http://x/\n### Snapshot\n```yaml\n- generic [ref=f1e1]:\n  - heading \"測試訂單系統\" [level=1] [ref=f1e2]\n  - generic [ref=f1e3]:\n    - textbox [ref=f1e4]: \"1\"\n    - textbox [ref=f1e5]\n    - button \"送出訂單\" [ref=f1e6]\n    - button \"送出訂單\" [ref=f1e7]\n    - link \"say \\\"hi\\\"\" [ref=f1e8] [cursor=pointer]\n```";
+
+    #[test]
+    fn the_current_page_url_is_read_from_a_snapshot() {
+        assert_eq!(page_url_of(SNAP).as_deref(), Some("http://x/"));
+        assert_eq!(page_url_of("### Page\n- Page URL: https://a.test/b?c=1\n### Snapshot"), Some("https://a.test/b?c=1".to_string()));
+        assert_eq!(page_url_of("沒有網址"), None);
+    }
 
     #[test]
     fn the_snapshot_is_parsed_into_role_name_and_ref() {

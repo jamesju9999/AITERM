@@ -34,6 +34,8 @@ pub struct Running {
     last_snapshot: Mutex<String>,
     /// 成功的動作類呼叫，給 `sys_recipe_save` 存成配方。上限 200 步。
     journal: Mutex<Vec<Step>>,
+    /// 日誌第一步開始時所在的網址：存配方時補成第一步的導覽，重播才會從同一個畫面開始。
+    journal_start_url: Mutex<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,6 +204,7 @@ impl SystemsState {
             needs_login: AtomicBool::new(false),
             last_snapshot: Mutex::new(String::new()),
             journal: Mutex::new(Vec::new()),
+            journal_start_url: Mutex::new(None),
         });
         map.insert(id.to_string(), run.clone());
         drop(map);
@@ -224,6 +227,7 @@ impl SystemsState {
         }
         *run.ctx.conn.lock() = conn.clone(); // 模式、規則改了立刻生效
         // 日誌用的步驟：把元素參照換成定位器（要在呼叫前用「呼叫當下看到的快照」換）。
+        let url_before = recipes::page_url_of(&run.last_snapshot.lock());
         let journal_step = (record && recipes::is_replayable(tool)).then(|| {
             let entries = recipes::parse_snapshot(&run.last_snapshot.lock());
             let mut a = recipes::to_locators(&args, &entries);
@@ -242,6 +246,9 @@ impl SystemsState {
         if let Some(step) = journal_step {
             if res["isError"] != true {
                 let mut j = run.journal.lock();
+                if j.is_empty() {
+                    *run.journal_start_url.lock() = url_before;
+                }
                 j.push(step);
                 if j.len() > 200 {
                     j.remove(0);
@@ -285,9 +292,16 @@ impl SystemsState {
         for s in &mut steps {
             s.args = recipes::parameterize(&s.args, &params);
         }
+        // 取全部日誌時，若第一步不是導覽，補一步回到當時的頁面：重播才不會剛好停在別的畫面而找不到元素。
+        if last_n.is_none() && steps.first().is_some_and(|s| s.tool != "sys_navigate") {
+            if let Some(url) = run.journal_start_url.lock().clone() {
+                steps.insert(0, Step { tool: "sys_navigate".into(), args: json!({ "url": url }), intent: "讀：回到錄製時的起始頁面".into() });
+            }
+        }
         let pool = self.audit_pool().await.ok_or("審計資料庫不可用，無法儲存配方")?;
         recipes::save(&pool, system, name.trim(), description, &params, &steps).await.map_err(|e| e.to_string())?;
         run.journal.lock().clear();
+        *run.journal_start_url.lock() = None;
         Ok(format!("已存成配方「{}」，共 {} 步、{} 個參數。", name.trim(), steps.len(), params.len()))
     }
 
@@ -553,6 +567,51 @@ mod tests {
         assert_eq!((list[0].ok_count, list[0].fail_count), (1, 1));
 
         auto.abort();
+        st.close("t").await;
+    }
+
+    /// 真機抓到的：AI 沒有自己導覽（瀏覽器開啟時就在起始頁），存下來的配方第一步就是填欄位；
+    /// 重播時若停在送出後的頁面就找不到欄位。存配方時要補一步「回到錄製時的頁面」。
+    #[tokio::test]
+    #[ignore]
+    async fn a_recipe_recorded_without_navigation_replays_from_the_recorded_page() {
+        use crate::systems::testsite::{conn, fake_site_with_bodies};
+        use std::collections::HashMap;
+        use std::sync::atomic::Ordering;
+
+        let (port, posts, bodies) = fake_site_with_bodies().await;
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
+        cfg.update(|a| a.system_connections.push(conn(port, Mode::Autonomous))).unwrap();
+        let st = Arc::new(SystemsState::with_pool(cfg.clone(), crate::systems::audit::open_in_memory().await));
+        let text = |v: &Value| v["content"].as_array().unwrap().iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+
+        // 不呼叫 sys_navigate：瀏覽器一開就在起始頁。
+        // 起始頁可能還在載入：等到快照裡有表單為止。
+        let mut e = Vec::new();
+        for _ in 0..20 {
+            let snap = st.call("t", "sys_snapshot", json!({"system":"t"})).await.unwrap();
+            e = recipes::parse_snapshot(&text(&snap));
+            if e.iter().any(|x| x.role == "textbox") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let input = e.iter().find(|x| x.role == "textbox").unwrap().reference.clone();
+        let button = e.iter().find(|x| x.role == "button").unwrap().reference.clone();
+        st.call("t", "sys_type", json!({"system":"t","target":input,"text":"A-102","intent":"寫：填單號"})).await.unwrap();
+        st.call("t", "sys_click", json!({"system":"t","target":button,"intent":"寫：送出"})).await.unwrap();
+        let msg = st.recipe_save("t", "送單", "", vec![Param { name: "order_no".into(), example: "A-102".into() }], None).await.unwrap();
+        assert!(msg.contains("3 步"), "要補上回到起始頁的導覽：{msg}");
+        let recipe = st.recipe_list("t").await.unwrap().remove(0);
+        assert_eq!(recipe.steps[0].tool, "sys_navigate");
+
+        // 現在瀏覽器停在送出後的頁面；重播仍要成功。
+        let vals: HashMap<String, String> = [("order_no".to_string(), "B-7".to_string())].into();
+        let out = st.recipe_run("t", "送單", vals).await.unwrap();
+        assert!(out.contains("已完成"), "{out}");
+        assert_eq!(posts.load(Ordering::SeqCst), 2);
+        assert!(bodies.lock()[1].contains("a=B-7"), "{:?}", bodies.lock());
         st.close("t").await;
     }
 }

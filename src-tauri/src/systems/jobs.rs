@@ -40,7 +40,8 @@ pub fn build_prompt(system_name: &str, system_id: &str, goal: &str) -> String {
          3. 每個動作都要帶 intent，並以「讀：」或「寫：」開頭說明要做什麼。\n\
          4. 動作被閘門拒絕（回覆含「被閘門拒絕」）時不可重試；停下來，回報需要開放什麼權限。\n\
          5. 登入失效、找不到元素、頁面不是預期的樣子時，不要亂試；停下來回報。\n\
-         6. 沒有人會回答你的問題。完成後用一兩句話回報結果；做不到就說明卡在哪裡。"
+         6. 沒有人會回答你的問題。完成後用一兩句話回報結果；做不到就說明卡在哪裡。\n\
+         7. 回報的最後一行必須是「結果：成功」或「結果：失敗：原因」，讓程式知道事情有沒有做成。"
     )
 }
 
@@ -93,6 +94,19 @@ pub fn unattended_warning(mode: Mode) -> Option<&'static str> {
         Mode::ReadOnly => Some("這個系統是只讀，任務遇到寫入會被拒絕"),
         Mode::ApproveEach => Some("這個系統要逐次核准，沒人在時寫入會等 5 分鐘後被拒絕"),
         Mode::Rules | Mode::Autonomous => None,
+    }
+}
+
+/// 看 AI 回報的最後一個「結果：…」行：成功回 `Some(true)`、失敗回 `Some(false)`，沒寫就是 `None`。
+pub fn final_verdict(summary: &str) -> Option<bool> {
+    let line = summary.lines().rev().map(str::trim).find(|l| l.starts_with("結果：") || l.starts_with("結果:"))?;
+    let rest = line.trim_start_matches("結果：").trim_start_matches("結果:").trim();
+    if rest.starts_with("成功") {
+        Some(true)
+    } else if rest.starts_with("失敗") {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -490,6 +504,12 @@ impl JobsRuntime {
                 run_claude(&command, &mcp_config_json(port, &token), &prompt, &ctx.work_dir, ctx.timeout).await
             }
         };
+        // AI 自己回報做不成（結果：失敗）也算失敗，不然「claude 結束碼 0」會把它記成成功。
+        let outcome = if outcome.status == "ok" && final_verdict(&outcome.summary) == Some(false) {
+            Outcome { status: "failed", summary: format!("AI 回報這件事沒有做成：\n{}", outcome.summary) }
+        } else {
+            outcome
+        };
         match super::audit::count_blocked_since(pool, system_id, started_ms).await {
             Ok(n) if n > 0 && outcome.status == "ok" => Outcome {
                 status: "failed",
@@ -538,6 +558,17 @@ mod tests {
         let p = build_prompt("訂單系統", "sys-1", "匯出昨天的訂單");
         assert!(p.contains("訂單系統") && p.contains("sys-1") && p.contains("匯出昨天的訂單"));
         assert!(p.contains("sys_recipe_list") && p.contains("被閘門拒絕") && p.contains("intent"));
+    }
+
+    #[test]
+    fn the_ais_own_verdict_line_decides_success_or_failure() {
+        assert_eq!(final_verdict("做完了\n結果：成功"), Some(true));
+        assert_eq!(final_verdict("卡住了\n結果：失敗：找不到單號欄位\n"), Some(false));
+        assert_eq!(final_verdict("結果:成功"), Some(true), "半形冒號也算");
+        assert_eq!(final_verdict("先寫了結果：成功\n後來又改\n結果：失敗：改了"), Some(false), "以最後一個為準");
+        assert_eq!(final_verdict("只是一般回報，沒寫結果行"), None);
+        assert_eq!(final_verdict("這一行含有結果：成功 但不是行首"), None);
+        assert!(build_prompt("s", "id", "g").contains("結果：成功"), "提示要要求 AI 寫結果行");
     }
 
     #[test]
