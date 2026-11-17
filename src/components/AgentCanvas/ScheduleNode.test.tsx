@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -53,5 +53,16 @@ describe("ScheduleNode", () => {
     const onEdit = mount(sched());
     await userEvent.click(screen.getByTestId("schedule-node"));
     expect(onEdit).toHaveBeenCalled();
+  });
+
+  it("按下滑鼠時通知拖曳（讓畫布可以拖動節點）", () => {
+    const onDragStart = vi.fn();
+    render(
+      <LocaleProvider>
+        <ScheduleNode schedule={sched()} x={10} y={20} onEdit={() => {}} onDragStart={onDragStart} />
+      </LocaleProvider>,
+    );
+    fireEvent.mouseDown(screen.getByTestId("schedule-node"));
+    expect(onDragStart).toHaveBeenCalledTimes(1);
   });
 });

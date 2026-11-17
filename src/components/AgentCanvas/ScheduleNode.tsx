@@ -1,3 +1,5 @@
+import type { MouseEvent as ReactMouseEvent } from "react";
+
 import { useLocale } from "../../contexts/LocaleContext";
 import { parseSpec, type ScheduleView } from "../../ipc/schedules";
 import { scheduleStatus } from "./scheduleStatus";
@@ -6,7 +8,21 @@ import { summarizeSchedule } from "./scheduleSummary";
 export const SCHEDULE_NODE_W = 200;
 
 /** 畫布上的定時器節點：名稱、週期摘要、狀態與最近一輪結果。點下去開設定。 */
-export function ScheduleNode({ schedule, x, y, onEdit }: { schedule: ScheduleView; x: number; y: number; onEdit: () => void }) {
+export function ScheduleNode({
+  schedule,
+  x,
+  y,
+  dragging,
+  onEdit,
+  onDragStart,
+}: {
+  schedule: ScheduleView;
+  x: number;
+  y: number;
+  dragging?: boolean;
+  onEdit: () => void;
+  onDragStart?: (e: ReactMouseEvent) => void;
+}) {
   const { t } = useLocale();
   const status = scheduleStatus(schedule);
   const last = schedule.runs[0];
@@ -24,12 +40,13 @@ export function ScheduleNode({ schedule, x, y, onEdit }: { schedule: ScheduleVie
             : t.sched_status_enabled;
   return (
     <div
-      className={`ac-sched-node ac-sched-node--${status}`}
+      className={`ac-sched-node ac-sched-node--${status}${dragging ? " ac-sched-node--dragging" : ""}`}
       data-testid="schedule-node"
       data-schedule-id={schedule.id}
       style={{ left: x, top: y, width: SCHEDULE_NODE_W }}
       role="button"
       tabIndex={0}
+      onMouseDown={onDragStart}
       onClick={onEdit}
       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onEdit()}
     >

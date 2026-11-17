@@ -1013,7 +1013,7 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-sched-time { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .ac-sched-check { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
 .ac-sched-runs { margin: 0; padding-left: 18px; font-size: 12px; }
-.ac-sched-node { position: absolute; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--aiterm-border, #334155); background: var(--aiterm-surface-2, #1e293b); cursor: pointer; font-size: 12px; line-height: 1.5; }
+.ac-sched-node { position: absolute; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border-color, #2a2a2a); background: var(--bg-secondary, #141414); font-size: 12px; line-height: 1.5; }
 .ac-sched-node--enabled { border-color: #22c55e; }
 .ac-sched-node--disabled { opacity: 0.6; }
 .ac-sched-node--failed, .ac-sched-node--agent_gone { border-color: #ef4444; }
@@ -1023,3 +1023,9 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-sched-node-last--failed { color: #ef4444; }
 .ac-sched-node-last--success { color: #22c55e; }
 .ac-sched-edges { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+.ac-sched-refine { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ac-sched-time .task-field-input { width: auto; }
+.ac-sched-time input[type="number"].task-field-input { width: 90px; }
+.ac-sched-addtime { align-self: flex-start; }
+.ac-sched-node { cursor: grab; user-select: none; -webkit-user-select: none; }
+.ac-sched-node--dragging { cursor: grabbing; z-index: 5; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4); }

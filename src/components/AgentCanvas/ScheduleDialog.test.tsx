@@ -1,11 +1,17 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import type { AgentRow } from "../../ipc/agents";
 import type { ScheduleView } from "../../ipc/schedules";
+import { invokeAiComplete } from "../../ipc/ai";
 import { ScheduleDialog } from "./ScheduleDialog";
+
+vi.mock("../../ipc/ai", () => ({ invokeAiComplete: vi.fn() }));
+vi.mock("../../ipc/provider", () => ({
+  listProviders: vi.fn().mockResolvedValue([{ id: "p1", name: "P1", is_default: true, models: [] }]),
+}));
 
 const agent = (id: string, kind: AgentRow["kind"], name: string) => ({ id, kind, name }) as AgentRow;
 const agents = [agent("c1", "coder", "工程師A"), agent("r1", "reviewer", "審核者"), agent("v1", "verifier", "驗收者")];
@@ -122,5 +128,43 @@ describe("ScheduleDialog", () => {
     mount({ onRunNow: vi.fn(), onDelete: vi.fn() });
     expect(screen.queryByRole("button", { name: "立即執行一次" })).toBeNull();
     expect(screen.queryByRole("button", { name: "刪除" })).toBeNull();
+  });
+
+  describe("固定指令的 AI 潤飾", () => {
+    beforeEach(() => vi.mocked(invokeAiComplete).mockReset());
+
+    it("指令空白時不能潤飾", () => {
+      mount();
+      expect(screen.getByTestId("sched-refine")).toBeDisabled();
+    });
+
+    it("潤飾後換成 AI 的內容、保留一鍵還原，且只改指令欄", async () => {
+      vi.mocked(invokeAiComplete).mockResolvedValue({ content: "```\n每次執行完整測試並回報失敗項目\n```" } as never);
+      mount();
+      await fillBasics();
+      await userEvent.click(screen.getByTestId("sched-refine"));
+      await waitFor(() => expect(screen.getByLabelText("固定指令")).toHaveValue("每次執行完整測試並回報失敗項目"));
+      expect(vi.mocked(invokeAiComplete).mock.calls[0][0][0].content).toContain("跑完整測試");
+      expect(screen.getByLabelText("名稱")).toHaveValue("每日測試");
+      await userEvent.click(screen.getByTestId("sched-refine-undo"));
+      expect(screen.getByLabelText("固定指令")).toHaveValue("跑完整測試");
+      expect(screen.queryByTestId("sched-refine-undo")).toBeNull();
+    });
+
+    it("AI 回空內容時顯示錯誤並保留原文", async () => {
+      vi.mocked(invokeAiComplete).mockResolvedValue({ content: "  " } as never);
+      mount();
+      await fillBasics();
+      await userEvent.click(screen.getByTestId("sched-refine"));
+      expect(await screen.findByText(/AI 沒有回覆/)).toBeInTheDocument();
+      expect(screen.getByLabelText("固定指令")).toHaveValue("跑完整測試");
+    });
+  });
+
+  it("欄位沿用 AITerm 共用的輸入樣式（跟其他對話框一致）", () => {
+    mount();
+    expect(screen.getByLabelText("名稱")).toHaveClass("task-field-input");
+    expect(screen.getByLabelText("固定指令")).toHaveClass("task-field-input");
+    expect(screen.getByLabelText("叫起的角色")).toHaveClass("task-field-input");
   });
 });

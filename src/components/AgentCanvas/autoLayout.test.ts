@@ -35,4 +35,31 @@ describe("autoLayout", () => {
     expect(pos.get("c1")!.x).toBe(pos.get("c2")!.x);
     expect(pos.get("r")!.x).toBeGreaterThan(pos.get("c1")!.x);
   });
+
+  it("定時器排在最左一欄，不蓋到任何角色（回歸：自動排列後被其他角色蓋住）", () => {
+    const nodes: LayoutNode[] = [
+      n("c1", "coder", 0, 200),
+      n("c2", "coder", 300, 200),
+      n("r", "reviewer", 0, 100),
+      { id: "s1", kind: "schedule", x: 0, y: 0, w: 200, h: 90 },
+      { id: "s2", kind: "schedule", x: 0, y: 10, w: 200, h: 90 },
+    ];
+    const pos = autoLayout(nodes);
+    const rect = (id: string) => {
+      const node = nodes.find((x) => x.id === id)!;
+      const p = pos.get(id)!;
+      return { l: p.x, t: p.y, r: p.x + node.w, b: p.y + node.h };
+    };
+    for (const a of nodes) {
+      for (const b of nodes) {
+        if (a.id >= b.id) continue;
+        const A = rect(a.id);
+        const B = rect(b.id);
+        const overlap = A.l < B.r && B.l < A.r && A.t < B.b && B.t < A.b;
+        expect(overlap, `${a.id} 與 ${b.id} 重疊`).toBe(false);
+      }
+    }
+    expect(pos.get("s1")!.x).toBeLessThan(pos.get("c1")!.x);
+    expect(pos.get("s1")!.y).toBeLessThan(pos.get("s2")!.y);
+  });
 });

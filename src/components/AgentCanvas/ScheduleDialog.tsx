@@ -1,11 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import type { AgentRow } from "../../ipc/agents";
+import { invokeAiComplete } from "../../ipc/ai";
+import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { parseSpec, type NewSchedule, type ScheduleKind, type ScheduleSpec, type ScheduleView } from "../../ipc/schedules";
+import { ModelPickerButton } from "../ModelPickerButton";
+import { buildScheduleRefineMessage, parseScheduleReply, SCHEDULE_REFINE_SYSTEM } from "./scheduleRefine";
 
 const MIN_INTERVAL = 5;
 const MAX_TIMES = 12;
+/** 跟工作卡、專案簡介的「AI 潤飾」共用模型偏好。 */
+const REFINE_PROVIDER_KEY = "aiterm_refine_provider";
 
 /** 新增／編輯一個定時器。純表單：儲存、刪除、啟停、立即執行都由呼叫端決定怎麼做。 */
 export function ScheduleDialog({
@@ -43,6 +49,55 @@ export function ScheduleDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [providerId, setProviderId] = useState("");
+  const [refining, setRefining] = useState(false);
+  /** 潤飾前的內容；有值才顯示「還原」。 */
+  const [beforeRefine, setBeforeRefine] = useState<string | null>(null);
+
+  // 沿用其他「AI 潤飾」的慣例：記住上次選的 → is_default → 清單第一個。
+  useEffect(() => {
+    let alive = true;
+    listProviders()
+      .then((list) => {
+        if (!alive) return;
+        setProviders(list);
+        const remembered = localStorage.getItem(REFINE_PROVIDER_KEY);
+        const fallback = list.find((p) => p.is_default)?.id ?? list[0]?.id ?? "";
+        setProviderId(remembered && list.some((p) => p.id === remembered) ? remembered : fallback);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const refine = async () => {
+    const draft = instruction.trim();
+    if (!draft) return;
+    setRefining(true);
+    setError(null);
+    try {
+      const reply = await invokeAiComplete(
+        [{ role: "user", content: buildScheduleRefineMessage(draft) }],
+        SCHEDULE_REFINE_SYSTEM,
+        "schedule-refine",
+        providerId || undefined,
+      );
+      const refined = parseScheduleReply(reply.content ?? "");
+      if (!refined) {
+        setError(t.board_refine_err_empty);
+        return;
+      }
+      if (providerId) localStorage.setItem(REFINE_PROVIDER_KEY, providerId);
+      setBeforeRefine(instruction);
+      setInstruction(refined);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setRefining(false);
+    }
+  };
 
   const fail = (e: unknown) => setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
 
@@ -101,13 +156,13 @@ export function ScheduleDialog({
         <h3 className="task-dialog-title">⏰ {t.sched_title}</h3>
 
         <label className="task-field">
-          <span>{t.sched_name}</span>
-          <input aria-label={t.sched_name} value={name} onChange={(e) => setName(e.target.value)} />
+          <span className="task-field-label">{t.sched_name}</span>
+          <input className="task-field-input" aria-label={t.sched_name} value={name} onChange={(e) => setName(e.target.value)} />
         </label>
 
         <label className="task-field">
-          <span>{t.sched_agent}</span>
-          <select aria-label={t.sched_agent} value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+          <span className="task-field-label">{t.sched_agent}</span>
+          <select className="task-field-input" aria-label={t.sched_agent} value={agentId} onChange={(e) => setAgentId(e.target.value)}>
             {targets.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
@@ -116,15 +171,51 @@ export function ScheduleDialog({
           </select>
         </label>
 
-        <label className="task-field">
-          <span>{t.sched_instruction}</span>
-          <textarea aria-label={t.sched_instruction} rows={4} value={instruction} onChange={(e) => setInstruction(e.target.value)} />
+        <div className="task-field">
+          <label className="task-field-label" htmlFor="sched-instruction">
+            {t.sched_instruction}
+          </label>
+          <div className="ac-sched-refine">
+            <ModelPickerButton providers={providers} selectedId={providerId} onChange={setProviderId} disabled={refining} />
+            <button
+              type="button"
+              className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+              data-testid="sched-refine"
+              disabled={refining || busy || !instruction.trim()}
+              onClick={() => void refine()}
+            >
+              {refining ? t.board_refine_busy : t.board_refine}
+            </button>
+            {beforeRefine !== null && (
+              <button
+                type="button"
+                className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+                data-testid="sched-refine-undo"
+                disabled={refining}
+                onClick={() => {
+                  setInstruction(beforeRefine);
+                  setBeforeRefine(null);
+                }}
+              >
+                {t.board_refine_undo}
+              </button>
+            )}
+          </div>
+          <textarea
+            id="sched-instruction"
+            className="task-field-input task-field-textarea"
+            aria-label={t.sched_instruction}
+            rows={4}
+            value={instruction}
+            disabled={refining}
+            onChange={(e) => setInstruction(e.target.value)}
+          />
           <span className="task-field-hint">{t.sched_instruction_hint}</span>
-        </label>
+        </div>
 
         <label className="task-field">
-          <span>{t.sched_mode}</span>
-          <select aria-label={t.sched_mode} value={kind} onChange={(e) => setKind(e.target.value as ScheduleKind)}>
+          <span className="task-field-label">{t.sched_mode}</span>
+          <select className="task-field-input" aria-label={t.sched_mode} value={kind} onChange={(e) => setKind(e.target.value as ScheduleKind)}>
             <option value="daily">{t.sched_mode_daily}</option>
             <option value="weekly">{t.sched_mode_weekly}</option>
             <option value="interval">{t.sched_mode_interval}</option>
@@ -133,7 +224,7 @@ export function ScheduleDialog({
 
         {kind === "weekly" && (
           <div className="task-field">
-            <span>{t.sched_days}</span>
+            <span className="task-field-label">{t.sched_days}</span>
             <div className="ac-sched-days">
               {t.sched_weekdays.map((label, i) => (
                 <label key={label}>
@@ -151,10 +242,10 @@ export function ScheduleDialog({
 
         {kind !== "interval" && (
           <div className="task-field">
-            <span>{t.sched_times}</span>
+            <span className="task-field-label">{t.sched_times}</span>
             {times.map((tm, i) => (
               <div key={i} className="ac-sched-time">
-                <input type="time" aria-label={`${t.sched_times} ${i + 1}`} value={tm} onChange={(e) => setTime(i, e.target.value)} />
+                <input type="time" className="task-field-input" aria-label={`${t.sched_times} ${i + 1}`} value={tm} onChange={(e) => setTime(i, e.target.value)} />
                 {times.length > 1 && (
                   <button type="button" className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={() => setTimes((ts) => ts.filter((_, j) => j !== i))}>
                     ✕
@@ -163,7 +254,7 @@ export function ScheduleDialog({
               </div>
             ))}
             {times.length < MAX_TIMES && (
-              <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setTimes((ts) => [...ts, "12:00"])}>
+              <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm ac-sched-addtime" onClick={() => setTimes((ts) => [...ts, "12:00"])}>
                 {t.sched_add_time}
               </button>
             )}
@@ -172,9 +263,9 @@ export function ScheduleDialog({
 
         {kind === "interval" && (
           <div className="task-field">
-            <span>{t.sched_every}</span>
+            <span className="task-field-label">{t.sched_every}</span>
             <div className="ac-sched-time">
-              <input type="number" min={MIN_INTERVAL} aria-label={t.sched_minutes} value={every} onChange={(e) => setEvery(e.target.value)} />
+              <input type="number" className="task-field-input" min={MIN_INTERVAL} aria-label={t.sched_minutes} value={every} onChange={(e) => setEvery(e.target.value)} />
               <span>{t.sched_minutes}</span>
             </div>
             <label>
@@ -182,9 +273,9 @@ export function ScheduleDialog({
             </label>
             {useWindow && (
               <div className="ac-sched-time">
-                <input type="time" aria-label="from" value={from} onChange={(e) => setFrom(e.target.value)} />
+                <input type="time" className="task-field-input" aria-label="from" value={from} onChange={(e) => setFrom(e.target.value)} />
                 <span>–</span>
-                <input type="time" aria-label="to" value={to} onChange={(e) => setTo(e.target.value)} />
+                <input type="time" className="task-field-input" aria-label="to" value={to} onChange={(e) => setTo(e.target.value)} />
               </div>
             )}
           </div>
@@ -214,7 +305,7 @@ export function ScheduleDialog({
 
         {initial && (
           <div className="task-field">
-            <span>{t.sched_runs}</span>
+            <span className="task-field-label">{t.sched_runs}</span>
             {initial.runs.length === 0 ? (
               <span className="task-field-hint">{t.sched_no_runs}</span>
             ) : (

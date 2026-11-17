@@ -176,7 +176,7 @@ import { writeTextFile } from "../../ipc/fs";
 import { createProject, listProjects, openProject } from "../../ipc/projects";
 import { invokeAiComplete } from "../../ipc/ai";
 import { listProviders } from "../../ipc/provider";
-import { listSchedules, type ScheduleView } from "../../ipc/schedules";
+import { listSchedules, saveSchedule, type ScheduleView } from "../../ipc/schedules";
 import { createFormation, formationsState, listRetiredAgents, requestFormationSwitch, switchFormation, type FormationsState } from "../../ipc/formations";
 import { AgentCanvasView } from "./index";
 
@@ -307,6 +307,43 @@ describe("AgentCanvasView", () => {
     expect(node).toHaveTextContent("每日測試");
     fireEvent.click(node);
     expect(await screen.findByTestId("schedule-dialog")).toBeInTheDocument();
+    vi.mocked(listSchedules).mockResolvedValue([]);
+  });
+
+  it("拖動定時器節點：放開時把新位置寫回，而且不會誤開設定對話框", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listSchedules).mockResolvedValue([scheduleRow({ canvas_x: 100, canvas_y: 80 })]);
+    vi.mocked(saveSchedule).mockClear();
+    view();
+    const node = await screen.findByTestId("schedule-node");
+    fireEvent.mouseDown(node, { button: 0, clientX: 300, clientY: 300 });
+    fireEvent.mouseMove(window, { clientX: 360, clientY: 340 });
+    fireEvent.mouseUp(window, { clientX: 360, clientY: 340 });
+    fireEvent.click(node);
+    await waitFor(() =>
+      expect(saveSchedule).toHaveBeenCalledWith(
+        expect.anything(),
+        "s1",
+        expect.objectContaining({ canvas_x: 160, canvas_y: 120, name: "每日測試", instruction: "跑測試" }),
+      ),
+    );
+    expect(screen.queryByTestId("schedule-dialog")).toBeNull();
+    vi.mocked(listSchedules).mockResolvedValue([]);
+  });
+
+  it("沒拖動只是點一下：不寫回位置、照常開設定", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listSchedules).mockResolvedValue([scheduleRow({ canvas_x: 100, canvas_y: 80 })]);
+    vi.mocked(saveSchedule).mockClear();
+    view();
+    const node = await screen.findByTestId("schedule-node");
+    fireEvent.mouseDown(node, { button: 0, clientX: 300, clientY: 300 });
+    fireEvent.mouseUp(window, { clientX: 301, clientY: 300 });
+    fireEvent.click(node);
+    expect(await screen.findByTestId("schedule-dialog")).toBeInTheDocument();
+    expect(saveSchedule).not.toHaveBeenCalled();
     vi.mocked(listSchedules).mockResolvedValue([]);
   });
 
@@ -1972,6 +2009,25 @@ describe("AgentCanvasView", () => {
     const x = (id: string) => vi.mocked(updateAgent).mock.calls.find(([, a]) => a.id === id)![1].canvas_x;
     expect(x("a1")).toBeLessThan(x("r1"));
     expect(x("r1")).toBeLessThan(x("v1"));
+  });
+
+  it("自動排列也會排定時器：寫回位置，且排在所有角色的左邊（不再被角色蓋住）", async () => {
+    vi.mocked(updateAgent).mockClear();
+    vi.mocked(saveSchedule).mockClear();
+    vi.mocked(listAgents).mockResolvedValue([
+      agent({ id: "a1", canvas_x: 300, canvas_y: 200 }),
+      agent({ id: "r1", kind: "reviewer", name: "R", canvas_x: 700, canvas_y: 200 }),
+    ]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listSchedules).mockResolvedValue([scheduleRow({ agent_id: "a1" })]);
+    view();
+    await screen.findByTestId("schedule-node");
+    fireEvent.click(screen.getByRole("button", { name: /自動排列|Arrange/ }));
+    await waitFor(() => expect(saveSchedule).toHaveBeenCalledTimes(1));
+    const saved = vi.mocked(saveSchedule).mock.calls[0][2];
+    const coderX = vi.mocked(updateAgent).mock.calls.find(([, a]) => a.id === "a1")![1].canvas_x;
+    expect(saved.canvas_x).toBeLessThan(coderX);
+    vi.mocked(listSchedules).mockResolvedValue([]);
   });
 
   it("工程師卡底部顯示「模組 x/y」，分支名放在提示裡；圖示依角色", async () => {

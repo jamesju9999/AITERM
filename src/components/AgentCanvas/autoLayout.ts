@@ -2,6 +2,8 @@ import type { AgentKind } from "../../ipc/agents";
 
 /** 由左到右的流程順序：產出規格的工程師（釐清需求、拆工作）→ 其他工程師 → 審核者 → 協調者 → 驗收者。沒放的角色不佔欄。 */
 const COLUMNS: ((n: LayoutNode) => boolean)[] = [
+  // 定時器：觸發的起點，排在最左一欄。
+  (n) => n.kind === "schedule",
   (n) => n.kind === "coder" && !!n.spec,
   (n) => n.kind === "coder" && !n.spec,
   (n) => n.kind === "reviewer",
@@ -14,7 +16,7 @@ const ROW_GAP = 40;
 
 export interface LayoutNode {
   id: string;
-  kind: AgentKind;
+  kind: AgentKind | "schedule";
   /** 原本的位置：同一欄裡依原本的上下順序排，使用者排過的順序不會被打亂。 */
   x: number;
   y: number;

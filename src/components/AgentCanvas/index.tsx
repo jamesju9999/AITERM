@@ -59,7 +59,7 @@ import { FormationMenu } from "./FormationMenu";
 import { TopMoreMenu } from "./TopMoreMenu";
 import { ScheduleDialog } from "./ScheduleDialog";
 import { ScheduleNode, SCHEDULE_NODE_W } from "./ScheduleNode";
-import { deleteSchedule, listSchedules, runScheduleNow, saveSchedule, setScheduleEnabled, type ScheduleView } from "../../ipc/schedules";
+import { deleteSchedule, listSchedules, parseSpec, runScheduleNow, saveSchedule, setScheduleEnabled, type ScheduleView } from "../../ipc/schedules";
 
 /** 編制還沒載入（或讀不到）時，選單照樣出現：團隊範本在裡面。 */
 const EMPTY_FORMATIONS: FormationsState = { formations: [], active: null, pending: null, busy: [], log: [] };
@@ -135,6 +135,16 @@ import "./index.css";
 
 /** 跟看板、TabBar 同一個門檻：小於這個位移是點擊，不是拖曳。 */
 const DRAG_THRESHOLD_PX = 4;
+
+/** 定時器節點的位置：存過就用存的；沒有就放在目標角色左邊（不超出畫布左緣），沒有目標放左上。 */
+function storedSchedulePos(s: ScheduleView, target?: AgentRow) {
+  return {
+    x: s.canvas_x ?? (target ? Math.max(8, target.canvas_x - SCHEDULE_NODE_W - 40) : 8),
+    y: s.canvas_y ?? (target ? target.canvas_y : 8),
+  };
+}
+/** 定時器節點沒量到實際高度時的估計值。 */
+const SCHEDULE_NODE_H = 90;
 const PROJECT_KEY = "aiterm.agentCanvas.project";
 const LAYOUT_KEY = "aiterm.agentCanvas.layout";
 const MIN_ZOOM = 0.3;
@@ -259,6 +269,10 @@ export function AgentCanvasView({
   const [refsOf, setRefsOf] = useState<{ projectId: string; list: Reference[] } | null>(null);
   const [refsOpen, setRefsOpen] = useState(false);
   const [schedulesOf, setSchedulesOf] = useState<{ projectId: string; rows: ScheduleView[] } | null>(null);
+  /** 拖曳定時器節點時的即時位置（放開才寫回）。 */
+  const [schedMove, setSchedMove] = useState<{ id: string; x: number; y: number } | null>(null);
+  /** 剛拖完的那一下 click 不要當成「點開設定」。 */
+  const schedDraggedRef = useRef(false);
   const [schedDialog, setSchedDialog] = useState<{ initial: ScheduleView | null } | null>(null);
   /** 這個專案的專案資料夾（使用者指定過的程式庫）；新增模組時帶入。記著是哪個專案的。 */
   const [projRepoOf, setProjRepoOf] = useState<{ projectId: string; path: string | null } | null>(null);
@@ -1043,13 +1057,22 @@ export function AgentCanvasView({
       maxX = Math.max(maxX, a.canvas_x + (el?.offsetWidth || NODE_W));
       maxY = Math.max(maxY, a.canvas_y + (el?.offsetHeight || NODE_H));
     }
+    // 定時器節點也要看得到（自動排列後它在最左一欄）。
+    for (const sch of schedules) {
+      const el = root?.querySelector<HTMLElement>(`[data-schedule-id="${sch.id}"]`);
+      const p = storedSchedulePos(sch, agents.find((g) => g.id === sch.agent_id));
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + (el?.offsetWidth || SCHEDULE_NODE_W));
+      maxY = Math.max(maxY, p.y + (el?.offsetHeight || SCHEDULE_NODE_H));
+    }
     // 資源區在最下面一排卡片的下方（左緣跟卡片對齊），它的右緣與底端也要看得到。
     if (resources.length > 0) {
       maxX = Math.max(maxX, railExtent.right);
       maxY = Math.max(maxY, railExtent.bottom);
     }
     return { minX, minY, maxX, maxY };
-  }, [agents, resources.length, railExtent]);
+  }, [agents, schedules, resources.length, railExtent]);
 
   /** 縮放並捲動到所有節點都看得到。畫面還沒有尺寸（分頁隱藏中）時回 false。 */
   const fitToView = useCallback((): boolean => {
@@ -1076,28 +1099,61 @@ export function AgentCanvasView({
   const arrange = useCallback(() => {
     if (!projectId) return;
     const root = canvasRef.current;
-    const pos = autoLayout(
-      agents.map((a) => {
+    const pos = autoLayout([
+      ...agents.map((a) => {
         const el = root?.querySelector<HTMLElement>(`[data-agent-id="${a.id}"]`);
         return { id: a.id, kind: a.kind, spec: a.produces_spec, x: a.canvas_x, y: a.canvas_y, w: el?.offsetWidth || NODE_W, h: el?.offsetHeight || NODE_H };
       }),
-    );
+      // 定時器也一起排：不然它留在舊位置，會被排好的角色蓋住。
+      ...schedules.map((sch) => {
+        const el = root?.querySelector<HTMLElement>(`[data-schedule-id="${sch.id}"]`);
+        const p = storedSchedulePos(sch, agents.find((g) => g.id === sch.agent_id));
+        return { id: `sched:${sch.id}`, kind: "schedule" as const, x: p.x, y: p.y, w: el?.offsetWidth || SCHEDULE_NODE_W, h: el?.offsetHeight || SCHEDULE_NODE_H };
+      }),
+    ]);
     const moved = agents.filter((a) => {
       const p = pos.get(a.id);
       return p && (p.x !== a.canvas_x || p.y !== a.canvas_y);
     });
     setAgents((prev) => prev.map((g) => ({ ...g, canvas_x: pos.get(g.id)?.x ?? g.canvas_x, canvas_y: pos.get(g.id)?.y ?? g.canvas_y })));
     setFitAfterArrange((n) => n + 1);
-    if (moved.length === 0) return;
+    const schedMoved = schedules.filter((sch) => pos.has(`sched:${sch.id}`));
+    if (schedMoved.length > 0) {
+      setSchedulesOf((prev) =>
+        prev && prev.projectId === projectId
+          ? {
+              ...prev,
+              rows: prev.rows.map((r) => {
+                const p = pos.get(`sched:${r.id}`);
+                return p ? { ...r, canvas_x: p.x, canvas_y: p.y } : r;
+              }),
+            }
+          : prev,
+      );
+    }
+    if (moved.length === 0 && schedMoved.length === 0) return;
     void run(() =>
-      Promise.all(
-        moved.map((a) => {
+      Promise.all([
+        ...moved.map((a) => {
           const p = pos.get(a.id)!;
           return updateAgent(projectId, { id: a.id, name: a.name, role: a.role, prompt_prefix: a.prompt_prefix, canvas_x: p.x, canvas_y: p.y });
         }),
-      ),
+        ...schedMoved.map((sch) => {
+          const p = pos.get(`sched:${sch.id}`)!;
+          return saveSchedule(projectId, sch.id, {
+            name: sch.name,
+            agent_id: sch.agent_id,
+            instruction: sch.instruction,
+            schedule_kind: sch.schedule_kind,
+            spec: parseSpec(sch.schedule_json),
+            failures_count_as_failed: sch.failures_count_as_failed,
+            canvas_x: p.x,
+            canvas_y: p.y,
+          });
+        }),
+      ]),
     );
-  }, [agents, projectId, run]);
+  }, [agents, schedules, projectId, run]);
   useEffect(() => {
     if (fitAfterArrange) fitToView();
     // 只在按了自動排列之後做一次，fitToView 本身變了不重做。
@@ -1149,10 +1205,54 @@ export function AgentCanvasView({
   }, [zoomAround, projects]);
 
   /** 定時器節點預設放在目標角色左邊（不讓它超出畫布左緣）；沒有目標時放左上。 */
-  const schedulePos = (s: ScheduleView, target?: AgentRow) => ({
-    x: s.canvas_x ?? (target ? Math.max(8, target.canvas_x - SCHEDULE_NODE_W - 40) : 8),
-    y: s.canvas_y ?? (target ? target.canvas_y : 8),
-  });
+  const schedulePos = (s: ScheduleView, target?: AgentRow) => {
+    if (schedMove?.id === s.id) return { x: schedMove.x, y: schedMove.y };
+    return storedSchedulePos(s, target);
+  };
+
+  /** 拖定時器節點：位置存在排程自己的 canvas_x／canvas_y，放開才寫回。 */
+  const beginScheduleDrag = (e: ReactMouseEvent, sch: ScheduleView, from: { x: number; y: number }) => {
+    if (e.button !== 0 || !projectId) return;
+    e.preventDefault();
+    const start = canvasPoint(e.clientX, e.clientY);
+    const offX = start.x - from.x;
+    const offY = start.y - from.y;
+    const sx = e.clientX;
+    const sy = e.clientY;
+    let moved = false;
+    const at = (ev: MouseEvent) => {
+      const p = canvasPoint(ev.clientX, ev.clientY);
+      return { x: Math.max(0, p.x - offX), y: Math.max(0, p.y - offY) };
+    };
+    const onMove = (ev: MouseEvent) => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < DRAG_THRESHOLD_PX) return;
+      moved = true;
+      setSchedMove({ id: sch.id, ...at(ev) });
+    };
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      if (!moved) return;
+      schedDraggedRef.current = true;
+      setTimeout(() => (schedDraggedRef.current = false), 0);
+      const pos = at(ev);
+      void saveSchedule(projectId, sch.id, {
+        name: sch.name,
+        agent_id: sch.agent_id,
+        instruction: sch.instruction,
+        schedule_kind: sch.schedule_kind,
+        spec: parseSpec(sch.schedule_json),
+        failures_count_as_failed: sch.failures_count_as_failed,
+        canvas_x: pos.x,
+        canvas_y: pos.y,
+      })
+        .then(() => refresh())
+        .catch((err) => setToast(String(err)))
+        .finally(() => setSchedMove(null));
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   const world = useMemo(() => {
     let w = 0;
@@ -1682,7 +1782,19 @@ export function AgentCanvasView({
                 {schedules.map((sch) => {
                   const target = shownAgents.find((g) => g.id === sch.agent_id);
                   const pos = schedulePos(sch, target);
-                  return <ScheduleNode key={sch.id} schedule={sch} x={pos.x} y={pos.y} onEdit={() => setSchedDialog({ initial: sch })} />;
+                  return (
+                    <ScheduleNode
+                      key={sch.id}
+                      schedule={sch}
+                      x={pos.x}
+                      y={pos.y}
+                      dragging={schedMove?.id === sch.id}
+                      onDragStart={(e) => beginScheduleDrag(e, sch, pos)}
+                      onEdit={() => {
+                        if (!schedDraggedRef.current) setSchedDialog({ initial: sch });
+                      }}
+                    />
+                  );
                 })}
                 {shownAgents.map((shown) => {
                   const a = agents.find((x) => x.id === shown.id) as AgentRow;
