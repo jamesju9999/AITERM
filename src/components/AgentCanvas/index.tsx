@@ -273,7 +273,7 @@ export function AgentCanvasView({
   const [schedMove, setSchedMove] = useState<{ id: string; x: number; y: number } | null>(null);
   /** 剛拖完的那一下 click 不要當成「點開設定」。 */
   const schedDraggedRef = useRef(false);
-  const [schedDialog, setSchedDialog] = useState<{ initial: ScheduleView | null } | null>(null);
+  const [schedDialog, setSchedDialog] = useState<{ initial: ScheduleView | null; pos?: { x: number; y: number } } | null>(null);
   /** 這個專案的專案資料夾（使用者指定過的程式庫）；新增模組時帶入。記著是哪個專案的。 */
   const [projRepoOf, setProjRepoOf] = useState<{ projectId: string; path: string | null } | null>(null);
   /** 使用者手動暫停的現況（全部／個別）。 */
@@ -846,6 +846,10 @@ export function AgentCanvasView({
       if (d.kind === "pool") {
         if (target?.kind !== "canvas") return;
         const p = canvasPoint(e.clientX, e.clientY);
+        if (d.id === "schedule") {
+          setSchedDialog({ initial: null, pos: { x: Math.max(8, p.x - SCHEDULE_NODE_W / 2), y: Math.max(8, p.y - 24) } });
+          return;
+        }
         setConfig({ kind: (d.id ?? "coder") as AgentKind, agent: null, x: Math.max(8, p.x - 120), y: Math.max(8, p.y - 24) });
         return;
       }
@@ -1575,6 +1579,18 @@ export function AgentCanvasView({
             </div>
           );
         })}
+        {projectId && (
+          <div
+            className="ac-pool-item ac-pool-item--schedule"
+            data-testid="pool-schedule"
+            data-guide="pool-schedule"
+            title={t.sched_pool_hint}
+            onMouseDown={(e) => beginDrag(e, "pool", "schedule")}
+          >
+            <span className="ac-agent-ico">⏰</span>
+            <span className="ac-pool-name">{t.sched_title}</span>
+          </div>
+        )}
         <span className="ac-pool-hint">{t.ac_pool_hint}</span>
         <span className="ac-pool-sep" aria-hidden />
         <span className="ac-pool-label">{t.ac_skills}</span>
@@ -2071,7 +2087,9 @@ export function AgentCanvasView({
         createPortal(
           <div className="task-card-ghost ac-ghost" style={{ transform: `translate(${ghost.x + 10}px, ${ghost.y + 10}px)` }}>
             {ghost.kind === "pool"
-              ? poolLabel((ghost.id ?? "coder") as AgentKind)
+              ? ghost.id === "schedule"
+                ? `⏰ ${t.sched_title}`
+                : poolLabel((ghost.id ?? "coder") as AgentKind)
               : ghost.kind === "skill"
                 ? ghost.id === "custom"
                   ? t.ac_skill_custom
@@ -2100,7 +2118,12 @@ export function AgentCanvasView({
           initial={schedDialog.initial}
           onClose={() => setSchedDialog(null)}
           onSave={async (args) => {
-            await saveSchedule(projectId, schedDialog.initial?.id ?? null, args);
+            // 從頂列拖出來的新定時器：用放開的位置；其餘照對話框送出的值。
+            await saveSchedule(projectId, schedDialog.initial?.id ?? null, {
+              ...args,
+              canvas_x: args.canvas_x ?? schedDialog.pos?.x ?? null,
+              canvas_y: args.canvas_y ?? schedDialog.pos?.y ?? null,
+            });
             void refresh();
           }}
           onDelete={

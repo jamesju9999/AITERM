@@ -442,6 +442,7 @@
 .ac-agent--verifying .ac-bar--indeterminate i { background: var(--ac-verify); }
 .ac-agent--verifier .ac-agent-ico,
 .ac-pool-item--verifier .ac-agent-ico { background: rgba(20, 184, 166, 0.15); color: #5eead4; }
+.ac-pool-item--schedule .ac-agent-ico { background: rgba(59, 130, 246, 0.15); color: #93c5fd; }
 /* 驗收報告 */
 /* 右邊留位置給捲軸：macOS 的浮動捲軸會蓋在內容上，把卡片的右框線遮掉。 */
 .ac-verify-list { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; padding-right: 10px; min-width: 0; }

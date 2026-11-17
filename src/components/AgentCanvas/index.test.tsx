@@ -347,6 +347,27 @@ describe("AgentCanvasView", () => {
     vi.mocked(listSchedules).mockResolvedValue([]);
   });
 
+  it("從頂列拖「定時器」到桌布：開出空白設定對話框，存檔時帶上放開的位置", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listSchedules).mockResolvedValue([]);
+    vi.mocked(saveSchedule).mockClear();
+    view();
+    const chip = await screen.findByTestId("pool-schedule");
+    drag(chip, document.querySelector('[data-drop="canvas"]') as Element);
+    const dlg = await screen.findByTestId("schedule-dialog");
+    fireEvent.change(within(dlg).getByLabelText("名稱"), { target: { value: "夜間測試" } });
+    fireEvent.change(within(dlg).getByLabelText("固定指令"), { target: { value: "跑測試" } });
+    fireEvent.click(within(dlg).getByRole("button", { name: "儲存" }));
+    await waitFor(() =>
+      expect(saveSchedule).toHaveBeenCalledWith(
+        "p1",
+        null,
+        expect.objectContaining({ name: "夜間測試", canvas_x: expect.any(Number), canvas_y: expect.any(Number) }),
+      ),
+    );
+  });
+
   it("「⋯」選單的「新增定時器」開出空白的設定對話框", async () => {
     vi.mocked(listAgents).mockResolvedValue([agent()]);
     vi.mocked(listTasks).mockResolvedValue([]);
