@@ -1,8 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
+import { invokeAiComplete } from "../../ipc/ai";
+import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import type { JobKind, JobRun, NewJob, SystemConnection, SystemJob } from "../../ipc/systems";
+import { ModelPickerButton } from "../ModelPickerButton";
+import { buildGoalRefineMessage, GOAL_REFINE_SYSTEM, parseGoalReply } from "./goalRefine";
 import { buildSpec, parseSpec, scheduleText } from "./jobSchedule";
+
+/** 跟工作卡、專案簡介、定時器的「AI 潤飾」共用模型偏好。 */
+const REFINE_PROVIDER_KEY = "aiterm_refine_provider";
 
 interface Props {
   system: SystemConnection;
@@ -132,6 +139,55 @@ function JobForm({ system, initial, onSave, onCancel }: { system: SystemConnecti
   const [days, setDays] = useState<number[]>(spec?.days ?? [1, 2, 3, 4, 5]);
   const [every, setEvery] = useState(spec?.every_minutes || 60);
   const [error, setError] = useState<string | null>(null);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [providerId, setProviderId] = useState("");
+  const [refining, setRefining] = useState(false);
+  /** 潤飾前的內容；有值才顯示「還原」。 */
+  const [beforeRefine, setBeforeRefine] = useState<string | null>(null);
+
+  // 沿用其他「AI 潤飾」的慣例：記住上次選的 → is_default → 清單第一個。
+  useEffect(() => {
+    let alive = true;
+    listProviders()
+      .then((list) => {
+        if (!alive) return;
+        setProviders(list);
+        const remembered = localStorage.getItem(REFINE_PROVIDER_KEY);
+        const fallback = list.find((p) => p.is_default)?.id ?? list[0]?.id ?? "";
+        setProviderId(remembered && list.some((p) => p.id === remembered) ? remembered : fallback);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const refine = async () => {
+    const draft = goal.trim();
+    if (!draft) return;
+    setRefining(true);
+    setError(null);
+    try {
+      const reply = await invokeAiComplete(
+        [{ role: "user", content: buildGoalRefineMessage(draft, system.name) }],
+        GOAL_REFINE_SYSTEM,
+        "system-job-goal-refine",
+        providerId || undefined,
+      );
+      const refined = parseGoalReply(reply.content ?? "");
+      if (!refined) {
+        setError(t.board_refine_err_empty);
+        return;
+      }
+      if (providerId) localStorage.setItem(REFINE_PROVIDER_KEY, providerId);
+      setBeforeRefine(goal);
+      setGoal(refined);
+    } catch (e) {
+      setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+    } finally {
+      setRefining(false);
+    }
+  };
 
   const toggleDay = (d: number) => setDays((ds) => (ds.includes(d) ? ds.filter((x) => x !== d) : [...ds, d]));
   const addTime = () => {
@@ -164,9 +220,29 @@ function JobForm({ system, initial, onSave, onCancel }: { system: SystemConnecti
     >
       <label>
         {t.sys_job_goal}
-        <textarea rows={3} value={goal} placeholder={t.sys_job_goal_ph} onChange={(e) => setGoal(e.target.value)} />
+        <textarea rows={4} value={goal} placeholder={t.sys_job_goal_ph} disabled={refining} onChange={(e) => setGoal(e.target.value)} />
         <small>{t.sys_job_goal_hint}</small>
       </label>
+      <div className="systems__refinebar">
+        <ModelPickerButton providers={providers} selectedId={providerId} onChange={setProviderId} disabled={refining} />
+        <button type="button" className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" data-testid="goal-refine" disabled={refining || !goal.trim()} onClick={() => void refine()}>
+          {refining ? t.board_refine_busy : t.board_refine}
+        </button>
+        {beforeRefine !== null && (
+          <button
+            type="button"
+            className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm"
+            data-testid="goal-refine-undo"
+            disabled={refining}
+            onClick={() => {
+              setGoal(beforeRefine);
+              setBeforeRefine(null);
+            }}
+          >
+            {t.board_refine_undo}
+          </button>
+        )}
+      </div>
       <label>
         {t.sys_job_name}
         <input value={name} placeholder={t.sys_job_name_ph} onChange={(e) => setName(e.target.value)} />
