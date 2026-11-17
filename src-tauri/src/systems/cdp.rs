@@ -159,7 +159,17 @@ pub async fn run_gate(ws_url: &str, ctx: GateCtx) -> Result<(), String> {
             "Target.attachedToTarget" => {
                 let info = &ev["params"]["targetInfo"];
                 let sid = ev["params"]["sessionId"].as_str().unwrap_or("").to_string();
-                if info["type"] != "page" || sid.is_empty() {
+                if sid.is_empty() {
+                    continue;
+                }
+                if info["type"] != "page" {
+                    // waitForDebuggerOnStart 讓每個新 target 都停在原地等我們放行。非分頁的（擴充功能的
+                    // service worker、瀏覽器內部頁面…）我們不攔，但一定要放行，否則 Playwright 連瀏覽器時
+                    // 會一直等那些 target，整整 30 秒後逾時（有頭模式的真機才會遇到，無頭測試沒有這些）。
+                    let cdp = cdp.clone();
+                    tokio::spawn(async move {
+                        let _ = cdp.call("Runtime.runIfWaitingForDebugger", json!({}), Some(&sid)).await;
+                    });
                     continue;
                 }
                 let tid = info["targetId"].as_str().unwrap_or("").to_string();

@@ -16,7 +16,7 @@ use crate::bridge::auth as bridge_auth;
 
 /// 鑰匙圈裡這個端點的 bearer token。
 pub const ENDPOINT_TOKEN_KEY: &str = "systems-endpoint:token";
-pub const DEFAULT_PORT: u16 = 8320;
+pub const DEFAULT_PORT: u16 = 48320;
 /// 在 `AppConfig.mcp_servers` 裡自動維護的那一筆的 id。
 pub const MCP_SERVER_ID: &str = "aiterm-systems";
 
@@ -118,7 +118,7 @@ async fn mcp_handler(
 }
 
 pub struct EndpointState {
-    running: Mutex<Option<(u16, tokio::sync::oneshot::Sender<()>)>>,
+    running: Mutex<Option<(u16, String, tokio::sync::oneshot::Sender<()>)>>,
 }
 
 impl Default for EndpointState {
@@ -132,12 +132,19 @@ impl EndpointState {
         self.running.lock().as_ref().map(|r| r.0)
     }
 
+    /// 目前這個端點實際在用的 token。要以它為準：鑰匙圈不可用時 token 只存在記憶體，
+    /// 重新產生一個會讓端點與已寫進設定的 token 對不上。
+    pub fn token(&self) -> Option<String> {
+        self.running.lock().as_ref().map(|r| r.1.clone())
+    }
+
     /// 啟動（已啟動就直接成功）。只綁 127.0.0.1；埠被占用就報錯，不自己換埠（換了的話已註冊的客戶端會指向死位址）。
     pub async fn start(&self, systems: Arc<SystemsState>, token: String, port: u16) -> Result<(), String> {
         if self.port() == Some(port) {
             return Ok(());
         }
         self.stop();
+        let token_for_state = token.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let listener = tokio::net::TcpListener::bind(addr)
             .await
@@ -149,12 +156,12 @@ impl EndpointState {
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).with_graceful_shutdown(async { let _ = rx.await; }).await;
         });
-        *self.running.lock() = Some((port, tx));
+        *self.running.lock() = Some((port, token_for_state, tx));
         Ok(())
     }
 
     pub fn stop(&self) {
-        if let Some((_, tx)) = self.running.lock().take() {
+        if let Some((_, _, tx)) = self.running.lock().take() {
             let _ = tx.send(());
         }
     }
@@ -214,7 +221,9 @@ mod tests {
         assert_eq!(c.post(&url).bearer_auth("wrong").json(&body).send().await.unwrap().status(), 401);
         let ok = c.post(&url).bearer_auth("secret").json(&body).send().await.unwrap();
         assert_eq!(ok.status(), 200);
+        assert_eq!(ep.token().as_deref(), Some("secret"), "要能問到端點實際在用的 token");
         ep.stop();
+        assert_eq!(ep.token(), None);
     }
 
     /// 整條後端：HTTP（bearer）→ MCP 端點 → 狀態 → 代理 → 閘門 → 真 Chrome。

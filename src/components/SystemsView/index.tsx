@@ -58,6 +58,8 @@ export function SystemsView() {
       setSystems(list);
       setApprovals(pend);
       setStatus(Object.fromEntries(statuses));
+      // 第一次儲存連線之後才會有 token，設定要跟著更新。
+      void systemsMcpConfig().then((c) => aliveRef.current && setMcpConfig(c)).catch(() => {});
     } catch (e) {
       if (aliveRef.current) setError(errText(e));
     }
@@ -97,7 +99,6 @@ export function SystemsView() {
       ),
     ];
     queueMicrotask(() => void refresh());
-    void systemsMcpConfig().then((c) => aliveRef.current && setMcpConfig(c)).catch(() => {});
     return () => {
       aliveRef.current = false;
       offs.forEach((off) => off());

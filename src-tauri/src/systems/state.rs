@@ -181,6 +181,7 @@ impl SystemsState {
         std::fs::create_dir_all(&out).ok();
         let upstream = Upstream::spawn(Some(&browser.cdp_http()), &out).await?;
         let proxy = Proxy::start(id, upstream, self.approvals.clone(), ctx.intent.clone(), ctx.manual.clone(), last_denied).await?;
+        proxy.warm_up().await;
         let run = Arc::new(Running {
             browser: tokio::sync::Mutex::new(browser),
             gate,

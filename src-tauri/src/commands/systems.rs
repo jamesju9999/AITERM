@@ -44,13 +44,20 @@ pub async fn ensure_endpoint(
     config: &Arc<ConfigStore>,
     mcp: &McpState,
 ) -> Result<(), String> {
-    let token = match secrets.get(ENDPOINT_TOKEN_KEY).map_err(|e| e.to_string())? {
-        Some(t) if !t.is_empty() => t,
-        _ => {
-            let t = crate::bridge::auth::generate_token();
-            secrets.set(ENDPOINT_TOKEN_KEY, &t).map_err(|e| e.to_string())?;
-            t
-        }
+    // 鑰匙圈不可用時（例如沒有預設鑰匙圈的環境）退回只在記憶體裡的 token：它只需要在
+    // 端點與自動維護的 MCP 設定之間一致，每次啟動換一個也不影響使用。
+    let token = match endpoint.token() {
+        Some(t) => t, // 端點已在跑：沿用它的 token，不可另產生（否則與已寫進設定的對不上）
+        None => match secrets.get(ENDPOINT_TOKEN_KEY) {
+            Ok(Some(t)) if !t.is_empty() => t,
+            _ => {
+                let t = crate::bridge::auth::generate_token();
+                if let Err(e) = secrets.set(ENDPOINT_TOKEN_KEY, &t) {
+                    log::warn!("systems 端點 token 無法存進鑰匙圈，只在這次執行有效：{e}");
+                }
+                t
+            }
+        },
     };
     endpoint.start(systems.clone(), token.clone(), DEFAULT_PORT).await?;
     let desired = McpServerConfig {
@@ -162,7 +169,11 @@ pub async fn systems_audit(id: String, limit: Option<i64>, systems: State<'_, Ar
 /// 給 Claude Code 貼的 MCP 設定。
 #[tauri::command]
 pub async fn systems_mcp_config(secrets: State<'_, Arc<SecretStore>>) -> Result<String, String> {
-    let token = secrets.get(ENDPOINT_TOKEN_KEY).map_err(|e| e.to_string())?.unwrap_or_default();
+    let token = secrets.get(ENDPOINT_TOKEN_KEY).ok().flatten().unwrap_or_default();
+    // 端點還沒啟動（沒有任何系統連線）或鑰匙圈不可用時沒有 token：不給一份不能用的設定。
+    if token.is_empty() {
+        return Ok(String::new());
+    }
     Ok(serde_json::to_string_pretty(&serde_json::json!({
         "mcpServers": { MCP_SERVER_ID: {
             "type": "http",

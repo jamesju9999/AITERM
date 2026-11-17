@@ -50,7 +50,8 @@ pub fn chrome_executable() -> Option<PathBuf> {
 }
 
 pub struct RunningBrowser {
-    child: tokio::process::Child,
+    /// 自己啟動的行程；接手上次留下的瀏覽器時是 `None`。
+    child: Option<tokio::process::Child>,
     pub port: u16,
     pub ws_url: String,
     pub profile: PathBuf,
@@ -64,17 +65,53 @@ impl RunningBrowser {
 
     /// 行程還在不在（使用者可能自己把視窗關了）。
     pub fn is_alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        match &mut self.child {
+            Some(c) => matches!(c.try_wait(), Ok(None)),
+            None => true, // 接手來的：行程不是我們的，連線斷了閘門會自己結束
+        }
     }
 
     pub async fn close(&mut self) {
-        let _ = self.child.kill().await;
+        match &mut self.child {
+            Some(c) => {
+                let _ = c.kill().await;
+            }
+            None => {
+                if let Ok((cdp, _ev)) = crate::systems::cdp::Cdp::connect(&self.ws_url).await {
+                    let _ = cdp.call("Browser.close", serde_json::json!({}), None).await;
+                }
+            }
+        }
     }
 }
 
+/// 我們啟動 Chrome 時把偵錯埠記在設定檔裡（Chrome 只有在埠為 0 時才會自己寫 `DevToolsActivePort`）。
+const PORT_FILE: &str = "aiterm-debug-port";
+
+/// 設定檔裡上次留下的 Chrome（AITerm 重啟或當掉時，它不會跟著結束，而且還佔著設定檔）。
+/// 還連得上就直接接手：保留登入狀態，也避開「設定檔被占用、新的 Chrome 沒開偵錯埠」。
+async fn adopt_existing(profile: &Path) -> Option<RunningBrowser> {
+    let text = std::fs::read_to_string(profile.join(PORT_FILE)).ok()?;
+    let port: u16 = text.lines().next()?.trim().parse().ok()?;
+    let v: serde_json::Value = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/json/version"))
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    let ws_url = v["webSocketDebuggerUrl"].as_str()?.to_string();
+    Some(RunningBrowser { child: None, port, ws_url, profile: profile.to_path_buf() })
+}
+
 pub async fn launch(base: &Path, system_id: &str, start_url: &str) -> Result<RunningBrowser, String> {
-    let exe = chrome_executable().ok_or("找不到 Google Chrome，請先安裝")?;
     let profile = profile_dir(base, system_id);
+    if let Some(existing) = adopt_existing(&profile).await {
+        return Ok(existing);
+    }
+    let exe = chrome_executable().ok_or("找不到 Google Chrome，請先安裝")?;
     std::fs::create_dir_all(&profile).map_err(|e| format!("無法建立瀏覽器設定檔資料夾：{e}"))?;
     #[cfg(unix)]
     {
@@ -90,7 +127,7 @@ pub async fn launch(base: &Path, system_id: &str, start_url: &str) -> Result<Run
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| format!("無法啟動 Chrome：{e}"))?;
-    let mut browser = RunningBrowser { child, port, ws_url: String::new(), profile };
+    let mut browser = RunningBrowser { child: Some(child), port, ws_url: String::new(), profile };
     let url = format!("http://127.0.0.1:{port}/json/version");
     let client = reqwest::Client::new();
     for _ in 0..50 {
@@ -98,6 +135,7 @@ pub async fn launch(base: &Path, system_id: &str, start_url: &str) -> Result<Run
             if let Ok(v) = resp.json::<serde_json::Value>().await {
                 if let Some(ws) = v["webSocketDebuggerUrl"].as_str() {
                     browser.ws_url = ws.to_string();
+                    let _ = std::fs::write(browser.profile.join(PORT_FILE), port.to_string());
                     return Ok(browser);
                 }
             }
@@ -134,6 +172,22 @@ mod tests {
     fn free_port_is_bindable_on_loopback() {
         let p = pick_free_port().unwrap();
         assert!(std::net::TcpListener::bind(("127.0.0.1", p)).is_ok());
+    }
+
+    /// 設定檔裡留著上次的 Chrome 時，再次啟動要接手它而不是白等 10 秒後失敗（真機重啟 App 時遇到）。
+    #[tokio::test]
+    #[ignore]
+    async fn a_second_launch_adopts_the_browser_left_in_the_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = launch(dir.path(), "t", "about:blank").await.unwrap();
+        let port = first.port;
+        // 模擬 App 當掉：丟掉第一個控制代碼但不關 Chrome。
+        std::mem::forget(first);
+        let mut second = launch(dir.path(), "t", "about:blank").await.unwrap();
+        assert_eq!(second.port, port, "要接手同一個 Chrome");
+        second.close().await;
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert!(reqwest::get(format!("http://127.0.0.1:{port}/json/version")).await.is_err(), "接手後也能關掉它");
     }
 
     /// 需要真的 Chrome：`cargo test -p app --lib -- --ignored systems::browser`。

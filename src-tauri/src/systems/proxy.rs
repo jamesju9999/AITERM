@@ -205,6 +205,18 @@ impl Proxy {
         Ok(Self { system_id: system_id.into(), upstream, tools, approvals, intent, manual, last_denied })
     }
 
+    /// 第一次工具呼叫會讓 Playwright MCP 連上瀏覽器，剛啟動的 Chrome（首次開啟、載入設定檔）
+    /// 偶爾超過它 30 秒的連線逾時，使用者的第一個動作就會白白失敗（真機實測遇到）。
+    /// 先用一個無害的呼叫把連線建好，逾時就再試。
+    pub async fn warm_up(&self) {
+        for _ in 0..3 {
+            match self.upstream_call("browser_tabs", json!({ "action": "list" })).await {
+                Ok(r) if is_playwright_timeout(&r) => continue,
+                _ => return,
+            }
+        }
+    }
+
     pub fn tools(&self) -> &[Value] {
         &self.tools
     }
