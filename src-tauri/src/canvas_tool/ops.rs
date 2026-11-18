@@ -195,7 +195,7 @@ pub async fn list_cards_text(pool: &SqlitePool, status: Option<&str>) -> Result<
 }
 
 /// 一張卡片的結果：狀態、錯誤、摘要，以及對話記錄最後一段。
-pub async fn read_card_text(pool: &SqlitePool, id: &str) -> Result<String, String> {
+pub async fn read_card_text(pool: &SqlitePool, project_path: &Path, id: &str) -> Result<String, String> {
     let t = store::get_task(pool, id.trim()).await.map_err(|e| e.to_string())?.ok_or_else(|| format!("找不到卡片：{}", id.trim()))?;
     let mut out = vec![format!("{}（id：{}，狀態：{}，種類：{}）", t.title, t.id, status_label(&t), t.card_kind)];
     if t.status != "done" {
@@ -207,13 +207,11 @@ pub async fn read_card_text(pool: &SqlitePool, id: &str) -> Result<String, Strin
     if let Some(s) = t.ai_summary.as_deref().filter(|s| !s.trim().is_empty()) {
         out.push(format!("摘要：{s}"));
     }
-    let log_path = t.session_path.as_deref().or(t.transcript_path.as_deref());
-    if let Some(text) = log_path.and_then(|p| std::fs::read_to_string(p).ok()) {
-        let rendered = if t.session_path.is_some() { crate::tasks::session_log::render_session_log(&text) } else { text };
-        let tail = tail_chars(rendered.trim(), TRANSCRIPT_TAIL);
-        if !tail.is_empty() {
-            out.push(format!("對話記錄最後一段：\n{tail}"));
-        }
+    // 路徑解析（相對專案資料夾、Codex 格式、讀不到時退回終端機擷取）沿用對話記錄視窗的那套。
+    let log = crate::commands::tasks::resolve_transcript(project_path, t.session_path.as_deref(), t.transcript_path.as_deref());
+    let tail = tail_chars(log.trim(), TRANSCRIPT_TAIL);
+    if !tail.is_empty() {
+        out.push(format!("對話記錄最後一段：\n{tail}"));
     }
     Ok(out.join("\n"))
 }
@@ -343,12 +341,34 @@ mod tests {
         let pool = pool().await;
         let coder = make_agent(&pool, "coder", "小明").await;
         let id = dispatch(&pool, std::path::Path::new("/tmp/p"), &coder, "查特休", "x", None).await.unwrap();
-        assert!(read_card_text(&pool, &id).await.unwrap().contains("還沒完成"));
+        assert!(read_card_text(&pool, std::path::Path::new("/tmp/p"), &id).await.unwrap().contains("還沒完成"));
         store::set_summary(&pool, &id, "剩餘 34.5 小時").await.unwrap();
         sqlx::query("UPDATE tasks SET status='done', outcome='success' WHERE id = ?").bind(&id).execute(&pool).await.unwrap();
-        let t = read_card_text(&pool, &id).await.unwrap();
+        let t = read_card_text(&pool, std::path::Path::new("/tmp/p"), &id).await.unwrap();
         assert!(t.contains("完成") && t.contains("剩餘 34.5 小時") && !t.contains("還沒完成"), "{t}");
-        assert!(read_card_text(&pool, "nope").await.unwrap_err().contains("找不到卡片"));
+        assert!(read_card_text(&pool, std::path::Path::new("/tmp/p"), "nope").await.unwrap_err().contains("找不到卡片"));
+    }
+
+    #[tokio::test]
+    async fn a_finished_card_shows_what_the_engineer_reported_even_when_the_log_path_is_relative() {
+        // 實機抓到：卡片存的是相對專案資料夾的路徑（tasks/<id>/session.jsonl），
+        // 直接當絕對路徑讀會讀不到，Ask AI 就只看到「完成」而沒有工程師的回報。
+        let pool = pool().await;
+        let coder = make_agent(&pool, "coder", "小明").await;
+        let id = dispatch(&pool, std::path::Path::new("/tmp/p"), &coder, "查時間", "x", None).await.unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let dir = project.path().join("tasks").join(&id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"任務完成：日期是 2026-11-18"}]}}"#;
+        std::fs::write(dir.join("session.jsonl"), format!("{line}\n")).unwrap();
+        sqlx::query("UPDATE tasks SET status='done', outcome='success', session_path=? WHERE id=?")
+            .bind(format!("tasks/{id}/session.jsonl"))
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let t = read_card_text(&pool, project.path(), &id).await.unwrap();
+        assert!(t.contains("任務完成：日期是 2026-11-18"), "{t}");
     }
 
     #[tokio::test]

@@ -164,7 +164,7 @@ async fn run<R: tauri::Runtime>(app: &AppHandle<R>, tool: &str, args: &Value) ->
     match tool {
         "canvas_list_agents" => ops::list_agents_text(pool).await,
         "canvas_list_cards" => ops::list_cards_text(pool, args["status"].as_str()).await,
-        "canvas_read_card" => ops::read_card_text(pool, arg(args, "card_id")).await,
+        "canvas_read_card" => ops::read_card_text(pool, &project.path, arg(args, "card_id")).await,
         "canvas_dispatch" => {
             let all = agents::list_agents(pool).await.map_err(|e| e.to_string())?;
             let agent = ops::find_agent(&all, arg(args, "agent"))?;
