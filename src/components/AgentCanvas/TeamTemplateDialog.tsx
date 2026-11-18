@@ -7,6 +7,7 @@ import { checkRepo, getReferences, projectRepo, setProjectRepo, type AgentRow, t
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { getProjectBrief } from "../../ipc/tasks";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { OpenSettingsButton } from "../OpenSettingsButton";
 import { buildRecommendMessage, buildRecommendSystem, parseRecommendation, type Recommendation } from "./teamRecommend";
 import { RepoStatus } from "./RepoStatus";
 import { confirmInitRepo } from "./repoInit";
@@ -299,6 +300,7 @@ export function TeamTemplateDialog({
               <span className="task-field-hint ac-rec-hint">
                 {brief === "" ? t.ac_rec_need_brief : providers.length === 0 ? t.ac_rec_need_provider : t.ac_rec_hint}
               </span>
+              {brief !== "" && providers.length === 0 && <OpenSettingsButton tab="providers" />}
               {providers.length > 0 && (
                 <ModelPickerButton providers={providers} selectedId={providerId} onChange={setProviderId} disabled={recBusy} />
               )}

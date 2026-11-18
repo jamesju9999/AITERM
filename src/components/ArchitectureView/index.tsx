@@ -6,6 +6,7 @@ import { archExportText, archLoad, archQaLoad, archQaSave, archReadFiles, archSa
 import { abortAi, formatAiError, invokeAiComplete, type AiError } from "../../ipc/ai";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { OpenSettingsButton } from "../OpenSettingsButton";
 import { ANALYZE_SYSTEM, buildAnalyzeMessage, mergeScanEdges, parseAnalysis, pickKeyFiles } from "./analyze";
 import { buildBaseGraph, type Architecture, type Edge } from "./model";
 import { buildDrillGraph, drillKey } from "./drill";
@@ -688,7 +689,12 @@ export function ArchitectureView({ isActive }: { isActive: boolean }) {
         </nav>
       )}
       {hiddenCount > 0 && <div className="arch-status arch-status-notice">{t.arch_hidden_n.replace("{n}", String(hiddenCount))}</div>}
-      {status.kind !== "idle" && <div className={`arch-status arch-status-${status.kind}`}>{status.msg}</div>}
+      {status.kind !== "idle" && (
+        <div className={`arch-status arch-status-${status.kind}`}>
+          {status.msg}
+          {status.kind === "notice" && status.msg === t.arch_no_ai && <> <OpenSettingsButton tab="providers" /></>}
+        </div>
+      )}
       {stale && <div className="arch-status arch-status-notice">{t.arch_stale}</div>}
       <div className="arch-body">
         <div className={`arch-canvas-wrap ${previewOpen ? "arch-has-preview" : ""}`}>

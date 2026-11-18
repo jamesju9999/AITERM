@@ -3,6 +3,7 @@ import { useLocale } from "../../contexts/LocaleContext";
 import type { KeepOptions, AuthStatus } from "../../ipc/apiDocs";
 import type { ProviderInfo } from "../../ipc/provider";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { OpenSettingsButton } from "../OpenSettingsButton";
 
 interface Props {
   outputDir: string;
@@ -166,6 +167,7 @@ export function ExtractionSettings({
         >
           {t.api_docs_extract_ai}
         </button>
+        {!hasProvider && <OpenSettingsButton tab="providers" />}
       </div>
     </div>
   );

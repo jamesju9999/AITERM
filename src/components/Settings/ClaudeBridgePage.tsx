@@ -20,6 +20,7 @@ import {
   tiersEqual,
   type BridgeProfile,
 } from "./bridgeProfiles";
+import { SettingsLoading } from "./SettingsLoading";
 import "./ClaudeBridgePage.css";
 
 /** 與 `useTerminalBlocks.ts` 的判斷方式一致，避免兩處用不同的偵測。 */
@@ -267,7 +268,7 @@ export function ClaudeBridgePage() {
     return [...vars.map(([k, v]) => `${k}='${v}'`), `ANTHROPIC_API_KEY=`, `claude`].join(" ");
   };
 
-  if (!cfg) return <div className="bridge-page" />;
+  if (!cfg) return <div className="bridge-page"><SettingsLoading /></div>;
 
   return (
     <div className="bridge-page">

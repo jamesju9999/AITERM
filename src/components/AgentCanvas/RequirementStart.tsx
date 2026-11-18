@@ -7,6 +7,7 @@ import { assignAgent, checkRepo, createAgent, getReferences, readMethodDecision,
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { createTask, getProjectBrief, setProjectBrief } from "../../ipc/tasks";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { OpenSettingsButton } from "../OpenSettingsButton";
 import { useRefineTask } from "../TaskBoard/useRefineTask";
 import { restoreWebviewFocus } from "../../lib/webviewFocus";
 import { RepoStatus } from "./RepoStatus";
@@ -161,6 +162,7 @@ export function RequirementStart({
       {discuss ? (
         <>
           <div className="ac-req-tools">
+            {providers.length === 0 && <OpenSettingsButton tab="providers" />}
             {providers.length > 0 && (
               <ModelPickerButton providers={providers} selectedId={providerId ?? ""} onChange={setProviderId} disabled={refiner.busy || busy} />
             )}
@@ -196,6 +198,7 @@ export function RequirementStart({
             }}
           />
           <div className="ac-req-tools">
+            {providers.length === 0 && <OpenSettingsButton tab="providers" />}
             {providers.length > 0 && (
               <ModelPickerButton providers={providers} selectedId={providerId ?? ""} onChange={setProviderId} disabled={refiner.busy || busy} />
             )}

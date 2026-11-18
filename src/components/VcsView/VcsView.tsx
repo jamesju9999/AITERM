@@ -13,6 +13,7 @@ import { getConfig, type SubmitShortcut } from "../../ipc/config";
 import { pickFolder, type ActiveFeature, type VcsRepoInfo } from "../../ipc/vcs";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { OpenSettingsButton } from "../OpenSettingsButton";
 import "./VcsView.css";
 
 const MANUAL_PATH_KEY = "aiterm-vcs-manual-path";
@@ -213,7 +214,10 @@ export function VcsView({ sessionId, isActive: _isActive }: VcsViewProps) {
               />
             </div>
           ) : (
-            <span style={{ marginLeft: "auto", fontSize: 11, color: "#555" }}>{t.vcs_no_ai}</span>
+            <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, color: "#555" }}>
+              {t.vcs_no_ai}
+              <OpenSettingsButton tab="providers" />
+            </span>
           )
         )}
       </div>

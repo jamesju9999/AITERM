@@ -1,5 +1,6 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { IntakeView } from "./index";
 import { validAddress } from "../../lib/intakeAddress";
 import { LocaleProvider } from "../../contexts/LocaleContext";
@@ -33,6 +34,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeAttachmentText: vi.fn(),
 }));
 import * as ipc from "../../ipc/intake";
+import { mailListAccounts } from "../../ipc/mail";
 
 const t = translations["zh-TW"];
 const webPort = `${t.intake_set_web_port} ${t.intake_web_port_shared}`;
@@ -44,7 +46,7 @@ function item(over: Partial<IntakeItem>): IntakeItem {
     kind: null, snapshot_head: null, verification: null, verified: null, sender_name: null, project_id: "p1", to_addrs: null, cc_addrs: null, board_task_id: null, route_kind: null, ...over,
   };
 }
-const wrap = () => render(<LocaleProvider><IntakeView /></LocaleProvider>);
+const wrap = () => render(<MemoryRouter><LocaleProvider><IntakeView /></LocaleProvider></MemoryRouter>);
 
 const P1 = { id: "p1", name: "專案一", repo_dir: "/work/one", open_count: 0, total: 0, enabled: true };
 const P2 = { id: "p2", name: "專案二", repo_dir: null, open_count: 2, total: 5, enabled: false };
@@ -554,6 +556,24 @@ describe("IntakeView", () => {
     expect(tg).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText(t.intake_set_tg_default)).toBeInTheDocument();
     expect(screen.queryByLabelText(t.intake_set_account)).toBeNull();
+  });
+
+  it("warns when the selected mailbox account has receiving disabled, and not when it is enabled", async () => {
+    const acc = { id: "acc", email: "me@example.com", imap_host: "h", imap_port: 993, smtp_host: "s", smtp_port: 587, username: "u", poll_interval_secs: 300 };
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ account_id: "acc" }));
+    vi.mocked(mailListAccounts).mockResolvedValue([{ ...acc, enabled: false }] as never);
+    const first = wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    expect(await screen.findByText(t.intake_account_disabled_warn)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t.intake_account_disabled_goto })).toBeInTheDocument();
+    first.unmount();
+
+    vi.mocked(mailListAccounts).mockResolvedValue([{ ...acc, enabled: true }] as never);
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    await screen.findByText("me@example.com");
+    expect(screen.queryByText(t.intake_account_disabled_warn)).toBeNull();
   });
 
   it("accepts telegram chat ids in the allowlist but rejects malformed addresses", () => {

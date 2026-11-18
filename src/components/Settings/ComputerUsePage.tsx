@@ -11,6 +11,7 @@ import {
   type ComputerStatus,
 } from "../../ipc/computer";
 import "./McpToolServerPage.css";
+import { SettingsLoading } from "./SettingsLoading";
 import "./ComputerUsePage.css";
 
 function fmtTime(ts: number): string {
@@ -26,14 +27,17 @@ export function ComputerUsePage() {
   const { t } = useLocale();
   const [status, setStatus] = useState<ComputerStatus | null>(null);
   const [audit, setAudit] = useState<ComputerAuditEntry[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const reload = useCallback(async () => {
     try {
       const [s, a] = await Promise.all([computerStatus(), computerAuditTail(20)]);
       setStatus(s);
       setAudit(a);
+      setLoadFailed(false);
     } catch (e) {
       console.error("讀取電腦操作狀態失敗:", e);
+      setLoadFailed(true);
     }
   }, []);
 
@@ -70,6 +74,9 @@ export function ComputerUsePage() {
       <p className="mcp-tool-server-desc">{t.computer_desc}</p>
       <p className="mcp-tool-server-desc">{t.computer_scope}</p>
 
+      {!status && (loadFailed
+        ? <div role="alert" style={{ color: "#f87171", fontSize: 13, padding: "16px 0" }}>{t.settings_load_failed}</div>
+        : <SettingsLoading />)}
       {status && (
         <>
           <section className="mcp-tool-server-section">

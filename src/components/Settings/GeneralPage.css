@@ -93,3 +93,14 @@
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* 只有一個標題、沒有說明文字的選項（語言、預設頁面）排成一列，不用各佔整行。 */
+.mode-list.mode-list--inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.mode-list--inline .mode-option {
+  align-items: center;
+  padding: 8px 16px;
+}

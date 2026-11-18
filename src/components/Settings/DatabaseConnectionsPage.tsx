@@ -161,7 +161,9 @@ export function DatabaseConnectionsPage() {
               <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
                 <div style={{ color: "#e6e6e6", fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{conn.name}</div>
                 <div style={{ color: "#888", fontSize: 11, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {DB_TYPE_LABELS[conn.db_type]} · {conn.host}:{conn.port} / {conn.database}
+                  {conn.db_type === "sqlite"
+                    ? `${DB_TYPE_LABELS[conn.db_type]} · ${conn.host || conn.database}`
+                    : `${DB_TYPE_LABELS[conn.db_type]} · ${conn.host}:${conn.port} / ${conn.database}`}
                   {conn.default_schema ? ` · schema=${conn.default_schema}` : ""}
                 </div>
               </div>

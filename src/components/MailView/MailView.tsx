@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useLocale } from "../../contexts/LocaleContext";
+import { OpenSettingsButton } from "../OpenSettingsButton";
 import {
   MAIL_SYNC_EVENT,
   mailDeleteMessage,
@@ -227,7 +228,12 @@ export function MailView({ isActive, onMessageRead }: MailViewProps) {
   }
 
   if (accounts.length === 0) {
-    return <div className="mail-view mail-view--empty">{t.mail_no_accounts}</div>;
+    return (
+      <div className="mail-view mail-view--empty">
+        <div>{t.mail_no_accounts}</div>
+        <div style={{ marginTop: 12 }}><OpenSettingsButton tab="mail" /></div>
+      </div>
+    );
   }
 
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId);

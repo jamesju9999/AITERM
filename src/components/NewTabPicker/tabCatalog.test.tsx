@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { colorForTab, getTabCatalog, visibleTabCatalog } from "./tabCatalog";
+import { colorForTab, getTabCatalog, groupedVisibleTabCatalog, TAB_GROUP_BY_ID, visibleTabCatalog } from "./tabCatalog";
 import { translations } from "../../lib/i18n";
 import type { TabType } from "../TabBar";
 
@@ -114,5 +114,22 @@ describe("colorForTab", () => {
 
   it("資料庫分頁拿到藍色", () => {
     expect(colorForTab("database")).toBe("#60a5fa");
+  });
+});
+
+describe("groupedVisibleTabCatalog", () => {
+  const t = translations["zh-TW"];
+
+  it("puts every visible entry in exactly one group (a new tab type without a group fails here)", () => {
+    const ids = visibleTabCatalog(t).map((e) => e.id);
+    for (const id of ids) expect(TAB_GROUP_BY_ID[id], `no group for ${id}`).toBeTruthy();
+    const grouped = groupedVisibleTabCatalog(t).flatMap((g) => g.entries.map((e) => e.id));
+    expect([...grouped].sort()).toEqual([...ids].sort());
+  });
+
+  it("orders groups AI → data → workflow and keeps Claude Code right after the plain terminal", () => {
+    const groups = groupedVisibleTabCatalog(t);
+    expect(groups.map((g) => g.group)).toEqual(["ai", "data", "workflow"]);
+    expect(groups[0].entries.slice(0, 2).map((e) => e.id)).toEqual(["terminal", "claude-code"]);
   });
 });

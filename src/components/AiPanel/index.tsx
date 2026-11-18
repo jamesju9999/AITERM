@@ -18,6 +18,7 @@ import { QuotaBadge } from "../QuotaBadge";
 import { useProviderQuota } from "../../hooks/useProviderQuota";
 import type { TerminalBlock } from "../../hooks/useTerminalBlocks";
 import { WrenchIcon } from "../Icons";
+import { OpenSettingsButton } from "../OpenSettingsButton";
 import { ChatPanelShell } from "../ChatPanel/ChatPanelShell";
 
 const IS_WINDOWS = navigator.platform.toLowerCase().startsWith("win");
@@ -402,6 +403,7 @@ export function AiPanel({
         </button>
       }
       extraInputControls={mcpEnabled ? (
+        <>
         <button
           type="button"
           // MCP 只在 ⚡ 開時生效：⚡ 關＝純聊天，按鈕停用且不亮，但記住原本的開關（localStorage）。
@@ -419,6 +421,8 @@ export function AiPanel({
           <WrenchIcon size={12} />
           <span>{mcpToolCount > 0 ? `MCP (${mcpToolCount})` : "MCP OFF"}</span>
         </button>
+        {agentMode && mcpToolCount === 0 && <OpenSettingsButton tab="mcp" className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" />}
+        </>
       ) : null}
       extraAboveInput={
         <>

@@ -30,6 +30,7 @@ import {
 } from "../../ipc/intake";
 import { MailIcon } from "../Icons";
 import { MarkdownText } from "../../lib/markdown";
+import { useNavigate } from "react-router-dom";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
 import { systemsList, type SystemConnection } from "../../ipc/systems";
 import { useIntakeChanged } from "../../hooks/useIntakeChanged";
@@ -573,6 +574,7 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
 
 function SettingsPanel({ projectId, projectName, legacySettings, onError }: { projectId: string; projectName: string; legacySettings: boolean; onError: (m: string | null) => void }) {
   const { t } = useLocale();
+  const navigate = useNavigate();
   const [cfg, setCfg] = useState<IntakeConfig | null>(null);
   const [hasOwn, setHasOwn] = useState(true);
   const [chanTab, setChanTab] = useState<"mail" | "telegram" | "web">("mail");
@@ -693,10 +695,18 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         <select value={cfg.account_id} onChange={(e) => set("account_id", e.target.value)}>
           <option value="">—</option>
           {accounts.map((a) => (
-            <option key={a.id} value={a.id}>{a.email}</option>
+            <option key={a.id} value={a.id}>{a.enabled === false ? `${a.email}（${t.intake_account_disabled_tag}）` : a.email}</option>
           ))}
         </select>
       </label>
+      {accounts.some((a) => a.id === cfg.account_id && a.enabled === false) && (
+        <div className="intake__meta" role="alert" style={{ color: "#f59e0b", fontSize: 12, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+          <span>{t.intake_account_disabled_warn}</span>
+          <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => navigate("/settings", { state: { tab: "mail" } })}>
+            {t.intake_account_disabled_goto}
+          </button>
+        </div>
+      )}
       <label className="intake__field">
         {t.intake_set_mode}
         <select value={cfg.mode} onChange={(e) => set("mode", e.target.value as IntakeConfig["mode"])}>

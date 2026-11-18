@@ -287,7 +287,7 @@ export function GeneralPage() {
       <section className="settings-section">
         <h3>{t.language}</h3>
         <p className="section-desc">{t.language_desc}</p>
-        <div className="mode-list">
+        <div className="mode-list mode-list--inline">
           {(["zh-TW", "en"] as Locale[]).map((l) => (
             <label key={l} className="mode-option">
               <input
@@ -308,7 +308,7 @@ export function GeneralPage() {
       <section className="settings-section">
         <h3>{t.default_tab}</h3>
         <p className="section-desc">{t.default_tab_desc}</p>
-        <div className="mode-list">
+        <div className="mode-list mode-list--inline">
           {([
             { value: "terminal" as DefaultTab, label: t.terminal_tab },
             { value: "database" as DefaultTab, label: t.database_tab },

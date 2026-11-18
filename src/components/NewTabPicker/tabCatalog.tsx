@@ -126,6 +126,53 @@ export function visibleTabCatalog(t: Translations): TabCatalogEntry[] {
   return getTabCatalog(t).filter((e) => !e.hidden);
 }
 
+/** 新增分頁選單的分組。只影響選單的呈現；目錄本身（首頁卡片、AI 路由）的順序不變。 */
+export type TabGroup = "ai" | "data" | "workflow";
+
+/** 每個分頁 id 屬於哪一組。新增分頁類型時漏列會被 tabCatalog.test 擋下。 */
+export const TAB_GROUP_BY_ID: Readonly<Record<string, TabGroup>> = {
+  terminal: "ai",
+  "claude-code": "ai",
+  "code-assistant": "ai",
+  "agent-canvas": "ai",
+  "loop-studio": "ai",
+  database: "data",
+  "cross-db": "data",
+  "knowledge-base": "data",
+  "doc-converter": "data",
+  design: "data",
+  "api-docs": "data",
+  intake: "workflow",
+  systems: "workflow",
+  vcs: "workflow",
+  architecture: "workflow",
+  "remote-terminal": "workflow",
+  mail: "workflow",
+};
+
+const GROUP_ORDER: readonly TabGroup[] = ["ai", "data", "workflow"];
+/** 組內順序（目錄裡 Claude Code 排最後，但在選單裡它應緊跟著終端機）。 */
+const ORDER_IN_GROUP: Readonly<Record<string, readonly string[]>> = {
+  ai: ["terminal", "claude-code", "code-assistant", "agent-canvas", "loop-studio"],
+  data: ["database", "cross-db", "knowledge-base", "doc-converter", "design"],
+  workflow: ["intake", "systems", "vcs", "architecture", "remote-terminal"],
+};
+
+/** 選單用：依組別分好的可見項目，空組不回傳。 */
+export function groupedVisibleTabCatalog(t: Translations): { group: TabGroup; entries: TabCatalogEntry[] }[] {
+  const visible = visibleTabCatalog(t);
+  return GROUP_ORDER.map((group) => {
+    const rank = (id: string) => {
+      const i = ORDER_IN_GROUP[group].indexOf(id);
+      return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    return {
+      group,
+      entries: visible.filter((e) => TAB_GROUP_BY_ID[e.id] === group).sort((a, b) => rank(a.id) - rank(b.id)),
+    };
+  }).filter((g) => g.entries.length > 0);
+}
+
 /** 分頁類型對應的專屬色。只吃 type 與 claudeBridge 兩個欄位，不吃整個 Tab——
  *  呼叫端（例如 ResumeSection）手上通常已經有一個 Tab，但這裡刻意收窄參數，
  *  之後 Tab 多長欄位不會牽動這個函式，測試也只需要造兩個值。

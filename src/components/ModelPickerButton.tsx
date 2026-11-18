@@ -7,6 +7,7 @@ import { QuotaBadge } from "./QuotaBadge";
 import { useProviderQuota } from "../hooks/useProviderQuota";
 import { usageQuotaAll, primaryWindow,
          type QuotaResult, type QuotaWindow } from "../ipc/usage";
+import { OpenSettingsButton } from "./OpenSettingsButton";
 import "./ModelPickerButton.css";
 
 interface Props {
@@ -146,7 +147,10 @@ export function ModelPickerButton({ providers, selectedId, onChange, disabled }:
             </button>
           ))}
           {providers.length === 0 && (
-            <div className="model-picker-dropdown__empty">{t.model_picker_no_provider}</div>
+            <div className="model-picker-dropdown__empty">
+              {t.model_picker_no_provider}{" "}
+              <OpenSettingsButton tab="providers" onBeforeNavigate={() => setOpen(false)} />
+            </div>
           )}
         </div>,
         document.body

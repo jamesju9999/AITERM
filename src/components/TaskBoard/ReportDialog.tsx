@@ -4,6 +4,7 @@ import { confirm, save } from "@tauri-apps/plugin-dialog";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ArtifactHtmlFrame } from "../ArtifactPanel/ArtifactHtmlFrame";
 import { ModelPickerButton } from "../ModelPickerButton";
+import { OpenSettingsButton } from "../OpenSettingsButton";
 import { writeTextFile } from "../../ipc/fs";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { deleteReport, listReports, readReport, type ReportInfo } from "../../ipc/reports";
@@ -390,7 +391,12 @@ export function ReportDialog({
               </div>
             )}
 
-            {error && <div className="report-error">{error}</div>}
+            {error && (
+              <div className="report-error">
+                {error}
+                {error === t.report_err_not_configured && <> <OpenSettingsButton tab="providers" /></>}
+              </div>
+            )}
             {rawReply && (
               <details className="report-raw" open>
                 <summary>{t.report_raw_reply}</summary>

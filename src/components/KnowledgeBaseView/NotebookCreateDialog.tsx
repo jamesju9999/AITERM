@@ -3,6 +3,7 @@ import { pickFolder } from "../../ipc/vcs";
 import { listProviders, type ProviderInfo } from "../../ipc/provider";
 import { kbListEmbeddingModels } from "../../ipc/knowledgeBase";
 import { useLocale } from "../../contexts/LocaleContext";
+import { OpenSettingsButton } from "../OpenSettingsButton";
 
 interface Props {
   onCreate: (name: string, folderPath: string, embedProviderId?: string, embedModel?: string) => Promise<void>;
@@ -128,7 +129,10 @@ export function NotebookCreateDialog({ onCreate, onClose }: Props) {
         </label>
 
         {providers.length === 0 ? (
-          <div className="kb-dialog__warning">{t.kb_create_no_provider}</div>
+          <div className="kb-dialog__warning">
+            {t.kb_create_no_provider}{" "}
+            <OpenSettingsButton tab="providers" onBeforeNavigate={onClose} />
+          </div>
         ) : (
           <>
             <label className="kb-dialog__field">

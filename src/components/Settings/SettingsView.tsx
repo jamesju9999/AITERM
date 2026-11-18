@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { ProvidersPage } from "./ProvidersPage";
 import { GeneralPage } from "./GeneralPage";
@@ -29,9 +29,37 @@ import {
   MonitorIcon,
   MailIcon,
 } from "../Icons";
+import type { Translations } from "../../lib/i18n";
 import "./SettingsView.css";
 
 type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp" | "mail" | "bridge" | "usage" | "mcpToolServer" | "openaiServer" | "computerUse" | "taskBoard";
+
+type SidebarEntry =
+  | { heading: string }
+  | { tab: SettingsTab; icon: ReactNode; label: string };
+
+function SIDEBAR_ITEMS(t: Translations): SidebarEntry[] {
+  const item = (tab: SettingsTab, icon: ReactNode, label: string): SidebarEntry => ({ tab, icon, label });
+  return [
+    item("general", <SettingsIcon size={16} />, t.general),
+    { heading: t.settings_group_ai },
+    item("providers", <RobotIcon size={16} />, t.ai_providers),
+    item("bridge", <LinkIcon size={16} />, t.bridge_title),
+    item("openaiServer", <LinkIcon size={16} />, t.openai_server_title),
+    item("usage", <ZapIcon size={16} />, t.usage_quota_title),
+    { heading: t.settings_group_connections },
+    item("databases", <DatabaseIcon size={16} />, t.db_connections),
+    item("vcs", <BranchIcon size={16} />, t.vcs_connections),
+    item("mail", <MailIcon size={16} />, t.mail_accounts_settings_title),
+    item("mcp", <WrenchIcon size={16} />, t.mcp_servers),
+    item("mcpToolServer", <SparklesIcon size={16} />, t.mcp_tool_server_title),
+    { heading: t.settings_group_automation },
+    item("taskBoard", <ClipboardListIcon size={16} />, t.settings_tab_taskBoard),
+    item("computerUse", <MonitorIcon size={16} />, t.settings_tab_computerUse),
+    { heading: "" },
+    item("about", <InfoIcon size={16} />, t.about),
+  ];
+}
 
 export function SettingsView() {
   const navigate = useNavigate();
@@ -58,90 +86,25 @@ export function SettingsView() {
       <nav className="settings-sidebar" data-tauri-drag-region>
         <div className="settings-sidebar-title" data-tauri-drag-region>{t.settings_title}</div>
 
-        <button
-          className={`sidebar-item ${tab === "general" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("general")}
-        >
-          <SettingsIcon size={16} /> {t.general}
-        </button>
-        <button
-          className={`sidebar-item ${tab === "providers" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("providers")}
-        >
-          <RobotIcon size={16} /> {t.ai_providers}
-        </button>
-        <button
-          className={`sidebar-item ${tab === "databases" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("databases")}
-        >
-          <DatabaseIcon size={16} /> {t.db_connections}
-        </button>
-        <button
-          className={`sidebar-item ${tab === "vcs" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("vcs")}
-        >
-          <BranchIcon size={16} /> {t.vcs_connections}
-        </button>
-        {/* 問題收集（Intake）需要郵件帳號，所以帳號設定頁重新開放；信箱分頁本身仍隱藏。 */}
-        <button
-          className={`sidebar-item ${tab === "mail" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("mail")}
-        >
-          <MailIcon size={16} /> {t.mail_accounts_settings_title}
-        </button>
-        <button
-          className={`sidebar-item ${tab === "mcp" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("mcp")}
-        >
-          <WrenchIcon size={16} /> {t.mcp_servers}
-        </button>
-        <button
-          className={`sidebar-item ${tab === "bridge" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("bridge")}
-        >
-          <LinkIcon size={16} /> {t.bridge_title}
-        </button>
-        <button
-          className={`sidebar-item ${tab === "mcpToolServer" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("mcpToolServer")}
-        >
-          <SparklesIcon size={16} /> {t.mcp_tool_server_title}
-        </button>
-        <button
-          className={`sidebar-item ${tab === "openaiServer" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("openaiServer")}
-        >
-          <LinkIcon size={16} /> {t.openai_server_title}
-        </button>
-        <button
-          className={`sidebar-item ${tab === "computerUse" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("computerUse")}
-        >
-          <MonitorIcon size={16} /> {t.settings_tab_computerUse}
-        </button>
-        <button
-          className={`sidebar-item ${tab === "taskBoard" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("taskBoard")}
-        >
-          <ClipboardListIcon size={16} /> {t.settings_tab_taskBoard}
-        </button>
-        <button
-          className={`sidebar-item ${tab === "usage" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("usage")}
-        >
-          <ZapIcon size={16} /> {t.usage_quota_title}
-        </button>
         {/*
-          The Enterprise entry is hidden from the sidebar. The tab, its page and
-          the render branch below are all still wired up, so restoring it means
-          putting this button back — nothing else was removed.
+          分組：一般置頂、關於置底，中間依用途分成三組。企業版分頁在側邊欄是隱藏的
+          （分頁、頁面、下方的 render 分支都還在，要恢復只要在這裡加回一項）。
         */}
-        <button
-          className={`sidebar-item ${tab === "about" ? "sidebar-item--active" : ""}`}
-          onClick={() => setTab("about")}
-        >
-          <InfoIcon size={16} /> {t.about}
-        </button>
+        {SIDEBAR_ITEMS(t).map((entry, i) =>
+          "heading" in entry ? (
+            entry.heading
+              ? <div key={`h${i}`} className="sidebar-group-heading">{entry.heading}</div>
+              : <div key={`h${i}`} className="sidebar-group-divider" />
+          ) : (
+            <button
+              key={entry.tab}
+              className={`sidebar-item ${tab === entry.tab ? "sidebar-item--active" : ""}`}
+              onClick={() => setTab(entry.tab)}
+            >
+              {entry.icon} {entry.label}
+            </button>
+          ),
+        )}
 
         {/*
           flex:1 — 這個 spacer 吃掉側邊欄所有剩餘的垂直空間，也就是畫面上那
