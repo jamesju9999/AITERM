@@ -45,6 +45,23 @@ fn windows_default_shell() -> Option<ShellSpec> {
 /// local-data directory is both the more correct and the less suspicious
 /// home for it. Falls back to the temp dir only if there's no data dir at
 /// all, which beats failing to start a shell entirely.
+/// 載入整合腳本的 `-Command` 字串。
+///
+/// **不能直接 dot-source `.ps1` 檔**（`. 'path.ps1'`）：全新的 Windows 11 上 Windows
+/// PowerShell 5.1 的執行原則預設是 Restricted（所有 scope 都 Undefined），`.ps1` 檔會被擋掉，
+/// 整合腳本整個沒載入——沒有 OSC 133（要靠畫面安靜 1.5 秒才結案，`dir` 平白多等 1.5 秒）、
+/// 沒有 OSC 7000（5.1 警告徽章不會出現）。實機：`(Get-Command prompt).Definition`
+/// 回的是內建預設提示字元。
+///
+/// 改成把檔案「讀成文字、建成 scriptblock 再 dot-source」：執行原則只管腳本檔的執行，
+/// 不管這種做法，所以不必降低使用者的安全設定。也刻意不用 `-ExecutionPolicy Bypass` 或
+/// `-EncodedCommand`：這兩個是惡意程式的典型命令列形狀，容易重演先前被 Defender
+/// 誤判成 Trojan 的事。腳本仍放在 app 自己的資料夾，路徑裡的單引號要加倍跳脫。
+pub(crate) fn powershell_launch_command(script_path: &std::path::Path) -> String {
+    let path = script_path.display().to_string().replace('\'', "''");
+    format!(". ([scriptblock]::Create([System.IO.File]::ReadAllText('{path}')))")
+}
+
 #[cfg(windows)]
 fn powershell_integration_dir() -> PathBuf {
     dirs::data_local_dir()
@@ -181,7 +198,7 @@ pub(crate) fn inject_powershell_integration(program: PathBuf) -> ShellSpec {
         args: vec![
             "-NoExit".into(),
             "-Command".into(),
-            format!(". '{}'", script_path.display()),
+            powershell_launch_command(&script_path),
         ],
         envs: vec![
             ("TERM".into(), "xterm-256color".into()),
@@ -677,6 +694,16 @@ mod tests {
             launch_arg.contains("shell_integration.ps1"),
             "expected the integration script to still be the thing sourced, got: {launch_arg}"
         );
+    }
+
+    #[test]
+    fn powershell_launch_command_does_not_run_a_ps1_file_directly() {
+        // 全新 Windows 11 的執行原則是 Restricted，直接 dot-source .ps1 會被擋、整合腳本沒載入。
+        let cmd = powershell_launch_command(std::path::Path::new(r"C:\Users\O'Brien\AppData\Local\AITerm\shell_integration\shell_integration.ps1"));
+        assert!(!cmd.starts_with(". 'C:"), "must not dot-source the file directly: {cmd}");
+        assert!(cmd.contains("ReadAllText('C:\\Users\\O''Brien"), "path read as text, quote escaped: {cmd}");
+        assert!(cmd.contains("[scriptblock]::Create"), "{cmd}");
+        assert!(!cmd.contains("Bypass") && !cmd.contains("EncodedCommand"), "{cmd}");
     }
 
     #[test]
