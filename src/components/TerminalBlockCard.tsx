@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from "react";
 import type { TerminalBlock } from "../hooks/useTerminalBlocks";
 import { useLocale } from "../contexts/LocaleContext";
+import { blockCwdLabel, getHomeDir } from "../lib/prettyCwd";
 import "./TerminalBlockCard.css";
 
 /** 「已加入書籤」就地回饋顯示多久。夠看清楚、又不會久到擋住再次操作。 */
@@ -17,11 +18,6 @@ function formatDuration(ms: number): string {
   return `${minutes}m${remSeconds}s`;
 }
 
-function shortenCwd(cwd?: string): string {
-  if (!cwd) return "";
-  const parts = cwd.split("/");
-  return parts.length > 2 ? `.../${parts.slice(-2).join("/")}` : cwd;
-}
 
 export interface TerminalBlockCardProps {
   block: TerminalBlock;
@@ -100,6 +96,14 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
   const visibleLines = isTruncated ? lines.slice(0, MAX_VISIBLE_LINES) : lines;
   const hiddenCount = lines.length - MAX_VISIBLE_LINES;
 
+  // 家目錄只問一次（模組層快取）；取到之前先用原路徑，取到後重繪成 `~`。
+  const [home, setHome] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getHomeDir().then((h) => { if (alive) setHome(h); });
+    return () => { alive = false; };
+  }, []);
+
   const duration = block.endTime
     ? formatDuration(block.endTime - block.startTime)
     : block.status === "running"
@@ -115,7 +119,7 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
   return (
     <div className={`aiterm-block-card ${isFailed ? "aiterm-block-card--failed" : ""}`}>
       <div className="aiterm-block-header" data-testid="block-header" onClick={() => setCollapsed((c) => !c)}>
-        <span className="aiterm-block-cwd" title={block.cwd}>{shortenCwd(block.cwd)}</span>
+        <span className="aiterm-block-cwd" title={block.cwd}>{blockCwdLabel(block.cwd, home)}</span>
         {block.gitInfo && (
           <span className="aiterm-block-git">
             git:({block.gitInfo.branch})

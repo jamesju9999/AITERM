@@ -7,6 +7,7 @@ import { collapseWholeStringRepeat } from "../lib/collapseWholeStringRepeat";
 import { ResizeRepaintGate } from "../lib/resizeRepaintGate";
 import { listen } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
+import { tildePath } from "../lib/prettyCwd";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -227,10 +228,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
         if (cwd && cwd !== lastSaved) {
           lastSaved = cwd;
           localStorage.setItem("aiterm_last_cwd", cwd);
-          const normalized = cwd.replace(/\\/g, "/");
-          const pretty = homePath && normalized.startsWith(homePath)
-            ? "~" + normalized.slice(homePath.length)
-            : normalized;
+          const pretty = tildePath(cwd, homePath);
           lastCwdRef.current = cwd;
           setDisplayCwd(pretty);
           onCwdChangeRef.current?.(cwd);
