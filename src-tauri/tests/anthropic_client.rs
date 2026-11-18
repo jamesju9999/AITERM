@@ -763,6 +763,52 @@ async fn oauth_out_of_extra_usage_with_tools_maps_to_tool_calling_unsupported() 
     );
 }
 
+// Anthropic 後來改了同一個情境的措辭（2026-11 實機遇到）：不再說 "out of extra usage"，
+// 改成 "Third-party apps now draw from extra usage, not plan limits"。判斷只認舊句子時，
+// 這個錯誤會直接丟給使用者而不是走 fallback；兩種措辭都要認得。
+const THIRD_PARTY_EXTRA_USAGE_BODY: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Third-party apps now draw from extra usage, not plan limits. Ask your workspace admin to add more and keep going."},"request_id":"req_y"}"#;
+
+#[tokio::test]
+async fn oauth_third_party_extra_usage_wording_also_maps_to_tool_calling_unsupported() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(THIRD_PARTY_EXTRA_USAGE_BODY))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::with_oauth("oat-token".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+    let err = match client.generate_with_tools(tool_req(), vec![], tx).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected an error"),
+    };
+    assert!(
+        matches!(err, AiError::ToolCallingUnsupported { reason: ToolFallbackReason::SubscriptionBilling }),
+        "新措辭也要走 fallback。實際是 {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn api_key_with_the_new_wording_stays_an_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(THIRD_PARTY_EXTRA_USAGE_BODY))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = AnthropicClient::with_base_url("sk-ant-key".into(), "claude-sonnet-4-5".into(), server.uri());
+    let (tx, _rx) = mpsc::channel::<GenerateChunk>(16);
+    let err = match client.generate_with_tools(tool_req(), vec![], tx).await {
+        Err(e) => e,
+        Ok(_) => panic!("expected an error"),
+    };
+    assert!(!matches!(err, AiError::ToolCallingUnsupported { .. }), "API key 用戶的這個錯誤是真的額度問題");
+}
+
 // API key（非訂閱）用戶付的是 API 額度，這個訊息對他們就是真的餘額不足——
 // 不能一併吞掉，否則會用一個假的「不支援工具」蓋掉真正的計費問題。
 #[tokio::test]

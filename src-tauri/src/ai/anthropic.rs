@@ -41,6 +41,13 @@ pub struct AnthropicClient {
     is_oauth: bool,
 }
 
+/// 訂閱（OAuth）請求帶 `tools` 被算到額外用量（API credits）時的 400 訊息。
+/// Anthropic 對同一情境換過措辭：舊的是 "out of extra usage"，新的是
+/// "Third-party apps now draw from extra usage, not plan limits"——兩種都要認得。
+pub(crate) fn is_extra_usage_billing_error(body: &str) -> bool {
+    body.contains("out of extra usage") || body.contains("draw from extra usage")
+}
+
 impl AnthropicClient {
     pub fn new(api_key: String, model: String) -> Self {
         Self::with_base_url(api_key, model, "https://api.anthropic.com".into())
@@ -153,7 +160,7 @@ impl AiProvider for AnthropicClient {
             //
             // 只限 OAuth：API key 用戶付的就是 API 額度，同一句話對他們是真的
             // 餘額不足，偽裝成「不支援工具」會蓋掉真正的問題。
-            if self.is_oauth && status.as_u16() == 400 && body_text.contains("out of extra usage") {
+            if self.is_oauth && status.as_u16() == 400 && is_extra_usage_billing_error(&body_text) {
                 log::warn!(
                     "Anthropic 訂閱憑證帶工具被計入 API credits（餘額不足），改用系統提示注入的相容模式"
                 );
