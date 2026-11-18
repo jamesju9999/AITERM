@@ -17,6 +17,9 @@ pub struct ToolsCheck {
     pub claude: Option<String>,
     pub codex: Option<String>,
     pub git: Option<String>,
+    /// PATH 裡找不到 claude，但預設安裝位置（`~/.local/bin`）有這個檔案：裝好了、只是安裝程式
+    /// 沒把它加進 PATH。前端據此顯示「已安裝但不在 PATH」與一鍵加入。
+    pub claude_unlisted: Option<String>,
 }
 
 const MARK: &str = "__AITERM_TOOL__";
@@ -91,13 +94,80 @@ pub async fn check(claude_command: &str) -> Result<ToolsCheck, String> {
     super::path_refresh::refresh().await;
     let claude = program_of(claude_command);
     let out = lookup(&[&claude, "codex", "git"]).await?;
+    let claude_found = parse_marks(&out, &claude);
+    // 只有用預設的 `claude` 指令時才看預設安裝位置（自訂指令不知道它會裝在哪）。
+    let claude_unlisted = if claude_found.is_none() && claude == "claude" {
+        dirs::home_dir()
+            .and_then(|h| unlisted_claude(&h, cfg!(windows), |p| p.is_file()))
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    };
     Ok(ToolsCheck {
         platform: if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "macos" } else { "linux" },
         claude_command: claude_command.to_string(),
-        claude: parse_marks(&out, &claude),
+        claude: claude_found,
+        claude_unlisted,
         codex: parse_marks(&out, "codex"),
         git: parse_marks(&out, "git").filter(|p| !is_macos_git_stub(p, xcode_tools_installed)),
     })
+}
+
+/// Claude Code 官方安裝程式的預設位置：`~/.local/bin/claude`（Windows 是 `claude.exe`）。
+/// 這個資料夾不一定在 PATH 裡（實機：Windows 全新安裝後使用者 PATH 沒有它）。
+pub fn unlisted_claude(
+    home: &std::path::Path,
+    windows: bool,
+    is_file: impl Fn(&std::path::Path) -> bool,
+) -> Option<std::path::PathBuf> {
+    let p = home.join(".local").join("bin").join(if windows { "claude.exe" } else { "claude" });
+    is_file(&p).then_some(p)
+}
+
+/// 把 `~/.local/bin` 加進**使用者層**的 PATH（不碰系統層），再重新讀進目前行程。
+/// 只接受「確實存在 claude」的預設資料夾，不接受前端傳來的任意路徑。
+/// 只有 Windows 做；其他平台的 PATH 在 shell 設定檔，不由 AITerm 代改。
+pub async fn add_claude_dir_to_user_path() -> Result<String, String> {
+    let file = dirs::home_dir()
+        .and_then(|h| unlisted_claude(&h, cfg!(windows), |p| p.is_file()))
+        .ok_or("找不到預設位置的 claude（~/.local/bin）")?;
+    let dir = file.parent().ok_or("路徑不正確")?.to_string_lossy().into_owned();
+    #[cfg(not(windows))]
+    {
+        let _ = dir;
+        Err("這個平台請把 ~/.local/bin 加進 shell 設定檔的 PATH".to_string())
+    }
+    #[cfg(windows)]
+    {
+        // 目錄用環境變數傳，不拼進腳本，不用處理引號。
+        // 讀原始值（不展開 %VAR%）、寫回 ExpandString，避免把使用者原有的 %USERPROFILE% 之類攤平。
+        // 最後設／刪一個暫時的使用者變數，讓系統廣播環境變更，新開的程式才讀得到。
+        let script = "$d = $env:AITERM_ADD_DIR; \
+            $k = Get-Item -LiteralPath 'HKCU:\\Environment'; \
+            $raw = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames'); \
+            $parts = @($raw -split ';' | Where-Object { $_ -ne '' }); \
+            if (-not ($parts | Where-Object { $_.TrimEnd('\\') -ieq $d.TrimEnd('\\') })) { \
+              Set-ItemProperty -LiteralPath 'HKCU:\\Environment' -Name Path -Type ExpandString -Value (($parts + $d) -join ';'); \
+              [Environment]::SetEnvironmentVariable('AITERM_PATH_TOUCH', '1', 'User'); \
+              [Environment]::SetEnvironmentVariable('AITERM_PATH_TOUCH', $null, 'User') \
+            }";
+        let shell = crate::pty::shell::find_powershell7()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "powershell.exe".into());
+        let out = tokio::process::Command::new(&shell)
+            .args(["-NoLogo", "-NonInteractive", "-NoProfile", "-Command", script])
+            .env("AITERM_ADD_DIR", &dir)
+            .stdin(std::process::Stdio::null())
+            .creation_flags(0x0800_0000)
+            .output()
+            .await
+            .map_err(|e| format!("無法執行 {shell}：{e}"))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        super::path_refresh::refresh().await;
+        Ok(dir)
+    }
 }
 
 /// 新的 Mac 上 `/usr/bin/git` 是個殼：執行它只會跳出「安裝命令列開發者工具」的視窗。
@@ -118,6 +188,20 @@ fn xcode_tools_installed() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unlisted_claude_looks_only_at_the_default_install_location() {
+        let home = std::path::Path::new("/h");
+        let found = |p: &std::path::Path| p.ends_with("claude.exe");
+        assert_eq!(
+            unlisted_claude(home, true, found).unwrap(),
+            std::path::Path::new("/h").join(".local").join("bin").join("claude.exe")
+        );
+        assert_eq!(unlisted_claude(home, true, |_| false), None, "檔案不存在＝沒裝");
+        // Windows 看 claude.exe，其他平台看 claude——找錯名字不能算有。
+        assert_eq!(unlisted_claude(home, false, found), None);
+        assert!(unlisted_claude(home, false, |p| p.ends_with("claude")).is_some());
+    }
 
     #[test]
     fn program_is_the_first_word_or_a_quoted_path() {

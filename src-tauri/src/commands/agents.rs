@@ -738,6 +738,12 @@ pub async fn agents_check_tools(
     crate::tasks::tools_check::check(&command).await
 }
 
+/// 把預設位置的 claude（~/.local/bin）加進使用者層 PATH（只有使用者在橫幅按下按鈕才會呼叫）。
+#[tauri::command]
+pub async fn agents_add_claude_to_path() -> Result<String, String> {
+    crate::tasks::tools_check::add_claude_dir_to_user_path().await
+}
+
 /// 一鍵把資料夾變成可用的 git repo（git init＋第一個 commit）。
 #[tauri::command]
 pub async fn agents_init_repo(

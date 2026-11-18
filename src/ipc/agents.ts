@@ -181,9 +181,14 @@ export interface ToolsCheck {
   claude: string | null;
   codex: string | null;
   git: string | null;
+  /** PATH 裡找不到 claude，但預設安裝位置（~/.local/bin）有：裝好了、只是不在 PATH。 */
+  claude_unlisted?: string | null;
 }
 
 export const checkTools = (): Promise<ToolsCheck> => invoke("agents_check_tools");
+
+/** 把預設位置的 claude 加進使用者層 PATH（Windows）。回傳加入的資料夾。 */
+export const addClaudeToPath = (): Promise<string> => invoke("agents_add_claude_to_path");
 
 // ── 資料庫技能（見 docs/superpowers/specs/2026-10-19-agent-db-skill-design.md）──
 

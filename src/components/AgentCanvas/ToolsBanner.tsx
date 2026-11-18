@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import type { ToolsCheck } from "../../ipc/agents";
+import { addClaudeToPath, type ToolsCheck } from "../../ipc/agents";
 import { installCommand, type Tool } from "./toolsCheck";
 
 /** 協作頁頂列下方：這台電腦缺哪些工具、各平台怎麼裝。 */
@@ -27,6 +27,20 @@ export function ToolsBanner({
       // 複製失敗也看得到指令，可以自己選取。
     }
   };
+  const [pathBusy, setPathBusy] = useState(false);
+  const [pathError, setPathError] = useState<string | null>(null);
+  const addToPath = async () => {
+    setPathBusy(true);
+    setPathError(null);
+    try {
+      await addClaudeToPath();
+      onRecheck();
+    } catch (e) {
+      setPathError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+    } finally {
+      setPathBusy(false);
+    }
+  };
   const what: Record<Tool, string> = { git: t.ac_tool_git, claude: t.ac_tool_claude, codex: t.ac_tool_codex };
   return (
     <div className="ac-tools" data-testid="ac-tools" role="alert">
@@ -39,6 +53,22 @@ export function ToolsBanner({
       </div>
       {missing.map((tool) => {
         const cmd = installCommand(tool, check.platform);
+        // 裝好了、只是不在 PATH：不要再叫人重裝，給路徑與（Windows）一鍵加入。
+        if (tool === "claude" && check.claude_unlisted) {
+          return (
+            <div key={tool} className="ac-tools-row" data-testid="ac-tools-unlisted">
+              <span className="ac-tools-what">{t.ac_tools_unlisted(check.claude_unlisted)}</span>
+              {check.platform === "windows" ? (
+                <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={pathBusy} onClick={() => void addToPath()}>
+                  {pathBusy ? t.ac_tools_checking : t.ac_tools_add_path}
+                </button>
+              ) : (
+                <span className="ac-tools-note">{t.ac_tools_unlisted_manual}</span>
+              )}
+              {pathError && <span className="ac-tools-note" role="alert">{pathError}</span>}
+            </div>
+          );
+        }
         return (
           <div key={tool} className="ac-tools-row">
             <span className="ac-tools-what">{what[tool]}</span>

@@ -8,6 +8,15 @@
 時，workflow 會退回用 commit 標題產生草稿（那份草稿長得像開發者日誌，通常需要
 手動改寫）。
 
+## v1.60.1
+
+**改善：Claude Code 裝好了卻被說「沒安裝」**
+
+- **Agent 協作的「缺少工具」提示變聰明了。** Claude Code 官方安裝程式把 `claude` 放在 `~/.local/bin`（Windows 是 `%USERPROFILE%\.local\bin`），但有些電腦上安裝程式沒有把這個資料夾加進 PATH，AITerm 因此找不到它，卻還一直叫你去安裝。現在如果預設位置其實已經有 `claude`，提示會改成「Claude Code 已經安裝在 …，但它所在的資料夾不在 PATH 裡」。
+- **Windows 上有「加入 PATH」按鈕**：按下去只會把那個資料夾加進**你的使用者** PATH（不動系統層、不需要系統管理員），然後自動重新檢查，不用重開 AITerm。Mac／Linux 會顯示路徑，請自行把資料夾加進 shell 設定檔。
+- 修正過時的說明：Windows 上裝好工具後按「重新檢查」就能找到，不需要重開 AITerm。
+- 還沒在 Windows 實機驗證「加入 PATH」按鈕。
+
 ## v1.60.0
 
 **新功能：指令執行中，輸入框可以直接回答它**

@@ -38,6 +38,7 @@ vi.mock("../../ipc/tasks", () => ({
   codexInfo: vi.fn().mockResolvedValue({ models: [], login: null, error: null }),
 }));
 vi.mock("../../ipc/agents", () => ({
+  addClaudeToPath: vi.fn().mockResolvedValue("C:\\Users\\u\\.local\\bin"),
   listAgents: vi.fn(),
   askAgent: vi.fn(),
   createAgent: vi.fn().mockResolvedValue("new-agent"),
@@ -150,6 +151,7 @@ import {
   checkRepo,
   relocateRepo,
   checkTools,
+  addClaudeToPath,
   createAgent,
   listDbQueries,
   setDbSkill,
@@ -889,6 +891,22 @@ describe("AgentCanvasView", () => {
     fireEvent.click(within(banner).getByRole("button", { name: /重新檢查|Check again/ }));
     await waitFor(() => expect(screen.queryByTestId("ac-tools")).toBeNull());
     expect(screen.queryByTestId("agent-tool-missing")).toBeNull();
+  });
+
+  it("Claude Code 裝好了但不在 PATH（Windows）：不叫人重裝，給路徑與「加入 PATH」；按下去後重新檢查", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent()]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    const unlisted = "C:\\Users\\u\\.local\\bin\\claude.exe";
+    vi.mocked(checkTools).mockResolvedValue({ ...allTools, platform: "windows" as const, claude: null, claude_unlisted: unlisted });
+    view();
+    const row = await screen.findByTestId("ac-tools-unlisted");
+    expect(row.textContent).toContain(unlisted);
+    expect(within(screen.getByTestId("ac-tools")).queryByText("irm https://claude.ai/install.ps1 | iex")).toBeNull();
+
+    vi.mocked(checkTools).mockResolvedValue({ ...allTools, platform: "windows" as const });
+    fireEvent.click(within(row).getByRole("button", { name: /加入 PATH|Add to PATH/ }));
+    await waitFor(() => expect(addClaudeToPath).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId("ac-tools")).toBeNull());
   });
 
   it("還沒有任何專案時也顯示缺工具提示", async () => {
