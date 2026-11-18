@@ -2,7 +2,7 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import type { SystemConnection, SystemMode, SystemRule } from "../../ipc/systems";
+import type { SystemConnection, SystemLoginInfo, SystemMode, SystemRule } from "../../ipc/systems";
 import { restoreWebviewFocus } from "../../lib/webviewFocus";
 import { ModelSelect } from "./ModelSelect";
 import { hostOf, slug } from "./utils";
@@ -12,11 +12,13 @@ const METHODS = ["*", "POST", "PUT", "PATCH", "DELETE"];
 
 interface Props {
   initial?: SystemConnection;
-  onSave: (conn: SystemConnection) => void | Promise<void>;
+  /** 已存的自動登入帳號（編輯時）。密碼不會帶回來。 */
+  initialLogin?: SystemLoginInfo;
+  onSave: (conn: SystemConnection, login: { username: string; password: string }) => void | Promise<void>;
   onCancel: () => void;
 }
 
-export function ConnectionForm({ initial, onSave, onCancel }: Props) {
+export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Props) {
   const { t } = useLocale();
   const [name, setName] = useState(initial?.name ?? "");
   const [url, setUrl] = useState(initial?.start_url ?? "");
@@ -24,6 +26,8 @@ export function ConnectionForm({ initial, onSave, onCancel }: Props) {
   const [mode, setMode] = useState<SystemMode>(initial?.mode ?? "read_only");
   const [model, setModel] = useState<string | null>(initial?.model ?? null);
   const [rules, setRules] = useState<SystemRule[]>(initial?.rules ?? []);
+  const [username, setUsername] = useState(initialLogin?.username ?? "");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const urlOk = /^https?:\/\//i.test(url.trim()) && hostOf(url) !== "";
@@ -56,7 +60,7 @@ export function ConnectionForm({ initial, onSave, onCancel }: Props) {
         rules: mode === "rules" ? rules.filter((r) => r.url_pattern.trim()) : [],
         enabled: initial?.enabled ?? true,
         model,
-      });
+      }, { username: username.trim(), password });
     } catch (e) {
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
     }
@@ -83,6 +87,22 @@ export function ConnectionForm({ initial, onSave, onCancel }: Props) {
         {urlTouched && !urlOk && <small className="systems__field-error">{t.sys_url_invalid}</small>}
         {urlOk && <small>{t.sys_hosts_default(host)}</small>}
       </label>
+
+      <div className="systems__field-block">
+        <div className="systems__field-label">{t.sys_login_title}</div>
+        <div className="systems__logingrid">
+          <input aria-label={t.sys_login_user} placeholder={t.sys_login_user} autoComplete="off" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <input
+            type="password"
+            aria-label={t.sys_login_pass}
+            placeholder={initialLogin?.has_password ? t.sys_login_pass_saved : t.sys_login_pass}
+            autoComplete="new-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
+        <small>{t.sys_autologin_hint}</small>
+      </div>
 
       <div className="systems__field-block">
         <div className="systems__field-label" id="sys-mode-label">

@@ -330,6 +330,7 @@ pub fn run() {
                 systems.set_emitter(Arc::new(move |name, payload| {
                     let _ = h2.emit(name, payload);
                 }));
+                systems.set_secrets(handle.state::<Arc<SecretStore>>().inner().clone());
                 {
                     // 定時任務：排程器與「現在執行」共用同一組狀態。
                     let config = handle.state::<Arc<ConfigStore>>().inner().clone();
@@ -834,6 +835,8 @@ pub fn run() {
             commands::systems::systems_save,
             commands::systems::systems_remove,
             commands::systems::systems_open_login,
+            commands::systems::systems_login_get,
+            commands::systems::systems_login_set,
             commands::systems::systems_status,
             commands::systems::systems_pending,
             commands::systems::systems_decide,

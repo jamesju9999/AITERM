@@ -124,15 +124,37 @@ pub async fn systems_remove(
     id: String,
     config: State<'_, Arc<ConfigStore>>,
     systems: State<'_, Arc<SystemsState>>,
+    secrets: State<'_, Arc<SecretStore>>,
 ) -> Result<(), String> {
     systems.close(&id).await;
+    let _ = crate::systems::login::clear(&secrets, &id);
     config.update(|cfg| cfg.system_connections.retain(|c| c.id != id)).map_err(|e| e.to_string())
 }
 
 /// 開啟這個系統的瀏覽器視窗（沒開就開），讓使用者手動登入。
 #[tauri::command]
 pub async fn systems_open_login(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<(), String> {
-    systems.inner().clone().ensure_running(&id).await.map(|_| ())
+    systems.inner().clone().ensure_ready(&id).await.map(|_| ())
+}
+
+#[derive(serde::Serialize)]
+pub struct LoginInfo {
+    pub username: String,
+    pub has_password: bool,
+}
+
+/// 自動登入的帳號與「有沒有存密碼」。密碼本身不回傳。
+#[tauri::command]
+pub async fn systems_login_get(id: String, secrets: State<'_, Arc<SecretStore>>) -> Result<LoginInfo, String> {
+    let (username, has_password) = crate::systems::login::describe(&secrets, &id);
+    Ok(LoginInfo { username, has_password })
+}
+
+/// 存自動登入的帳密。`password` 為空／沒給代表密碼不變；帳號留空代表清除。
+#[tauri::command]
+pub async fn systems_login_set(id: String, username: String, password: Option<String>, secrets: State<'_, Arc<SecretStore>>) -> Result<(), String> {
+    let password = password.filter(|p| !p.is_empty());
+    crate::systems::login::save(&secrets, &id, &username, password.as_deref())
 }
 
 #[tauri::command]

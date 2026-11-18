@@ -16,7 +16,7 @@ export function AuditLog({ rows }: { rows: AuditRow[] }) {
       {rows.length === 0 ? (
         <p className="systems__muted">{t.sys_audit_empty}</p>
       ) : (
-        <ul>
+        <ul className="systems__auditlist">
           {rows.map((r) => (
             <li key={r.id} data-testid="audit-row">
               <span className={`systems__verdict systems__verdict--${r.verdict}`}>{label[r.verdict]}</span>

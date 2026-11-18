@@ -106,9 +106,39 @@ async fn adopt_existing(profile: &Path) -> Option<RunningBrowser> {
     Some(RunningBrowser { child: None, port, ws_url, profile: profile.to_path_buf() })
 }
 
+/// 接手舊的 Chrome 時它不會自己開起始網址（可能停在空白頁，視窗也可能在背景）：
+/// 沒有網頁分頁或只有空白頁就開起始網址，並把有內容的分頁（或新開的）帶到前景。
+async fn show_start_page(ws_url: &str, start_url: &str) {
+    use serde_json::json;
+    let Ok((cdp, _ev)) = crate::systems::cdp::Cdp::connect(ws_url).await else { return };
+    let Ok(res) = cdp.call("Target.getTargets", json!({}), None).await else { return };
+    let pages: Vec<&serde_json::Value> = res["targetInfos"].as_array().map(|a| a.iter().filter(|t| t["type"] == "page").collect()).unwrap_or_default();
+    let is_blank = |t: &serde_json::Value| {
+        let u = t["url"].as_str().unwrap_or("");
+        u.is_empty() || u.starts_with("about:") || u.starts_with("chrome://newtab") || u.starts_with("chrome://new-tab")
+    };
+    let target = match pages.iter().find(|t| !is_blank(t)) {
+        Some(t) => t["targetId"].as_str().map(String::from),
+        None => {
+            // macOS 關掉最後一個視窗 Chrome 也不會結束：沒有任何分頁時要明確開新視窗，不然沒地方放。
+            let created = cdp.call("Target.createTarget", json!({ "url": start_url, "newWindow": pages.is_empty() }), None).await.ok();
+            for t in pages.iter().filter(|t| is_blank(t)) {
+                if let Some(id) = t["targetId"].as_str() {
+                    let _ = cdp.call("Target.closeTarget", json!({ "targetId": id }), None).await;
+                }
+            }
+            created.and_then(|c| c["targetId"].as_str().map(String::from))
+        }
+    };
+    if let Some(id) = target {
+        let _ = cdp.call("Target.activateTarget", json!({ "targetId": id }), None).await;
+    }
+}
+
 pub async fn launch(base: &Path, system_id: &str, start_url: &str) -> Result<RunningBrowser, String> {
     let profile = profile_dir(base, system_id);
     if let Some(existing) = adopt_existing(&profile).await {
+        show_start_page(&existing.ws_url, start_url).await;
         return Ok(existing);
     }
     let exe = chrome_executable().ok_or("找不到 Google Chrome，請先安裝")?;

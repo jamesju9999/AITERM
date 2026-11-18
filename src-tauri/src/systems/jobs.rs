@@ -539,6 +539,12 @@ impl JobsRuntime {
             Ok(c) => c,
             Err(e) => return Outcome { status: "failed", summary: e },
         };
+        // 有存帳密：先開瀏覽器並自動登入，AI 一開始就在登入後的畫面上工作。
+        if conn.enabled && ctx.systems.has_login(system_id) {
+            if let Err(e) = ctx.systems.ensure_ready(system_id).await {
+                return Outcome { status: "failed", summary: e };
+            }
+        }
         let outcome = match (conn.enabled, (ctx.endpoint)()) {
             (false, _) => Outcome { status: "failed", summary: "系統連線已停用".into() },
             (_, None) => Outcome { status: "failed", summary: "系統連線端點沒有在執行".into() },
@@ -648,11 +654,20 @@ impl JobsRuntime {
     }
 }
 
+/// 操作記錄與輸出檔保留天數。
+const RETENTION_DAYS: u64 = 30;
+
 /// 啟動背景排程：每 30 秒掃一次。
 pub fn spawn(rt: Arc<JobsRuntime>, ctx: Arc<JobsCtx>) {
     tauri::async_runtime::spawn(async move {
+        // 啟動後與每天一次，清掉太舊的操作記錄與輸出檔，避免無限累積。
+        let mut last_prune: Option<std::time::Instant> = None;
         loop {
             tokio::time::sleep(Duration::from_secs(30)).await;
+            if last_prune.is_none_or(|t| t.elapsed() >= Duration::from_secs(86_400)) {
+                ctx.systems.prune_old(RETENTION_DAYS).await;
+                last_prune = Some(std::time::Instant::now());
+            }
             rt.tick(&ctx, chrono::Local::now().naive_local()).await;
         }
     });

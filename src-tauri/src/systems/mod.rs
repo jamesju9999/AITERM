@@ -8,6 +8,7 @@ pub mod cdp;
 pub mod endpoint;
 pub mod gate;
 pub mod jobs;
+pub mod login;
 pub mod proxy;
 pub mod recipes;
 pub mod skill;

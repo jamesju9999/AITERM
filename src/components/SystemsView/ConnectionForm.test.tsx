@@ -37,7 +37,26 @@ describe("ConnectionForm", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({ name: "Orders", allowed_hosts: ["app.example.com"], mode: "read_only", enabled: true, rules: [] }),
+      { username: "", password: "" },
     );
+  });
+
+  it("passes the typed username and password along separately from the connection, and shows that a password is already saved", async () => {
+    const onSave = vi.fn(() => Promise.resolve());
+    render(
+      <LocaleProvider>
+        <ConnectionForm initialLogin={{ username: "u1", has_password: true }} onSave={onSave} onCancel={() => {}} />
+      </LocaleProvider>,
+    );
+    fill();
+    expect((screen.getByLabelText(t.sys_login_user) as HTMLInputElement).value).toBe("u1");
+    const pass = screen.getByLabelText(t.sys_login_pass) as HTMLInputElement;
+    expect(pass.placeholder).toBe(t.sys_login_pass_saved);
+    expect(pass.type).toBe("password");
+    fireEvent.change(pass, { target: { value: "s3cret" } });
+    fireEvent.click(screen.getByText(t.sys_save));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith(expect.not.objectContaining({ password: expect.anything() }), { username: "u1", password: "s3cret" });
   });
 
   it("will not save autonomous mode unless the user confirms", async () => {
@@ -51,7 +70,7 @@ describe("ConnectionForm", () => {
 
     confirmMock.mockResolvedValueOnce(true);
     fireEvent.click(screen.getByText(t.sys_save));
-    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ mode: "autonomous" })));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ mode: "autonomous" }), expect.anything()));
   });
 
   it("only keeps rules in rules mode and drops blank patterns", async () => {
@@ -114,7 +133,7 @@ describe("ConnectionForm", () => {
     fill();
     fireEvent.change(screen.getByLabelText(t.sys_model), { target: { value: "haiku" } });
     fireEvent.click(screen.getByText(t.sys_save));
-    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ model: "haiku" })));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ model: "haiku" }), expect.anything()));
   });
 
   it("a system saved with a full model name shows it and does not lose it", async () => {
@@ -130,6 +149,6 @@ describe("ConnectionForm", () => {
     );
     expect((screen.getByLabelText(t.sys_model) as HTMLSelectElement).value).toBe("claude-sonnet-5-5");
     fireEvent.click(screen.getByText(t.sys_save));
-    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ model: "claude-sonnet-5-5" })));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ model: "claude-sonnet-5-5" }), expect.anything()));
   });
 });

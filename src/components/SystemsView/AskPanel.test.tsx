@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { LocaleProvider } from "../../contexts/LocaleContext";
@@ -27,8 +27,6 @@ function mount(over: Partial<React.ComponentProps<typeof AskPanel>> = {}) {
   const props = {
     system,
     onRun: vi.fn(() => Promise.resolve(report())),
-    onSaveRecipe: vi.fn(() => Promise.resolve("ok")),
-    onDiscard: vi.fn(() => Promise.resolve()),
     ...over,
   };
   render(
@@ -71,44 +69,19 @@ describe("AskPanel", () => {
     expect(screen.queryByTestId("ask-running")).toBeNull();
   });
 
-  it("offers to save only after a successful run with steps", async () => {
-    mount({ onRun: vi.fn(() => Promise.resolve(report({ status: "failed", summary: "找不到欄位", can_save: false, params: [] }))) });
-    await ask();
-    expect(screen.getByText(t.sys_ask_failed)).toBeInTheDocument();
-    expect(screen.queryByTestId("ask-save")).toBeNull();
-  });
-
-  it("saves the recorded steps with the chosen parameter names, skipping unchecked candidates", async () => {
-    const p = mount({
-      onRun: vi.fn(() =>
-        Promise.resolve(report({ params: [{ name: "單號", example: "A-102" }, { name: "備註", example: "急件" }] })),
-      ),
-    });
-    await ask();
-    fireEvent.change(screen.getByPlaceholderText(t.sys_save_name_ph), { target: { value: "送單" } });
-    const rows = screen.getAllByTestId("ask-param");
-    expect(rows.length).toBe(2);
-    fireEvent.click(rows[1].querySelector('input[type="checkbox"]')!); // 不要「備註」
-    fireEvent.change(rows[0].querySelectorAll("input")[1], { target: { value: "order_no" } });
-    fireEvent.click(screen.getByText(t.sys_save_btn));
-    await waitFor(() => expect(p.onSaveRecipe).toHaveBeenCalledWith("送單", "", [{ name: "order_no", example: "A-102" }]));
-    expect((await screen.findByTestId("ask-saved")).textContent).toBe(t.sys_save_done("送單"));
-    expect(screen.queryByTestId("ask-result")).toBeNull();
-  });
-
-  it("needs a recipe name to save, and 'don't save' discards the recording", async () => {
-    const p = mount();
-    await ask();
-    expect((screen.getByText(t.sys_save_btn) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByText(t.sys_save_skip));
-    await waitFor(() => expect(p.onDiscard).toHaveBeenCalled());
-    expect(screen.queryByTestId("ask-result")).toBeNull();
-  });
-
-  it("explains when nothing looked like a changing value", async () => {
-    mount({ onRun: vi.fn(() => Promise.resolve(report({ params: [] }))) });
-    await ask();
-    expect(screen.getByText(t.sys_save_no_params)).toBeInTheDocument();
+  it("saves a goal per system, refills it on click and removes it", async () => {
+    localStorage.clear();
+    mount();
+    const box = screen.getByPlaceholderText(t.sys_ask_goal_ph) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "查剩餘特休" } });
+    fireEvent.click(screen.getByText(t.sys_goal_save));
+    expect((screen.getByText(t.sys_goal_save) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(box, { target: { value: "" } });
+    fireEvent.click(screen.getByText("查剩餘特休"));
+    expect(box.value).toBe("查剩餘特休");
+    fireEvent.click(screen.getByLabelText(t.sys_goal_remove));
+    expect(screen.queryByTestId("saved-goals")).toBeNull();
+    expect(localStorage.getItem(`aiterm.systems.goals.${system.id}`)).toBe("[]");
   });
 
   it("shows the error when the run itself fails (for example the system is busy)", async () => {

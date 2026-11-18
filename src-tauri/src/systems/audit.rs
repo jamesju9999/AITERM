@@ -151,6 +151,30 @@ pub async fn record(pool: &SqlitePool, e: &Entry) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+/// 刪掉 `cutoff_ms` 之前的記錄，回傳刪了幾筆。
+pub async fn prune(pool: &SqlitePool, cutoff_ms: i64) -> Result<u64, sqlx::Error> {
+    Ok(sqlx::query("DELETE FROM system_audit WHERE ts_ms < ?").bind(cutoff_ms).execute(pool).await?.rows_affected())
+}
+
+/// 刪掉資料夾（含子資料夾）裡最後修改時間早於 `cutoff` 的檔案，回傳刪了幾個。資料夾本身不動。
+pub fn prune_files(dir: &std::path::Path, cutoff: std::time::SystemTime) -> usize {
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let p = e.path();
+        match e.file_type() {
+            Ok(t) if t.is_dir() => n += prune_files(&p, cutoff),
+            Ok(t) if t.is_file() => {
+                if e.metadata().and_then(|m| m.modified()).is_ok_and(|m| m < cutoff) && std::fs::remove_file(&p).is_ok() {
+                    n += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    n
+}
+
 /// 某系統最近的記錄，新的在前。
 pub async fn list(pool: &SqlitePool, system_id: &str, limit: i64) -> Result<Vec<Row>, sqlx::Error> {
     sqlx::query_as::<_, Row>(
@@ -211,6 +235,31 @@ mod tests {
         assert_eq!(rows[0].tool, "sys_navigate", "最新的在前");
         assert_eq!(rows[1].verdict, "approved");
         assert_eq!(rows[1].source, "user");
+    }
+
+    #[tokio::test]
+    async fn pruning_removes_only_records_older_than_the_cutoff() {
+        let pool = memory().await;
+        for ts in [5, 99, 100, 101] {
+            record(&pool, &at(Entry::new("a", "gate", "i", None, None, Verdict::Allow, "rule"), ts)).await.unwrap();
+        }
+        assert_eq!(prune(&pool, 100).await.unwrap(), 2);
+        let left: Vec<i64> = list(&pool, "a", 10).await.unwrap().iter().map(|r| r.ts_ms).collect();
+        assert_eq!(left, vec![101, 100], "剛好等於截止時間的保留");
+    }
+
+    #[test]
+    fn old_files_are_pruned_recursively_but_folders_and_new_files_stay() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sys");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("old.yml"), "x").unwrap();
+        std::fs::write(dir.path().join("also-old.log"), "x").unwrap();
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        assert_eq!(prune_files(dir.path(), past), 0, "都比截止時間新，一個都不刪");
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+        assert_eq!(prune_files(dir.path(), future), 2);
+        assert!(sub.is_dir() && !sub.join("old.yml").exists());
     }
 
     #[tokio::test]

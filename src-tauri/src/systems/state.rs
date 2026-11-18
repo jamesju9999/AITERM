@@ -36,6 +36,8 @@ pub struct Running {
     journal: Mutex<Vec<Step>>,
     /// 日誌第一步開始時所在的網址：存配方時補成第一步的導覽，重播才會從同一個畫面開始。
     journal_start_url: Mutex<Option<String>>,
+    /// 上次自動登入的時間：執行中偵測到登入頁時，一分鐘內不重複登入（帳密錯時避免把帳號鎖住）。
+    last_auto_login: Mutex<Option<std::time::Instant>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,6 +56,9 @@ pub struct SystemsState {
     emitter: Mutex<Option<Emitter>>,
     catalog: tokio::sync::OnceCell<Vec<Value>>,
     data_dir: PathBuf,
+    secrets: Mutex<Option<Arc<crate::secret::SecretStore>>>,
+    /// 同一時間只讓一個自動登入在跑，後到的等前面登完再看頁面。
+    login_lock: tokio::sync::Mutex<()>,
 }
 
 /// 頁面看起來被導去登入頁（登入失效）：網址不在白名單，或路徑像登入頁。
@@ -84,7 +89,41 @@ impl SystemsState {
             emitter: Mutex::new(None),
             catalog: tokio::sync::OnceCell::new(),
             data_dir,
+            secrets: Mutex::new(None),
+            login_lock: tokio::sync::Mutex::new(()),
         }
+    }
+
+    pub fn set_secrets(&self, s: Arc<crate::secret::SecretStore>) {
+        *self.secrets.lock() = Some(s);
+    }
+
+    /// 這個系統有沒有存好可用的帳號密碼。
+    pub fn has_login(&self, id: &str) -> bool {
+        self.secrets.lock().as_ref().is_some_and(|s| super::login::load(s, id).is_some())
+    }
+
+    /// 有存帳密且瀏覽器停在登入頁就自動登入。`Ok(true)` 剛登入、`Ok(false)` 不需要。
+    pub async fn auto_login(&self, id: &str, run: &Arc<Running>) -> Result<bool, String> {
+        let Some(secrets) = self.secrets.lock().clone() else { return Ok(false) };
+        let Some(creds) = super::login::load(&secrets, id) else { return Ok(false) };
+        let conn = self.connection(id)?;
+        let _one_at_a_time = self.login_lock.lock().await;
+        let ws = run.browser.lock().await.ws_url.clone();
+        *run.last_auto_login.lock() = Some(std::time::Instant::now());
+        let ok = super::login::auto_login(&ws, &conn, &creds).await?;
+        if ok {
+            run.needs_login.store(false, Ordering::SeqCst);
+            self.emit("systems://state", json!({ "system_id": id, "needs_login": false }));
+        }
+        Ok(ok)
+    }
+
+    /// 開瀏覽器，並在有存帳密時自動登入到可以工作為止。沒存帳密就等同 `ensure_running`。
+    pub async fn ensure_ready(self: &Arc<Self>, id: &str) -> Result<Arc<Running>, String> {
+        let run = self.ensure_running(id).await?;
+        self.auto_login(id, &run).await?;
+        Ok(run)
     }
 
     /// 用指定的資料庫（測試用記憶體資料庫，免得測試把記錄寫進使用者真正的 systems.db）。
@@ -205,6 +244,7 @@ impl SystemsState {
             last_snapshot: Mutex::new(String::new()),
             journal: Mutex::new(Vec::new()),
             journal_start_url: Mutex::new(None),
+            last_auto_login: Mutex::new(None),
         });
         map.insert(id.to_string(), run.clone());
         drop(map);
@@ -260,8 +300,20 @@ impl SystemsState {
             self.emit("systems://state", json!({ "system_id": system, "needs_login": logged_out }));
         }
         if logged_out {
-            if let Some(a) = res["content"].as_array_mut() {
-                a.push(json!({ "type": "text", "text": "注意：頁面看起來是登入頁，登入可能已失效。請使用者在瀏覽器視窗重新登入，再告訴你繼續；不要嘗試自己填入帳號密碼。" }));
+            let recently = run.last_auto_login.lock().is_some_and(|t| t.elapsed() < Duration::from_secs(60));
+            let note = if self.has_login(system) && !recently {
+                match self.auto_login(system, &run).await {
+                    Ok(true) => "注意：剛才頁面是登入頁，AITerm 已自動登入成功。請重新用 sys_snapshot 看目前畫面，必要時再導覽到要去的頁面後繼續；不要自己填帳號密碼。".to_string(),
+                    Ok(false) => String::new(),
+                    Err(e) => format!("注意：頁面是登入頁，AITerm 自動登入沒成功（{e}）。請停下來回報，需要使用者檢查帳號密碼；不要自己填帳號密碼。"),
+                }
+            } else {
+                "注意：頁面看起來是登入頁，登入可能已失效。請使用者在瀏覽器視窗重新登入，再告訴你繼續；不要嘗試自己填入帳號密碼。".to_string()
+            };
+            if !note.is_empty() {
+                if let Some(a) = res["content"].as_array_mut() {
+                    a.push(json!({ "type": "text", "text": note }));
+                }
             }
         }
         Ok(res)
@@ -321,6 +373,18 @@ impl SystemsState {
         Ok(format!("已存成配方「{}」，共 {} 步、{} 個參數。", name.trim(), steps.len(), params.len()))
     }
 
+    /// 清掉超過 `days` 天的操作記錄與瀏覽器輸出檔（頁面快照、console 記錄）。
+    pub async fn prune_old(&self, days: u64) {
+        let span = std::time::Duration::from_secs(days * 86_400);
+        let Some(pool) = self.audit_pool().await else { return };
+        let cutoff_ms = chrono::Utc::now().timestamp_millis() - (span.as_millis() as i64);
+        let rows = audit::prune(&pool, cutoff_ms).await.unwrap_or(0);
+        let files = std::time::SystemTime::now().checked_sub(span).map(|c| audit::prune_files(&self.data_dir.join("system-output"), c)).unwrap_or(0);
+        if rows + files as u64 > 0 {
+            log::info!("系統連線清理：刪除 {rows} 筆操作記錄、{files} 個輸出檔（超過 {days} 天）");
+        }
+    }
+
     pub async fn recipe_list(&self, system: &str) -> Result<Vec<recipes::Recipe>, String> {
         self.connection(system)?;
         let pool = self.audit_pool().await.ok_or("審計資料庫不可用")?;
@@ -362,9 +426,20 @@ impl SystemsState {
                 if step.tool == "sys_navigate" {
                     return Ok(args);
                 }
-                let snap = self.call_inner(system, "sys_snapshot", json!({ "system": system }), false).await?;
-                let entries = recipes::parse_snapshot(&text_of(&snap));
-                recipes::resolve_locators(&args, &entries)
+                // 單頁式網站剛導覽或剛點完，畫面常還在渲染：找不到元素先等一下再重試，最多約 10 秒。
+                let mut attempt = 0;
+                loop {
+                    let snap = self.call_inner(system, "sys_snapshot", json!({ "system": system }), false).await?;
+                    let entries = recipes::parse_snapshot(&text_of(&snap));
+                    match recipes::resolve_locators(&args, &entries) {
+                        Ok(a) => break Ok(a),
+                        Err(e) if attempt >= 10 => break Err(e),
+                        Err(_) => {
+                            attempt += 1;
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
+                    }
+                }
             }
             .await;
             let mut args = match prepared {
@@ -391,7 +466,16 @@ impl SystemsState {
             }
         }
         let _ = recipes::record_run(&pool, recipe.id, true).await;
-        Ok(format!("配方「{name}」已完成，共 {total} 步。"))
+        // 配方只存動作，不存「讀」到的內容；結束時把停留畫面的文字一併回傳，這才是查詢的答案。
+        let page = match self.call_inner(system, "sys_snapshot", json!({ "system": system }), false).await {
+            Ok(snap) => recipes::page_text(&text_of(&snap)),
+            Err(_) => String::new(),
+        };
+        if page.is_empty() {
+            Ok(format!("配方「{name}」已完成，共 {total} 步。"))
+        } else {
+            Ok(format!("配方「{name}」已完成，共 {total} 步。\n\n最後停留的畫面內容：\n{page}"))
+        }
     }
 
     /// 停止：拒絕這個系統所有等待中的核准，並讓 AI 的工具呼叫暫停（瀏覽器保持開著），

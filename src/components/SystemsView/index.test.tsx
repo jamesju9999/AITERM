@@ -27,6 +27,8 @@ vi.mock("../../ipc/systems", async (orig) => ({
   systemsMcpConfig: vi.fn(() => Promise.resolve("{}")),
   systemsDecide: vi.fn(() => Promise.resolve(true)),
   systemsSave: vi.fn(() => Promise.resolve()),
+  systemsLoginGet: vi.fn(() => Promise.resolve({ username: "", has_password: false })),
+  systemsLoginSet: vi.fn(() => Promise.resolve()),
   systemsStop: vi.fn(() => Promise.resolve(0)),
   systemsTakeover: vi.fn(() => Promise.resolve()),
   systemsHandback: vi.fn(() => Promise.resolve()),
@@ -138,19 +140,6 @@ describe("SystemsView", () => {
     await waitFor(() => expect(ipc.systemsSave).toHaveBeenCalledWith(expect.objectContaining({ id: "s1", enabled: false })));
   });
 
-  it("the recipes button loads and shows that system's recipes, and deleting asks then calls the command", async () => {
-    vi.mocked(ipc.systemsRecipes).mockResolvedValue([
-      { id: 9, system_id: "s1", name: "送單", description: "", params: [], steps: [], ok_count: 0, fail_count: 0, last_run_ms: null },
-    ]);
-    setup();
-    fireEvent.click(await screen.findByText(t.sys_recipes_title));
-    expect(await screen.findByTestId("recipe-row")).toBeTruthy();
-    expect(ipc.systemsRecipes).toHaveBeenCalledWith("s1");
-    const row = await screen.findByTestId("recipe-row");
-    fireEvent.click(row.querySelectorAll("button")[2]);
-    await waitFor(() => expect(ipc.systemsRecipeDelete).toHaveBeenCalledWith(9));
-  });
-
   it("the jobs button loads that system's jobs, and a job-disabled event shows a notice", async () => {
     vi.mocked(ipc.systemsJobs).mockResolvedValue([
       { id: "j1", system_id: "s1", name: "每日匯出", goal: "g", kind: "daily", spec_json: '{"times":["09:00"]}', enabled: true, created_ms: 1, last_fired_ms: 1, fail_streak: 0, disabled_reason: null },
@@ -164,11 +153,8 @@ describe("SystemsView", () => {
     expect((await screen.findByTestId("job-notice")).textContent).toBe(t.sys_job_disabled_toast("每日匯出"));
   });
 
-  it("the Ask AI tab runs a goal on that system, and a recipe can be run from the recipes tab", async () => {
+  it("the Ask AI tab runs a goal on that system", async () => {
     vi.mocked(ipc.systemsRunGoal).mockResolvedValue({ status: "ok", summary: "做好了", steps: [], params: [], can_save: false });
-    vi.mocked(ipc.systemsRecipes).mockResolvedValue([
-      { id: 9, system_id: "s1", name: "送單", description: "", params: [], steps: [], ok_count: 0, fail_count: 0, last_run_ms: null },
-    ]);
     setup();
     fireEvent.click(await screen.findByText(t.sys_ask_title, { selector: "button" }));
     fireEvent.change(await screen.findByPlaceholderText(t.sys_ask_goal_ph), { target: { value: "查今天的訂單" } });
@@ -176,9 +162,5 @@ describe("SystemsView", () => {
     await waitFor(() => expect(ipc.systemsRunGoal).toHaveBeenCalledWith("s1", "查今天的訂單", null));
     expect(await screen.findByText("做好了")).toBeTruthy();
 
-    fireEvent.click(screen.getByText(t.sys_recipes_title, { selector: "button" }));
-    fireEvent.click(await screen.findByTestId("recipe-run"));
-    fireEvent.click(screen.getByText(t.sys_recipe_run_go));
-    await waitFor(() => expect(ipc.systemsRecipeRun).toHaveBeenCalledWith("s1", "送單", {}));
   });
 });

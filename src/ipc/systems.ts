@@ -72,6 +72,15 @@ export interface Recipe {
 
 export const systemsList = () => invoke<SystemConnection[]>("systems_list");
 export const systemsSave = (conn: SystemConnection) => invoke<void>("systems_save", { conn });
+export interface SystemLoginInfo {
+  username: string;
+  /** 有沒有存密碼；密碼本身不會回傳。 */
+  has_password: boolean;
+}
+export const systemsLoginGet = (id: string) => invoke<SystemLoginInfo>("systems_login_get", { id });
+/** 存自動登入的帳密。password 空字串／null = 密碼不變；username 留空 = 清除。 */
+export const systemsLoginSet = (id: string, username: string, password: string | null) =>
+  invoke<void>("systems_login_set", { id, username, password });
 export const systemsRemove = (id: string) => invoke<void>("systems_remove", { id });
 export const systemsOpenLogin = (id: string) => invoke<void>("systems_open_login", { id });
 export const systemsStatus = (id: string) => invoke<SystemStatus>("systems_status", { id });

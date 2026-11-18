@@ -77,6 +77,34 @@ pub fn page_url_of(text: &str) -> Option<String> {
     text.split("Page URL: ").nth(1)?.split_whitespace().next().map(String::from)
 }
 
+/// 把快照整理成人讀得懂的畫面文字：去掉參照與游標標記，最多留 6000 字。
+pub fn page_text(snapshot: &str) -> String {
+    const LIMIT: usize = 6000;
+    let mut out = String::new();
+    for line in snapshot.lines() {
+        let mut l = line.to_string();
+        while let Some(a) = l.find(" [ref=") {
+            match l[a..].find(']') {
+                Some(b) => l.replace_range(a..a + b + 1, ""),
+                None => break,
+            }
+        }
+        let l = l.replace(" [cursor=pointer]", "");
+        let t = l.trim_end();
+        if t.trim().is_empty() || t.trim_start().starts_with("```") || t.starts_with("###") {
+            continue;
+        }
+        out.push_str(t);
+        out.push('\n');
+    }
+    let out = out.trim_end().to_string();
+    if out.chars().count() > LIMIT {
+        format!("{}…", out.chars().take(LIMIT).collect::<String>())
+    } else {
+        out
+    }
+}
+
 pub fn locator_for(entries: &[Entry], reference: &str) -> Option<Locator> {
     let idx = entries.iter().position(|e| e.reference == reference)?;
     let e = &entries[idx];
@@ -392,6 +420,12 @@ mod tests {
     use super::*;
 
     const SNAP: &str = "### Page\n- Page URL: http://x/\n### Snapshot\n```yaml\n- generic [ref=f1e1]:\n  - heading \"測試訂單系統\" [level=1] [ref=f1e2]\n  - generic [ref=f1e3]:\n    - textbox [ref=f1e4]: \"1\"\n    - textbox [ref=f1e5]\n    - button \"送出訂單\" [ref=f1e6]\n    - button \"送出訂單\" [ref=f1e7]\n    - link \"say \\\"hi\\\"\" [ref=f1e8] [cursor=pointer]\n```";
+
+    #[test]
+    fn page_text_drops_refs_and_markers_but_keeps_the_words() {
+        let t = page_text(SNAP);
+        assert!(t.contains("heading \"測試訂單系統\" [level=1]") && !t.contains("[ref=") && !t.contains("```") && !t.contains("[cursor"), "{t}");
+    }
 
     #[test]
     fn the_current_page_url_is_read_from_a_snapshot() {

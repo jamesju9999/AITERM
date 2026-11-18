@@ -6,35 +6,34 @@ import { GoalRefineBar } from "./GoalRefineBar";
 import { ModelSelect } from "./ModelSelect";
 import { modelName } from "./utils";
 
-interface Param {
-  name: string;
-  example: string;
-  use: boolean;
-}
-
 interface Props {
   system: SystemConnection;
   onRun: (goal: string, model: string | null) => Promise<AdhocReport>;
-  onSaveRecipe: (name: string, description: string, params: { name: string; example: string }[]) => Promise<string>;
-  onDiscard: () => Promise<void>;
+}
+
+const goalsKey = (systemId: string) => `aiterm.systems.goals.${systemId}`;
+
+function loadGoals(systemId: string): string[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(goalsKey(systemId)) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 const errText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
 
-/** 「請 AI 操作」：打一句話讓 AI 在這個系統上做事；成功後可以把剛才的步驟存成操作流程。 */
-export function AskPanel({ system, onRun, onSaveRecipe, onDiscard }: Props) {
+/** 「請 AI 操作」：打一句話讓 AI 在這個系統上做事；結果直接顯示在下方。 */
+export function AskPanel({ system, onRun }: Props) {
   const { t } = useLocale();
   const [goal, setGoal] = useState("");
+  const [savedGoals, setSavedGoals] = useState<string[]>(() => loadGoals(system.id));
   const [model, setModel] = useState<string | null>(null);
   const [refining, setRefining] = useState(false);
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<AdhocReport | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState<string | null>(null);
-  // 存操作流程的表單
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
-  const [params, setParams] = useState<Param[]>([]);
 
   const toolLabel = (tool: string) => {
     const key = `sys_tool_${tool.replace(/^sys_/, "")}` as keyof typeof t;
@@ -42,47 +41,28 @@ export function AskPanel({ system, onRun, onSaveRecipe, onDiscard }: Props) {
     return typeof v === "string" ? v : tool;
   };
 
+  function persistGoals(next: string[]) {
+    setSavedGoals(next);
+    try {
+      localStorage.setItem(goalsKey(system.id), JSON.stringify(next));
+    } catch {
+      /* 儲存空間不可用時只留在畫面上 */
+    }
+  }
+
   async function start() {
     setRunning(true);
     setError(null);
-    setSaved(null);
     setReport(null);
     try {
       const r = await onRun(goal.trim(), model);
       setReport(r);
-      setParams(r.params.map((p) => ({ ...p, use: true })));
-      setName("");
-      setDesc("");
     } catch (e) {
       setError(errText(e));
     } finally {
       setRunning(false);
     }
   }
-
-  async function save() {
-    setError(null);
-    try {
-      const chosen = params.filter((p) => p.use && p.name.trim()).map((p) => ({ name: p.name.trim(), example: p.example }));
-      await onSaveRecipe(name.trim(), desc.trim(), chosen);
-      setSaved(name.trim());
-      setReport(null);
-    } catch (e) {
-      setError(errText(e));
-    }
-  }
-
-  async function skip() {
-    setError(null);
-    try {
-      await onDiscard();
-      setReport(null);
-    } catch (e) {
-      setError(errText(e));
-    }
-  }
-
-  const setParam = (i: number, patch: Partial<Param>) => setParams((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
 
   return (
     <section className="systems__audit systems__ask">
@@ -97,12 +77,34 @@ export function AskPanel({ system, onRun, onSaveRecipe, onDiscard }: Props) {
           {t.sys_ask_goal}
           <textarea rows={3} value={goal} placeholder={t.sys_ask_goal_ph} disabled={running || refining} onChange={(e) => setGoal(e.target.value)} />
         </label>
+        {savedGoals.length > 0 && (
+          <div className="systems__chips" aria-label={t.sys_goal_saved} data-testid="saved-goals">
+            {savedGoals.map((g) => (
+              <span key={g} className={`systems__chip${goal === g ? " is-on" : ""}`}>
+                <button type="button" className="systems__chip-x" title={g} disabled={running} onClick={() => setGoal(g)}>
+                  {g.replace(/\s+/g, " ").slice(0, 24)}
+                </button>
+                <button type="button" className="systems__chip-x" aria-label={t.sys_goal_remove} title={t.sys_goal_remove} onClick={() => persistGoals(savedGoals.filter((x) => x !== g))}>
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <p className="systems__muted">{t.sys_ask_hint}</p>
         <label className="systems__asklabel systems__askmodel">
           {t.sys_model}
           <ModelSelect value={model} onChange={setModel} disabled={running} inheritLabel={t.sys_model_inherit_system(modelName(t, system.model))} />
         </label>
         <div className="systems__askbar">
+          <button
+            type="button"
+            className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+            disabled={running || !goal.trim() || savedGoals.includes(goal.trim())}
+            onClick={() => persistGoals([...savedGoals, goal.trim()])}
+          >
+            {t.sys_goal_save}
+          </button>
           <GoalRefineBar systemName={system.name} goal={goal} onGoal={setGoal} onBusy={setRefining} disabled={running} onError={setError} />
           <button type="submit" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={running || refining || !goal.trim()}>
             {t.sys_ask_send}
@@ -120,12 +122,6 @@ export function AskPanel({ system, onRun, onSaveRecipe, onDiscard }: Props) {
           {t.sys_error(error)}
         </p>
       )}
-      {saved && (
-        <p className="systems__preview" role="status" data-testid="ask-saved">
-          {t.sys_save_done(saved)}
-        </p>
-      )}
-
       {report && (
         <div className="systems__result" data-testid="ask-result">
           <div className="systems__jobhead">
@@ -151,52 +147,6 @@ export function AskPanel({ system, onRun, onSaveRecipe, onDiscard }: Props) {
             </ol>
           )}
 
-          {report.can_save && (
-            <form
-              className="systems__form systems__saveform"
-              data-testid="ask-save"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (name.trim()) void save();
-              }}
-            >
-              <div className="systems__subtitle">{t.sys_save_title}</div>
-              <p className="systems__muted">{t.sys_save_hint}</p>
-              <label>
-                {t.sys_save_name}
-                <input value={name} placeholder={t.sys_save_name_ph} onChange={(e) => setName(e.target.value)} />
-              </label>
-              <label>
-                {t.sys_save_desc}
-                <input value={desc} onChange={(e) => setDesc(e.target.value)} />
-              </label>
-              <div className="systems__field-block">
-                <div className="systems__field-label">{t.sys_save_params}</div>
-                {params.length === 0 ? (
-                  <p className="systems__muted">{t.sys_save_no_params}</p>
-                ) : (
-                  <div className="systems__params">
-                    <p className="systems__muted">{t.sys_save_params_hint}</p>
-                    {params.map((p, i) => (
-                      <div key={i} className="systems__param" data-testid="ask-param">
-                        <input type="checkbox" aria-label={p.name} checked={p.use} onChange={(e) => setParam(i, { use: e.target.checked })} />
-                        <input aria-label={`${t.sys_save_params} ${i + 1}`} value={p.name} disabled={!p.use} onChange={(e) => setParam(i, { name: e.target.value })} />
-                        <span className="systems__muted">{t.sys_save_param_example(p.example)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="systems__actions">
-                <button type="submit" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={!name.trim()}>
-                  {t.sys_save_btn}
-                </button>
-                <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void skip()}>
-                  {t.sys_save_skip}
-                </button>
-              </div>
-            </form>
-          )}
         </div>
       )}
     </section>
