@@ -67,6 +67,11 @@ export interface AppConfig {
   enterprise_device_id: string | null;
   enterprise_policy: EnterprisePolicy | null;
   mcp_enabled?: boolean;
+  /** 以下四個清單首頁「設定清單」只看有沒有，不看內容；舊版後端可能沒有，所以是選填。 */
+  mail_accounts?: { id: string; enabled?: boolean }[];
+  mcp_servers?: { id: string }[];
+  db_connections?: { id: string }[];
+  vcs_connections?: { id: string }[];
   claude_bridge: ClaudeBridgeConfig;
   mcp_tool_server: McpToolServerConfig;
   openai_server: OpenAiServerConfig;

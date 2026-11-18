@@ -3,13 +3,15 @@ import { useLocale } from "../contexts/LocaleContext";
 import type { Translations } from "../lib/i18n";
 
 /** 設定頁的分頁 id（與 SettingsView 的 SettingsTab 對應）。 */
-export type SettingsTarget = "providers" | "mail" | "mcp" | "bridge";
+export type SettingsTarget = "providers" | "mail" | "mcp" | "bridge" | "databases" | "vcs";
 
 const LABEL_KEY = {
   providers: "open_settings_providers",
   mail: "open_settings_mail",
   mcp: "open_settings_mcp",
   bridge: "open_settings_bridge",
+  databases: "open_settings_databases",
+  vcs: "open_settings_vcs",
 } as const satisfies Record<SettingsTarget, keyof Translations>;
 
 /**
@@ -19,19 +21,22 @@ const LABEL_KEY = {
 export function OpenSettingsButton({
   tab,
   onBeforeNavigate,
+  label,
   className = "aiterm-btn aiterm-btn--secondary aiterm-btn--sm",
 }: {
   tab: SettingsTarget;
+  /** 覆寫預設的「前往…設定」文字（例如清單裡每一列只需要寫「設定」）。 */
+  label?: string;
   /** 跳走之前先收尾，例如關掉對話框。 */
   onBeforeNavigate?: () => void;
   className?: string;
 }) {
   const inRouter = useInRouterContext();
   if (!inRouter) return null;
-  return <Inner tab={tab} onBeforeNavigate={onBeforeNavigate} className={className} />;
+  return <Inner tab={tab} onBeforeNavigate={onBeforeNavigate} label={label} className={className} />;
 }
 
-function Inner({ tab, onBeforeNavigate, className }: { tab: SettingsTarget; onBeforeNavigate?: () => void; className: string }) {
+function Inner({ tab, onBeforeNavigate, label, className }: { tab: SettingsTarget; onBeforeNavigate?: () => void; label?: string; className: string }) {
   const { t } = useLocale();
   const navigate = useNavigate();
   return (
@@ -44,7 +49,7 @@ function Inner({ tab, onBeforeNavigate, className }: { tab: SettingsTarget; onBe
         navigate("/settings", { state: { tab } });
       }}
     >
-      {t[LABEL_KEY[tab]]}
+      {label ?? t[LABEL_KEY[tab]]}
     </button>
   );
 }

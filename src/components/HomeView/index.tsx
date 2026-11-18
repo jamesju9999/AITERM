@@ -3,6 +3,7 @@ import { LaunchGrid } from "./LaunchGrid";
 import { RunningTasks } from "./RunningTasks";
 import { ResumeSection } from "./ResumeSection";
 import { UsageSection } from "./UsageSection";
+import { SetupChecklist } from "./SetupChecklist";
 import type { Tab, TabType } from "../TabBar";
 import type { TabOpenOpts } from "../NewTabPicker/tabCatalog";
 import type { RouteResult } from "./routeIntent";
@@ -33,6 +34,8 @@ export function HomeView({ onOpenTab, tabs, onSelectTab, onAiRouted }: Props) {
       />
       {/* 順序：進行中的任務 → 接續上次的工作 → 開始工作 → 今日 AI 用量。
           正在跑的最急，其次是接續昨天的事，再來才是開新的東西，用量是參考資訊。 */}
+      {/* 設定清單：只在還有沒設好的功能時出現，放在輸入框下面讓新使用者第一眼看到。 */}
+      <SetupChecklist />
       <RunningTasks tabs={tabs} onSelectTab={onSelectTab} />
       <ResumeSection
         tabs={tabs}
