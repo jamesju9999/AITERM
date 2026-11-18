@@ -110,7 +110,10 @@ function global:prompt {
     # guaranteed to arrive AFTER the visible prompt characters — unlike A
     # (printed above), which fires before this function's return value is
     # ever echoed to the screen.
-    "$rendered$([char]27)]133;B$([char]7)"
+    # P marker：放在提示字元文字的最前面。A 是用 [Console]::Write 直接寫的，Windows
+    # ConPTY 下它會比前面還沒畫出來的輸出文字更早到；P 跟文字同一條串流，保證排在
+    # 前面所有輸出之後，前端靠它補讀結案當下還沒到齊的輸出尾段。
+    "$([char]27)]133;P$([char]7)$rendered$([char]27)]133;B$([char]7)"
 }
 
 # C marker: PowerShell has no preexec-equivalent hook, so this overrides the
@@ -807,8 +810,10 @@ mod tests {
              (default: a single space) to silently mangle a multi-line custom prompt"
         );
         assert!(
-            content.contains(r#""$rendered$([char]27)]133;B$([char]7)""#),
-            "expected the prompt function to append a B marker after the rendered prompt text"
+            content.contains(r#""$([char]27)]133;P$([char]7)$rendered$([char]27)]133;B$([char]7)""#),
+            "expected the prompt function to put a P marker before and a B marker after the \
+             rendered prompt text (P rides the text stream so it can't overtake still-pending \
+             command output under Windows ConPTY)"
         );
     }
 

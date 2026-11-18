@@ -75,7 +75,8 @@ pub fn shell_idle(raw: &[u8]) -> Option<bool> {
         }
     }
     match last? {
-        b'A' | b'B' | b'D' => Some(true),
+        // P 是提示字元文字最前面的標記（後面一定跟著 B），一樣代表停在提示字元。
+        b'A' | b'B' | b'D' | b'P' => Some(true),
         b'C' => Some(false),
         _ => None,
     }
@@ -122,6 +123,7 @@ mod tests {
         assert_eq!(shell_idle(b"\x1b]133;A\x07$ claude\x1b]133;C\x07"), Some(false), "指令還在跑");
         assert_eq!(shell_idle(b"\x1b]133;C\x07out\x1b]133;D;0\x07\x1b]133;A\x07$ "), Some(true), "跑完又回到提示字元");
         assert_eq!(shell_idle(b"\x1b]133;D;1\x07"), Some(true));
+        assert_eq!(shell_idle(b"\x1b]133;C\x07out\x1b]133;P\x07PS C:\\> "), Some(true), "P 也代表回到提示字元");
         // 輸出很多時最後一個標記才算，不是第一個。
         let mut long = b"\x1b]133;A\x07".to_vec();
         long.extend(std::iter::repeat(b'x').take(100_000));

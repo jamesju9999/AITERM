@@ -161,6 +161,11 @@ export function useTerminalBlocks(
   // running 中的區塊現在也要持續讀取畫面緩衝區更新 renderedLines
   // （見下面的 scheduleLiveRender），不是只有結束時讀一次。
   const outputStartRef = useRef<{ blockId: string; marker: IMarker; above: RowsAboveSnapshot } | null>(null);
+  // 已結案、等「下一個提示字元開始」（OSC 133 P）再補讀一次輸出的區塊。
+  // Windows ConPTY 的文字是延後畫出來的，D 這類透傳序列卻立刻到：結案當下緩衝區裡可能只有
+  // 表頭、沒有後面的資料列（實機：Get-ExecutionPolicy -List 只剩表頭，echo hi 的 hi 不見）。
+  // P 嵌在提示字元文字的最前面，跟文字同一條串流、一定排在前面所有輸出之後，所以是可靠的終點。
+  const pendingTailRef = useRef<{ blockId: string; marker: IMarker; above: RowsAboveSnapshot } | null>(null);
   // scheduleLiveRender 節流：同一個節流週期內收到多個 chunk，只在最後一次
   // 真正重新掃描緩衝區算 renderedLines，不會累積成「chunk 數 × 目前已輸出
   // 列數」的計算量。用 setTimeout 不用 requestAnimationFrame：這裡只是
@@ -340,6 +345,8 @@ export function useTerminalBlocks(
     setBlocks([]);
     outputStartRef.current?.marker.dispose();
     outputStartRef.current = null;
+    pendingTailRef.current?.marker.dispose();
+    pendingTailRef.current = null;
     if (liveRenderRafRef.current !== null) {
       clearTimeout(liveRenderRafRef.current);
       liveRenderRafRef.current = null;
@@ -408,7 +415,14 @@ export function useTerminalBlocks(
           : outputStartRow(buf, start.above, start.marker.line);
         const endRow = findContentEndRow(buf, cursorRow, startRow + term.rows, term.cols);
         renderedLines = readRenderedLines(buf, startRow, endRow, cols);
-        start.marker.dispose();
+        pendingTailRef.current?.marker.dispose();
+        if (opts?.clearOnParsed || start.marker.isDisposed) {
+          start.marker.dispose();
+          pendingTailRef.current = null;
+        } else {
+          // 緩衝區不會被清掉（Windows）：標記留著，等 OSC 133 P 到了再補讀。
+          pendingTailRef.current = { blockId, marker: start.marker, above: start.above };
+        }
         outputStartRef.current = null;
       }
 
@@ -520,6 +534,8 @@ export function useTerminalBlocks(
         rawOutput: "",
       };
 
+      pendingTailRef.current?.marker.dispose();
+      pendingTailRef.current = null;
       const updated = [...blocksRef.current, newBlock];
       blocksRef.current = updated;
       setBlocks(updated);
@@ -591,6 +607,29 @@ export function useTerminalBlocks(
           col: term.buffer.active.cursorX,
         };
         onPromptReady?.();
+        return true;
+      } else if (data === "P") {
+        // 提示字元開始（嵌在提示字元文字最前面）：上一個指令的輸出到這裡為止。
+        // 補讀一次，把結案當下還沒畫出來的尾段補回卡片。
+        const tail = pendingTailRef.current;
+        pendingTailRef.current = null;
+        if (tail && !tail.marker.isDisposed) {
+          const buf = term.buffer.active;
+          const promptRow = buf.baseY + buf.cursorY;
+          // 游標不在行首＝最後一列輸出沒有換行，那一列也算輸出。
+          const endRow = buf.cursorX > 0 ? promptRow + 1 : promptRow;
+          const startRow = outputStartRow(buf, tail.above, tail.marker.line);
+          if (endRow > startRow) {
+            const lines = readRenderedLines(buf, startRow, endRow, term.cols);
+            const current = blocksRef.current.find((b) => b.id === tail.blockId);
+            if (current && current.status !== "running" && lines.length >= (current.renderedLines?.length ?? 0)) {
+              const updated = blocksRef.current.map((b) => (b.id === tail.blockId ? { ...b, renderedLines: lines } : b));
+              blocksRef.current = updated;
+              setBlocks(updated);
+            }
+          }
+        }
+        tail?.marker.dispose();
         return true;
       } else if (data === "C") {
         // Command start — usually a no-op, since the block was already

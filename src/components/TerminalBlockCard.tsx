@@ -88,10 +88,16 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
   const allLines = block.renderedLines ?? [];
   // 同一批沒有 C 標記的 shell 也不會讓輸出起點跳過回顯，卡片第一列會是指令自己
   // 又印一次——跟上面的指令列重複。只在結束碼未知時剝掉，有 OSC 133 的卡片不動。
-  const lines =
-    exitIsUnknown && allLines.length > 0 && lineText(allLines[0]).trim() === block.command.trim()
-      ? allLines.slice(1)
-      : allLines;
+  //
+  // Windows PowerShell 5.1（PSReadLine 2.0）有真實結束碼也會這樣：Enter 處理器送出 C 標記
+  // 時換行還沒回顯，輸出起點落在提示字元那一列，第一列變成「PS C:\\Users\\x> 指令」。
+  // 這種「PS …> 指令」的提示字元回顯列不可能是指令的輸出，一律剝掉。
+  const firstLine = allLines.length > 0 ? lineText(allLines[0]).trim() : "";
+  const cmd = block.command.trim();
+  const isEchoOfCommand =
+    firstLine !== "" && cmd !== "" && !cmd.includes("\n") &&
+    ((exitIsUnknown && firstLine === cmd) || (/^PS [^\n>]*> /.test(firstLine) && firstLine.endsWith(` ${cmd}`)));
+  const lines = isEchoOfCommand ? allLines.slice(1) : allLines;
   const isTruncated = !expanded && lines.length > MAX_VISIBLE_LINES;
   const visibleLines = isTruncated ? lines.slice(0, MAX_VISIBLE_LINES) : lines;
   const hiddenCount = lines.length - MAX_VISIBLE_LINES;

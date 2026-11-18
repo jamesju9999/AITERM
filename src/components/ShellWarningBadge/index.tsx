@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useLocale } from "../../contexts/LocaleContext";
 import { detectPowerShell7 } from "../../ipc/shell";
 import type { ShellIdentity } from "../../hooks/useShellIdentity";
@@ -85,7 +86,10 @@ export function ShellWarningBadge({ identity }: Props) {
 
   return (
     <span className="aiterm-shellwarn">
-      {noticeOpen && (
+      {noticeOpen && createPortal(
+        // 對話框的遮罩是 position:absolute，基準是最近的定位祖先；放在這顆徽章裡面
+        // （.aiterm-shellwarn 是 position:relative 的小 span）會被擠成一條窄縫，
+        // 所以掛到 body 上，才會是置中的正常對話框。
         <CloseConfirmDialog
           title={t.shell_notice_title(identity?.version ?? "")}
           body={
@@ -105,7 +109,8 @@ export function ShellWarningBadge({ identity }: Props) {
           cancelLabel={t.shell_notice_dismiss}
           onConfirm={() => setNoticeOpen(false)}
           onCancel={dismissForever}
-        />
+        />,
+        document.body,
       )}
       <button
         className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm aiterm-shellwarn__btn"

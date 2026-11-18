@@ -165,6 +165,17 @@ describe("結束碼未知的卡片（沒有 OSC 133 的 shell）", () => {
     expect(screen.getByText("@Recycle@")).toBeInTheDocument();
   });
 
+  it("PowerShell 提示字元回顯列（PS C:\\Users\\User> 指令）即使有真實結束碼也剝掉", () => {
+    const block = makeBlock({
+      command: "dir",
+      exitCode: 0,
+      renderedLines: [{ spans: [{ text: "PS C:\\Users\\User> " }, { text: "dir" }] }, { spans: [{ text: "Contacts" }] }],
+    });
+    render(<TerminalBlockCard block={block} />);
+    expect(screen.queryByText(/PS C:/)).not.toBeInTheDocument();
+    expect(screen.getByText("Contacts")).toBeInTheDocument();
+  });
+
   it("有真實結束碼時不剝（輸出剛好等於指令文字是合法內容）", () => {
     const block = makeBlock({
       command: "echo ls",
