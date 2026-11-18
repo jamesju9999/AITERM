@@ -142,7 +142,7 @@ fn arg<'a>(args: &'a Value, key: &str) -> &'a str {
 }
 
 /// Ask AI 的入口。錯誤一律包成 `is_error` 的結果，讓模型讀得到原因。
-pub async fn call(app: &AppHandle, tool: &str, args: Value) -> McpToolResult {
+pub async fn call<R: tauri::Runtime>(app: &AppHandle<R>, tool: &str, args: Value) -> McpToolResult {
     let enabled = app.state::<Arc<ConfigStore>>().get().mcp_tool_server.agent_canvas_enabled;
     if !enabled {
         return McpToolResult { content: "Agent 協作工具已停用，請使用者到設定 → MCP 工具伺服器開啟。".into(), is_error: true };
@@ -153,7 +153,7 @@ pub async fn call(app: &AppHandle, tool: &str, args: Value) -> McpToolResult {
     }
 }
 
-async fn run(app: &AppHandle, tool: &str, args: &Value) -> Result<String, String> {
+async fn run<R: tauri::Runtime>(app: &AppHandle<R>, tool: &str, args: &Value) -> Result<String, String> {
     let reg = app.state::<ProjectRegistry>();
     let projects = reg.all();
     if tool == "canvas_list_projects" {
@@ -258,5 +258,99 @@ mod tests {
         // 逾時視為沒回應，且清掉待確認，下一個請求可以進來。
         assert_eq!(c.ask(|_, _| {}, json!({}), Duration::from_millis(50)).await.unwrap(), Decision::TimedOut);
         assert!(c.pending.lock().is_empty());
+    }
+
+    // ── 接線：用 mock App 走完整條 call()（開關、專案、確認、建卡、查結果）──────────
+
+    use crate::tasks::store;
+    use tauri::Listener;
+
+    struct Rig {
+        app: tauri::App<tauri::test::MockRuntime>,
+        project_pool: sqlx::SqlitePool,
+        _dir: tempfile::TempDir,
+    }
+
+    /// `answer`：模擬前端對確認框的回覆（None＝不回應）。
+    async fn rig(enabled: bool, answer: Option<bool>) -> Rig {
+        let app = tauri::test::mock_app();
+        let h = app.handle().clone();
+        h.manage(Arc::new(ConfigStore::from_config(cfg(enabled))));
+        let confirm = Arc::new(CanvasConfirm::default());
+        h.manage(confirm.clone());
+        h.manage(SchedulerHandle { wake: Arc::new(tokio::sync::Notify::new()), cancels: Arc::new(Mutex::new(HashMap::new())) });
+        let dir = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let project = reg.create(dir.path(), "請假專案", "").await.unwrap();
+        agents::create_agent(
+            &project.pool,
+            &agents::NewAgent { kind: "coder", name: "小明", role: "coder", prompt_prefix: "", project_dir: "/tmp/repo", canvas_x: 0.0, canvas_y: 0.0 },
+        )
+        .await
+        .unwrap();
+        h.manage(reg);
+        if let Some(approve) = answer {
+            h.listen(CONFIRM_EVENT, move |e| {
+                let v: Value = serde_json::from_str(e.payload()).unwrap();
+                confirm.decide(v["id"].as_str().unwrap(), approve);
+            });
+        }
+        Rig { app, project_pool: project.pool, _dir: dir }
+    }
+
+    fn dispatch_args() -> Value {
+        json!({ "agent": "小明", "title": "查特休", "instruction": "去請假系統查剩餘特休時數" })
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_approved_dispatch_creates_the_card_and_the_result_can_be_read_back() {
+        let r = rig(true, Some(true)).await;
+        let h = r.app.handle();
+        let res = call(h, "canvas_dispatch", dispatch_args()).await;
+        assert!(!res.is_error, "{}", res.content);
+        let cards = store::list_tasks(&r.project_pool).await.unwrap();
+        assert_eq!(cards.len(), 1);
+        assert!(res.content.contains(&cards[0].id) && cards[0].body.contains("去請假系統查剩餘特休時數") && cards[0].body.starts_with(ops::MARK));
+        // 看板與結果都查得到；還沒做完會說明。
+        assert!(call(h, "canvas_list_cards", json!({})).await.content.contains("查特休"));
+        assert!(call(h, "canvas_read_card", json!({ "card_id": cards[0].id })).await.content.contains("還沒完成"));
+        let agents = call(h, "canvas_list_agents", json!({})).await;
+        assert!(agents.content.contains("小明") && agents.content.contains("忙碌中"), "{}", agents.content);
+        // 同一個角色忙碌時，第二次派工不會跳確認框也不會建卡。
+        let again = call(h, "canvas_dispatch", dispatch_args()).await;
+        assert!(again.is_error && again.content.contains("排隊或執行"), "{}", again.content);
+        assert_eq!(store::list_tasks(&r.project_pool).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_rejected_dispatch_creates_nothing_and_tells_the_model_not_to_retry() {
+        let r = rig(true, Some(false)).await;
+        let res = call(r.app.handle(), "canvas_dispatch", dispatch_args()).await;
+        assert!(res.is_error && res.content.contains("拒絕") && res.content.contains("不要重試"), "{}", res.content);
+        assert!(store::list_tasks(&r.project_pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn with_the_switch_off_every_tool_is_refused_and_nothing_is_asked() {
+        let r = rig(false, Some(true)).await;
+        for tool in ["canvas_list_projects", "canvas_list_agents", "canvas_dispatch", "canvas_list_cards", "canvas_read_card"] {
+            let res = call(r.app.handle(), tool, dispatch_args()).await;
+            assert!(res.is_error && res.content.contains("已停用"), "{tool}: {}", res.content);
+        }
+        assert!(store::list_tasks(&r.project_pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bad_input_is_refused_before_any_confirmation_is_shown() {
+        let r = rig(true, None).await; // 沒人回應：若真的送出確認，這個測試會卡在 5 分鐘逾時
+        let h = r.app.handle();
+        let no_agent = call(h, "canvas_dispatch", json!({ "agent": "ghost", "title": "t", "instruction": "i" })).await;
+        assert!(no_agent.is_error && no_agent.content.contains("找不到角色"), "{}", no_agent.content);
+        let no_title = call(h, "canvas_dispatch", json!({ "agent": "小明", "title": " ", "instruction": "i" })).await;
+        assert!(no_title.is_error && no_title.content.contains("title"), "{}", no_title.content);
+        let bad_project = call(h, "canvas_list_agents", json!({ "project": "不存在" })).await;
+        assert!(bad_project.is_error && bad_project.content.contains("找不到專案"), "{}", bad_project.content);
+        let projects = call(h, "canvas_list_projects", json!({})).await;
+        assert!(!projects.is_error && projects.content.contains("請假專案"));
     }
 }
