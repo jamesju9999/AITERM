@@ -97,3 +97,8 @@
   0%, 100% { opacity: 0.25; }
   50% { opacity: 1; }
 }
+
+.aiterm-block-waiting-input {
+  color: #f5c26b;
+  font-weight: 600;
+}

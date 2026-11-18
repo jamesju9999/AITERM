@@ -2,11 +2,31 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type Keyb
 import { isImeComposing } from "../lib/imeComposing";
 import type { SubmitShortcut, SuggestionAcceptKey } from "../ipc/config";
 import { findSuggestion } from "../lib/commandSuggestion";
+import type { InputPrompt } from "../lib/inputPrompt";
 import { useLocale } from "../contexts/LocaleContext";
 import { listDirectory, type DirEntry } from "../ipc/fs";
 import "./WarpInput.css";
 
+/**
+ * 回覆模式：有指令正在執行時，輸入的文字是「回答那個指令」，不是新指令。
+ * 見 docs/superpowers/specs/2026-11-18-running-command-reply-design.md。
+ */
+export interface WarpReply {
+  /** 執行中的指令文字，顯示在提示列。 */
+  command: string;
+  /** 看出來它在等什麼（yes/no、按任意鍵、密碼）；認不出來就是 null。 */
+  prompt: InputPrompt | null;
+  /** 把文字（不含換行）送進執行中的指令；呼叫端負責補 Enter。 */
+  onSend: (text: string) => void;
+  /** 送 Ctrl+C。 */
+  onStop: () => void;
+  /** 把卡片強制收尾（指令其實已結束、卡片卻卡在執行中的出口）。 */
+  onForceEnd: () => void;
+}
+
 export interface WarpInputProps {
+  /** 有值＝回覆模式（見 WarpReply）。 */
+  reply?: WarpReply | null;
   onSubmit: (cmd: string) => void;
   disabled?: boolean;
   shortcut?: SubmitShortcut;
@@ -69,7 +89,7 @@ const CTRL_KEY_SEQUENCES: Record<string, string> = {
 };
 
 export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function WarpInput(
-  { onSubmit, disabled, shortcut = "enter", sessionId, placeholder, isCommandRunning, onRawKey, suggestionKey = "off" },
+  { onSubmit, disabled, shortcut = "enter", sessionId, placeholder, isCommandRunning, onRawKey, suggestionKey = "off", reply },
   ref,
 ) {
   const { t } = useLocale();
@@ -183,6 +203,13 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
 
   const commitCommand = (cmd: string) => {
     if (!cmd.trim()) return;
+    if (reply) {
+      // 回覆執行中的指令：不開新卡片、不存歷史（可能是密碼）。
+      reply.onSend(cmd);
+      setValue("");
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
+      return;
+    }
     let newHistory = history.filter((h) => h !== cmd);
     newHistory.push(cmd);
     if (newHistory.length > 100) newHistory = newHistory.slice(newHistory.length - 100);
@@ -379,8 +406,38 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
     syncCaret();
   };
 
+  const masked = reply?.prompt?.kind === "password";
+  const quickOptions = reply?.prompt && reply.prompt.kind !== "password" ? reply.prompt.options : [];
+
   return (
-    <div className="warp-input-container">
+    <>
+      {reply && (
+        <div className="warp-reply-bar" role="status">
+          <span className="warp-reply-label" title={reply.command}>
+            {reply.prompt ? <strong className="warp-reply-waiting">{t.warp_reply_waiting}</strong> : null}
+            <span>{t.warp_reply_label(reply.command)}</span>
+          </span>
+          <span className="warp-reply-actions">
+            {quickOptions.map((opt) => (
+              <button
+                key={opt || "enter"}
+                type="button"
+                className="warp-reply-chip"
+                onClick={() => reply.onSend(opt)}
+              >
+                {opt === "" ? t.warp_reply_enter : opt}
+              </button>
+            ))}
+            <button type="button" className="warp-reply-btn" onClick={reply.onStop} title={t.warp_reply_stop_title}>
+              {t.warp_reply_stop}
+            </button>
+            <button type="button" className="warp-reply-btn" onClick={reply.onForceEnd} title={t.warp_reply_force_end_title}>
+              {t.warp_reply_force_end}
+            </button>
+          </span>
+        </div>
+      )}
+    <div className={reply ? "warp-input-container warp-input-container--reply" : "warp-input-container"}>
       {historyOpen && history.length > 0 && (
         <div className="warp-history-popover">
           <div className="warp-history-header">
@@ -462,7 +519,7 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
         )}
         <textarea
           ref={textareaRef}
-          className="warp-input-textarea"
+          className={masked ? "warp-input-textarea warp-input-textarea--masked" : "warp-input-textarea"}
           value={value}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
@@ -471,7 +528,7 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
           onClick={syncCaret}
           onCompositionStart={() => setComposing(true)}
           onCompositionEnd={() => setComposing(false)}
-          placeholder={placeholder ?? t.input_placeholder(shortcut === "enter" ? "Enter" : shortcut === "shift-enter" ? "Shift+Enter" : "Ctrl+Enter")}
+          placeholder={reply ? (masked ? t.warp_reply_password_placeholder : t.warp_reply_placeholder) : placeholder ?? t.input_placeholder(shortcut === "enter" ? "Enter" : shortcut === "shift-enter" ? "Shift+Enter" : "Ctrl+Enter")}
           rows={1}
           disabled={disabled}
           autoCorrect="off"
@@ -492,5 +549,6 @@ export const WarpInput = forwardRef<WarpInputHandle, WarpInputProps>(function Wa
         </svg>
       </button>
     </div>
+    </>
   );
 });

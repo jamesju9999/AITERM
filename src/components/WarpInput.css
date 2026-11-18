@@ -231,3 +231,69 @@
   background: #2a2b30;
   color: #fff;
 }
+
+/* ── 回覆模式：有指令正在執行，輸入的文字是回答它 ── */
+.warp-reply-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 8px 14px -4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: #d9a441;
+  background: rgba(217, 164, 65, 0.08);
+  border: 1px solid rgba(217, 164, 65, 0.3);
+  border-radius: 10px;
+}
+
+.warp-reply-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warp-reply-waiting { color: #f5c26b; }
+
+.warp-reply-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.warp-reply-btn,
+.warp-reply-chip {
+  padding: 2px 10px;
+  font: inherit;
+  color: #ddd;
+  background: transparent;
+  border: 1px solid #555;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.warp-reply-btn:hover { border-color: #d9a441; color: #f5c26b; }
+
+.warp-reply-chip {
+  color: #0a0a0a;
+  background: #d9a441;
+  border-color: #d9a441;
+  font-weight: 600;
+}
+
+.warp-reply-chip:hover { background: #f5c26b; }
+
+.warp-input-container--reply,
+.warp-input-container--reply:focus-within {
+  border-color: #d9a441;
+  box-shadow: 0 0 0 3px rgba(217, 164, 65, 0.13);
+}
+
+/* 密碼提問：遮罩輸入（WebView2／WebKit 都支援） */
+.warp-input-textarea--masked {
+  -webkit-text-security: disc;
+}

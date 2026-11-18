@@ -49,6 +49,7 @@ import { QuotaBadge } from "./QuotaBadge";
 import { SharePanel } from "./SharePanel";
 import { IntakeToggle } from "./IntakeToggle";
 import { ShellWarningBadge } from "./ShellWarningBadge";
+import { detectInputPrompt, lastLineText } from "../lib/inputPrompt";
 import { ElevationBadge } from "./ElevationBadge";
 import { useProviderQuota } from "../hooks/useProviderQuota";
 import { WarpInput, type WarpInputHandle } from "./WarpInput";
@@ -2570,6 +2571,19 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
           sessionId={sessionId}
           isCommandRunning={blocks[blocks.length - 1]?.status === "running"}
           onRawKey={(data) => { if (sessionId) writePty(sessionId, data).catch(console.error); }}
+          reply={(() => {
+            // 有指令正在執行：輸入框進入回覆模式，打的字是回答它，不是新指令。
+            // 見 docs/superpowers/specs/2026-11-18-running-command-reply-design.md。
+            const running = blocks[blocks.length - 1];
+            if (!running || running.status !== "running" || !sessionId) return null;
+            return {
+              command: running.command,
+              prompt: detectInputPrompt(lastLineText(running.renderedLines)),
+              onSend: (text: string) => { writePty(sessionId, text + "\r").catch(console.error); },
+              onStop: () => { writePty(sessionId, "\x03").catch(console.error); },
+              onForceEnd: () => finalizeBlock(running.id, -1),
+            };
+          })()}
           onSubmit={(cmd) => {
             setAgentPhase(null);
             const agentQuery = parseAgentPrefix(cmd);

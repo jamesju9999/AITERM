@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from "react";
 import type { TerminalBlock } from "../hooks/useTerminalBlocks";
 import { useLocale } from "../contexts/LocaleContext";
 import { blockCwdLabel, getHomeDir } from "../lib/prettyCwd";
+import { detectInputPrompt, lastLineText } from "../lib/inputPrompt";
 import "./TerminalBlockCard.css";
 
 /** 「已加入書籤」就地回饋顯示多久。夠看清楚、又不會久到擋住再次操作。 */
@@ -110,6 +111,9 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
     return () => { alive = false; };
   }, []);
 
+  // 執行中、最後一列像提問（[Y/N]、密碼…）＝指令正在等使用者輸入。
+  const waitingForInput = block.status === "running" && detectInputPrompt(lastLineText(block.renderedLines)) !== null;
+
   const duration = block.endTime
     ? formatDuration(block.endTime - block.startTime)
     : block.status === "running"
@@ -139,6 +143,7 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
           </span>
         )}
         {duration && <span className="aiterm-block-duration">({duration})</span>}
+        {waitingForInput && <span className="aiterm-block-waiting-input">{t.warp_reply_waiting}</span>}
         <span className={exitClass}>{isFailed && block.exitCode !== undefined ? `exit ${block.exitCode}` : ""}</span>
         <div className="aiterm-block-card__actions" onClick={(e) => e.stopPropagation()}>
           {isFailed && onAskAi && (

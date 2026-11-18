@@ -176,6 +176,19 @@ describe("結束碼未知的卡片（沒有 OSC 133 的 shell）", () => {
     expect(screen.getByText("Contacts")).toBeInTheDocument();
   });
 
+  it("執行中且最後一列是提問：標頭顯示「等待你的輸入」；一般輸出或已結束則不顯示", () => {
+    const running = makeBlock({
+      status: "running", exitCode: undefined, endTime: undefined, startTime: Date.now(),
+      renderedLines: [{ spans: [{ text: "Found Git" }] }, { spans: [{ text: "[Y] 是  [N] 否: " }] }],
+    });
+    const { rerender } = render(<TerminalBlockCard block={running} />);
+    expect(screen.getByText("⏳ 等待你的輸入")).toBeInTheDocument();
+    rerender(<TerminalBlockCard block={{ ...running, renderedLines: [{ spans: [{ text: "Downloading…" }] }] }} />);
+    expect(screen.queryByText("⏳ 等待你的輸入")).not.toBeInTheDocument();
+    rerender(<TerminalBlockCard block={{ ...running, status: "completed", exitCode: 0, endTime: Date.now() }} />);
+    expect(screen.queryByText("⏳ 等待你的輸入")).not.toBeInTheDocument();
+  });
+
   it("有真實結束碼時不剝（輸出剛好等於指令文字是合法內容）", () => {
     const block = makeBlock({
       command: "echo ls",

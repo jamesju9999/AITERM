@@ -314,6 +314,15 @@ const zhTW = {
     input_placeholder: (key: string) =>
       `輸入指令... (${key} 送出，按 ↑ 檢視歷史)`,
     warp_send_title: "送出",
+    warp_reply_label: (cmd: string) => `↳ 回覆執行中的指令：${cmd}`,
+    warp_reply_placeholder: "輸入的文字會送給執行中的指令（Enter 送出）",
+    warp_reply_password_placeholder: "輸入密碼（不會顯示，也不會存進歷史）",
+    warp_reply_waiting: "⏳ 等待你的輸入",
+    warp_reply_stop: "停止",
+    warp_reply_stop_title: "送出 Ctrl+C，中斷執行中的指令",
+    warp_reply_force_end: "結束這張卡片",
+    warp_reply_force_end_title: "指令其實已經結束、卡片卻還在執行中時使用：把卡片收尾，輸入框回到一般模式",
+    warp_reply_enter: "Enter",
 
     // DatabaseConnectionsPage
     add_connection: "+ 新增連線",
@@ -3412,6 +3421,15 @@ const enRaw = {
     input_placeholder: (key: string) =>
       `Enter command... (${key} to submit, ↑ for history)`,
     warp_send_title: "Send",
+    warp_reply_label: (cmd: string) => `↳ Replying to running command: ${cmd}`,
+    warp_reply_placeholder: "Text goes to the running command (Enter to send)",
+    warp_reply_password_placeholder: "Type the password (hidden, not saved to history)",
+    warp_reply_waiting: "⏳ Waiting for your input",
+    warp_reply_stop: "Stop",
+    warp_reply_stop_title: "Send Ctrl+C to interrupt the running command",
+    warp_reply_force_end: "End this card",
+    warp_reply_force_end_title: "Use when the command has actually finished but the card still says running: closes the card and returns the input box to normal mode",
+    warp_reply_enter: "Enter",
 
     // DatabaseConnectionsPage
     add_connection: "+ New Connection",
