@@ -633,7 +633,10 @@ pub async fn ai_chat(
     if scope != ToolScope::None {
         let tools: Vec<crate::ai::McpToolDefinition> = {
             let (mcp_infos, computer_infos) = if scope == ToolScope::All {
-                (mcp_manager.lock().await.list_tool_infos(), crate::computer::builtin_tool_infos(&cfg))
+                // Agent 協作工具跟電腦操作一樣是內建虛擬伺服器，併在同一段（順序：MCP、內建、終端機）。
+                let mut builtin = crate::computer::builtin_tool_infos(&cfg);
+                builtin.extend(crate::canvas_tool::tool_infos(&cfg));
+                (mcp_manager.lock().await.list_tool_infos(), builtin)
             } else {
                 (vec![], vec![])
             };
@@ -658,6 +661,11 @@ pub async fn ai_chat(
                 scope == ToolScope::All && cfg.mcp_tool_server.computer_enabled,
             );
             let prompt = format!("{prompt}\n\n{}", crate::terminal_tool::PROMPT_HINT);
+            let prompt = if scope == ToolScope::All && cfg.mcp_tool_server.agent_canvas_enabled {
+                format!("{prompt}\n\n{}", crate::canvas_tool::PROMPT_HINT)
+            } else {
+                prompt
+            };
             let req = GenerateRequest {
                 system_prompt: prompt,
                 messages,

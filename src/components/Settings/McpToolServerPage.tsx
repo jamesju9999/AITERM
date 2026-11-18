@@ -90,6 +90,16 @@ export function McpToolServerPage() {
           {t.mcp_tool_server_coordination_enable}
         </label>
         <p className="mcp-tool-server-desc">{t.mcp_tool_server_coordination_desc}</p>
+
+        <label className="mcp-tool-server-row">
+          <input
+            type="checkbox"
+            checked={cfg.agent_canvas_enabled ?? false}
+            onChange={(e) => updateCfg({ ...cfg, agent_canvas_enabled: e.target.checked })}
+          />
+          {t.mcp_tool_server_canvas_enable}
+        </label>
+        <p className="mcp-tool-server-desc">{t.mcp_tool_server_canvas_desc}</p>
       </section>
 
       {status?.running && (

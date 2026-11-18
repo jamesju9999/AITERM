@@ -2,6 +2,7 @@ pub mod agent_transcript;
 pub mod ai;
 pub use aiterm_core::appimage_env;
 pub mod bridge;
+pub mod canvas_tool;
 pub mod claude_activity;
 pub mod chatgpt_web;
 pub mod code_assistant;
@@ -293,6 +294,7 @@ pub fn run() {
         .manage(Arc::new(PtyManager::new()))
         .manage(config)
         .manage(secrets)
+        .manage(Arc::new(canvas_tool::CanvasConfirm::default()))
         .manage(router)
         .manage(usage_store)
         .manage(Arc::new(usage::quota::cache::QuotaCache::new()))
@@ -835,6 +837,7 @@ pub fn run() {
             commands::systems::systems_save,
             commands::systems::systems_remove,
             commands::systems::systems_open_login,
+            commands::mcp::canvas_confirm_decide,
             commands::systems::systems_login_get,
             commands::systems::systems_login_set,
             commands::systems::systems_status,

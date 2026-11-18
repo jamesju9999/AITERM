@@ -246,6 +246,11 @@ pub struct McpToolServerConfig {
     /// capability (can drive any app on the machine), so default off.
     #[serde(default)]
     pub computer_enabled: bool,
+
+    /// Gates the `canvas_*` tools that let Ask AI dispatch work to Agent-canvas roles
+    /// and read results. Every dispatch also needs the user's approval. Default off.
+    #[serde(default)]
+    pub agent_canvas_enabled: bool,
 }
 
 impl Default for McpToolServerConfig {
@@ -255,6 +260,7 @@ impl Default for McpToolServerConfig {
             port: default_mcp_tool_server_port(),
             coordination_enabled: false,
             computer_enabled: false,
+            agent_canvas_enabled: false,
         }
     }
 }

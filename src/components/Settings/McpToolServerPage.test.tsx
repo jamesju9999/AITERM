@@ -47,6 +47,17 @@ describe("McpToolServerPage", () => {
     await waitFor(() => expect(screen.getAllByRole("checkbox")[0]).not.toBeChecked());
   });
 
+  it("the Agent canvas switch is off by default and is saved with the config when turned on", async () => {
+    const user = userEvent.setup();
+    render(<McpToolServerPage />);
+    await waitFor(() => screen.getAllByRole("checkbox"));
+    const canvas = screen.getByRole("checkbox", { name: /Ask AI/ });
+    expect(canvas).not.toBeChecked();
+    await user.click(canvas);
+    await user.click(screen.getByRole("button", { name: /save|儲存/i }));
+    await waitFor(() => expect(mcpToolServerSetConfig).toHaveBeenCalledWith(expect.objectContaining({ agent_canvas_enabled: true })));
+  });
+
   it("enabling and saving calls mcpToolServerSetConfig with enabled: true", async () => {
     const user = userEvent.setup();
     render(<McpToolServerPage />);

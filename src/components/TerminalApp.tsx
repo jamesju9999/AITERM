@@ -39,6 +39,7 @@ import { HomeView } from "./HomeView";
 import { TaskBoardView } from "./TaskBoard";
 import { useTranscriptUpgrader } from "./TaskBoard/useTranscriptUpgrader";
 import { useAutoCloseFinishedTabs } from "./TaskBoard/useAutoCloseFinishedTabs";
+import { useCanvasDispatchConfirm } from "../hooks/useCanvasDispatchConfirm";
 import { useTaskCompletionNotifications } from "./TaskBoard/useTaskCompletionNotifications";
 import { RouteHint } from "./RouteHint";
 import type { RouteResult } from "./HomeView/routeIntent";
@@ -118,6 +119,7 @@ export function TerminalApp({ hasUpdate = false, onClaudeDetected }: TerminalApp
   const activeIdRef = useRef(activeId);
   useAutoCloseFinishedTabs(activeIdRef);
   useTaskCompletionNotifications(activeIdRef);
+  useCanvasDispatchConfirm();
   const isSidebarOpenRef = useRef(isSidebarOpen);
   const homeActiveRef = useRef(homeActive);
   // Tab close guards: components register an async fn that returns true = ok to close, false = cancel

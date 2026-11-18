@@ -194,6 +194,7 @@ pub async fn get_mcp_tools(
 ) -> Result<Vec<McpToolInfo>, String> {
     let mut tools = mcp.lock().await.list_tool_infos();
     tools.extend(crate::computer::builtin_tool_infos(&config.get()));
+    tools.extend(crate::canvas_tool::tool_infos(&config.get()));
     tools.extend(crate::terminal_tool::tool_infos());
     Ok(tools)
 }
@@ -204,7 +205,12 @@ pub async fn execute_mcp_tool(
     args: serde_json::Value,
     mcp: State<'_, McpManagerState>,
     computer: State<'_, Arc<crate::computer::ComputerService>>,
+    app: tauri::AppHandle,
 ) -> Result<McpToolResult, String> {
+    // Agent 協作內建工具：派工要使用者確認，其餘只讀。
+    if let Some(tool) = crate::canvas_tool::builtin_tool_name(&encoded_name) {
+        return Ok(crate::canvas_tool::call(&app, tool, args).await);
+    }
     // 內建的電腦操作工具不是真的 MCP 連線，直接交給 ComputerService（授權與稽核都在裡面）。
     if let Some(tool) = crate::computer::tools::builtin_tool_name(&encoded_name) {
         return Ok(crate::computer::tools::call(&computer, tool, args).await);
@@ -473,4 +479,14 @@ pub async fn install_mcp_package(
             Err(msg)
         }
     }
+}
+
+/// 前端對「Ask AI 要派工」確認框的回覆。請求已逾時或不存在回 `false`。
+#[tauri::command]
+pub async fn canvas_confirm_decide(
+    id: String,
+    approve: bool,
+    confirm: State<'_, Arc<crate::canvas_tool::CanvasConfirm>>,
+) -> Result<bool, String> {
+    Ok(confirm.decide(&id, approve))
 }

@@ -2079,7 +2079,7 @@ fn spawn_schedule_loop(app: AppHandle, sched: SchedulerHandle) {
 }
 
 /// 驗收者起點需要受驗版本：用專案驗收者所屬 repo 的目前 HEAD。
-async fn schedule_head_sha(pool: &sqlx::SqlitePool) -> Option<String> {
+pub(crate) async fn schedule_head_sha(pool: &sqlx::SqlitePool) -> Option<String> {
     let agents = crate::tasks::agents::list_agents(pool).await.ok()?;
     let verifier = agents.iter().find(|a| a.kind == "verifier")?;
     crate::vcs::git::GitClient::new(verifier.project_dir.clone(), None).head_sha().await.ok()
