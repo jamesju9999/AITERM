@@ -40,6 +40,38 @@ pub struct McpToolServerState {
 struct Running {
     port: u16,
     shutdown: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+/// 舊伺服器收到關閉訊號後，只要還有連線沒斷（Claude Code 等客戶端的 keep-alive），
+/// axum 的 graceful shutdown 就不會結束、連接埠也不會放掉。等太久就直接中止它。
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+impl Running {
+    /// 通知關閉，並等它真的放掉連接埠（最多 `grace`，超過就中止任務、強制放掉）。
+    async fn stop_and_wait(self, grace: std::time::Duration) {
+        let Running { shutdown, mut task, .. } = self;
+        let _ = shutdown.send(());
+        if tokio::time::timeout(grace, &mut task).await.is_err() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
+/// 剛放掉的連接埠偶爾還要一瞬間才能再綁；短暫重試，別一次失敗就放棄。
+async fn bind_with_retry(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+    let mut last = None;
+    for _ in 0..10 {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => return Ok(l),
+            Err(e) => {
+                last = Some(e);
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+    }
+    Err(last.expect("迴圈至少跑過一次"))
 }
 
 impl Default for McpToolServerState {
@@ -78,10 +110,15 @@ impl McpToolServerState {
         app_handle: Option<tauri::AppHandle>,
         pty_manager: Arc<PtyManager>,
     ) -> anyhow::Result<()> {
-        self.stop();
+        // 先關舊的並等它放掉連接埠：只送關閉訊號就直接綁，舊的 listener 還握著埠，
+        // 設定頁每次「儲存」都會撞上 Address already in use（實機遇到）。
+        let old = self.running.lock().take();
+        if let Some(old) = old {
+            old.stop_and_wait(STOP_GRACE).await;
+        }
 
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+        let listener = bind_with_retry(addr).await.map_err(|e| {
             anyhow::anyhow!("無法綁定 127.0.0.1:{port}（{e}）。請在設定裡換一個埠。")
         })?;
 
@@ -102,7 +139,7 @@ impl McpToolServerState {
             coordination_registry,
         );
         let (tx, rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let served = axum::serve(listener, app)
                 .with_graceful_shutdown(async { let _ = rx.await; })
                 .await;
@@ -111,13 +148,53 @@ impl McpToolServerState {
             }
         });
 
-        *self.running.lock() = Some(Running { port, shutdown: tx });
+        *self.running.lock() = Some(Running { port, shutdown: tx, task });
         Ok(())
     }
 
     pub fn stop(&self) {
         if let Some(r) = self.running.lock().take() {
             let _ = r.shutdown.send(());
+            // 不等：同步呼叫端（停用開關）不需要馬上重綁；任務隨後自己結束。
+            drop(r.task);
         }
+    }
+}
+
+#[cfg(test)]
+mod rebind_tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    /// 起一個只回 200 的伺服器，並讓一個客戶端保持連線不斷（像 Claude Code 的 keep-alive）。
+    async fn serve_with_idle_client() -> (Running, SocketAddr, tokio::net::TcpStream) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let app = axum::Router::new().route("/", axum::routing::get(|| async { "ok" }));
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).with_graceful_shutdown(async { let _ = rx.await; }).await;
+        });
+        let mut c = tokio::net::TcpStream::connect(addr).await.unwrap();
+        c.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        (Running { port: addr.port(), shutdown: tx, task }, addr, c)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn binding_right_after_only_sending_the_shutdown_signal_still_hits_the_old_listener() {
+        // 對照組：舊做法（送訊號後立刻重綁，沒讓舊任務有機會處理）。證明測試會重現 Address already in use。
+        let (running, addr, _client) = serve_with_idle_client().await;
+        let _ = running.shutdown.send(());
+        assert!(tokio::net::TcpListener::bind(addr).await.is_err(), "舊做法：舊任務還沒處理關閉，埠仍被握著");
+        running.task.abort();
+    }
+
+    #[tokio::test]
+    async fn stop_and_wait_releases_the_port_even_with_an_idle_client_connected() {
+        let (running, addr, _client) = serve_with_idle_client().await;
+        running.stop_and_wait(std::time::Duration::from_millis(300)).await;
+        let rebound = bind_with_retry(addr).await;
+        assert!(rebound.is_ok(), "關閉後要能立刻重綁同一個埠：{:?}", rebound.err());
     }
 }
