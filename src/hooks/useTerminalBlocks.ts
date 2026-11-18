@@ -622,7 +622,9 @@ export function useTerminalBlocks(
           if (endRow > startRow) {
             const lines = readRenderedLines(buf, startRow, endRow, term.cols);
             const current = blocksRef.current.find((b) => b.id === tail.blockId);
-            if (current && current.status !== "running" && lines.length >= (current.renderedLines?.length ?? 0)) {
+            // 只補「最後一個區塊」：後面已經有新區塊，範圍就會跟它重疊。
+            const isLast = blocksRef.current[blocksRef.current.length - 1]?.id === tail.blockId;
+            if (current && isLast && current.status !== "running" && lines.length >= (current.renderedLines?.length ?? 0)) {
               const updated = blocksRef.current.map((b) => (b.id === tail.blockId ? { ...b, renderedLines: lines } : b));
               blocksRef.current = updated;
               setBlocks(updated);
@@ -788,6 +790,9 @@ export function useTerminalBlocks(
         completionCallbacksRef.current.set(newBlock.id, onComplete);
       }
 
+      // 新指令開始了：上一個區塊的尾段補讀作廢（它的範圍會蓋到這個新區塊，見 pendingTailRef）。
+      pendingTailRef.current?.marker.dispose();
+      pendingTailRef.current = null;
       const updated = [...blocksRef.current, newBlock];
       blocksRef.current = updated;
       setBlocks(updated);
