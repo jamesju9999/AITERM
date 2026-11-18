@@ -28,6 +28,16 @@ describe("TerminalBlockCard", () => {
     expect(screen.getByText(/500ms|0\.5s/)).toBeInTheDocument();
   });
 
+  it("running with no output yet shows a waiting hint; hides it once output or completion arrives", () => {
+    const running = makeBlock({ status: "running", exitCode: undefined, endTime: undefined, startTime: Date.now(), renderedLines: [] });
+    const { rerender } = render(<TerminalBlockCard block={running} />);
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    rerender(<TerminalBlockCard block={{ ...running, renderedLines: [{ spans: [{ text: "Downloading" }] }] }} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    rerender(<TerminalBlockCard block={makeBlock({ renderedLines: [] })} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("renders output lines from renderedLines", () => {
     render(<TerminalBlockCard block={makeBlock()} />);
     expect(screen.getByText("hi")).toBeInTheDocument();

@@ -163,6 +163,12 @@ function TerminalBlockCardImpl({ block, highlightQuery, onAskAi, onBookmark, onC
       <div className="aiterm-block-command">{highlightText(block.command, highlightQuery)}</div>
       {!collapsed && (
         <div className="aiterm-block-body" data-testid="block-body">
+          {block.status === "running" && visibleLines.length === 0 && (
+            <div className="aiterm-block-waiting" role="status">
+              <span className="aiterm-block-waiting__dot" aria-hidden="true" />
+              {t.block_running_waiting.replace("{time}", formatDuration(Date.now() - block.startTime))}
+            </div>
+          )}
           <pre>
             {visibleLines.map((line, i) => (
               <div key={i} className="aiterm-block-line">

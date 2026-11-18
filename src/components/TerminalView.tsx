@@ -102,6 +102,11 @@ async function resolvePastedFilePath(file: File): Promise<string> {
   return writePastedFile(file.name, base64Data);
 }
 
+
+/** 卡片何時要顯示：有輸出列，或指令正在執行（即使還沒任何輸出，例如 winget 安裝 Git 時，
+ *  使用者要立刻看到「指令已送出、正在等」，卡片裡會顯示等待提示）。 */
+const isBlockVisible = (b: { renderedLines?: unknown; status: string }) => Boolean(b.renderedLines) || b.status === "running";
+
 export interface TerminalViewProps {
   isActive?: boolean;
   onToggleSidebar?: () => void;
@@ -845,7 +850,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
   // is always rendered, even with an empty body) still needs to be scrolled
   // into view — it's the moment the block enters the filtered `.filter((b) =>
   // b.renderedLines)` list this component actually renders.
-  const visibleBlockCount = blocks.filter((b) => b.renderedLines).length;
+  const visibleBlockCount = blocks.filter(isBlockVisible).length;
   const totalRenderedLineCount = blocks.reduce((sum, b) => sum + (b.renderedLines?.length ?? 0), 0);
   useEffect(() => {
     blockListRef.current?.scrollTo({ top: blockListRef.current.scrollHeight });
@@ -2434,7 +2439,7 @@ export function TerminalView({ isActive = true, onToggleSidebar, isSidebarOpen =
             this list would hide the very content (e.g. claude CLI's trust prompt) the user
             needs to see and interact with. */}
         {!isAlternateBuffer && (() => {
-          const visibleBlocks = blocks.filter((b) => b.renderedLines);
+          const visibleBlocks = blocks.filter(isBlockVisible);
           if (visibleBlocks.length === 0) {
             // 使用者反映：終端機剛開好、還沒跑過任何指令時，整塊卡片列表
             // 就是一片空黑，看起來像沒東西可用（見設計文件

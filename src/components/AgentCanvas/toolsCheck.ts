@@ -22,6 +22,6 @@ export function installCommand(tool: Tool, platform: ToolsCheck["platform"]): st
     case "codex":
       return "npm install -g @openai/codex";
     case "git":
-      return platform === "macos" ? "xcode-select --install" : platform === "windows" ? "winget install --id Git.Git -e" : "sudo apt install git";
+      return platform === "macos" ? "xcode-select --install" : platform === "windows" ? "winget install --id Git.Git -e --source winget" : "sudo apt install git";
   }
 }
