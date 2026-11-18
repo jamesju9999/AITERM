@@ -48,6 +48,9 @@ pub struct SystemConnection {
     /// 定時任務與「請 AI 操作」可以個別覆蓋；問題收集一律用這個。
     #[serde(default)]
     pub model: Option<String>,
+    /// AI 可以從這些資料夾挑檔案上傳到網頁（`sys_file_upload`）。空＝不能上傳。
+    #[serde(default)]
+    pub upload_dirs: Vec<String>,
 }
 
 fn default_true() -> bool {

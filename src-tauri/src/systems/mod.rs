@@ -12,6 +12,7 @@ pub mod login;
 pub mod proxy;
 pub mod recipes;
 pub mod skill;
+pub mod upload;
 pub mod state;
 pub mod types;
 

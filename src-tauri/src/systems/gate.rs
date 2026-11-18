@@ -82,7 +82,7 @@ mod tests {
             allowed_hosts: vec!["example.com".into()],
             mode,
             rules: vec![],
-            enabled: true, model: None,
+            enabled: true, model: None, upload_dirs: vec![],
         }
     }
 

@@ -36,6 +36,15 @@ pub fn validate(conn: &SystemConnection) -> Result<(), String> {
             return Err("模型名稱只能用英數與 . _ - [ ] :".into());
         }
     }
+    for d in conn.upload_dirs.iter().filter(|d| !d.trim().is_empty()) {
+        let p = std::path::Path::new(d.trim());
+        if !p.is_absolute() {
+            return Err(format!("可上傳資料夾必須是完整路徑：{d}"));
+        }
+        if !p.is_dir() {
+            return Err(format!("可上傳資料夾不存在：{d}"));
+        }
+    }
     Ok(())
 }
 
@@ -338,7 +347,7 @@ mod tests {
             allowed_hosts: vec!["example.com".into()],
             mode: Mode::ReadOnly,
             rules: vec![],
-            enabled: true, model: None,
+            enabled: true, model: None, upload_dirs: vec![],
         }
     }
 

@@ -683,7 +683,7 @@ mod board_wiring_tests {
             a.task_board.claude_command = script_path.clone();
             a.system_connections.push(crate::systems::types::SystemConnection {
                 id: "t".into(), name: "訂單系統".into(), start_url: "http://127.0.0.1:1/".into(), allowed_hosts: vec!["127.0.0.1".into()],
-                mode: crate::systems::types::Mode::Autonomous, rules: vec![], enabled: true, model: None,
+                mode: crate::systems::types::Mode::Autonomous, rules: vec![], enabled: true, model: None, upload_dirs: vec![],
             });
         }).unwrap();
         let systems = Arc::new(crate::systems::state::SystemsState::with_pool(cfg.clone(), crate::systems::audit::open_in_memory().await));

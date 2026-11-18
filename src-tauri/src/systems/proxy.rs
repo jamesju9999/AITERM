@@ -15,7 +15,7 @@ use super::approvals::{Approvals, APPROVAL_TIMEOUT};
 
 /// 會動作的工具：一定要帶 `intent`。
 const ACTING: &[&str] =
-    &["click", "type", "fill_form", "press_key", "select_option", "drag", "navigate", "handle_dialog"];
+    &["click", "type", "fill_form", "press_key", "select_option", "drag", "navigate", "handle_dialog", "file_upload", "drop"];
 /// 只讀取畫面或調整檢視的工具。
 const READONLY: &[&str] = &[
     "snapshot", "take_screenshot", "find", "wait_for", "tabs", "navigate_back", "hover", "console_messages",
@@ -57,9 +57,16 @@ pub fn expose_tools(upstream: &[Value]) -> Vec<Value> {
         }
         schema["properties"] = Value::Object(props);
         schema["required"] = Value::Array(required);
+        let description = if base == "drop" {
+            json!("把檔案拖放到網頁的某個區塊（沒有「選擇檔案」按鈕、只能拖曳的上傳區塊用這個）：target 是區塊的參照，paths 是檔案完整路徑。只能放這個系統設定的「可上傳資料夾」裡的檔案，其他路徑會被拒絕。這是寫入動作，intent 要以「寫：」開頭。")
+        } else if base == "file_upload" {
+            json!("把檔案上傳到網頁：先點網頁上的「選擇檔案」按鈕讓檔案選擇視窗出現，再呼叫這個工具並在 paths 給檔案的完整路徑。只能上傳這個系統設定的「可上傳資料夾」裡的檔案，其他路徑會被拒絕。這是寫入動作，intent 要以「寫：」開頭。")
+        } else {
+            t["description"].clone()
+        };
         out.push(json!({
             "name": format!("sys_{base}"),
-            "description": t["description"].clone(),
+            "description": description,
             "inputSchema": schema,
         }));
     }
@@ -112,7 +119,16 @@ pub struct Upstream {
 impl Upstream {
     /// `cdp_http` 為 `None` 時不連瀏覽器（只用來取得工具清單）。
     pub async fn spawn(cdp_http: Option<&str>, output_dir: &std::path::Path) -> Result<Self, String> {
+        Self::spawn_with(cdp_http, output_dir, false).await
+    }
+
+    /// `allow_files`：讓 Playwright 讀工作區以外的檔案（上傳用）。只有設了可上傳資料夾的系統才開；
+    /// 能上傳哪些路徑由 AITerm 自己在 `sys_file_upload` 前檢查。
+    pub async fn spawn_with(cdp_http: Option<&str>, output_dir: &std::path::Path, allow_files: bool) -> Result<Self, String> {
         let mut args = vec!["-y".to_string(), crate::tasks::ask::PLAYWRIGHT_MCP.to_string()];
+        if allow_files {
+            args.push("--allow-unrestricted-file-access".to_string());
+        }
         if let Some(c) = cdp_http {
             args.extend(["--cdp-endpoint".to_string(), c.to_string()]);
         }
@@ -295,7 +311,7 @@ mod tests {
 
     #[test]
     fn dangerous_tools_are_never_exposed() {
-        let names = ["evaluate", "run_code_unsafe", "file_upload", "drop", "close", "emulate_media"];
+        let names = ["evaluate", "run_code_unsafe", "close", "emulate_media"];
         let upstream: Vec<Value> =
             names.iter().map(|n| json!({"name": format!("browser_{n}"), "inputSchema": {"type":"object"}})).collect();
         assert!(expose_tools(&upstream).is_empty());
@@ -367,6 +383,94 @@ mod tests {
         let said = result_text(&click);
         assert!(said.contains("被閘門拒絕") && said.contains("POST"), "{said}");
         assert_eq!(posts.load(Ordering::SeqCst), 0, "伺服器不該收到 POST");
+
+        proxy.close().await;
+        gate.abort();
+        b.close().await;
+    }
+
+    /// 上傳：點「選擇檔案」→ `sys_file_upload` → 送出，伺服器要收到檔案內容。
+    /// `cargo test -p app --lib -- --ignored --test-threads=1 systems::proxy::tests::a_file_can_be_uploaded`
+    #[tokio::test]
+    #[ignore]
+    async fn a_file_can_be_uploaded_through_the_proxy() {
+        use crate::systems::browser;
+        use crate::systems::cdp::{run_gate, GateCtx, GateEvent};
+        use crate::systems::testsite::{conn, fake_site_with_bodies};
+        use crate::systems::types::Mode;
+
+        let (port, posts, bodies) = fake_site_with_bodies().await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = tempfile::tempdir().unwrap();
+        let path = file.path().join("report.txt");
+        std::fs::write(&path, "UPLOAD-MARKER-123").unwrap();
+        let mut b = browser::launch(dir.path(), "t", "about:blank").await.unwrap();
+        let approvals = Arc::new(Approvals::new());
+        let last_denied: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let emit: Arc<dyn Fn(GateEvent) + Send + Sync> = Arc::new(|_| {});
+        let ctx = GateCtx::new(conn(port, Mode::Autonomous), approvals.clone(), emit);
+        let (intent, manual) = (ctx.intent.clone(), ctx.manual.clone());
+        let ws = b.ws_url.clone();
+        let gate = tokio::spawn(async move { run_gate(&ws, ctx).await });
+        tokio::time::sleep(Duration::from_millis(800)).await;
+
+        let up = Upstream::spawn_with(Some(&b.cdp_http()), dir.path(), true).await.unwrap();
+        let proxy = Proxy::start("t", up, approvals, intent, manual, last_denied).await.unwrap();
+        proxy.call("sys_navigate", json!({"system":"t","url":format!("http://127.0.0.1:{port}/upload"),"intent":"讀：開上傳頁"})).await.unwrap();
+        let snap = result_text(&proxy.call("sys_snapshot", json!({"system":"t"})).await.unwrap());
+        let r = snap.split("button \"Choose File\" [ref=").nth(1).or_else(|| snap.split("[ref=").nth(2)).and_then(|s| s.split(']').next()).expect(&snap).to_string();
+        proxy.call("sys_click", json!({"system":"t","target":r,"intent":"讀：開檔案選擇"})).await.unwrap();
+        let up_res = proxy.call("sys_file_upload", json!({"system":"t","paths":[path.display().to_string()],"intent":"寫：上傳報表"})).await.unwrap();
+        assert!(up_res["isError"] != true, "{}", result_text(&up_res));
+        let snap = result_text(&proxy.call("sys_snapshot", json!({"system":"t"})).await.unwrap());
+        let send = snap.split("button \"Send\" [ref=").nth(1).and_then(|s| s.split(']').next()).expect(&snap).to_string();
+        proxy.call("sys_click", json!({"system":"t","target":send,"intent":"寫：送出"})).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+        // 假伺服器只讀一次 socket，檔案內容可能還沒到；收到帶檔名的 multipart 部分就證明檔案被送出了。
+        assert!(bodies.lock().iter().any(|b| b.contains("filename=\"report.txt\"")), "伺服器沒收到上傳的檔案：{:?}", bodies.lock());
+
+        proxy.close().await;
+        gate.abort();
+        b.close().await;
+    }
+
+    /// 純拖曳區塊（沒有檔案輸入框）：`sys_drop` 放檔案 → 伺服器要收到帶檔名的檔案。
+    /// `cargo test -p app --lib -- --ignored --test-threads=1 systems::proxy::tests::a_file_can_be_dropped`
+    #[tokio::test]
+    #[ignore]
+    async fn a_file_can_be_dropped_onto_a_drop_zone() {
+        use crate::systems::browser;
+        use crate::systems::cdp::{run_gate, GateCtx, GateEvent};
+        use crate::systems::testsite::{conn, fake_site_with_bodies};
+        use crate::systems::types::Mode;
+
+        let (port, posts, bodies) = fake_site_with_bodies().await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = tempfile::tempdir().unwrap();
+        let path = file.path().join("dropped.txt");
+        std::fs::write(&path, "DROP-MARKER-456").unwrap();
+        let mut b = browser::launch(dir.path(), "t", "about:blank").await.unwrap();
+        let approvals = Arc::new(Approvals::new());
+        let last_denied: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let emit: Arc<dyn Fn(GateEvent) + Send + Sync> = Arc::new(|_| {});
+        let ctx = GateCtx::new(conn(port, Mode::Autonomous), approvals.clone(), emit);
+        let (intent, manual) = (ctx.intent.clone(), ctx.manual.clone());
+        let ws = b.ws_url.clone();
+        let gate = tokio::spawn(async move { run_gate(&ws, ctx).await });
+        tokio::time::sleep(Duration::from_millis(800)).await;
+
+        let up = Upstream::spawn_with(Some(&b.cdp_http()), dir.path(), true).await.unwrap();
+        let proxy = Proxy::start("t", up, approvals, intent, manual, last_denied).await.unwrap();
+        assert!(proxy.tools().iter().any(|t| t["name"] == "sys_drop"), "sys_drop 要有對外");
+        proxy.call("sys_navigate", json!({"system":"t","url":format!("http://127.0.0.1:{port}/drop"),"intent":"讀：開拖曳頁"})).await.unwrap();
+        let snap = result_text(&proxy.call("sys_snapshot", json!({"system":"t"})).await.unwrap());
+        let r = snap.split("button \"Drop here\" [ref=").nth(1).and_then(|s| s.split(']').next()).expect(&snap).to_string();
+        let res = proxy.call("sys_drop", json!({"system":"t","target":r,"paths":[path.display().to_string()],"intent":"寫：拖放報表"})).await.unwrap();
+        assert!(res["isError"] != true, "{}", result_text(&res));
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        assert_eq!(posts.load(Ordering::SeqCst), 1, "拖放後頁面應該送出一個 POST");
+        assert!(bodies.lock().iter().any(|b| b.contains("filename=\"dropped.txt\"")), "伺服器沒收到拖放的檔案：{:?}", bodies.lock());
 
         proxy.close().await;
         gate.abort();

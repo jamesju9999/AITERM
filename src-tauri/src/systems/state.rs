@@ -219,6 +219,7 @@ impl SystemsState {
                 me.emit("systems://denied", json!({ "system_id": system_id, "method": method, "url": url, "reason": reason }));
             }
         });
+        let allow_files = !conn.upload_dirs.is_empty();
         let mut ctx = GateCtx::new(conn, self.approvals.clone(), emit);
         ctx.audit = self.audit_pool().await;
         let ws = browser.ws_url.clone();
@@ -232,7 +233,7 @@ impl SystemsState {
 
         let out = self.data_dir.join("system-output").join(id);
         std::fs::create_dir_all(&out).ok();
-        let upstream = Upstream::spawn(Some(&browser.cdp_http()), &out).await?;
+        let upstream = Upstream::spawn_with(Some(&browser.cdp_http()), &out, allow_files).await?;
         let proxy = Proxy::start(id, upstream, self.approvals.clone(), ctx.intent.clone(), ctx.manual.clone(), last_denied).await?;
         proxy.warm_up().await;
         let run = Arc::new(Running {
@@ -258,7 +259,7 @@ impl SystemsState {
     }
 
     /// `record`：成功的動作要不要進操作日誌（重播配方時不記，免得存下重播本身）。
-    async fn call_inner(self: &Arc<Self>, system: &str, tool: &str, args: Value, record: bool) -> Result<Value, String> {
+    async fn call_inner(self: &Arc<Self>, system: &str, tool: &str, mut args: Value, record: bool) -> Result<Value, String> {
         let run = self.ensure_running(system).await?;
         let conn = self.connection(system)?;
         if !conn.enabled {
@@ -266,6 +267,14 @@ impl SystemsState {
             return Err("這個系統連線已停用".into());
         }
         *run.ctx.conn.lock() = conn.clone(); // 模式、規則改了立刻生效
+        // 上傳類：選檔上傳與拖放檔案。拖放只放文字資料（沒有 paths）時不碰檔案，照一般寫入處理。
+        let is_file_drop = tool == "sys_drop" && args["paths"].as_array().is_some_and(|a| !a.is_empty());
+        if tool == "sys_file_upload" || is_file_drop {
+            if conn.mode == super::types::Mode::ReadOnly {
+                return Err("這個系統是只讀，不能上傳檔案".into());
+            }
+            super::upload::prepare(&conn.upload_dirs, &mut args)?;
+        }
         // 日誌用的步驟：把元素參照換成定位器（要在呼叫前用「呼叫當下看到的快照」換）。
         let url_before = recipes::page_url_of(&run.last_snapshot.lock());
         let journal_step = (record && recipes::is_replayable(tool)).then(|| {
@@ -541,7 +550,7 @@ mod tests {
             allowed_hosts: vec!["example.com".into()],
             mode: Mode::ReadOnly,
             rules: vec![],
-            enabled: true, model: None,
+            enabled: true, model: None, upload_dirs: vec![],
         }
     }
 

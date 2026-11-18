@@ -754,7 +754,7 @@ mod tests {
         let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
         let mk = |model: Option<&str>| SystemConnection {
             id: "t".into(), name: "T".into(), start_url: "http://127.0.0.1:1/".into(), allowed_hosts: vec!["127.0.0.1".into()],
-            mode: Mode::Autonomous, rules: vec![], enabled: true, model: model.map(String::from),
+            mode: Mode::Autonomous, rules: vec![], enabled: true, model: model.map(String::from), upload_dirs: vec![],
         };
         let st = Arc::new(SystemsState::with_pool(cfg.clone(), crate::systems::audit::open_in_memory().await));
         let ctx = Arc::new(JobsCtx {

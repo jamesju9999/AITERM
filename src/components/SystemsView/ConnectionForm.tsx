@@ -22,6 +22,7 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
   const { t } = useLocale();
   const [name, setName] = useState(initial?.name ?? "");
   const [url, setUrl] = useState(initial?.start_url ?? "");
+  const [uploadDirs, setUploadDirs] = useState((initial?.upload_dirs ?? []).join("\n"));
   const [hosts, setHosts] = useState((initial?.allowed_hosts ?? []).join(", "));
   const [mode, setMode] = useState<SystemMode>(initial?.mode ?? "read_only");
   const [model, setModel] = useState<string | null>(initial?.model ?? null);
@@ -60,6 +61,7 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
         rules: mode === "rules" ? rules.filter((r) => r.url_pattern.trim()) : [],
         enabled: initial?.enabled ?? true,
         model,
+        upload_dirs: uploadDirs.split("\n").map((d) => d.trim()).filter(Boolean),
       }, { username: username.trim(), password });
     } catch (e) {
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
@@ -167,6 +169,12 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
           <small>{t.sys_hosts_hint2}</small>
         </label>
       </details>
+
+      <label>
+        {t.sys_upload_dirs}
+        <textarea rows={2} value={uploadDirs} placeholder={t.sys_upload_dirs_ph} onChange={(e) => setUploadDirs(e.target.value)} />
+        <small>{t.sys_upload_dirs_hint}</small>
+      </label>
 
       {error && (
         <p className="systems__error" role="alert">

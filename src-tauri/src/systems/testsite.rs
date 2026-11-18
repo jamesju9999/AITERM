@@ -33,6 +33,11 @@ pub async fn fake_site_with_bodies() -> (u16, Arc<AtomicUsize>, Arc<parking_lot:
                     p.fetch_add(1, Ordering::SeqCst);
                     b.lock().push(head.split("\r\n\r\n").nth(1).unwrap_or("").to_string());
                     "<h1>saved</h1>"
+                } else if head.starts_with("GET /drop") {
+                    // 純拖曳區塊：沒有 input[type=file]，只聽 drop 事件，把檔案用 fetch 送出。
+                    "<div id=\"dz\" role=\"button\" aria-label=\"Drop here\" tabindex=\"0\" style=\"width:300px;height:120px;border:2px dashed #888\">drop zone</div><script>const z=document.getElementById('dz');z.addEventListener('dragover',e=>e.preventDefault());z.addEventListener('drop',e=>{e.preventDefault();const f=new FormData();for(const x of e.dataTransfer.files)f.append('f',x);fetch('/submit',{method:'POST',body:f}).then(()=>{z.textContent='sent'})});</script>"
+                } else if head.starts_with("GET /upload") {
+                    "<form method=\"POST\" action=\"/submit\" enctype=\"multipart/form-data\"><input type=\"file\" name=\"f\"><button type=\"submit\">Send</button></form>"
                 } else {
                     "<form method=\"POST\" action=\"/submit\"><input name=\"a\" value=\"1\"><button>Save</button></form>"
                 };
@@ -57,7 +62,7 @@ pub fn conn(port: u16, mode: Mode) -> SystemConnection {
         mode,
         rules: vec![],
         enabled: true,
-        model: None,
+        model: None, upload_dirs: vec![],
     }
 }
 

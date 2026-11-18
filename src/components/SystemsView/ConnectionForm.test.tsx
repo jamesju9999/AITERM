@@ -41,6 +41,15 @@ describe("ConnectionForm", () => {
     );
   });
 
+  it("saves the upload folders one per line, ignoring blank lines", async () => {
+    const onSave = mount();
+    fill();
+    fireEvent.change(screen.getByPlaceholderText(t.sys_upload_dirs_ph), { target: { value: "/a/b\n\n  /c  \n" } });
+    fireEvent.click(screen.getByText(t.sys_save));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ upload_dirs: ["/a/b", "/c"] }), expect.anything());
+  });
+
   it("passes the typed username and password along separately from the connection, and shows that a password is already saved", async () => {
     const onSave = vi.fn(() => Promise.resolve());
     render(

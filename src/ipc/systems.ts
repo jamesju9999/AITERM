@@ -21,6 +21,8 @@ export interface SystemConnection {
   enabled: boolean;
   /** AI 操作這個系統用的模型；null／沒有 = 沿用 Claude Code 的預設。 */
   model?: string | null;
+  /** AI 可以從這些資料夾挑檔案上傳；空 = 不能上傳。 */
+  upload_dirs?: string[];
 }
 
 export interface SystemStatus {
