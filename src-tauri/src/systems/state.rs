@@ -550,7 +550,7 @@ mod tests {
             allowed_hosts: vec!["example.com".into()],
             mode: Mode::ReadOnly,
             rules: vec![],
-            enabled: true, model: None, upload_dirs: vec![],
+            enabled: true, model: None, upload_dirs: vec![], ..Default::default()
         }
     }
 

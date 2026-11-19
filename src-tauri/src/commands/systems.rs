@@ -20,6 +20,9 @@ pub fn validate(conn: &SystemConnection) -> Result<(), String> {
     if conn.name.trim().is_empty() {
         return Err("名稱不可空白".into());
     }
+    if conn.is_desktop() {
+        return validate_desktop(conn);
+    }
     if !(conn.start_url.starts_with("http://") || conn.start_url.starts_with("https://")) {
         return Err("起始網址必須是 http 或 https".into());
     }
@@ -43,6 +46,23 @@ pub fn validate(conn: &SystemConnection) -> Result<(), String> {
         }
         if !p.is_dir() {
             return Err(format!("可上傳資料夾不存在：{d}"));
+        }
+    }
+    Ok(())
+}
+
+/// 桌面類型：只檢查名稱、綁定的 App 與模型；沒有網址與網域。
+fn validate_desktop(conn: &SystemConnection) -> Result<(), String> {
+    let app = conn.app.trim();
+    if app.is_empty() {
+        return Err("要綁定的 App 不可空白".into());
+    }
+    if app.len() > 200 || app.starts_with('-') || app.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | '"' | '<' | '>' | '|' | '*' | '?')) {
+        return Err("App 名稱不正確（不可含路徑符號、引號或控制字元，也不可以 - 開頭）".into());
+    }
+    if let Some(m) = conn.model.as_deref().filter(|m| !m.trim().is_empty()) {
+        if crate::systems::jobs::clean_model(Some(m)).is_none() {
+            return Err("模型名稱只能用英數與 . _ - [ ] :".into());
         }
     }
     Ok(())
@@ -347,8 +367,31 @@ mod tests {
             allowed_hosts: vec!["example.com".into()],
             mode: Mode::ReadOnly,
             rules: vec![],
-            enabled: true, model: None, upload_dirs: vec![],
+            enabled: true, model: None, upload_dirs: vec![], ..Default::default()
         }
+    }
+
+    fn desktop() -> SystemConnection {
+        SystemConnection {
+            id: "d".into(),
+            name: "進銷存".into(),
+            kind: crate::systems::types::SystemKind::Desktop,
+            app: "ERP Client".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_desktop_connection_needs_only_a_safe_app_name() {
+        assert!(validate(&desktop()).is_ok(), "桌面類型不需要網址與網域");
+        for bad in ["", "   ", "-x", "C:\\a\\b.exe", "a/b", "a\"b", "a\nb"] {
+            let mut c = desktop();
+            c.app = bad.into();
+            assert!(validate(&c).is_err(), "{bad:?}");
+        }
+        let mut c = desktop();
+        c.name = " ".into();
+        assert!(validate(&c).is_err());
     }
 
     #[test]

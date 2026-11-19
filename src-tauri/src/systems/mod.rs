@@ -5,6 +5,7 @@ pub mod approvals;
 pub mod audit;
 pub mod browser;
 pub mod cdp;
+pub mod desktop;
 pub mod endpoint;
 pub mod gate;
 pub mod jobs;
