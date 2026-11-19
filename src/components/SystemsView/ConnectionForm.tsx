@@ -98,15 +98,17 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
         <div className="systems__field-label" id="sys-kind-label">
           {t.sys_kind}
         </div>
-        <div role="radiogroup" aria-labelledby="sys-kind-label" className="systems__actions">
+        <div className="systems__modes" role="radiogroup" aria-labelledby="sys-kind-label">
           {(["web", "desktop"] as const).map((k) => (
-            <label key={k}>
-              <input type="radio" name="sys-kind" value={k} checked={kind === k} onChange={() => setKind(k)} />{" "}
-              {k === "web" ? t.sys_kind_web : t.sys_kind_desktop}
+            <label key={k} className={`systems__mode${kind === k ? " is-on" : ""}`}>
+              <input type="radio" name="sys-kind" value={k} checked={kind === k} onChange={() => setKind(k)} />
+              <span className="systems__mode-head">
+                <strong>{k === "web" ? t.sys_kind_web : t.sys_kind_desktop}</strong>
+              </span>
+              <span className="systems__mode-desc">{k === "web" ? t.sys_kind_web_desc : t.sys_kind_desktop_desc}</span>
             </label>
           ))}
         </div>
-        {desktop && <small>{t.sys_kind_desktop_desc}</small>}
       </div>
       {desktop ? (
         <>
@@ -115,7 +117,7 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
             <input value={app} placeholder={t.sys_app_ph} onChange={(e) => setApp(e.target.value)} />
             <small>{t.sys_app_hint}</small>
           </label>
-          <label>
+          <label className="systems__check">
             <input type="checkbox" checked={launchApp} onChange={(e) => setLaunchApp(e.target.checked)} /> {t.sys_launch_app}
           </label>
         </>

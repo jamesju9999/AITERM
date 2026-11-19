@@ -170,7 +170,7 @@ describe("ConnectionForm", () => {
 
   it("switches to a desktop app system: asks for the app, hides URL/domain/upload fields and saves them empty", async () => {
     const onSave = mount();
-    fireEvent.click(screen.getByRole("radio", { name: t.sys_kind_desktop }));
+    fireEvent.click(screen.getByRole("radio", { name: new RegExp(t.sys_kind_desktop) }));
     expect(screen.queryByPlaceholderText(t.sys_url_ph)).toBeNull();
     expect(screen.queryByPlaceholderText(t.sys_upload_dirs_ph)).toBeNull();
     fireEvent.change(screen.getByPlaceholderText(t.sys_name_ph), { target: { value: "進銷存" } });
@@ -188,7 +188,7 @@ describe("ConnectionForm", () => {
 
   it("lets a desktop system opt out of launching the app and offers desktop rule actions", async () => {
     const onSave = mount();
-    fireEvent.click(screen.getByRole("radio", { name: t.sys_kind_desktop }));
+    fireEvent.click(screen.getByRole("radio", { name: new RegExp(t.sys_kind_desktop) }));
     fireEvent.change(screen.getByPlaceholderText(t.sys_name_ph), { target: { value: "X" } });
     fireEvent.change(screen.getByPlaceholderText(t.sys_app_ph), { target: { value: "Notes" } });
     fireEvent.click(screen.getByLabelText(t.sys_launch_app));

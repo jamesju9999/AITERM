@@ -77,6 +77,7 @@
 .systems__form input:focus, .systems__form select:focus, .systems__form textarea:focus { outline: none; border-color: var(--accent, #a855f7); }
 .systems__form input[type="checkbox"] { accent-color: var(--accent, #a855f7); }
 .systems__form > .systems__actions { padding: 4px 0 0 202px; }
+.systems__form label.systems__check { display: flex; align-items: center; gap: 8px; padding-left: 202px; cursor: pointer; }
 .systems__rules { border: 1px solid var(--border, #2a2a2a); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
 .systems__rules legend { padding: 0 6px; font-size: 12px; color: var(--text-secondary, #888); }
 .systems__rule { display: grid; grid-template-columns: 90px 1fr 90px; gap: 6px; }
@@ -89,7 +90,7 @@
 .systems__note p { color: var(--text-secondary, #aaa); font-size: 12px; }
 .systems__subtitle { margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--text-secondary, #aaa); }
 
-@media (max-width: 720px) { .systems__form > .systems__actions { padding-left: 0; } .systems__form label { grid-template-columns: 1fr; } .systems__form label > small { grid-column: 1; } .systems__head { flex-direction: column; } }
+@media (max-width: 720px) { .systems__form > .systems__actions { padding-left: 0; } .systems__form label.systems__check { padding-left: 0; } .systems__form label { grid-template-columns: 1fr; } .systems__form label > small { grid-column: 1; } .systems__head { flex-direction: column; } }
 
 /* 定時任務列 */
 .systems__jobhead { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
