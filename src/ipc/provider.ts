@@ -197,6 +197,7 @@ export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
   "anthropic-compatible": "Anthropic-Compatible",
   codex: "Codex (ChatGPT)",
   "chatgpt-web": "ChatGPT Web",
+  "claude-cli": "Claude Code (CLI)",
 };
 
 export const DEFAULT_MODELS: Record<ProviderType, string> = {
@@ -215,6 +216,8 @@ export const DEFAULT_MODELS: Record<ProviderType, string> = {
   // 空字串：實際可用的模型由 chatgpt_web_models 動態取得，寫死一個 slug
   // 只會在使用者的方案不含它時給出一個看不懂的錯誤。
   "chatgpt-web": "",
+  // CLI 的模型別名；留空也行（用 CLI 自己的預設）。
+  "claude-cli": "sonnet",
 };
 
 export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
@@ -232,6 +235,8 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   codex: "",
   // 傳輸是隱藏 webview，端點固定在 https://chatgpt.com，不從設定讀。
   "chatgpt-web": "",
+  // 本機行程，沒有端點。
+  "claude-cli": "",
 };
 
 /** OpenAI-compatible quick-pick presets shown in the form — for servers with

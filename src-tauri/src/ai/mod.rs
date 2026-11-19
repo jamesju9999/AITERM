@@ -14,6 +14,7 @@ pub mod anthropic;
 pub mod antigravity;
 pub mod artifact_prompt;
 pub mod chatgpt_web;
+pub mod claude_cli;
 pub mod codex;
 pub mod compatible;
 pub mod content;
@@ -143,7 +144,7 @@ pub struct GenerateChunk {
     pub usage: Option<TokenUsage>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TokenUsage {
     pub prompt: u32,
     pub completion: u32,

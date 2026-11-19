@@ -77,6 +77,7 @@ const PROVIDER_TYPES: ProviderType[] = [
   "anthropic-compatible",
   "codex",
   "chatgpt-web",
+  "claude-cli",
 ];
 
 function FormSection({ title, children }: { title: string; children: ReactNode }) {
@@ -426,7 +427,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
     setError(null);
     if (!id.trim()) { setError(t.err_id_empty); return; }
     if (!displayName.trim()) { setError(t.err_name_empty); return; }
-    if (!model.trim()) { setError(t.err_model_empty); return; }
+    if (!model.trim() && providerType !== "claude-cli") { setError(t.err_model_empty); return; }
     if (
       providerType === "github-copilot" &&
       !apiKey.trim() &&
@@ -777,6 +778,25 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
             </div>
           )}
 
+          {providerType === "claude-cli" && (
+            <div className="form-group">
+              <label htmlFor="claude-cli-model">{t.settings_provider_model_placeholder}</label>
+              <input
+                id="claude-cli-model"
+                list="claude-cli-models"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="sonnet"
+              />
+              <datalist id="claude-cli-models">
+                <option value="haiku" />
+                <option value="sonnet" />
+                <option value="opus" />
+              </datalist>
+              <div className="form-hint">{t.claude_cli_hint}</div>
+            </div>
+          )}
+
           {providerType === "chatgpt-web" && (
             <div className="form-group">
               {/* 三項風險刻意都寫出來：這條路徑違反上游服務條款、工具呼叫是
@@ -987,7 +1007,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
           {/* chatgpt-web 沒有金鑰可填——登入狀態在 webview 自己身上。這個條件是
               「排除清單」，新增的供應商型別預設會被包含進來，所以每加一個不用
               金鑰的型別都要記得排除。 */}
-          {providerType !== "github-copilot" && providerType !== "anthropic" && providerType !== "codex" && providerType !== "google-ai" && providerType !== "chatgpt-web" && (
+          {providerType !== "github-copilot" && providerType !== "anthropic" && providerType !== "codex" && providerType !== "google-ai" && providerType !== "chatgpt-web" && providerType !== "claude-cli" && (
             <div className="form-group">
               <label>
                 {providerType === "openai-compatible" ? t.provider_api_key_optional : t.provider_api_key}
@@ -1038,7 +1058,7 @@ export function ProviderForm({ existing, onSave, onCancel }: Props) {
           https://chatgpt.com（不從設定讀）、模型由上面的下拉負責、
           JSON mode 是 OpenAI 相容 API 的參數。整節都藏掉，否則會留下
           一個只有標題、裡面空無一物的區塊。 */}
-      {providerType !== "chatgpt-web" && (
+      {providerType !== "chatgpt-web" && providerType !== "claude-cli" && (
       <FormSection title={t.provider_section_endpoint}>
         {(providerType === "ollama" ||
           providerType === "openai-compatible" ||

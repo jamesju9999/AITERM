@@ -18,7 +18,8 @@ export type ProviderType =
   | "kimi"
   | "anthropic-compatible"
   | "codex"
-  | "chatgpt-web";
+  | "chatgpt-web"
+  | "claude-cli";
 
 export type ExecutionMode = "always-confirm" | "graded" | "full-auto";
 

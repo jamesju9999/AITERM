@@ -498,13 +498,13 @@ pub struct AiChatReply {
     pub images_dropped: bool,
 }
 
-/// 這一輪送出去時，附的圖片會不會被丟掉。目前只有 ChatGPT 網頁版不收圖片
-/// （見 `ai/chatgpt_web.rs::message_text`）。
+/// 這一輪送出去時，附的圖片會不會被丟掉。目前 ChatGPT 網頁版與 Claude Code CLI 不收圖片
+/// （見 `ai/chatgpt_web.rs::message_text`、`ai/claude_cli.rs::flatten_messages`）。
 ///
 /// 只看最後一則使用者訊息（本輪送的那則）：看整段歷史的話，附過一次圖之後
 /// 每一輪都會再提示。工具迴圈的後續輪次以 tool 結果結尾，所以不能只看最後一則。
 fn images_will_be_dropped(provider_type: Option<ProviderType>, messages: &[ChatMessage]) -> bool {
-    provider_type == Some(ProviderType::ChatgptWeb)
+    matches!(provider_type, Some(ProviderType::ChatgptWeb | ProviderType::ClaudeCli))
         && messages
             .iter()
             .rev()
@@ -1257,6 +1257,12 @@ mod tests {
             Some(ProviderType::ChatgptWeb),
             &[image_msg(), other_msg("assistant"), text_msg()]
         ));
+    }
+
+    #[test]
+    fn claude_cli_with_image_drops_images() {
+        assert!(images_will_be_dropped(Some(ProviderType::ClaudeCli), &[image_msg()]));
+        assert!(!images_will_be_dropped(Some(ProviderType::ClaudeCli), &[text_msg()]));
     }
 
     #[test]

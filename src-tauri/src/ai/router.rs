@@ -79,6 +79,8 @@ pub(crate) fn default_base_url(provider_type: ProviderType) -> Option<&'static s
         // 網頁版走 webview 傳輸，base_url 由 session 固定為 https://chatgpt.com，
         // 不從設定讀。
         ProviderType::ChatgptWeb => None,
+        // 本機 CLI，沒有端點。
+        ProviderType::ClaudeCli => None,
     }
 }
 
@@ -111,7 +113,9 @@ pub fn openai_chat_url(provider_type: ProviderType, base_url: &str) -> String {
         // 網頁版不會實際呼叫這條路徑（走 webview 傳輸），但窮舉 match 必須列出；
         // 併入 Codex 那組是保守處理，不代表這個端點形狀真的適用。
         | ProviderType::Codex
-        | ProviderType::ChatgptWeb => format!("{base}/chat/completions"),
+        | ProviderType::ChatgptWeb
+        // 本機 CLI 不走 HTTP，同樣只為窮舉 match 而列。
+        | ProviderType::ClaudeCli => format!("{base}/chat/completions"),
     }
 }
 
@@ -669,6 +673,8 @@ impl AiRouter {
                 let (token, account_id) = get_valid_codex_oauth_token(&provider_cfg.id, &self.secrets).await?;
                 Arc::new(crate::ai::codex::CodexClient::new(token, provider_cfg.model.clone(), account_id))
             }
+            // 本機 `claude` CLI 自己管登入，這裡沒有金鑰也沒有 base_url。
+            ProviderType::ClaudeCli => Arc::new(crate::ai::claude_cli::ClaudeCliClient::new(provider_cfg.model.clone())),
             // 憑證不在這裡——session 的 webview 自己持有登入狀態，所以這個
             // 分支不查 keyring、也沒有 token 可以驗。
             ProviderType::ChatgptWeb => Arc::new(

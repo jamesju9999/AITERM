@@ -72,6 +72,10 @@ pub fn kind_for(p: &ProviderConfig) -> Option<UpstreamKind> {
         // 的實作與測試都還在，屆時把這裡改回 `Some(UpstreamKind::ChatgptWeb)`
         // 即可。
         ProviderType::ChatgptWeb => None,
+
+        // 本機 CLI 是「文字生成」提供者，不講 Anthropic／OpenAI 協定；
+        // 橋接的對象本來就是 Claude Code，繞一圈回 claude 沒有意義。
+        ProviderType::ClaudeCli => None,
     }
 }
 

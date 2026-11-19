@@ -2737,6 +2737,8 @@ const zhTW = {
       "認證機制是逆向而來，上游變更即失效，整個供應商會回 403。",
     chatgpt_web_login: "登入 ChatGPT",
     chatgpt_web_login_hint: "會開啟一個 ChatGPT 視窗，登入完成後自動收起。",
+    claude_cli_hint:
+      "使用本機已安裝並登入的 Claude Code（claude 指令），走你的 Claude 訂閱額度。每次呼叫會啟動一個本機行程；目前只做文字生成，工具呼叫沿用提示注入。模型填 haiku／sonnet／opus 或完整名稱，留空用 CLI 預設。",
     chatgpt_web_login_waiting: "請在開啟的 ChatGPT 視窗完成登入，完成後會自動載入模型清單。",
     chatgpt_web_models_loading: "讀取可用模型中…",
     chatgpt_web_models_empty: "尚未取得模型清單，請先登入。",
@@ -5864,6 +5866,8 @@ const enRaw = {
       "The authentication flow is reverse-engineered. Any upstream change breaks it and the whole provider starts returning 403.",
     chatgpt_web_login: "Sign in to ChatGPT",
     chatgpt_web_login_hint: "Opens a ChatGPT window; it hides itself once you are signed in.",
+    claude_cli_hint:
+      "Uses the Claude Code (claude command) already installed and signed in on this machine, on your Claude subscription. Each call starts a local process; text generation only, tool calls keep using prompt injection. Model: haiku / sonnet / opus or a full name; leave empty for the CLI default.",
     chatgpt_web_login_waiting: "Sign in from the ChatGPT window that just opened — the model list loads automatically once you are in.",
     chatgpt_web_models_loading: "Loading available models…",
     chatgpt_web_models_empty: "No model list yet — sign in first.",

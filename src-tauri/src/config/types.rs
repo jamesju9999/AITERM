@@ -477,6 +477,9 @@ pub enum ProviderType {
     /// 與 `Codex` 不同：那是 Responses API + 原生 function calling，
     /// 這是網頁前端自己的後端 + prompt 模擬工具。兩者吃同一份訂閱額度。
     ChatgptWeb,
+    /// 本機 `claude` CLI（Claude Code）。用 CLI 自己登入的訂閱，只做文字生成；
+    /// 沒有金鑰、沒有 Base URL。
+    ClaudeCli,
 }
 
 impl std::fmt::Display for ProviderType {
@@ -495,6 +498,7 @@ impl std::fmt::Display for ProviderType {
             ProviderType::AnthropicCompatible => write!(f, "Anthropic-Compatible"),
             ProviderType::Codex => write!(f, "Codex"),
             ProviderType::ChatgptWeb => write!(f, "ChatGPT Web"),
+            ProviderType::ClaudeCli => write!(f, "Claude Code CLI"),
         }
     }
 }
@@ -791,6 +795,7 @@ mod tests {
             (ProviderType::AnthropicCompatible, "anthropic-compatible"),
             (ProviderType::Codex, "codex"),
             (ProviderType::ChatgptWeb, "chatgpt-web"),
+            (ProviderType::ClaudeCli, "claude-cli"),
         ] {
             let w = W { ty };
             let serialized = toml::to_string(&w).unwrap();
