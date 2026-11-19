@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::ai::{
-    sse::{find_line_end, map_http_error, separator_len, truncate},
+    sse::{find_line_end, map_http_error, send_with_retry, separator_len, truncate},
     AiError, AiProvider, AiToolCall, ChatMessage, GenerateChunk, GenerateRequest,
     GenerateWithToolsResult, McpToolDefinition, TokenUsage,
 };
@@ -39,6 +39,9 @@ pub struct AnthropicClient {
     base_url: String,
     client: reqwest::Client,
     is_oauth: bool,
+    /// 是否在請求加 prompt caching 斷點。只對官方端點開——第三方相容中繼
+    /// 不保證認得 `cache_control`，寧可不省也不要被 400。
+    cache: bool,
 }
 
 /// 訂閱（OAuth）請求帶 `tools` 被算到額外用量（API credits）時的 400 訊息。
@@ -54,11 +57,12 @@ impl AnthropicClient {
     }
 
     pub fn with_base_url(api_key: String, model: String, base_url: String) -> Self {
-        Self { token: api_key, model, base_url, client: reqwest::Client::new(), is_oauth: false }
+        let cache = base_url.contains("api.anthropic.com");
+        Self { token: api_key, model, base_url, client: reqwest::Client::new(), is_oauth: false, cache }
     }
 
     pub fn with_oauth(access_token: String, model: String, base_url: String) -> Self {
-        Self { token: access_token, model, base_url, client: reqwest::Client::new(), is_oauth: true }
+        Self { token: access_token, model, base_url, client: reqwest::Client::new(), is_oauth: true, cache: true }
     }
 
     fn messages_url(&self) -> String {
@@ -87,14 +91,17 @@ impl AiProvider for AnthropicClient {
         req: GenerateRequest,
         tx: mpsc::Sender<GenerateChunk>,
     ) -> Result<(), AiError> {
-        let body = build_request_body(&self.model, &req, true, self.is_oauth);
-        let resp = self
-            .auth_request(self.client.post(self.messages_url()))
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .json(&body)
-            .send()
-            .await
+        let mut body = serde_json::to_value(build_request_body(&self.model, &req, true, self.is_oauth))
             .map_err(|e| AiError::Network { message: e.to_string() })?;
+        if self.cache {
+            apply_prompt_cache(&mut body);
+        }
+        let resp = send_with_retry(|| {
+            self.auth_request(self.client.post(self.messages_url()))
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .json(&body)
+        })
+        .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -125,7 +132,7 @@ impl AiProvider for AnthropicClient {
         let messages: Vec<serde_json::Value> = build_anthropic_messages(&req.messages);
 
         // 串流。原本沒帶 stream，帶工具的對話因此整段一次跳出來。
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "max_tokens": DEFAULT_MAX_TOKENS,
             "system": build_system_field(&system_text, self.is_oauth),
@@ -133,15 +140,17 @@ impl AiProvider for AnthropicClient {
             "tools": tool_defs,
             "stream": true
         });
+        if self.cache {
+            apply_prompt_cache(&mut body);
+        }
 
-        let resp = self
-            .auth_request(self.client.post(self.messages_url()))
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AiError::Network { message: e.to_string() })?;
+        let resp = send_with_retry(|| {
+            self.auth_request(self.client.post(self.messages_url()))
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .header("content-type", "application/json")
+                .json(&body)
+        })
+        .await?;
 
         let status = resp.status();
         if status == 401 { return Err(AiError::AuthFailed); }
@@ -397,6 +406,53 @@ fn build_system_field(system_text: &str, is_oauth: bool) -> serde_json::Value {
         blocks.push(serde_json::json!({ "type": "text", "text": system_text }));
     }
     serde_json::Value::Array(blocks)
+}
+
+/// 在請求上放 prompt caching 斷點：system 最後一塊、最後一個 tool、最後一則
+/// message 的最後一塊（共 3 個，上限是 4）。多輪對話與 agent 迴圈每輪都重送
+/// 同一段前綴，命中快取後那段只收約 1/10 的輸入費；前綴不足最小長度時上游
+/// 會直接忽略，不報錯。已自帶 `cache_control` 的區塊不動。
+pub(crate) fn apply_prompt_cache(body: &mut serde_json::Value) {
+    use serde_json::{json, Value};
+    let mark = |block: &mut Value| {
+        if let Some(o) = block.as_object_mut() {
+            o.entry("cache_control").or_insert_with(|| json!({ "type": "ephemeral" }));
+        }
+    };
+    // 字串內容 → 單一 text 區塊，才有地方掛 cache_control。空字串維持原樣，
+    // 否則會產生上游會 400 的空 text 區塊。
+    let to_blocks = |v: &mut Value| {
+        if let Some(t) = v.as_str() {
+            if !t.is_empty() {
+                *v = json!([{ "type": "text", "text": t }]);
+            }
+        }
+    };
+    let mark_last = |v: &mut Value| {
+        if let Some(last) = v.as_array_mut().and_then(|a| a.last_mut()) {
+            // thinking 區塊不可帶 cache_control
+            let t = last.get("type").and_then(Value::as_str).unwrap_or("");
+            if t != "thinking" && t != "redacted_thinking" {
+                mark(last);
+            }
+        }
+    };
+    if let Some(sys) = body.get_mut("system") {
+        to_blocks(sys);
+        mark_last(sys);
+    }
+    if let Some(tools) = body.get_mut("tools") {
+        mark_last(tools);
+    }
+    if let Some(content) = body
+        .get_mut("messages")
+        .and_then(Value::as_array_mut)
+        .and_then(|a| a.last_mut())
+        .and_then(|m| m.get_mut("content"))
+    {
+        to_blocks(content);
+        mark_last(content);
+    }
 }
 
 /// Anthropic API 強制要求 `max_tokens`，所以呼叫端沒指定時一定要補一個值。
@@ -786,6 +842,60 @@ mod tests {
             mode: QueryMode::SingleCommand,
             max_tokens: Some(256),
         }
+    }
+
+
+    fn cc(v: &serde_json::Value) -> bool { v.get("cache_control").is_some() }
+
+    #[test]
+    fn prompt_cache_marks_system_tools_and_last_message() {
+        let mut body = serde_json::json!({
+            "system": "sys",
+            "tools": [{"name":"a"},{"name":"b"}],
+            "messages": [
+                {"role":"user","content":"first"},
+                {"role":"assistant","content":[{"type":"text","text":"x"}]},
+                {"role":"user","content":"last"}
+            ]
+        });
+        apply_prompt_cache(&mut body);
+        assert!(cc(&body["system"][0]));
+        assert!(!cc(&body["tools"][0]) && cc(&body["tools"][1]));
+        assert_eq!(body["messages"][0]["content"], "first", "earlier turns untouched");
+        assert!(!cc(&body["messages"][1]["content"][0]));
+        assert_eq!(body["messages"][2]["content"][0]["text"], "last");
+        assert!(cc(&body["messages"][2]["content"][0]));
+    }
+
+    #[test]
+    fn prompt_cache_marks_only_last_system_block_and_skips_thinking_and_empty() {
+        let mut body = serde_json::json!({
+            "system": [{"type":"text","text":"sentinel"},{"type":"text","text":"p"}],
+            "messages": [{"role":"assistant","content":[{"type":"thinking","thinking":"t"}]}]
+        });
+        apply_prompt_cache(&mut body);
+        assert!(!cc(&body["system"][0]) && cc(&body["system"][1]));
+        assert!(!cc(&body["messages"][0]["content"][0]));
+        let mut empty = serde_json::json!({"system":"","messages":[{"role":"user","content":""}]});
+        apply_prompt_cache(&mut empty);
+        assert_eq!(empty["system"], "");
+        assert!(!empty.to_string().contains("cache_control"));
+    }
+
+    #[test]
+    fn prompt_cache_is_idempotent_and_keeps_existing_marker() {
+        let mut body = serde_json::json!({"messages":[{"role":"user","content":[
+            {"type":"text","text":"a","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]});
+        apply_prompt_cache(&mut body);
+        apply_prompt_cache(&mut body);
+        assert_eq!(body["messages"][0]["content"][0]["cache_control"]["ttl"], "1h");
+    }
+
+    #[test]
+    fn cache_only_enabled_for_official_endpoint() {
+        assert!(AnthropicClient::new("k".into(), "m".into()).cache);
+        assert!(AnthropicClient::with_oauth("t".into(), "m".into(), "https://x.example".into()).cache);
+        assert!(!AnthropicClient::with_base_url("k".into(), "m".into(), "https://relay.example".into()).cache);
     }
 
     /// Anthropic 強制要 max_tokens；呼叫端沒指定（None）時用 DEFAULT_MAX_TOKENS，

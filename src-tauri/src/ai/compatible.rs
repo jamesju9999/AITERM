@@ -72,12 +72,10 @@ impl OpenAiCompatibleClient {
     ) -> Result<(), AiError> {
         let json_mode = self.supports_json_mode && req.mode == crate::ai::QueryMode::SingleCommand;
         let body = build_request_body(&self.model, &req, json_mode, schema.as_ref());
-        let builder = self.apply_headers(self.client.post(self.completions_url()).json(&body));
-
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| AiError::Network { message: e.to_string() })?;
+        let resp = crate::ai::sse::send_with_retry(|| {
+            self.apply_headers(self.client.post(self.completions_url()).json(&body))
+        })
+        .await?;
 
         let status = resp.status();
 

@@ -102,12 +102,12 @@ impl AiProvider for OpenAiClient {
             "stream": true
         });
 
-        let resp = self.client.post(self.completions_url())
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AiError::Network { message: e.to_string() })?;
+        let resp = crate::ai::sse::send_with_retry(|| {
+            self.client.post(self.completions_url())
+                .bearer_auth(&self.api_key)
+                .json(&body)
+        })
+        .await?;
 
         let status = resp.status();
         if status == 401 { return Err(AiError::AuthFailed); }

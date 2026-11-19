@@ -366,3 +366,142 @@ pub async fn map_http_error(status: reqwest::StatusCode, resp: reqwest::Response
     let body = resp.text().await.unwrap_or_default();
     AiError::Network { message: format!("http {}: {}", status.as_u16(), truncate(&body, 200)) }
 }
+
+// ── 送出前的暫時性錯誤重試 ─────────────────────────────────────────────────────
+
+/// 最多重試幾次（不含第一次）。
+const MAX_RETRIES: u32 = 2;
+/// `Retry-After` 超過這個秒數就不等了：訂閱額度用完時上游會要你等數小時，
+/// 在這裡睡著只會讓使用者以為卡死，直接把 429 回報出去才對。
+const MAX_RETRY_AFTER_SECS: u64 = 10;
+
+/// 值得重試的狀態碼：限流與上游暫時性故障（529 是 Anthropic 的「過載」）。
+pub(crate) fn is_retryable_status(status: u16) -> bool {
+    matches!(status, 429 | 500 | 502 | 503 | 504 | 529)
+}
+
+/// 第 `attempt`（從 0 起算）次重試前要等多久；`None` 表示不要重試。
+/// 有數字型 `Retry-After` 就照它（超過上限不等）；否則指數退避 base、2×base…
+pub(crate) fn retry_delay(
+    retry_after: Option<&str>,
+    attempt: u32,
+    base: std::time::Duration,
+) -> Option<std::time::Duration> {
+    if let Some(secs) = retry_after.and_then(|v| v.trim().parse::<u64>().ok()) {
+        return (secs <= MAX_RETRY_AFTER_SECS).then(|| std::time::Duration::from_secs(secs));
+    }
+    Some(base * 2u32.pow(attempt))
+}
+
+/// 送出請求，遇到暫時性失敗（連線／逾時錯誤、429/5xx/529）就退避重試，
+/// 其餘情況（含重試用盡後的最後一個回應）原樣交回，由呼叫端照舊處理。
+///
+/// 只能包「還沒開始吐 chunk」的那次送出：串流開始後才失敗的不可重試，
+/// 否則前端會收到重複的內容。`build` 每次要重新建出 RequestBuilder，
+/// 因為 `send()` 會消耗它。
+pub async fn send_with_retry<F>(build: F) -> Result<reqwest::Response, AiError>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    send_with_retry_base(build, std::time::Duration::from_secs(1)).await
+}
+
+pub(crate) async fn send_with_retry_base<F>(
+    build: F,
+    base: std::time::Duration,
+) -> Result<reqwest::Response, AiError>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    let mut attempt = 0;
+    loop {
+        match build().send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                if attempt >= MAX_RETRIES || !is_retryable_status(status) {
+                    return Ok(resp);
+                }
+                let retry_after = resp
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
+                let Some(delay) = retry_delay(retry_after.as_deref(), attempt, base) else {
+                    return Ok(resp);
+                };
+                log::warn!("HTTP {status}，{}ms 後重試（第 {} 次）", delay.as_millis(), attempt + 1);
+                tokio::time::sleep(delay).await;
+            }
+            Err(e) if attempt < MAX_RETRIES && (e.is_connect() || e.is_timeout()) => {
+                let delay = base * 2u32.pow(attempt);
+                log::warn!("連線失敗（{e}），{}ms 後重試（第 {} 次）", delay.as_millis(), attempt + 1);
+                tokio::time::sleep(delay).await;
+            }
+            Err(e) => return Err(AiError::Network { message: e.to_string() }),
+        }
+        attempt += 1;
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use std::time::Duration;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn retryable_statuses() {
+        for s in [429, 500, 502, 503, 504, 529] {
+            assert!(is_retryable_status(s), "{s}");
+        }
+        for s in [200, 400, 401, 403, 404, 413] {
+            assert!(!is_retryable_status(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn delay_honours_retry_after_and_caps_it() {
+        let b = Duration::from_millis(100);
+        assert_eq!(retry_delay(Some("3"), 0, b), Some(Duration::from_secs(3)));
+        assert_eq!(retry_delay(Some("3600"), 0, b), None, "數小時的等待不重試");
+        assert_eq!(retry_delay(None, 0, b), Some(b));
+        assert_eq!(retry_delay(None, 1, b), Some(b * 2));
+        assert_eq!(retry_delay(Some("Wed, 21 Oct"), 1, b), Some(b * 2), "非數字退回退避");
+    }
+
+    #[tokio::test]
+    async fn retries_transient_then_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).respond_with(ResponseTemplate::new(529)).up_to_n_times(2).expect(2).mount(&server).await;
+        Mock::given(method("POST")).respond_with(ResponseTemplate::new(200)).expect(1).mount(&server).await;
+        let client = reqwest::Client::new();
+        let resp = send_with_retry_base(|| client.post(server.uri()), Duration::from_millis(1)).await.unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+    }
+
+    #[tokio::test]
+    async fn gives_back_last_response_when_retries_exhausted() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).respond_with(ResponseTemplate::new(503)).expect(3).mount(&server).await;
+        let client = reqwest::Client::new();
+        let resp = send_with_retry_base(|| client.post(server.uri()), Duration::from_millis(1)).await.unwrap();
+        assert_eq!(resp.status().as_u16(), 503);
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_client_errors_or_long_rate_limits() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).respond_with(ResponseTemplate::new(400)).expect(1).mount(&server).await;
+        let client = reqwest::Client::new();
+        let r = send_with_retry_base(|| client.post(server.uri()), Duration::from_millis(1)).await.unwrap();
+        assert_eq!(r.status().as_u16(), 400);
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "7200"))
+            .expect(1).mount(&server).await;
+        let r = send_with_retry_base(|| client.post(server.uri()), Duration::from_millis(1)).await.unwrap();
+        assert_eq!(r.status().as_u16(), 429);
+    }
+}
