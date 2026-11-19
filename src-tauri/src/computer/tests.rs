@@ -1444,3 +1444,70 @@ async fn unknown_app_is_still_an_error_when_real_apps_exist() {
     let err = r.svc.read_screen("Firefox").await.unwrap_err();
     assert!(err.contains("找不到 App"), "{err}");
 }
+
+// ── 系統連線（桌面 App）用的擴充 ────────────────────────────────────────────
+
+#[tokio::test]
+async fn a_pre_authorized_app_does_not_show_the_first_use_dialog() {
+    let r = rig(&[]);
+    r.svc.authorize_app_for_system(&["com.apple.notes".to_string()]);
+    r.svc.snapshot("Notes", None).await.unwrap();
+    assert!(r.approver.asked().is_empty(), "連線已設定＝使用者已授權這個 App");
+    // 別的 App 照舊要問。
+    r.svc.revoke_app_for_system(&["com.apple.notes".to_string()]);
+    assert!(r.svc.snapshot("Notes", None).await.is_err(), "撤銷後回到首次使用詢問（腳本空了＝拒絕）");
+}
+
+#[tokio::test]
+async fn pre_confirmed_scope_skips_the_destructive_dialog_only_inside_it() {
+    let r = rig(&[Decision::AllowAlways, Decision::Deny]);
+    r.svc.snapshot("Notes", None).await.unwrap(); // 首次授權＋記下元件
+    let ok = with_pre_confirmed(r.svc.click("Notes", ClickTarget::Element("0.1".into()), MouseButton::Left, false)).await;
+    assert!(ok.is_ok(), "閘門已判定過的寫入不再重複詢問");
+    assert_eq!(r.approver.asked().len(), 1, "只有首次授權那一次");
+    let e = r.svc.click("Notes", ClickTarget::Element("0.1".into()), MouseButton::Left, false).await.unwrap_err();
+    assert!(e.starts_with("使用者拒絕"), "範圍外仍然要問");
+}
+
+#[tokio::test]
+async fn element_label_reports_what_the_last_snapshot_saw() {
+    let r = rig(&[Decision::AllowAlways]);
+    assert_eq!(r.svc.element_label("Notes", "0.1").await, None, "還沒 snapshot 過");
+    r.svc.snapshot("Notes", None).await.unwrap();
+    assert_eq!(r.svc.element_label("Notes", "0.1").await, Some(("AXButton".to_string(), "Delete".to_string())));
+    assert_eq!(r.svc.element_label("Notes", "9.9").await, None);
+}
+
+#[tokio::test]
+async fn type_secret_refuses_a_field_that_is_not_a_password_field() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.snapshot("Notes", None).await.unwrap();
+    // fake 的 doc.2 = false：焦點不是密碼欄位
+    let e = r.svc.type_secret("Notes", "0.0", "hunter2").await.unwrap_err();
+    assert!(e.contains("密碼欄位"), "{e}");
+    assert!(!e.contains("hunter2"));
+    assert!(!r.backend.calls().iter().any(|c| c.starts_with("type ")), "沒有任何字被打出去");
+    let log = r.svc.audit().tail(5);
+    assert!(log.iter().all(|l| !l.detail.contains("hunter2") && !l.outcome.contains("hunter2")));
+}
+
+#[tokio::test]
+async fn type_secret_types_into_a_password_field_and_never_echoes_it() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.snapshot("Notes", None).await.unwrap();
+    r.backend.doc.lock().2 = true; // 焦點是密碼欄位
+    let out = text(r.svc.type_secret("Notes", "0.0", "hunter2").await.unwrap());
+    assert!(!out.contains("hunter2"), "{out}");
+    assert!(r.backend.calls().iter().any(|c| c == "type hunter2"));
+    let log = r.svc.audit().tail(5);
+    assert!(log.iter().all(|l| !l.detail.contains("hunter2") && !l.outcome.contains("hunter2")), "{log:?}");
+}
+
+#[tokio::test]
+async fn type_secret_rejects_an_unknown_element_id() {
+    let r = rig(&[Decision::AllowAlways]);
+    r.svc.snapshot("Notes", None).await.unwrap();
+    r.backend.doc.lock().2 = true;
+    let e = r.svc.type_secret("Notes", "7.7", "x").await.unwrap_err();
+    assert!(e.contains("元件 id"), "{e}");
+}

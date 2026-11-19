@@ -71,6 +71,20 @@ const SCREEN_KEY: &str = "*screen*";
 const MAX_TREE_LINES: usize = 400;
 const MAX_STATE_CHARS: usize = 300;
 
+tokio::task_local! {
+    /// 系統連線的閘門已經判定過這次寫入（放行或使用者核准），`confirm_destructive` 不要重複詢問。
+    static PRE_CONFIRMED: bool;
+}
+
+/// 在這個範圍內執行的動作，破壞性確認視為已完成。只有系統連線的閘門在自己放行後才可以用。
+pub async fn with_pre_confirmed<F: std::future::Future>(fut: F) -> F::Output {
+    PRE_CONFIRMED.scope(true, fut).await
+}
+
+fn pre_confirmed() -> bool {
+    PRE_CONFIRMED.try_with(|v| *v).unwrap_or(false)
+}
+
 pub struct ComputerService {
     backend: Arc<dyn Backend>,
     approver: Arc<dyn Approver>,
@@ -84,6 +98,8 @@ pub struct ComputerService {
     apps_ttl: Mutex<Duration>,
     /// 動作與下一步（或畫面觀察）之間等 UI 反應的時間；測試設為 0。
     settle: Mutex<Duration>,
+    /// 系統連線已綁定的 App（小寫的識別字串）。使用者建立連線＝授權它，所以不再彈首次使用對話框。
+    pre_authorized: Mutex<std::collections::HashSet<String>>,
 }
 
 /// App 清單快取的有效時間。夠短，使用者剛開啟／關閉 App 時不會等太久；
@@ -130,7 +146,55 @@ impl ComputerService {
             apps: Mutex::new(None),
             apps_ttl: Mutex::new(APPS_TTL),
             settle: Mutex::new(SETTLE),
+            pre_authorized: Mutex::new(Default::default()),
         }
+    }
+
+    /// 系統連線用：這些識別字串（名稱或套件 ID，不分大小寫）代表的 App 已由使用者授權。
+    pub fn authorize_app_for_system(&self, keys: &[String]) {
+        self.pre_authorized.lock().extend(keys.iter().map(|k| k.to_lowercase()));
+    }
+
+    pub fn revoke_app_for_system(&self, keys: &[String]) {
+        let mut set = self.pre_authorized.lock();
+        for k in keys {
+            set.remove(&k.to_lowercase());
+        }
+    }
+
+    /// 最近一次 snapshot／觀察記下的元件 (role, title)；沒看過回 `None`。系統連線的閘門用它判定動作。
+    pub async fn element_label(&self, app: &str, id: &str) -> Option<(String, String)> {
+        let info = self.resolve_app(app).await.ok()?;
+        self.seen.lock().get(&(info.pid, id.to_string())).cloned()
+    }
+
+    /// 螢幕座標處的元件 (role, title)，座標點擊用。
+    pub async fn label_at(&self, x: f64, y: f64) -> Option<(String, String)> {
+        let el = self.backend.element_at(x, y).await.ok()??;
+        Some((el.role, el.title))
+    }
+
+    /// 把密碼填進密碼欄位：目標必須是這個 App 最近一次看到的元件，而且聚焦後確實是密碼型欄位，
+    /// 否則一個字都不打。回傳文字與審計都不含密碼。
+    pub async fn type_secret(&self, app: &str, element: &str, secret: &str) -> Result<ToolOutput, String> {
+        let r = async {
+            self.require_enabled()?;
+            self.require_accessibility()?;
+            let info = self.gate(app, "輸入密碼").await?;
+            self.backend.activate(info.pid).await?;
+            if !self.seen.lock().contains_key(&(info.pid, element.to_string())) {
+                return Err("不認得這個元件 id。請先呼叫 sys_app_snapshot 取得最新的元件樹。".to_string());
+            }
+            self.backend.focus_element(info.pid, element).await?;
+            match self.backend.focused_text(info.pid).await {
+                Ok(Some(f)) if f.secure => {}
+                _ => return Err("這個欄位不是密碼欄位，沒有輸入任何內容。請確認元件 id 是登入畫面的密碼欄位。".to_string()),
+            }
+            self.backend.type_text(secret).await?;
+            Ok(ToolOutput::Text("已輸入密碼（內容不回傳）".to_string()))
+        }
+        .await;
+        self.finish("computer_type_secret", app, "密碼欄位", r)
     }
 
     pub fn set_settle(&self, d: Duration) {
@@ -241,6 +305,9 @@ impl ComputerService {
         if keys.iter().any(|k| allowed.contains(k)) {
             return Ok(());
         }
+        if keys.iter().any(|k| self.pre_authorized.lock().contains(&k.to_lowercase())) {
+            return Ok(());
+        }
         let req = ApprovalRequest {
             kind: ApprovalKind::FirstUse,
             app: display.to_string(),
@@ -278,6 +345,9 @@ impl ComputerService {
     }
 
     async fn confirm_destructive(&self, app: &AppInfo, action: &str, detail: &str) -> Result<(), String> {
+        if pre_confirmed() {
+            return Ok(());
+        }
         let req = ApprovalRequest {
             kind: ApprovalKind::Destructive,
             app: app.name.clone(),
