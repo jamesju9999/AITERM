@@ -683,4 +683,45 @@ echo '{"type":"result","subtype":"success","is_error":true,"result":"Not logged 
         let u = usage.unwrap();
         assert!(u.cache_write + u.cache_read < 5000, "瘦身旗標失效？{u:?}");
     }
+
+    /// 串流到一半取消（等同使用者按「停止」）：真的 claude 不能留下來。
+    /// 用系統提示暫存檔名（含本測試行程的 pid）找出我們自己啟動的那一個，不會誤判別的 claude。
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore]
+    async fn claude_cli_real_cancel_mid_stream_leaves_no_process() {
+        fn ours() -> Vec<String> {
+            let out = std::process::Command::new("pgrep")
+                .args(["-f", &format!("aiterm-claude-cli-{}-", std::process::id())])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect()
+        }
+        let c = std::sync::Arc::new(ClaudeCliClient::new("haiku".into()));
+        let (tx, mut rx) = mpsc::channel(256);
+        let r = GenerateRequest {
+            system_prompt: "你是寫作助手".into(),
+            messages: vec![msg("user", "請寫一篇 1500 字的文章，主題是海洋，不要停。")],
+            context: Default::default(),
+            mode: super::super::QueryMode::Chat,
+            max_tokens: None,
+        };
+        let task = tokio::spawn({
+            let c = c.clone();
+            async move { c.generate(r, tx).await }
+        });
+        // 等到真的收到第一段文字：此時 claude 一定正在串流。
+        let first = tokio::time::timeout(Duration::from_secs(60), rx.recv()).await.expect("60 秒內要有第一段").unwrap();
+        assert!(!first.delta.is_empty() && !first.done, "要在串流途中，不是已結束：{first:?}");
+        let before = ours();
+        assert!(!before.is_empty(), "取消前應該看得到我們啟動的 claude（否則這個測試是空的）");
+        eprintln!("取消前行程：{before:?}");
+
+        task.abort(); // 使用者按停止
+        let _ = task.await;
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let after = ours();
+        eprintln!("取消後行程：{after:?}");
+        assert!(after.is_empty(), "取消後不能留下 claude：{after:?}");
+    }
 }
