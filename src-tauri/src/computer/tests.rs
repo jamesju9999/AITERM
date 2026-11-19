@@ -14,13 +14,13 @@ fn el(id: &str, role: &str, title: &str) -> ElementNode {
 }
 
 /// 記錄所有被呼叫的動作；元件樹可在測試中途改寫來模擬「畫面變了」。
-struct FakeBackend {
+pub(crate) struct FakeBackend {
     perms: Permissions,
     tree: Mutex<ElementNode>,
     calls: Mutex<Vec<String>>,
     press_fails: bool,
     /// 模擬焦點文字區：(內容, 是否全選, 是否密碼欄位)。
-    doc: Mutex<(String, bool, bool)>,
+    pub(crate) doc: Mutex<(String, bool, bool)>,
     list_calls: std::sync::atomic::AtomicUsize,
     /// 假的 OCR 結果（螢幕座標）。
     screen_text: Mutex<Vec<ScreenText>>,
@@ -37,7 +37,7 @@ fn st(text: &str, x: f64, y: f64) -> ScreenText {
 }
 
 impl FakeBackend {
-    fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         let mut root = el("0", "AXWindow", "Doc");
         root.children = vec![el("0.0", "AXButton", "Save"), el("0.1", "AXButton", "Delete")];
         Arc::new(Self {
@@ -53,7 +53,7 @@ impl FakeBackend {
             only_desktop: Default::default(),
         })
     }
-    fn calls(&self) -> Vec<String> {
+    pub(crate) fn calls(&self) -> Vec<String> {
         self.calls.lock().clone()
     }
     fn list_calls(&self) -> usize {
@@ -150,16 +150,16 @@ impl Backend for FakeBackend {
 }
 
 /// 依序回覆預設決定；沒決定了就拒絕。記錄所有被問到的請求。
-struct FakeApprover {
+pub(crate) struct FakeApprover {
     script: Mutex<VecDeque<Decision>>,
     asked: Mutex<Vec<(ApprovalKind, String, String)>>,
 }
 
 impl FakeApprover {
-    fn new(script: &[Decision]) -> Arc<Self> {
+    pub(crate) fn new(script: &[Decision]) -> Arc<Self> {
         Arc::new(Self { script: Mutex::new(script.iter().copied().collect()), asked: Mutex::new(vec![]) })
     }
-    fn asked(&self) -> Vec<(ApprovalKind, String, String)> { self.asked.lock().clone() }
+    pub(crate) fn asked(&self) -> Vec<(ApprovalKind, String, String)> { self.asked.lock().clone() }
 }
 
 #[async_trait]
@@ -1510,4 +1510,11 @@ async fn type_secret_rejects_an_unknown_element_id() {
     r.backend.doc.lock().2 = true;
     let e = r.svc.type_secret("Notes", "7.7", "x").await.unwrap_err();
     assert!(e.contains("元件 id"), "{e}");
+}
+
+/// 給系統連線（桌面）的測試用：已開啟總開關、不等 UI 反應的服務。
+pub(crate) fn test_service(approver_script: &[Decision]) -> (Arc<ComputerService>, Arc<FakeBackend>, Arc<FakeApprover>, tempfile::TempDir) {
+    let r = rig_with(FakeBackend::new(), true, approver_script);
+    let Rig { svc, backend, approver, _dir, .. } = r;
+    (Arc::new(svc), backend, approver, _dir)
 }

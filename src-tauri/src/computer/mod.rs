@@ -1009,4 +1009,4 @@ fn render_tree(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
