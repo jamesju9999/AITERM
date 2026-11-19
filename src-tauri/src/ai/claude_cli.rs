@@ -514,7 +514,9 @@ mod tests {
     #[test]
     fn finder_checks_path_then_well_known_dirs() {
         let home = PathBuf::from("/home/u");
-        let dirs = candidate_dirs(Some(std::ffi::OsStr::new("/a:/b")), Some(&home));
+        // PATH 分隔符依平台不同（Windows 是 `;`），所以用 join_paths 組，不寫死 `:`。
+        let path = std::env::join_paths(["/a", "/b"]).unwrap();
+        let dirs = candidate_dirs(Some(path.as_os_str()), Some(&home));
         assert_eq!(&dirs[..2], &[PathBuf::from("/a"), PathBuf::from("/b")]);
         assert!(dirs.contains(&home.join(".local").join("bin")));
         let want = home.join(".local").join("bin").join(executable_names()[0]);
