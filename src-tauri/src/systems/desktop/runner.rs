@@ -119,6 +119,16 @@ impl DesktopRunner {
         self.emit_state(id);
     }
 
+    pub async fn open_app(&self, conn: &SystemConnection) -> Result<(), String> {
+        self.computer.authorize_app_for_system(&[conn.app.clone()]);
+        self.computer.open_app(&conn.app).await.map(|_| ())
+    }
+
+    /// 連線停用或移除：收回對這個 App 的預先授權。
+    pub fn revoke(&self, app: &str) {
+        self.computer.revoke_app_for_system(&[app.to_string()]);
+    }
+
     /// 停用或移除連線時清掉狀態。
     pub fn close(&self, id: &str) {
         self.approvals.reject_all(id);

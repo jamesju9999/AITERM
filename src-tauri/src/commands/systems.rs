@@ -136,6 +136,7 @@ pub async fn systems_save(
     mcp: State<'_, McpState>,
 ) -> Result<(), String> {
     validate(&conn)?;
+    let old = config.get().system_connections.into_iter().find(|c| c.id == conn.id);
     config
         .update(|cfg| match cfg.system_connections.iter().position(|c| c.id == conn.id) {
             Some(i) => cfg.system_connections[i] = conn.clone(),
@@ -144,6 +145,12 @@ pub async fn systems_save(
         .map_err(|e| e.to_string())?;
     if !conn.enabled {
         systems.close(&conn.id).await;
+    }
+    // 換綁別的 App（或改回網頁）：收回對舊 App 的預先授權。
+    if let (Some(old), Some(runner)) = (old, systems.desktop_runner()) {
+        if old.is_desktop() && (old.app != conn.app || !conn.is_desktop()) {
+            runner.revoke(&old.app);
+        }
     }
     ensure_endpoint(&endpoint, &systems, &secrets, &config, &mcp).await
 }
@@ -163,6 +170,10 @@ pub async fn systems_remove(
 /// 開啟這個系統的瀏覽器視窗（沒開就開），讓使用者手動登入。
 #[tauri::command]
 pub async fn systems_open_login(id: String, systems: State<'_, Arc<SystemsState>>) -> Result<(), String> {
+    // 桌面 App 類型：把 App 開起來（或帶到前景），讓使用者自己登入。
+    if systems.connection(&id).is_ok_and(|c| c.is_desktop()) {
+        return systems.open_desktop_app(&id).await;
+    }
     systems.inner().clone().ensure_ready(&id).await.map(|_| ())
 }
 

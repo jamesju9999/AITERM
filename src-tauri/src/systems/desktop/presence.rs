@@ -51,17 +51,44 @@ pub enum Defer {
 
 /// 無人執行前的判定。偵測不到（`None`）一律視為可以開始。
 pub fn defer_decision(locked: Option<bool>, idle: Option<Duration>, waited: Duration) -> Defer {
+    defer_decision_with(locked, idle, waited, IDLE_NEEDED, MAX_DEFER)
+}
+
+pub fn defer_decision_with(locked: Option<bool>, idle: Option<Duration>, waited: Duration, idle_needed: Duration, max: Duration) -> Defer {
     let blocked = if locked == Some(true) {
         Some("螢幕鎖定中")
-    } else if idle.is_some_and(|i| i < IDLE_NEEDED) {
+    } else if idle.is_some_and(|i| i < idle_needed) {
         Some("使用者正在操作電腦")
     } else {
         None
     };
     match blocked {
         None => Defer::Go,
-        Some(_) if waited >= MAX_DEFER => Defer::GiveUp,
+        Some(_) if waited >= max => Defer::GiveUp,
         Some(why) => Defer::Wait(why),
+    }
+}
+
+/// 等到螢幕沒鎖、使用者閒置夠久。回傳實際等了多久；等超過 `max` 回 `Err`（說明原因）。
+pub async fn wait_until_free(monitor: &dyn InputMonitor, idle_needed: Duration, step: Duration, max: Duration) -> Result<Duration, String> {
+    let start = std::time::Instant::now();
+    let mut last_reason = "";
+    loop {
+        let waited = start.elapsed();
+        match defer_decision_with(monitor.screen_locked(), monitor.idle(), waited, idle_needed, max) {
+            Defer::Go => return Ok(waited),
+            Defer::Wait(why) => {
+                last_reason = why;
+                tokio::time::sleep(step).await;
+            }
+            Defer::GiveUp => {
+                return Err(format!(
+                    "等了 {} 分鐘，電腦一直沒有閒置下來（{}），這次沒有執行",
+                    max.as_secs() / 60,
+                    if last_reason.is_empty() { "使用者正在操作電腦" } else { last_reason }
+                ))
+            }
+        }
     }
 }
 
@@ -129,6 +156,32 @@ mod tests {
         assert_eq!(defer_decision(Some(true), None, MAX_DEFER), Defer::GiveUp);
         assert_eq!(defer_decision(Some(false), Some(S(1)), MAX_DEFER - S(1)), Defer::Wait("使用者正在操作電腦"));
         assert_eq!(defer_decision(Some(false), Some(S(1)), MAX_DEFER), Defer::GiveUp);
+    }
+
+    #[tokio::test]
+    async fn wait_until_free_returns_at_once_when_the_machine_is_idle() {
+        let m = FakeMonitor::new(Some(S(600)), Some(false));
+        let waited = wait_until_free(&*m, S(60), Duration::from_millis(5), S(10)).await.unwrap();
+        assert!(waited < Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn wait_until_free_waits_for_the_user_to_go_idle() {
+        let m = FakeMonitor::new(Some(S(1)), Some(false));
+        let m2 = m.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            *m2.idle.lock() = Some(S(120));
+        });
+        let waited = wait_until_free(&*m, S(60), Duration::from_millis(10), S(10)).await.unwrap();
+        assert!(waited >= Duration::from_millis(50), "{waited:?}");
+    }
+
+    #[tokio::test]
+    async fn wait_until_free_gives_up_with_the_reason() {
+        let m = FakeMonitor::new(None, Some(true));
+        let e = wait_until_free(&*m, S(60), Duration::from_millis(5), Duration::from_millis(30)).await.unwrap_err();
+        assert!(e.contains("螢幕鎖定中"), "{e}");
     }
 
     #[test]

@@ -292,7 +292,7 @@ export function SystemsView() {
                       {st && st.pending > 0 && <span className="systems__badge systems__badge--warn">{t.sys_pending_n(st.pending)}</span>}
                     </div>
                     <div className="systems__url">
-                      {s.start_url}
+                      {s.kind === "desktop" ? `${t.sys_kind_desktop}：${s.app ?? ""}` : s.start_url}
                       <span className="systems__dot">·</span>
                       {{ read_only: t.sys_mode_read_only, approve_each: t.sys_mode_approve_each, rules: t.sys_mode_rules, autonomous: t.sys_mode_autonomous }[s.mode]}
                     </div>
@@ -311,7 +311,7 @@ export function SystemsView() {
                 </div>
                 <div className="systems__actions">
                   <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={!s.enabled} onClick={() => void run(() => systemsOpenLogin(s.id))}>
-                    {t.sys_open_login}
+                    {s.kind === "desktop" ? t.sys_open_app : t.sys_open_login}
                   </button>
                   <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={!st?.running} onClick={() => void run(() => systemsStop(s.id))}>
                     {t.sys_stop}
@@ -326,6 +326,11 @@ export function SystemsView() {
                     </button>
                   )}
                 </div>
+                {s.kind === "desktop" && (
+                  <p className="systems__hint" data-testid="desktop-hint">
+                    {t.sys_desktop_unattended_hint}
+                  </p>
+                )}
                 {s.enabled && !st?.running && (
                   <p className="systems__hint" data-testid="login-hint">
                     {t.sys_login_hint}

@@ -15,6 +15,7 @@ use super::approvals::{Approvals, PendingView};
 use super::audit;
 use super::browser::{self, RunningBrowser};
 use super::cdp::{run_gate, GateCtx, GateEvent};
+use super::desktop::runner::DesktopRunner;
 use super::gate::host_of;
 use super::proxy::{fetch_catalog, Proxy, Upstream};
 use super::recipes::{self, Param, Step};
@@ -59,6 +60,8 @@ pub struct SystemsState {
     secrets: Mutex<Option<Arc<crate::secret::SecretStore>>>,
     /// 同一時間只讓一個自動登入在跑，後到的等前面登完再看頁面。
     login_lock: tokio::sync::Mutex<()>,
+    /// 桌面 App 類型連線的執行核心；電腦操作服務就緒後才有（見 `set_computer`）。
+    desktop: Mutex<Option<Arc<DesktopRunner>>>,
 }
 
 /// 頁面看起來被導去登入頁（登入失效）：網址不在白名單，或路徑像登入頁。
@@ -91,7 +94,48 @@ impl SystemsState {
             data_dir,
             secrets: Mutex::new(None),
             login_lock: tokio::sync::Mutex::new(()),
+            desktop: Mutex::new(None),
         }
+    }
+
+    /// 接上電腦操作服務，桌面 App 類型的連線才能運作。
+    pub fn set_computer(self: &Arc<Self>, computer: Arc<crate::computer::ComputerService>) {
+        let weak = Arc::downgrade(self);
+        let w_emit = weak.clone();
+        let emit: Emitter = Arc::new(move |name, payload| {
+            if let Some(me) = w_emit.upgrade() {
+                me.emit(name, payload);
+            }
+        });
+        let creds: Arc<dyn Fn(&str) -> Option<super::login::Creds> + Send + Sync> = Arc::new(move |id| {
+            let me = weak.upgrade()?;
+            let secrets = me.secrets.lock().clone()?;
+            super::login::load(&secrets, id)
+        });
+        let runner = DesktopRunner::new(computer, super::desktop::os_monitor::os_monitor(), self.approvals.clone(), emit, creds);
+        *self.desktop.lock() = Some(Arc::new(runner));
+    }
+
+    #[cfg(test)]
+    pub fn set_desktop_runner_for_test(&self, r: Arc<DesktopRunner>) {
+        *self.desktop.lock() = Some(r);
+    }
+
+    pub fn desktop_runner(&self) -> Option<Arc<DesktopRunner>> {
+        self.desktop.lock().clone()
+    }
+
+    /// 桌面 App 類型：啟動（或帶到前景）綁定的 App，讓使用者自己登入或接手。
+    pub async fn open_desktop_app(&self, id: &str) -> Result<(), String> {
+        let conn = self.connection(id)?;
+        if !conn.is_desktop() {
+            return Err("這不是桌面 App 系統".into());
+        }
+        self.desktop_runner().ok_or("電腦操作服務還沒就緒")?.open_app(&conn).await
+    }
+
+    fn is_desktop(&self, id: &str) -> bool {
+        self.connection(id).map(|c| c.is_desktop()).unwrap_or(false)
     }
 
     pub fn set_secrets(&self, s: Arc<crate::secret::SecretStore>) {
@@ -194,6 +238,9 @@ impl SystemsState {
         if !conn.enabled {
             return Err("這個系統連線已停用".into());
         }
+        if conn.is_desktop() {
+            return Err("桌面 App 系統不使用瀏覽器".into());
+        }
         let mut map = self.running.lock().await;
         if let Some(r) = map.get(id) {
             let alive = r.browser.lock().await.is_alive() && !r.gate.is_finished();
@@ -260,8 +307,20 @@ impl SystemsState {
 
     /// `record`：成功的動作要不要進操作日誌（重播配方時不記，免得存下重播本身）。
     async fn call_inner(self: &Arc<Self>, system: &str, tool: &str, mut args: Value, record: bool) -> Result<Value, String> {
-        let run = self.ensure_running(system).await?;
         let conn = self.connection(system)?;
+        if conn.is_desktop() != super::desktop::tools::is_desktop_tool(tool) && tool != "sys_list" {
+            return Err(if conn.is_desktop() {
+                "這是桌面 App 系統，請用 sys_app_* 工具".to_string()
+            } else {
+                "這是網頁系統，請用 sys_* 工具（不是 sys_app_*）".to_string()
+            });
+        }
+        if conn.is_desktop() {
+            let runner = self.desktop_runner().ok_or("電腦操作服務還沒就緒，無法操作桌面 App")?;
+            let pool = self.audit_pool().await;
+            return runner.call(&conn, pool.as_ref(), tool, args).await;
+        }
+        let run = self.ensure_running(system).await?;
         if !conn.enabled {
             self.close(system).await;
             return Err("這個系統連線已停用".into());
@@ -490,6 +549,9 @@ impl SystemsState {
     /// 停止：拒絕這個系統所有等待中的核准，並讓 AI 的工具呼叫暫停（瀏覽器保持開著），
     /// 直到使用者按「交還 AI」。回傳拒絕了幾筆。
     pub async fn stop(&self, id: &str) -> usize {
+        if self.is_desktop(id) {
+            return self.desktop_runner().map(|r| r.pause(id)).unwrap_or_else(|| self.approvals.reject_all(id));
+        }
         let n = self.approvals.reject_all(id);
         if let Some(r) = self.running.lock().await.get(id) {
             r.ctx.manual.store(true, Ordering::SeqCst);
@@ -499,6 +561,11 @@ impl SystemsState {
     }
 
     pub async fn set_manual(&self, id: &str, manual: bool) -> Result<(), String> {
+        if self.is_desktop(id) {
+            let r = self.desktop_runner().ok_or("電腦操作服務還沒就緒")?;
+            if manual { r.pause(id); } else { r.resume(id); }
+            return Ok(());
+        }
         let map = self.running.lock().await;
         let run = map.get(id).ok_or("這個系統目前沒有開啟")?;
         run.ctx.manual.store(manual, Ordering::SeqCst);
@@ -509,6 +576,14 @@ impl SystemsState {
 
     /// 關閉這個系統的瀏覽器與代理（停用時用）。
     pub async fn close(&self, id: &str) {
+        if let Some(r) = self.desktop_runner() {
+            if let Ok(c) = self.connection(id) {
+                if c.is_desktop() {
+                    r.revoke(&c.app);
+                }
+            }
+            r.close(id);
+        }
         self.approvals.reject_all(id);
         if let Some(r) = self.running.lock().await.remove(id) {
             r.proxy.close().await;
@@ -519,6 +594,11 @@ impl SystemsState {
     }
 
     pub async fn status(&self, id: &str) -> SystemStatus {
+        if self.is_desktop(id) {
+            let pending = self.approvals.list().into_iter().filter(|p| p.pending.system_id == id).count();
+            let (paused, needs_login) = self.desktop_runner().map(|r| r.status(id)).unwrap_or((false, false));
+            return SystemStatus { running: true, manual: paused, pending, needs_login };
+        }
         let map = self.running.lock().await;
         let pending = self.approvals.list().into_iter().filter(|p| p.pending.system_id == id).count();
         match map.get(id) {

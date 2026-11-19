@@ -163,4 +163,20 @@ describe("SystemsView", () => {
     expect(await screen.findByText("做好了")).toBeTruthy();
 
   });
+  it("shows a desktop system with its bound app, an open-app button, and the hand-back button while paused", async () => {
+    setup([conn({ kind: "desktop", app: "ERP Client", start_url: "", allowed_hosts: [] })], st({ manual: true }));
+    await screen.findByText(new RegExp(`${t.sys_kind_desktop}：ERP Client`));
+    expect(screen.getByTestId("desktop-hint")).toBeTruthy();
+    expect(screen.queryByText(t.sys_open_login)).toBeNull();
+    fireEvent.click(screen.getByText(t.sys_open_app));
+    await waitFor(() => expect(ipc.systemsOpenLogin).toHaveBeenCalledWith("s1"));
+    fireEvent.click(screen.getByText(t.sys_handback));
+    await waitFor(() => expect(ipc.systemsHandback).toHaveBeenCalledWith("s1"));
+  });
+
+  it("does not show the desktop hint for a web system", async () => {
+    setup();
+    await screen.findByText("訂單系統");
+    expect(screen.queryByTestId("desktop-hint")).toBeNull();
+  });
 });

@@ -3,6 +3,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 // ── 型別（鏡射 Rust systems/types.rs、approvals.rs、audit.rs、state.rs）──────
 
+export type SystemKind = "web" | "desktop";
+
 export type SystemMode = "read_only" | "approve_each" | "rules" | "autonomous";
 
 export interface SystemRule {
@@ -23,6 +25,12 @@ export interface SystemConnection {
   model?: string | null;
   /** AI 可以從這些資料夾挑檔案上傳；空 = 不能上傳。 */
   upload_dirs?: string[];
+  /** 連線種類；沒有這個欄位 = 網頁。 */
+  kind?: SystemKind;
+  /** 桌面 App 類型：綁定的 App（名稱或套件 ID）。 */
+  app?: string;
+  /** 桌面 App 類型：App 沒開時由 AITerm 啟動。 */
+  launch_app?: boolean;
 }
 
 export interface SystemStatus {

@@ -2,13 +2,14 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
-import type { SystemConnection, SystemLoginInfo, SystemMode, SystemRule } from "../../ipc/systems";
+import type { SystemConnection, SystemKind, SystemLoginInfo, SystemMode, SystemRule } from "../../ipc/systems";
 import { restoreWebviewFocus } from "../../lib/webviewFocus";
 import { ModelSelect } from "./ModelSelect";
 import { hostOf, slug } from "./utils";
 
 const MODES: SystemMode[] = ["read_only", "approve_each", "rules", "autonomous"];
 const METHODS = ["*", "POST", "PUT", "PATCH", "DELETE"];
+const DESKTOP_METHODS = ["*", "click", "type", "key", "login"];
 
 interface Props {
   initial?: SystemConnection;
@@ -20,6 +21,9 @@ interface Props {
 
 export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Props) {
   const { t } = useLocale();
+  const [kind, setKind] = useState<SystemKind>(initial?.kind ?? "web");
+  const [app, setApp] = useState(initial?.app ?? "");
+  const [launchApp, setLaunchApp] = useState(initial?.launch_app ?? true);
   const [name, setName] = useState(initial?.name ?? "");
   const [url, setUrl] = useState(initial?.start_url ?? "");
   const [uploadDirs, setUploadDirs] = useState((initial?.upload_dirs ?? []).join("\n"));
@@ -34,6 +38,9 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
   const urlOk = /^https?:\/\//i.test(url.trim()) && hostOf(url) !== "";
   const urlTouched = url.trim() !== "" && url.trim() !== "https://" && url.trim() !== "http://";
   const host = hostOf(url);
+
+  const desktop = kind === "desktop";
+  const canSave = name.trim() !== "" && (desktop ? app.trim() !== "" : urlOk);
 
   const modeInfo: Record<SystemMode, { title: string; desc: string; risk: string; tone: string }> = {
     read_only: { title: t.sys_mode_title_read_only, desc: t.sys_mode_desc_read_only, risk: t.sys_risk_safe, tone: "safe" },
@@ -55,13 +62,17 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
       await onSave({
         id: initial?.id ?? slug(name),
         name: name.trim(),
-        start_url: url.trim(),
-        allowed_hosts: allowed,
+        kind,
+        // 桌面類型沒有網址、網域與上傳資料夾。
+        start_url: desktop ? "" : url.trim(),
+        allowed_hosts: desktop ? [] : allowed,
         mode,
         rules: mode === "rules" ? rules.filter((r) => r.url_pattern.trim()) : [],
         enabled: initial?.enabled ?? true,
         model,
-        upload_dirs: uploadDirs.split("\n").map((d) => d.trim()).filter(Boolean),
+        upload_dirs: desktop ? [] : uploadDirs.split("\n").map((d) => d.trim()).filter(Boolean),
+        app: desktop ? app.trim() : "",
+        launch_app: launchApp,
       }, { username: username.trim(), password });
     } catch (e) {
       setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
@@ -83,12 +94,39 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
         {t.sys_name}
         <input value={name} placeholder={t.sys_name_ph} onChange={(e) => setName(e.target.value)} />
       </label>
-      <label>
-        {t.sys_start_url}
-        <input value={url} placeholder={t.sys_url_ph} onChange={(e) => setUrl(e.target.value)} />
-        {urlTouched && !urlOk && <small className="systems__field-error">{t.sys_url_invalid}</small>}
-        {urlOk && <small>{t.sys_hosts_default(host)}</small>}
-      </label>
+      <div className="systems__field-block">
+        <div className="systems__field-label" id="sys-kind-label">
+          {t.sys_kind}
+        </div>
+        <div role="radiogroup" aria-labelledby="sys-kind-label" className="systems__actions">
+          {(["web", "desktop"] as const).map((k) => (
+            <label key={k}>
+              <input type="radio" name="sys-kind" value={k} checked={kind === k} onChange={() => setKind(k)} />{" "}
+              {k === "web" ? t.sys_kind_web : t.sys_kind_desktop}
+            </label>
+          ))}
+        </div>
+        {desktop && <small>{t.sys_kind_desktop_desc}</small>}
+      </div>
+      {desktop ? (
+        <>
+          <label>
+            {t.sys_app}
+            <input value={app} placeholder={t.sys_app_ph} onChange={(e) => setApp(e.target.value)} />
+            <small>{t.sys_app_hint}</small>
+          </label>
+          <label>
+            <input type="checkbox" checked={launchApp} onChange={(e) => setLaunchApp(e.target.checked)} /> {t.sys_launch_app}
+          </label>
+        </>
+      ) : (
+        <label>
+          {t.sys_start_url}
+          <input value={url} placeholder={t.sys_url_ph} onChange={(e) => setUrl(e.target.value)} />
+          {urlTouched && !urlOk && <small className="systems__field-error">{t.sys_url_invalid}</small>}
+          {urlOk && <small>{t.sys_hosts_default(host)}</small>}
+        </label>
+      )}
 
       <div className="systems__field-block">
         <div className="systems__field-label">{t.sys_login_title}</div>
@@ -131,13 +169,17 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
           {rules.map((r, i) => (
             <div key={i} className="systems__rule" data-testid="rule-row">
               <select aria-label={t.sys_rule_method} value={r.method} onChange={(e) => setRule(i, { method: e.target.value })}>
-                {METHODS.map((m) => (
+                {(desktop ? DESKTOP_METHODS : METHODS).map((m) => (
                   <option key={m} value={m}>
-                    {m === "*" ? t.sys_rule_method_any : m}
+                    {m === "*"
+                      ? t.sys_rule_method_any
+                      : desktop
+                        ? { click: t.sys_rule_method_click, type: t.sys_rule_method_type, key: t.sys_rule_method_key, login: t.sys_rule_method_login }[m]
+                        : m}
                   </option>
                 ))}
               </select>
-              <input aria-label={t.sys_rule_pattern} value={r.url_pattern} placeholder={t.sys_rule_pattern_ph} onChange={(e) => setRule(i, { url_pattern: e.target.value })} />
+              <input aria-label={t.sys_rule_pattern} value={r.url_pattern} placeholder={desktop ? t.sys_rule_pattern_ph_desktop : t.sys_rule_pattern_ph} onChange={(e) => setRule(i, { url_pattern: e.target.value })} />
               <select aria-label="action" value={r.action} onChange={(e) => setRule(i, { action: e.target.value as SystemRule["action"] })}>
                 <option value="allow">{t.sys_rule_allow}</option>
                 <option value="ask">{t.sys_rule_ask}</option>
@@ -148,7 +190,7 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
             </div>
           ))}
           <div>
-            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setRules((rs) => [...rs, { method: "POST", url_pattern: "", action: "allow" }])}>
+            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setRules((rs) => [...rs, { method: desktop ? "click" : "POST", url_pattern: "", action: "allow" }])}>
               {t.sys_rule_add}
             </button>
           </div>
@@ -161,6 +203,7 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
         <small>{t.sys_model_system_default_hint}</small>
       </label>
 
+      {!desktop && (
       <details className="systems__advanced" open={Boolean(initial && hosts)}>
         <summary>{t.sys_hosts_advanced}</summary>
         <label>
@@ -169,12 +212,15 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
           <small>{t.sys_hosts_hint2}</small>
         </label>
       </details>
+      )}
 
-      <label>
-        {t.sys_upload_dirs}
-        <textarea rows={2} value={uploadDirs} placeholder={t.sys_upload_dirs_ph} onChange={(e) => setUploadDirs(e.target.value)} />
-        <small>{t.sys_upload_dirs_hint}</small>
-      </label>
+      {!desktop && (
+        <label>
+          {t.sys_upload_dirs}
+          <textarea rows={2} value={uploadDirs} placeholder={t.sys_upload_dirs_ph} onChange={(e) => setUploadDirs(e.target.value)} />
+          <small>{t.sys_upload_dirs_hint}</small>
+        </label>
+      )}
 
       {error && (
         <p className="systems__error" role="alert">
@@ -182,7 +228,7 @@ export function ConnectionForm({ initial, initialLogin, onSave, onCancel }: Prop
         </p>
       )}
       <div className="systems__actions">
-        <button type="submit" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={!name.trim() || !urlOk}>
+        <button type="submit" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={!canSave}>
           {t.sys_save}
         </button>
         <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={onCancel}>

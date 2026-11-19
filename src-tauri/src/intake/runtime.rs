@@ -696,6 +696,8 @@ mod board_wiring_tests {
             emit: Arc::new(|_, _| {}),
             work_dir: dir.path().join("jobs"),
             timeout: Duration::from_secs(20),
+            idle_needed: Duration::ZERO,
+            max_defer: Duration::ZERO,
         }));
         SysEnv { app, pool, project, jobs, dir, _parent: parent }
     }

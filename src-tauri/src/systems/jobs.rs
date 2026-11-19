@@ -45,6 +45,34 @@ pub fn build_prompt(system_name: &str, system_id: &str, goal: &str) -> String {
     )
 }
 
+/// 桌面 App 系統的提示：工具是 `sys_app_*`，沒有配方，登入與暫停有專用規矩。
+pub fn build_desktop_prompt(system_name: &str, system_id: &str, app: &str, goal: &str) -> String {
+    format!(
+        "你是自動執行的助理，現在要在桌面 App「{app}」（系統「{system_name}」，system id：{system_id}）上完成下面的目標。\n\n\
+         目標：\n{goal}\n\n\
+         規矩：\n\
+         1. 只使用 sys_app_* 工具，每次呼叫都要帶 system=\"{system_id}\"；工具只作用在這個 App，不能切到別的 App。\n\
+         2. 先用 sys_app_snapshot 或 sys_app_find 看畫面，用回傳的元件 id 操作；畫面幾乎空白的 App 改用 sys_app_read_screen 與 sys_app_click_text。\n\
+         3. 每個動作都要帶 intent，並以「讀：」或「寫：」開頭。會改資料、送出、刪除、付款、按 Enter 送出的動作一律寫「寫：」。\n\
+         4. 動作被閘門拒絕（回覆含「被閘門拒絕」）時不可重試；停下來，回報需要開放什麼權限。\n\
+         5. App 停在登入畫面時：用 sys_app_snapshot 找到帳號與密碼欄位，呼叫 sys_app_login（你看不到密碼，也不要自己輸入帳密）；\
+         沒存帳密、要驗證碼或登入失敗就呼叫 sys_app_report_login_needed 然後停下來。\n\
+         6. 回覆含「已暫停」代表使用者正在操作電腦，立刻停止，不要再呼叫工具。\n\
+         7. 找不到元素、畫面不是預期的樣子時，不要亂試；停下來回報。\n\
+         8. 沒有人會回答你的問題。完成後用一兩句話回報結果；做不到就說明卡在哪裡。\n\
+         9. 回報的最後一行必須是「結果：成功」或「結果：失敗：原因」，讓程式知道事情有沒有做成。"
+    )
+}
+
+/// 依連線種類組提示。
+pub fn build_prompt_for(conn: &SystemConnection, goal: &str) -> String {
+    if conn.is_desktop() {
+        build_desktop_prompt(&conn.name, &conn.id, &conn.app, goal)
+    } else {
+        build_prompt(&conn.name, &conn.id, goal)
+    }
+}
+
 /// 這次要用的模型名稱：只接受英數與 `._-[]:`（跟看板派工同一套規則），不合法就沿用預設。
 pub fn clean_model(m: Option<&str>) -> Option<String> {
     let m = m?.trim();
@@ -451,6 +479,9 @@ pub struct JobsCtx {
     pub emit: super::state::Emitter,
     pub work_dir: std::path::PathBuf,
     pub timeout: Duration,
+    /// 桌面 App 的無人執行：要閒置多久才開始、最多延後多久（測試用小值）。
+    pub idle_needed: Duration,
+    pub max_defer: Duration,
 }
 
 #[derive(Default)]
@@ -534,13 +565,41 @@ impl JobsRuntime {
     /// 讓 AI 在某個系統上完成一段目標（定時任務與問題收集共用）：組提示、跑 claude，
     /// 並把「執行期間有寫入被拒絕或逾時」判成失敗（claude 自己結束碼是 0 也一樣）。
     pub async fn run_goal(&self, ctx: &Arc<JobsCtx>, pool: &SqlitePool, system_id: &str, goal: &str, model: Option<&str>) -> Outcome {
+        self.run_goal_with(ctx, pool, system_id, goal, model, false).await
+    }
+
+    /// `attended`：使用者就在電腦前（「請 AI 操作」）。桌面 App 類型的無人執行（定時、信件／問題收集）
+    /// 會先等電腦閒置，有人在用就延後；有人在場時不等。
+    pub async fn run_goal_with(&self, ctx: &Arc<JobsCtx>, pool: &SqlitePool, system_id: &str, goal: &str, model: Option<&str>, attended: bool) -> Outcome {
         let started_ms = now_ms();
         let conn: SystemConnection = match ctx.systems.connection(system_id) {
             Ok(c) => c,
             Err(e) => return Outcome { status: "failed", summary: e },
         };
-        // 有存帳密：先開瀏覽器並自動登入，AI 一開始就在登入後的畫面上工作。
-        if conn.enabled && ctx.systems.has_login(system_id) {
+        let desktop = if conn.is_desktop() && conn.enabled {
+            let Some(runner) = ctx.systems.desktop_runner() else {
+                return Outcome { status: "failed", summary: "電腦操作服務還沒就緒，無法操作桌面 App".into() };
+            };
+            if !attended {
+                if let Err(e) = super::desktop::presence::wait_until_free(
+                    &**runner.monitor(),
+                    ctx.idle_needed,
+                    super::desktop::presence::DEFER_STEP,
+                    ctx.max_defer,
+                )
+                .await
+                {
+                    (ctx.emit)("systems://desktop-busy", json!({ "system_id": system_id, "message": e }));
+                    return Outcome { status: "failed", summary: e };
+                }
+            }
+            runner.resume(system_id); // 上一次的暫停不帶到這一次
+            Some(runner)
+        } else {
+            None
+        };
+        // 有存帳密：先開瀏覽器並自動登入，AI 一開始就在登入後的畫面上工作。（桌面類型的登入由 AI 驅動。）
+        if conn.enabled && !conn.is_desktop() && ctx.systems.has_login(system_id) {
             if let Err(e) = ctx.systems.ensure_ready(system_id).await {
                 return Outcome { status: "failed", summary: e };
             }
@@ -549,12 +608,24 @@ impl JobsRuntime {
             (false, _) => Outcome { status: "failed", summary: "系統連線已停用".into() },
             (_, None) => Outcome { status: "failed", summary: "系統連線端點沒有在執行".into() },
             (true, Some((port, token))) => {
-                let prompt = build_prompt(&conn.name, &conn.id, goal);
+                let prompt = build_prompt_for(&conn, goal);
                 // 模型：這次指定的 → 系統的預設 → Claude Code 自己的預設。
                 let chosen = clean_model(model).or_else(|| clean_model(conn.model.as_deref()));
                 let command = with_model(&ctx.config.get().task_board.claude_command, chosen.as_deref());
                 run_claude(&command, &mcp_config_json(port, &token), &prompt, &ctx.work_dir, ctx.timeout).await
             }
+        };
+        // 桌面類型：執行中被使用者打斷或需要使用者登入，就算沒做完。
+        let outcome = match &desktop {
+            Some(r) if outcome.status == "ok" && r.status(system_id).0 => Outcome {
+                status: "failed",
+                summary: format!("執行被暫停：使用者操作了電腦或按了停止，這次沒有做完。AI 的回報：\n{}", outcome.summary),
+            },
+            Some(r) if outcome.status == "ok" && r.status(system_id).1 => Outcome {
+                status: "failed",
+                summary: format!("需要使用者自己登入 App，這次沒有做完。AI 的回報：\n{}", outcome.summary),
+            },
+            _ => outcome,
         };
         // AI 自己回報做不成（結果：失敗）也算失敗，不然「claude 結束碼 0」會把它記成成功。
         let outcome = if outcome.status == "ok" && final_verdict(&outcome.summary) == Some(false) {
@@ -619,7 +690,7 @@ impl JobsRuntime {
             return Err("這個系統正在處理別的事".into());
         }
         ctx.systems.journal_clear(system_id).await;
-        let outcome = self.run_goal(ctx, &pool, system_id, goal, model).await;
+        let outcome = self.run_goal_with(ctx, &pool, system_id, goal, model, true).await;
         let steps = ctx.systems.journal_steps(system_id).await;
         self.unlock(&key);
         let ok = outcome.status == "ok";
@@ -764,6 +835,8 @@ mod tests {
             emit: Arc::new(|_, _| {}),
             work_dir: dir.path().join("jobs"),
             timeout: Duration::from_secs(20),
+            idle_needed: Duration::ZERO,
+            max_defer: Duration::ZERO,
         });
         let rt = Arc::new(JobsRuntime::default());
         let args = |rt: &Arc<JobsRuntime>| {
@@ -1008,6 +1081,8 @@ mod tests {
             emit: Arc::new(|_, _| {}),
             work_dir: dir.path().join("jobs"),
             timeout: Duration::from_secs(120),
+            idle_needed: Duration::ZERO,
+            max_defer: Duration::ZERO,
         });
         let pool = st.audit_pool().await.unwrap();
         let now = chrono::Local::now().naive_local();
@@ -1097,6 +1172,8 @@ mod tests {
             emit: Arc::new(|_, _| {}),
             work_dir: dir.path().join("jobs"),
             timeout: Duration::from_secs(120),
+            idle_needed: Duration::ZERO,
+            max_defer: Duration::ZERO,
         });
         let rt = Arc::new(JobsRuntime::default());
 
@@ -1135,4 +1212,80 @@ mod tests {
         ep.stop();
         st.close("t").await;
     }
+    // ── 桌面 App 類型 ──
+
+    fn desktop_conn() -> SystemConnection {
+        SystemConnection {
+            id: "erp".into(), name: "進銷存".into(), kind: crate::systems::types::SystemKind::Desktop, app: "ERP Client".into(),
+            mode: Mode::Autonomous, ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_desktop_prompt_names_the_app_the_tools_and_the_rules() {
+        let p = build_prompt_for(&desktop_conn(), "查今天的訂單");
+        for w in ["ERP Client", "erp", "sys_app_*", "查今天的訂單", "sys_app_login", "sys_app_report_login_needed", "已暫停", "結果：成功", "寫："] {
+            assert!(p.contains(w), "缺 {w}：{p}");
+        }
+        assert!(!p.contains("sys_recipe_list"), "桌面系統沒有配方");
+        let web = build_prompt_for(&SystemConnection { id: "w".into(), name: "訂單".into(), ..Default::default() }, "g");
+        assert!(web.contains("sys_recipe_list") && !web.contains("sys_app_"), "網頁提示不變");
+    }
+
+    async fn desktop_ctx(idle: Option<Duration>, locked: Option<bool>, max_defer: Duration) -> (Arc<JobsCtx>, Arc<crate::systems::desktop::presence::FakeMonitor>, Arc<Mutex<Vec<String>>>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(crate::config::ConfigStore::new_at(dir.path().join("config.json")));
+        cfg.update(|a| a.system_connections.push(desktop_conn())).unwrap();
+        let st = Arc::new(SystemsState::with_pool(cfg.clone(), crate::systems::audit::open_in_memory().await));
+        let (computer, _b, _a, cdir) = crate::computer::tests::test_service(&[]);
+        std::mem::forget(cdir);
+        let monitor = crate::systems::desktop::presence::FakeMonitor::new(idle, locked);
+        let emit_all: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
+        let ev = emit_all.clone();
+        let emit: super::super::state::Emitter = Arc::new(move |n, p| ev.lock().push(format!("{n} {p}")));
+        let runner = crate::systems::desktop::runner::DesktopRunner::new(computer, monitor.clone(), st.approvals.clone(), emit.clone(), Arc::new(|_| None));
+        st.set_desktop_runner_for_test(Arc::new(runner));
+        let ctx = Arc::new(JobsCtx {
+            systems: st,
+            config: cfg,
+            endpoint: Arc::new(|| Some((1, "x".to_string()))),
+            emit,
+            work_dir: dir.path().join("jobs"),
+            timeout: Duration::from_secs(20),
+            idle_needed: Duration::from_secs(60),
+            max_defer,
+        });
+        (ctx, monitor, emit_all, dir)
+    }
+
+    #[tokio::test]
+    async fn an_unattended_desktop_run_gives_up_when_the_machine_never_goes_idle() {
+        let (ctx, _m, events, _d) = desktop_ctx(Some(Duration::from_secs(1)), Some(false), Duration::from_millis(40)).await;
+        let pool = ctx.systems.audit_pool().await.unwrap();
+        let rt = JobsRuntime::default();
+        let o = rt.run_goal(&ctx, &pool, "erp", "查訂單", None).await;
+        assert_eq!(o.status, "failed");
+        assert!(o.summary.contains("沒有閒置") && o.summary.contains("沒有執行"), "{}", o.summary);
+        assert!(events.lock().iter().any(|e| e.starts_with("systems://desktop-busy")), "要通知使用者");
+    }
+
+    #[tokio::test]
+    async fn a_locked_screen_also_defers_an_unattended_desktop_run() {
+        let (ctx, _m, _e, _d) = desktop_ctx(Some(Duration::from_secs(9999)), Some(true), Duration::from_millis(40)).await;
+        let pool = ctx.systems.audit_pool().await.unwrap();
+        let o = JobsRuntime::default().run_goal(&ctx, &pool, "erp", "查訂單", None).await;
+        assert!(o.status == "failed" && o.summary.contains("螢幕鎖定中"), "{}", o.summary);
+    }
+
+    #[tokio::test]
+    async fn an_attended_run_does_not_wait_for_idle() {
+        // 使用者自己按「請 AI 操作」：人就在電腦前，不能因為「正在操作」而延後。
+        let (ctx, _m, events, _d) = desktop_ctx(Some(Duration::from_secs(1)), Some(false), Duration::from_millis(40)).await;
+        let pool = ctx.systems.audit_pool().await.unwrap();
+        let o = JobsRuntime::default().run_goal_with(&ctx, &pool, "erp", "查訂單", None, true).await;
+        assert!(!o.summary.contains("沒有閒置"), "{}", o.summary);
+        assert!(!events.lock().iter().any(|e| e.starts_with("systems://desktop-busy")));
+    }
+
+
 }

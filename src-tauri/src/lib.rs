@@ -347,6 +347,8 @@ pub fn run() {
                         }),
                         work_dir: dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("AITERM").join("system-jobs"),
                         timeout: systems::jobs::RUN_TIMEOUT,
+                        idle_needed: systems::desktop::presence::IDLE_NEEDED,
+                        max_defer: systems::desktop::presence::MAX_DEFER,
                     });
                     let rt = Arc::new(systems::jobs::JobsRuntime::default());
                     app.manage(ctx.clone());
@@ -411,6 +413,8 @@ pub fn run() {
                     computer::audit::AuditLog::new(computer::audit::AuditLog::default_path()),
                     std::process::id() as i32,
                 ));
+                // 系統連線的桌面 App 類型借用同一份電腦操作服務（總開關、權限、審計都共用）。
+                app.state::<Arc<systems::state::SystemsState>>().inner().set_computer(service.clone());
                 app.manage(approver);
                 app.manage(service);
             }

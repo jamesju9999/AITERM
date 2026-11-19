@@ -160,4 +160,49 @@ describe("ConnectionForm", () => {
     fireEvent.click(screen.getByText(t.sys_save));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ model: "claude-sonnet-5-5" }), expect.anything()));
   });
+  it("saves a web system with kind web and no bound app by default", async () => {
+    const onSave = mount();
+    fill();
+    fireEvent.click(screen.getByText(t.sys_save));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ kind: "web", app: "" }), expect.anything());
+  });
+
+  it("switches to a desktop app system: asks for the app, hides URL/domain/upload fields and saves them empty", async () => {
+    const onSave = mount();
+    fireEvent.click(screen.getByRole("radio", { name: t.sys_kind_desktop }));
+    expect(screen.queryByPlaceholderText(t.sys_url_ph)).toBeNull();
+    expect(screen.queryByPlaceholderText(t.sys_upload_dirs_ph)).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText(t.sys_name_ph), { target: { value: "進銷存" } });
+    const save = screen.getByText(t.sys_save) as HTMLButtonElement;
+    expect(save.disabled).toBe(true); // 還沒填 App
+    fireEvent.change(screen.getByPlaceholderText(t.sys_app_ph), { target: { value: " ERP Client " } });
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "desktop", app: "ERP Client", launch_app: true, start_url: "", allowed_hosts: [], upload_dirs: [], mode: "read_only" }),
+      expect.anything(),
+    );
+  });
+
+  it("lets a desktop system opt out of launching the app and offers desktop rule actions", async () => {
+    const onSave = mount();
+    fireEvent.click(screen.getByRole("radio", { name: t.sys_kind_desktop }));
+    fireEvent.change(screen.getByPlaceholderText(t.sys_name_ph), { target: { value: "X" } });
+    fireEvent.change(screen.getByPlaceholderText(t.sys_app_ph), { target: { value: "Notes" } });
+    fireEvent.click(screen.getByLabelText(t.sys_launch_app));
+    pickMode(t.sys_mode_title_rules);
+    fireEvent.click(screen.getByText(t.sys_rule_add));
+    const method = screen.getByLabelText(t.sys_rule_method) as HTMLSelectElement;
+    expect(Array.from(method.options).map((o) => o.value)).toEqual(["*", "click", "type", "key", "login"]);
+    expect(method.value).toBe("click");
+    fireEvent.change(screen.getByLabelText(t.sys_rule_pattern), { target: { value: "刪除*" } });
+    fireEvent.click(screen.getByText(t.sys_save));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ launch_app: false, rules: [{ method: "click", url_pattern: "刪除*", action: "allow" }] }),
+      expect.anything(),
+    );
+  });
 });

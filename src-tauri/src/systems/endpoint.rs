@@ -113,7 +113,14 @@ fn describe_systems(config_conns: Vec<super::types::SystemConnection>) -> String
     }
     let list: Vec<Value> = config_conns
         .iter()
-        .map(|c| json!({ "id": c.id, "name": c.name, "start_url": c.start_url, "mode": c.mode, "enabled": c.enabled }))
+        .map(|c| {
+            if c.is_desktop() {
+                json!({ "id": c.id, "name": c.name, "kind": "desktop", "app": c.app, "mode": c.mode, "enabled": c.enabled,
+                        "tools": "sys_app_*（桌面 App 系統只能用 sys_app_* 工具）" })
+            } else {
+                json!({ "id": c.id, "name": c.name, "kind": "web", "start_url": c.start_url, "mode": c.mode, "enabled": c.enabled })
+            }
+        })
         .collect();
     serde_json::to_string_pretty(&list).unwrap_or_default()
 }
@@ -131,13 +138,23 @@ pub async fn handle_rpc(state: &Arc<SystemsState>, req: Value, scope: &Scope) ->
                 "serverInfo": { "name": "aiterm-systems", "version": env!("CARGO_PKG_VERSION") }
             }),
         ),
-        "tools/list" => match state.catalog().await {
-            Ok(mut tools) => {
-                tools.splice(0..0, std::iter::once(list_tool()).chain(recipe_tools()));
-                rpc_result(&id, json!({ "tools": tools }))
+        "tools/list" => {
+            let conns = scope.filter(state.connections());
+            let has_desktop = conns.iter().any(|c| c.is_desktop());
+            let has_web = conns.iter().any(|c| !c.is_desktop());
+            // 只有桌面系統時不必啟動 Playwright MCP 去取網頁工具清單。
+            let web_tools = if has_web || !has_desktop { state.catalog().await } else { Ok(vec![]) };
+            match web_tools {
+                Ok(mut tools) => {
+                    if has_desktop {
+                        tools.extend(super::desktop::tools::defs());
+                    }
+                    tools.splice(0..0, std::iter::once(list_tool()).chain(recipe_tools()));
+                    rpc_result(&id, json!({ "tools": tools }))
+                }
+                Err(e) => rpc_error(&id, -32603, &e),
             }
-            Err(e) => rpc_error(&id, -32603, &e),
-        },
+        }
         "tools/call" => {
             let name = req["params"]["name"].as_str().unwrap_or("").to_string();
             let args = req["params"]["arguments"].clone();
@@ -148,7 +165,9 @@ pub async fn handle_rpc(state: &Arc<SystemsState>, req: Value, scope: &Scope) ->
                 if !system.is_empty() && !scope.allows(&system) {
                     return Some(rpc_result(&id, tool_text(format!("這個工作沒有被授權使用系統連線「{system}」（先用 sys_list 看可用的系統）"), true)));
                 }
-                if let Some(r) = if system.is_empty() { None } else { handle_recipe_tool(state, &name, &args).await } {
+                if name.starts_with("sys_recipe_") && state.connection(&system).is_ok_and(|c| c.is_desktop()) {
+                    rpc_result(&id, tool_text("桌面 App 系統不支援配方；請直接依目標操作。".into(), true))
+                } else if let Some(r) = if system.is_empty() { None } else { handle_recipe_tool(state, &name, &args).await } {
                     match r {
                         Ok(t) => rpc_result(&id, tool_text(t, false)),
                         Err(e) => rpc_result(&id, tool_text(e, true)),
@@ -320,6 +339,83 @@ mod tests {
         assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("system"));
         let r = handle_rpc(&s, json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"sys_snapshot","arguments":{"system":"ghost"}}}), &Scope::All).await.unwrap();
         assert_eq!(r["result"]["isError"], true, "不存在的系統回工具層錯誤，不是 JSON-RPC 錯誤");
+    }
+
+    /// 一個桌面連線（綁定假後端的 Notes）與一個網頁連線，桌面工具走假的電腦操作服務。
+    async fn state_with_both() -> (Arc<SystemsState>, tempfile::TempDir, Arc<crate::computer::tests::FakeBackend>) {
+        use crate::systems::types::{Mode, SystemConnection, SystemKind};
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(ConfigStore::new_at(dir.path().join("config.json")));
+        cfg.update(|c| {
+            c.system_connections.push(SystemConnection {
+                id: "erp".into(), name: "ERP".into(), kind: SystemKind::Desktop, app: "Notes".into(), mode: Mode::ReadOnly, ..Default::default()
+            });
+            c.system_connections.push(SystemConnection {
+                id: "web".into(), name: "Web".into(), start_url: "https://x.test/".into(), allowed_hosts: vec!["x.test".into()], ..Default::default()
+            });
+        })
+        .unwrap();
+        let s = Arc::new(SystemsState::with_pool(cfg, crate::systems::audit::open_in_memory().await));
+        s.set_catalog_for_test(vec![json!({"name":"sys_snapshot"})]);
+        let (computer, backend, _approver, cdir) = crate::computer::tests::test_service(&[]);
+        s.set_computer(computer);
+        std::mem::forget(cdir); // 測試期間要保留審計檔所在資料夾
+        (s, dir, backend)
+    }
+
+    async fn call_tool(s: &Arc<SystemsState>, scope: &Scope, name: &str, args: Value) -> Value {
+        handle_rpc(s, json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":name,"arguments":args}}), scope).await.unwrap()["result"].clone()
+    }
+
+    #[tokio::test]
+    async fn tools_list_adds_the_desktop_tools_when_a_desktop_system_is_in_scope() {
+        let (s, _d, _b) = state_with_both().await;
+        let names = |r: Value| -> Vec<String> { r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect() };
+        let all = names(handle_rpc(&s, json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), &Scope::All).await.unwrap());
+        assert!(all.contains(&"sys_snapshot".to_string()) && all.contains(&"sys_app_click".to_string()) && all.contains(&"sys_app_login".to_string()));
+        let web_only = names(handle_rpc(&s, json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), &Scope::Only(vec!["web".into()])).await.unwrap());
+        assert!(!web_only.iter().any(|n| n.starts_with("sys_app_")), "只授權網頁系統的工作看不到桌面工具");
+        let desktop_only = names(handle_rpc(&s, json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), &Scope::Only(vec!["erp".into()])).await.unwrap());
+        assert!(desktop_only.contains(&"sys_app_click".to_string()) && !desktop_only.contains(&"sys_snapshot".to_string()));
+    }
+
+    #[tokio::test]
+    async fn sys_list_tells_the_ai_which_kind_each_system_is() {
+        let (s, _d, _b) = state_with_both().await;
+        let r = call_tool(&s, &Scope::All, "sys_list", json!({})).await;
+        let list: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+        let erp = list.as_array().unwrap().iter().find(|c| c["id"] == "erp").unwrap();
+        assert_eq!((erp["kind"].as_str(), erp["app"].as_str()), (Some("desktop"), Some("Notes")));
+        assert!(erp.get("start_url").is_none());
+        let web = list.as_array().unwrap().iter().find(|c| c["id"] == "web").unwrap();
+        assert_eq!(web["kind"], "web");
+    }
+
+    #[tokio::test]
+    async fn a_desktop_tool_call_reaches_the_bound_app_and_the_scope_still_applies() {
+        let (s, _d, backend) = state_with_both().await;
+        let r = call_tool(&s, &Scope::All, "sys_app_snapshot", json!({"system":"erp","intent":"讀：看畫面"})).await;
+        assert_eq!(r["isError"], false, "{r}");
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("Delete"));
+        let _ = backend;
+        let r = call_tool(&s, &Scope::Only(vec!["web".into()]), "sys_app_snapshot", json!({"system":"erp","intent":"讀：x"})).await;
+        assert_eq!(r["isError"], true, "沒被授權的系統不可用");
+    }
+
+    #[tokio::test]
+    async fn web_and_desktop_tools_cannot_be_mixed_up() {
+        let (s, _d, _b) = state_with_both().await;
+        let r = call_tool(&s, &Scope::All, "sys_snapshot", json!({"system":"erp","intent":"讀：x"})).await;
+        assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains("sys_app_"), "{r}");
+        let r = call_tool(&s, &Scope::All, "sys_app_snapshot", json!({"system":"web","intent":"讀：x"})).await;
+        assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains("網頁系統"), "{r}");
+    }
+
+    #[tokio::test]
+    async fn recipes_are_refused_for_desktop_systems() {
+        let (s, _d, _b) = state_with_both().await;
+        let r = call_tool(&s, &Scope::All, "sys_recipe_list", json!({"system":"erp"})).await;
+        assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains("不支援配方"), "{r}");
     }
 
     #[tokio::test]
