@@ -1,7 +1,7 @@
 # Claude Code CLI 提供者（純文字）
 
 日期：2026-11-19
-狀態：設計，尚未實作
+狀態：已實作並以真的 claude 實機驗證（Mac）；Windows 尚未驗證
 
 ## 背景
 
@@ -46,13 +46,16 @@ claude -p
   --model <model>
   --tools ""
   --output-format stream-json --verbose --include-partial-messages
-  --system-prompt <system_prompt>
+  --system-prompt-file <暫存檔>
   --setting-sources ""
   --strict-mcp-config
   --disable-slash-commands
+  --no-session-persistence
 ```
 
-提示（把 `messages` 攤平成文字）走 **stdin**，避免多行中文在各平台命令列引號出問題（與 `claude_args` 同一原則）。
+提示（把 `messages` 攤平成文字）走 **stdin**、系統提示走**暫存檔**（用完即刪），都不進 argv：
+多行中文在各平台命令列引號會出問題，Windows 命令列也有長度上限（與 `claude_args` 同一原則）。
+**行程在系統暫存目錄執行**（見下表）。
 
 **瘦身參數是必要的，已實測（claude 2.1.328，Mac）：**
 
@@ -61,6 +64,11 @@ claude -p
 | 只有 `--tools ""` | 12,497（使用者的 hooks／CLAUDE.md／skills 全被帶進來） |
 | 加 `--setting-sources "" --strict-mcp-config --disable-slash-commands` | 636 |
 | `--bare` | **不可用**：回「Not logged in」，因為 `--bare` 不吃訂閱 OAuth |
+| 上面三個旗標，但 cwd 是 AITerm 的 repo | **11,104**：`claude` 會從 cwd 往上載入專案的 `CLAUDE.md`，`--setting-sources ""` 擋不住 |
+| 三個旗標＋中立資料夾（系統暫存目錄） | 約 600 |
+
+最後兩列是實機驗收時才發現的：第一次真實執行得到 11,104，原因是行程繼承了 AITerm 的工作目錄。
+修正是 `current_dir(temp_dir)`，並有測試鎖住（假 claude 會回報自己的 `pwd`）。
 
 不用瘦身參數的話，每次 Ask AI 都會背著使用者的 SessionStart hook 輸出，既貴又會汙染答案。
 
@@ -102,7 +110,7 @@ GUI App 的 PATH 不含 Homebrew／npm／`~/.local/bin`。找法沿用 `tasks/to
 第一期**每次重送整段歷史**（攤平成 `User:`／`Assistant:` 文字），不用 `--resume`。
 理由：`--resume` 會把這次對話留在使用者的 Claude Code 工作階段清單裡，汙染他們自己的 `/resume`；
 也讓 AITerm 的歷史與 CLI 狀態分家。代價是長對話重複計 token，由 CLI 自己的 prompt cache 吸收。
-加 `--no-session-persistence` 避免寫入磁碟工作階段（若該旗標存在；實作時先以 `claude --help` 確認）。
+`--no-session-persistence` 避免寫入磁碟工作階段（已用 `claude --help` 確認存在）。
 
 ### 前端
 
