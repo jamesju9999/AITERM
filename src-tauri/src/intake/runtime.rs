@@ -159,8 +159,10 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
         }
         if let Err(e) = {
             let images = store::list_attachments(&db.pool, &item.id).await.unwrap_or_default();
-            let diagnose = config::load(&db.pool, &item.project_id).await.handling(&item.source) == config::Handling::Diagnose;
-            crate::tasks::dispatch::write_then_submit(&pty, &tab, &dispatcher::build_prompt(&item, &images, diagnose)).await
+            let cfg = config::load(&db.pool, &item.project_id).await;
+            let diagnose = cfg.handling(&item.source) == config::Handling::Diagnose;
+            let prompt = format!("{}{}", dispatcher::build_prompt(&item, &images, diagnose), dispatcher::refs_note(&cfg.refs_for(&item.source)));
+            crate::tasks::dispatch::write_then_submit(&pty, &tab, &prompt).await
         } {
             rt.registry.release(&tab);
             store::fail(&db.pool, &item.id, &format!("無法送進終端機：{e}")).await.ok();

@@ -46,9 +46,15 @@ fn card_title(item: &IntakeItem) -> String {
 /// `queued` 的項目（自動派送）→ 卡片進排隊欄；`pending`（手動）→ 留在規劃欄。
 ///
 /// `question`＝提問：卡片內文要求唯讀回答，不改任何檔案。
+/// 該題管道設定的「參考資料夾」提示（沒設就是空字串）。
+async fn refs_text(intake: &SqlitePool, item: &IntakeItem) -> String {
+    super::dispatcher::refs_note(&super::config::load(intake, &item.project_id).await.refs_for(&item.source))
+}
+
 pub async fn route_item(intake: &SqlitePool, handle: &ProjectHandle, item: &IntakeItem, repo_dir: &str, question: bool, diagnose: bool) -> Result<String, String> {
     let files = store::list_attachments(intake, &item.id).await.map_err(|e| e.to_string())?;
     let body = if question { question_body(item, &files, diagnose) } else { card_body(item, &files) };
+    let body = format!("{body}{}", refs_text(intake, item).await);
     let id = tasks::create_task(&handle.pool, &card_title(item), &body, repo_dir, true, false)
         .await
         .map_err(|e| e.to_string())?;
@@ -241,7 +247,8 @@ pub fn ask_question(item: &IntakeItem, diagnose: bool) -> String {
 /// `pending`（手動）→ 留在規劃欄不指派，使用者在桌布上自己指派。
 pub async fn route_canvas_bug(intake: &SqlitePool, handle: &ProjectHandle, item: &IntakeItem, agent: &AgentRow) -> Result<String, String> {
     let files = store::list_attachments(intake, &item.id).await.map_err(|e| e.to_string())?;
-    let id = tasks::create_task(&handle.pool, &card_title(item), &bug_body(item, &files), &agent.project_dir, true, false)
+    let body = format!("{}{}", bug_body(item, &files), refs_text(intake, item).await);
+    let id = tasks::create_task(&handle.pool, &card_title(item), &body, &agent.project_dir, true, false)
         .await
         .map_err(|e| e.to_string())?;
     let built = async {
@@ -258,7 +265,8 @@ pub async fn route_canvas_bug(intake: &SqlitePool, handle: &ProjectHandle, item:
 
 /// 建問答卡交給最閒的 Agent 讀程式庫回答，並認領為 `on_board`（`canvas_ask`）。
 pub async fn route_canvas_ask(intake: &SqlitePool, handle: &ProjectHandle, item: &IntakeItem, agent: &AgentRow, diagnose: bool) -> Result<String, String> {
-    let id = workflow::create_ask_card(&handle.pool, &handle.path, agent, &ask_question(item, diagnose)).await.map_err(|e| e.to_string())?;
+    let question = format!("{}{}", ask_question(item, diagnose), refs_text(intake, item).await);
+    let id = workflow::create_ask_card(&handle.pool, &handle.path, agent, &question).await.map_err(|e| e.to_string())?;
     let built = async {
         sqlx::query("UPDATE tasks SET title = ? WHERE id = ?")
             .bind(format!("提問：{}", card_title(item)))
@@ -439,6 +447,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn each_channels_reference_folders_are_added_to_its_cards_only() {
+        use crate::intake::config::{self, Config};
+        let (intake, h, _d) = setup().await;
+        let mut cfg = Config::default();
+        cfg.channel_refs.email = vec!["/docs/all".into(), "docs/internal".into()];
+        cfg.channel_refs.line = vec!["/docs/faq".into()];
+        config::save(&intake, "p", &cfg).await.unwrap();
+        let email = add(&intake, "e1", store::QUEUED, "信來的").await;
+        // 提問卡與要改程式的卡都附，而且是這個管道自己的清單。
+        let q = route_item(&intake, &h, &email, "/repo", true, false).await.unwrap();
+        let q = tasks::get_task(&h.pool, &q).await.unwrap().unwrap().body;
+        assert!(q.contains("【參考資料夾】") && q.contains("- /docs/all") && q.contains("- docs/internal（相對於專案資料夾）") && !q.contains("/docs/faq"), "{q}");
+        let email2 = add(&intake, "e2", store::QUEUED, "信來的要改").await;
+        let c = route_item(&intake, &h, &email2, "/repo", false, false).await.unwrap();
+        assert!(tasks::get_task(&h.pool, &c).await.unwrap().unwrap().body.contains("- /docs/all"));
+        // 沒設參考資料夾的管道（telegram）完全不加。
+        let tg = {
+            let mut i = add(&intake, "t1", store::QUEUED, "電報來的").await;
+            sqlx::query("UPDATE intake_items SET source = 'telegram' WHERE id = ?").bind(&i.id).execute(&intake).await.unwrap();
+            i.source = "telegram".into();
+            i
+        };
+        let t = route_item(&intake, &h, &tg, "/repo", true, false).await.unwrap();
+        assert!(!tasks::get_task(&h.pool, &t).await.unwrap().unwrap().body.contains("參考資料夾"));
+    }
+
+    #[tokio::test]
     async fn diagnose_only_questions_tell_the_agent_to_announce_diagnose_mode_when_asked_to_implement() {
         use crate::intake::dispatcher::DIAGNOSE_NOTICE;
         let (intake, h, _d) = setup().await;
@@ -615,6 +650,28 @@ mod tests {
         assert!(card.body.contains("<<<INTAKE") && card.body.contains("只讀") && card.body.contains("不可信"));
         assert!(card.body.contains("不要提到專案裡其他卡片"), "要提醒不能洩漏其他人的問題");
         assert_eq!(store::get_item(&intake, &item.id).await.unwrap().unwrap().route_kind.as_deref(), Some("canvas_ask"));
+    }
+
+    #[tokio::test]
+    async fn canvas_ask_and_bug_cards_carry_the_channels_reference_folders() {
+        use crate::intake::config::{self, Config};
+        let (intake, h, _d) = setup().await;
+        let mut cfg = Config::default();
+        cfg.channel_refs.email = vec!["/docs/faq".into()];
+        config::save(&intake, "p", &cfg).await.unwrap();
+        let a = agent(&h, "coder", "甲").await;
+        let ask = add(&intake, "m1", store::QUEUED, "怎麼登入").await;
+        let id = route_canvas_ask(&intake, &h, &ask, &a, false).await.unwrap();
+        assert!(tasks::get_task(&h.pool, &id).await.unwrap().unwrap().body.contains("- /docs/faq"));
+        let bug = add(&intake, "m2", store::QUEUED, "修登入").await;
+        let id = route_canvas_bug(&intake, &h, &bug, &a).await.unwrap();
+        let body = tasks::get_task(&h.pool, &id).await.unwrap().unwrap().body;
+        assert!(body.contains("【參考資料夾】") && body.contains("- /docs/faq"), "{body}");
+        // 沒設清單時，原本的卡片內文不變。
+        config::save(&intake, "p", &Config::default()).await.unwrap();
+        let plain = add(&intake, "m3", store::QUEUED, "另一題").await;
+        let id = route_canvas_ask(&intake, &h, &plain, &a, false).await.unwrap();
+        assert!(!tasks::get_task(&h.pool, &id).await.unwrap().unwrap().body.contains("參考資料夾"));
     }
 
     #[tokio::test]

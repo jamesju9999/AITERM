@@ -52,6 +52,37 @@ impl Default for ChannelHandling {
     }
 }
 
+/// 每個管道各自的「參考資料夾」：派送給 AI 時，提示詞會要它回答前先到這些資料夾找資料。
+/// 允許絕對路徑、`~` 開頭與相對於專案資料夾的路徑。預設都是空（不加任何提示）。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelRefs {
+    /// 所有管道共用：每個管道派送時都會帶上（再加上該管道自己的）。
+    pub shared: Vec<String>,
+    pub email: Vec<String>,
+    pub telegram: Vec<String>,
+    pub line: Vec<String>,
+    pub web: Vec<String>,
+}
+
+/// 去頭尾空白、略過空白項、去重（保留第一次出現的順序）。
+pub fn clean_paths(paths: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in paths {
+        let p = p.trim();
+        if !p.is_empty() && !out.iter().any(|x| x == p) {
+            out.push(p.to_string());
+        }
+    }
+    out
+}
+
+impl ChannelRefs {
+    pub fn cleaned(&self) -> Self {
+        Self { shared: clean_paths(&self.shared), email: clean_paths(&self.email), telegram: clean_paths(&self.telegram), line: clean_paths(&self.line), web: clean_paths(&self.web) }
+    }
+}
+
 /// 網頁表單的開放範圍。外網沒有獨立模式：`Lan` 綁 0.0.0.0，要從外網進來請自備反向代理／Tunnel。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,6 +129,8 @@ pub struct Config {
     pub web_port: u16,
     /// 各管道的處理方式（只診斷／可改檔案）。
     pub channel_handling: ChannelHandling,
+    /// 各管道的參考資料夾。
+    pub channel_refs: ChannelRefs,
     /// 問題派送到哪裡處理。
     pub route: Route,
     /// 派送目標是系統連線時，要用哪個系統（`SystemConnection.id`）。
@@ -130,6 +163,7 @@ impl Default for Config {
             web_mode: WebMode::Off,
             web_port: 8320,
             channel_handling: ChannelHandling::default(),
+            channel_refs: ChannelRefs::default(),
             route: Route::Board,
             system_id: String::new(),
         }
@@ -137,6 +171,20 @@ impl Default for Config {
 }
 
 impl Config {
+    /// 依題目來源取實際要帶給 AI 的參考資料夾：所有管道共用的，加上該管道自己的（去重，共用的在前）。
+    /// 不認得的來源只回共用的。
+    pub fn refs_for(&self, source: &str) -> Vec<String> {
+        let r = &self.channel_refs;
+        let own: &[String] = match source {
+            "email" => &r.email,
+            "telegram" => &r.telegram,
+            "line" => &r.line,
+            "web" => &r.web,
+            _ => &[],
+        };
+        clean_paths(&[r.shared.as_slice(), own].concat())
+    }
+
     /// 依題目來源（`email`／`telegram`／`line`／`web`）取處理方式；不認得的來源保守沿用原行為（可改檔案）。
     pub fn handling(&self, source: &str) -> Handling {
         let h = &self.channel_handling;
@@ -244,6 +292,29 @@ mod tests {
 
     fn c(mode: MatchMode, alias: &str, tag: &str) -> Config {
         Config { enabled: true, account_id: "acc".into(), mode, alias: alias.into(), tag: tag.into(), ..Config::default() }
+    }
+
+    #[test]
+    fn reference_folders_are_per_channel_cleaned_and_default_to_none() {
+        let c = Config::default();
+        assert!(["email", "telegram", "line", "web", "x"].iter().all(|s| c.refs_for(s).is_empty()));
+        // 共用的資料夾每個管道都會帶上，再加上各自的（去重，共用的在前）；未知來源只拿到共用的。
+        let mut s = Config::default();
+        s.channel_refs.shared = vec!["/docs/public".into(), "/docs/faq".into()];
+        s.channel_refs.line = vec!["/docs/faq".into(), "/docs/line-only".into()];
+        assert_eq!(s.refs_for("line"), vec!["/docs/public", "/docs/faq", "/docs/line-only"]);
+        assert_eq!(s.refs_for("email"), vec!["/docs/public", "/docs/faq"]);
+        assert_eq!(s.refs_for("x"), vec!["/docs/public", "/docs/faq"]);
+        let old: Config = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+        assert_eq!(old.channel_refs, ChannelRefs::default(), "舊設定缺欄位仍可讀");
+        let mut c = Config::default();
+        c.channel_refs.line = vec!["/docs/faq".into()];
+        c.channel_refs.email = vec!["/docs/all".into(), "~/notes".into()];
+        assert_eq!(c.refs_for("line"), vec!["/docs/faq"]);
+        assert_eq!(c.refs_for("email").len(), 2);
+        assert!(c.refs_for("web").is_empty(), "各管道互不相干");
+        let dirty = ChannelRefs { line: vec!["  /a ".into(), "".into(), "/a".into(), "   ".into(), "b".into()], ..Default::default() };
+        assert_eq!(dirty.cleaned().line, vec!["/a", "b"]);
     }
 
     #[test]

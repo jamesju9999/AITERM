@@ -12,6 +12,7 @@ pub mod line_store;
 pub mod line_source;
 pub mod mail_source;
 pub mod queue;
+pub mod refs;
 #[cfg(test)]
 mod rehearsal;
 pub mod rules;

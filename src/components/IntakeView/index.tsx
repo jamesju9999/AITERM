@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   intakeAdoptLegacy,
+  intakeCheckFolders,
   intakeApprove,
   intakeAssign,
   intakeCopyLegacyConfig,
@@ -28,6 +30,8 @@ import {
   intakeUpsertSender,
   type IntakeAttachment,
   type IntakeChannelHandling,
+  type IntakeChannelRefs,
+  type IntakeFolderCheck,
   type IntakeConfig,
   type IntakeLineStatus,
   type IntakeLineUnknown,
@@ -604,6 +608,8 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   const [tgDefault, setTgDefault] = useState(false);
   const [lineStatus, setLineStatus] = useState<IntakeLineStatus | null>(null);
   const [lineUnknown, setLineUnknown] = useState<IntakeLineUnknown[]>([]);
+  const [refChecks, setRefChecks] = useState<Record<string, IntakeFolderCheck>>({});
+  const [newRefs, setNewRefs] = useState<Record<string, string>>({});
   const [unknownLabels, setUnknownLabels] = useState<Record<string, string>>({});
   const [editingAddr, setEditingAddr] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState("");
@@ -636,6 +642,20 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
     systemsList().then(setSystems).catch(() => {});
     loadSenders();
   }, [loadSenders, onError, projectId]);
+
+  const refPaths = cfg ? Array.from(new Set(Object.values(cfg.channel_refs).flat())) : [];
+  const refKey = JSON.stringify(refPaths);
+  useEffect(() => {
+    const paths = JSON.parse(refKey) as string[];
+    if (paths.length === 0) return;
+    let live = true;
+    intakeCheckFolders(projectId, paths)
+      .then((r) => live && setRefChecks(Object.fromEntries(r.map((c) => [c.path, c]))))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [projectId, refKey]);
 
   if (!cfg) return null;
   const set = <K extends keyof IntakeConfig>(k: K, v: IntakeConfig[K]) => {
@@ -736,6 +756,73 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       </label>
       <p className="intake__meta intake__hint">{cfg.channel_handling[ch] === "diagnose" ? t.intake_handling_diagnose_hint : t.intake_handling_edit_hint}</p>
     </>
+  );
+
+  const addRef = (ch: keyof IntakeChannelRefs, raw: string) => {
+    const p = raw.trim();
+    if (!p || cfg.channel_refs[ch].includes(p)) return;
+    set("channel_refs", { ...cfg.channel_refs, [ch]: [...cfg.channel_refs[ch], p] });
+    setNewRefs((m) => ({ ...m, [ch]: "" }));
+  };
+  const removeRef = (ch: keyof IntakeChannelRefs, p: string) =>
+    set("channel_refs", { ...cfg.channel_refs, [ch]: cfg.channel_refs[ch].filter((x) => x !== p) });
+  const pickRef = async (ch: keyof IntakeChannelRefs) => {
+    try {
+      const picked = await openDialog({ directory: true, multiple: false });
+      if (typeof picked === "string" && picked) addRef(ch, picked);
+    } catch (e) {
+      onError(errText(e));
+    }
+  };
+  const refStatus = (c: IntakeFolderCheck | undefined): { ok: boolean; text: string } => {
+    if (!c) return { ok: true, text: t.intake_refs_checking };
+    if (!c.exists) return { ok: false, text: t.intake_refs_missing };
+    if (!c.is_dir) return { ok: false, text: t.intake_refs_not_dir };
+    const parts = [c.readable > 0 ? t.intake_refs_ok(c.readable) : t.intake_refs_empty];
+    if (c.office > 0) parts.push(t.intake_refs_office(c.office));
+    if (c.truncated) parts.push(t.intake_refs_truncated);
+    return { ok: c.readable > 0 && c.office === 0, text: parts.join("；") };
+  };
+  const refsField = (ch: keyof IntakeChannelRefs, label: string) => (
+    <div className="intake__refs">
+      <h4 className="intake__card-title">{ch === "shared" ? t.intake_refs_shared : t.intake_refs}</h4>
+      <p className="intake__meta intake__hint">{ch === "shared" ? t.intake_refs_shared_hint : t.intake_refs_hint}</p>
+      <ul className="intake__refs-list" aria-label={`${label} ${t.intake_refs}`}>
+        {cfg.channel_refs[ch].map((p) => {
+          const st = refStatus(refChecks[p]);
+          return (
+            <li key={p} className="intake__refs-row">
+              <span className="intake__refs-main">
+                <code>{p}</code>
+                <span className={st.ok ? "intake__refs-ok" : "intake__refs-warn"}>
+                  <span aria-hidden="true">{st.ok ? "✓" : "⚠"}</span> {st.text}
+                </span>
+              </span>
+              <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_remove} ${p}`} onClick={() => removeRef(ch, p)}>
+                {t.intake_remove}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="intake__field intake__field--inline">
+        <input
+          aria-label={`${label} ${t.intake_refs_path}`}
+          value={newRefs[ch] ?? ""}
+          placeholder={t.intake_refs_ph}
+          onChange={(e) => setNewRefs((m) => ({ ...m, [ch]: e.target.value }))}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") addRef(ch, newRefs[ch] ?? "");
+          }}
+        />
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_refs_add}`} disabled={!(newRefs[ch] ?? "").trim()} onClick={() => addRef(ch, newRefs[ch] ?? "")}>
+          {t.intake_refs_add}
+        </button>
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_refs_pick}`} onClick={() => void pickRef(ch)}>
+          {t.intake_refs_pick}
+        </button>
+      </div>
+    </div>
   );
 
   const needsAlias = cfg.mode === "alias" || cfg.mode === "alias_or_tag";
@@ -839,6 +926,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         <input value={cfg.auth_server} onChange={(e) => set("auth_server", e.target.value)} />
       </label>
       {handlingField("email", t.intake_sec_mailbox)}
+      {refsField("email", t.intake_sec_mailbox)}
           </>
         )}
         {chanTab === "telegram" && (
@@ -853,6 +941,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         {t.intake_set_tg_default}
       </label>
       {handlingField("telegram", t.intake_sec_telegram)}
+      {refsField("telegram", t.intake_sec_telegram)}
           </>
         )}
         {chanTab === "line" && (
@@ -919,6 +1008,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       <p className="intake__meta intake__hint">{t.intake_line_retention_hint}</p>
       <p className="intake__meta intake__hint">{t.intake_line_unknown_pointer}</p>
       {handlingField("line", t.intake_sec_line)}
+      {refsField("line", t.intake_sec_line)}
           </>
         )}
         {chanTab === "web" && (
@@ -948,9 +1038,11 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       )}
       {cfg.web_mode === "lan" && <p className="intake__error">{t.intake_web_lan_warning}</p>}
       {handlingField("web", t.intake_sec_web)}
+      {refsField("web", t.intake_sec_web)}
           </>
         )}
         </div>
+      {refsField("shared", t.intake_refs_shared_label)}
       </section>
       <div className="intake__cols">
       <div className="intake__col">

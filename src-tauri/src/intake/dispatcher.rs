@@ -18,6 +18,30 @@ pub fn marker_for(item_id: &str) -> String {
 /// 提問者要求實作／修改、但這個管道只診斷時，回覆開頭要有的告知（要原樣寫出，方便辨識）。
 pub const DIAGNOSE_NOTICE: &str = "【診斷模式】這個管道目前設定為只診斷，我不會修改任何檔案；以下是建議做法，請自行套用，或請管理員把這個管道改成可改檔案。";
 
+fn is_absolute_like(p: &str) -> bool {
+    let b = p.as_bytes();
+    p.starts_with('~')
+        || std::path::Path::new(p).is_absolute()
+        || p.starts_with("\\\\")
+        || (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+}
+
+/// 管道的「參考資料夾」：要 AI 回答前先到這些資料夾找資料。清單空就回空字串（不加任何提示）。
+pub fn refs_note(paths: &[String]) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    let list: Vec<String> = paths
+        .iter()
+        .map(|p| if is_absolute_like(p) { format!("- {p}") } else { format!("- {p}（相對於專案資料夾）") })
+        .collect();
+    format!(
+        "\n\n【參考資料夾】回答前請先到下列資料夾尋找相關資料（用 Read、Grep、Glob 讀取；pdf 可直接讀），\
+         依資料回答並註明引用的檔名；找不到就明說不知道，不要猜。這些資料夾只供參考，不要修改裡面的檔案：\n{}",
+        list.join("\n")
+    )
+}
+
 /// 「只診斷」管道多加的要求。這是提示詞層級的約束，不是沙箱。
 pub fn diagnose_note() -> String {
     format!(
@@ -232,6 +256,16 @@ mod tests {
         assert!(p.starts_with("[INTAKE#abcdef12]"));
         assert!(p.contains("外部") && p.contains("不可信"));
         assert!(p.contains("<<<INTAKE\n主旨：壞掉了\n\n請修\nINTAKE>>>"));
+    }
+
+    #[test]
+    fn the_reference_folder_note_lists_every_path_and_marks_relative_ones() {
+        assert_eq!(refs_note(&[]), "", "沒設就完全不加");
+        let n = refs_note(&["/docs/faq".into(), "C:\\docs\\手冊".into(), "~/notes".into(), "docs/internal".into()]);
+        assert!(n.contains("【參考資料夾】") && n.contains("不要猜") && n.contains("不要修改裡面的檔案"), "{n}");
+        assert!(n.contains("- /docs/faq\n") && n.contains("- C:\\docs\\手冊\n") && n.contains("- ~/notes\n"), "{n}");
+        assert!(n.contains("- docs/internal（相對於專案資料夾）"), "{n}");
+        assert_eq!(n.matches("相對於專案資料夾").count(), 1, "絕對路徑與 ~ 不加註記");
     }
 
     #[test]

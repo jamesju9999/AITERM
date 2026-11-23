@@ -7,6 +7,27 @@ export type MatchMode = "alias" | "subject_tag" | "alias_or_tag" | "dedicated";
 export type DispatchMode = "auto" | "manual";
 /** 一個管道收到的問題要怎麼處理：只診斷（不改檔案）或可改檔案。 */
 export type IntakeHandling = "diagnose" | "edit";
+/** 各管道的參考資料夾（派送給 AI 時，提示詞要它先到這些資料夾找資料）。 */
+export interface IntakeChannelRefs {
+  /** 所有管道共用。 */
+  shared: string[];
+  email: string[];
+  telegram: string[];
+  line: string[];
+  web: string[];
+}
+/** 參考資料夾的檢查結果。 */
+export interface IntakeFolderCheck {
+  path: string;
+  exists: boolean;
+  is_dir: boolean;
+  /** Claude Code 讀得到的檔案數。 */
+  readable: number;
+  /** 讀不了的 Office 類檔案數。 */
+  office: number;
+  /** 資料夾很大，只統計了前面一部分。 */
+  truncated: boolean;
+}
 export interface IntakeChannelHandling {
   email: IntakeHandling;
   telegram: IntakeHandling;
@@ -72,6 +93,8 @@ export interface IntakeConfig {
   web_port: number;
   /** 各管道的處理方式。 */
   channel_handling: IntakeChannelHandling;
+  /** 各管道的參考資料夾。 */
+  channel_refs: IntakeChannelRefs;
   /** 問題派送到哪裡處理。 */
   route: IntakeRoute;
   /** 派送目標是系統連線時，要用哪個系統（SystemConnection.id）。 */
@@ -154,6 +177,8 @@ export interface IntakeLineUnknown {
 }
 export const intakeLineUnknown = () => invoke<IntakeLineUnknown[]>("intake_line_unknown");
 export const intakeLineForgetUnknown = (id: string) => invoke<boolean>("intake_line_forget_unknown", { id });
+export const intakeCheckFolders = (projectId: string, paths: string[]) =>
+  invoke<IntakeFolderCheck[]>("intake_check_folders", { projectId, paths });
 export const intakeLineStatus = () => invoke<IntakeLineStatus>("intake_line_status");
 /** 空字串＝不變。 */
 export const intakeLineSetCredentials = (channelSecret: string, accessToken: string) =>

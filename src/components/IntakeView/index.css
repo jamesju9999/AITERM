@@ -236,3 +236,15 @@
 .intake__refresh { width: 34px; }
 .intake__del--pane { padding: 0 14px; font-size: 13px; }
 .intake__listhead .intake__refresh { font-size: 18px; }
+
+.intake__refs { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--border, #2a2a2a); }
+.intake__refs .intake__card-title { margin: 0; }
+.intake__settings .intake__refs .intake__meta { margin-left: 0; }
+.intake__refs-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.intake__refs-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #2a2a2a); border-radius: 6px; font-size: 13px; }
+.intake__refs-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.intake__refs-main code { overflow-wrap: anywhere; }
+.intake__refs-ok { font-size: 12px; color: #34d399; }
+.intake__refs-warn { font-size: 12px; color: #f59e0b; }
+.intake__refs-row button { flex: none; white-space: nowrap; }
+.intake__settings .intake__refs .intake__field--inline input { flex: 1 1 280px; max-width: none; }

@@ -7,6 +7,8 @@ import { LocaleProvider } from "../../contexts/LocaleContext";
 import { translations } from "../../lib/i18n";
 import type { IntakeItem } from "../../ipc/intake";
 
+const openDialog = vi.fn();
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...a: unknown[]) => openDialog(...a) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 vi.mock("../../ipc/systems", () => ({ systemsList: vi.fn(() => Promise.resolve([{ id: "sys1", name: "訂單系統", start_url: "https://x/", allowed_hosts: ["x"], mode: "autonomous", rules: [], enabled: true }])) }));
 vi.mock("../../ipc/mail", () => ({ mailListAccounts: vi.fn(() => Promise.resolve([])) }));
@@ -32,6 +34,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeSetConfig: vi.fn(() => Promise.resolve()),
   intakeSenders: vi.fn(() => Promise.resolve([])),
   intakeUpsertSender: vi.fn(() => Promise.resolve()),
+  intakeCheckFolders: vi.fn(() => Promise.resolve([])),
   intakeSetSenderLabel: vi.fn(() => Promise.resolve()),
   intakeDeleteSender: vi.fn(() => Promise.resolve(true)),
   intakeDropped: vi.fn(() => Promise.resolve([["not_allowed", 3]])),
@@ -63,7 +66,7 @@ function cfgView(over: Partial<ipc.IntakeConfig> = {}, extra: Partial<ipc.Intake
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, line_enabled: false, line_port: 8321, line_auto_open: true, line_test_mode: false, line_retention_days: 30, channel_handling: { email: "edit", telegram: "edit", line: "diagnose", web: "edit" }, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, line_enabled: false, line_port: 8321, line_auto_open: true, line_test_mode: false, line_retention_days: 30, channel_handling: { email: "edit", telegram: "edit", line: "diagnose", web: "edit" }, channel_refs: { shared: [], email: [], telegram: [], line: [], web: [] }, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
     },
     saved: true,
     telegram_default: false,
@@ -390,6 +393,110 @@ describe("IntakeView", () => {
     );
     fireEvent.change(box, { target: { value: "Ub345e5d492c48c02a3eaa279924c52" } });
     expect(add).toBeDisabled();
+  });
+
+  it("each channel has its own reference folders: add, pick, remove, see whether they are usable, and save per channel", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(
+      cfgView({ enabled: true, channel_refs: { shared: [], email: ["/docs/all"], telegram: [], line: [], web: [] } }),
+    );
+    vi.mocked(ipc.intakeCheckFolders).mockImplementation((_p, paths) =>
+      Promise.resolve(
+        paths.map((path) =>
+          path === "/docs/all"
+            ? { path, exists: true, is_dir: true, readable: 12, office: 3, truncated: false }
+            : path === "/docs/faq"
+              ? { path, exists: true, is_dir: true, readable: 5, office: 0, truncated: false }
+              : { path, exists: false, is_dir: false, readable: 0, office: 0, truncated: false },
+        ),
+      ),
+    );
+    openDialog.mockResolvedValue("/picked/manuals");
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    // 信箱已有一個：顯示可讀數量與 Office 警告。
+    const mailList = await screen.findByRole("list", { name: `${t.intake_sec_mailbox} ${t.intake_refs}` });
+    expect(await within(mailList).findByText("/docs/all")).toBeInTheDocument();
+    expect(await within(mailList).findByText(new RegExp(t.intake_refs_ok(12)))).toBeInTheDocument();
+    expect(within(mailList).getByText(new RegExp(t.intake_refs_office(3)))).toBeInTheDocument();
+    // 手動輸入新增（Enter 或按鈕）；不存在的路徑會警告。
+    const box = screen.getByLabelText(`${t.intake_sec_mailbox} ${t.intake_refs_path}`);
+    fireEvent.change(box, { target: { value: "  /docs/faq  " } });
+    fireEvent.click(screen.getByRole("button", { name: `${t.intake_sec_mailbox} ${t.intake_refs_add}` }));
+    expect(await within(mailList).findByText(new RegExp(t.intake_refs_ok(5)))).toBeInTheDocument();
+    fireEvent.change(box, { target: { value: "/not/here" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await within(mailList).findByText(t.intake_refs_missing)).toBeInTheDocument();
+    // 重複的不會再加一次。
+    fireEvent.change(box, { target: { value: "/docs/faq" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(within(mailList).getAllByText("/docs/faq")).toHaveLength(1);
+    // 選擇資料夾。
+    fireEvent.click(screen.getByRole("button", { name: `${t.intake_sec_mailbox} ${t.intake_refs_pick}` }));
+    expect(await within(mailList).findByText("/picked/manuals")).toBeInTheDocument();
+    // 移除。
+    fireEvent.click(within(mailList).getByRole("button", { name: `${t.intake_remove} /not/here` }));
+    await waitFor(() => expect(within(mailList).queryByText("/not/here")).toBeNull());
+    // 另一個管道（LINE）有自己的清單，互不相干。
+    fireEvent.click(screen.getByRole("tab", { name: new RegExp(t.intake_sec_line) }));
+    const lineList = await screen.findByRole("list", { name: `${t.intake_sec_line} ${t.intake_refs}` });
+    expect(within(lineList).queryByText("/docs/all")).toBeNull();
+    fireEvent.change(screen.getByLabelText(`${t.intake_sec_line} ${t.intake_refs_path}`), { target: { value: "/docs/faq" } });
+    fireEvent.click(screen.getByRole("button", { name: `${t.intake_sec_line} ${t.intake_refs_add}` }));
+    fireEvent.click(screen.getByText(t.intake_set_save));
+    await waitFor(() =>
+      expect(ipc.intakeSetConfig).toHaveBeenCalledWith(
+        "p1",
+        expect.objectContaining({ channel_refs: { shared: [], email: ["/docs/all", "/docs/faq", "/picked/manuals"], telegram: [], line: ["/docs/faq"], web: [] } }),
+        false,
+      ),
+    );
+  });
+
+  it("a shared reference folder list applies to every channel and is saved separately from the channel lists", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ enabled: true }));
+    vi.mocked(ipc.intakeCheckFolders).mockImplementation((_p, paths) =>
+      Promise.resolve(paths.map((path) => ({ path, exists: true, is_dir: true, readable: 7, office: 0, truncated: false }))),
+    );
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    expect(await screen.findByText(t.intake_refs_shared)).toBeInTheDocument();
+    const shared = screen.getByRole("list", { name: `${t.intake_refs_shared_label} ${t.intake_refs}` });
+    fireEvent.change(screen.getByLabelText(`${t.intake_refs_shared_label} ${t.intake_refs_path}`), { target: { value: "/docs/public" } });
+    fireEvent.click(screen.getByRole("button", { name: `${t.intake_refs_shared_label} ${t.intake_refs_add}` }));
+    expect(await within(shared).findByText("/docs/public")).toBeInTheDocument();
+    expect(await within(shared).findByText(new RegExp(t.intake_refs_ok(7)))).toBeInTheDocument();
+    // 切到哪個管道分頁，共用清單都還在。
+    fireEvent.click(screen.getByRole("tab", { name: new RegExp(t.intake_sec_line) }));
+    expect(within(screen.getByRole("list", { name: `${t.intake_refs_shared_label} ${t.intake_refs}` })).getByText("/docs/public")).toBeInTheDocument();
+    fireEvent.click(screen.getByText(t.intake_set_save));
+    await waitFor(() =>
+      expect(ipc.intakeSetConfig).toHaveBeenCalledWith(
+        "p1",
+        expect.objectContaining({ channel_refs: { shared: ["/docs/public"], email: [], telegram: [], line: [], web: [] } }),
+        false,
+      ),
+    );
+  });
+
+  it("picking a folder that the user cancels adds nothing, and an empty or non-folder path is flagged", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ enabled: true, channel_refs: { shared: [], email: ["/a-file.md", "/empty"], telegram: [], line: [], web: [] } }));
+    vi.mocked(ipc.intakeCheckFolders).mockResolvedValue([
+      { path: "/a-file.md", exists: true, is_dir: false, readable: 0, office: 0, truncated: false },
+      { path: "/empty", exists: true, is_dir: true, readable: 0, office: 0, truncated: true },
+    ]);
+    openDialog.mockResolvedValue(null);
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    const list = await screen.findByRole("list", { name: `${t.intake_sec_mailbox} ${t.intake_refs}` });
+    expect(await within(list).findByText(t.intake_refs_not_dir)).toBeInTheDocument();
+    expect(within(list).getByText(new RegExp(t.intake_refs_empty))).toBeInTheDocument();
+    expect(within(list).getByText(new RegExp(t.intake_refs_truncated))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: `${t.intake_sec_mailbox} ${t.intake_refs_pick}` }));
+    await waitFor(() => expect(openDialog).toHaveBeenCalled());
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
   });
 
   it("each row of the question list says which channel the question came from", async () => {

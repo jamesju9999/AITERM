@@ -72,6 +72,8 @@ async fn resolve_conflicts(pool: &sqlx::SqlitePool, project_id: &str, cfg: &Conf
 
 #[tauri::command]
 pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, project_id: String, config: Config, telegram_default: bool) -> Result<(), String> {
+    let mut config = config;
+    config.channel_refs = config.channel_refs.cleaned();
     check_conflicts(&app, &db.pool, &project_id, &config).await?;
     let mut global = config::load_global(&db.pool).await;
     global.web_port = config.web_port;
@@ -573,6 +575,20 @@ mod tests {
         std::fs::write(&secret, "密碼").unwrap();
         assert!(text_preview(root.path(), &row(&secret)).is_err(), "目錄外的檔案不能讀");
     }
+}
+
+/// 檢查參考資料夾：存不存在、是不是資料夾、Claude Code 讀得到／讀不了的檔案有多少。
+/// 相對路徑接在這個專案的程式庫資料夾後面（沒有就對不上）。
+#[tauri::command]
+pub async fn intake_check_folders(app: AppHandle, project_id: String, paths: Vec<String>) -> Result<Vec<super::refs::FolderCheck>, String> {
+    use tauri::Manager;
+    let base: Option<std::path::PathBuf> = match app.try_state::<crate::projects::ProjectRegistry>().and_then(|r| r.get(&project_id)) {
+        Some(h) => crate::tasks::formations::repo_path(&h.pool).await.ok().flatten().map(std::path::PathBuf::from),
+        None => None,
+    };
+    tauri::async_runtime::spawn_blocking(move || paths.iter().map(|p| super::refs::check(p, base.as_deref())).collect())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 最近出現、但還沒加入白名單的 LINE 來源（群組／使用者），給設定頁一鍵加入。

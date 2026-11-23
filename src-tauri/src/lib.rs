@@ -599,6 +599,7 @@ pub fn run() {
             intake::commands::intake_senders,
             intake::commands::intake_upsert_sender,
             intake::commands::intake_set_sender_label,
+            intake::commands::intake_check_folders,
             intake::commands::intake_delete_sender,
             intake::commands::intake_dropped,
             intake::commands::intake_approve,
