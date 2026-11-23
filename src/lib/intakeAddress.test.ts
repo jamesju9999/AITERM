@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validAddress } from "./intakeAddress";
+import { displayAddress, validAddress } from "./intakeAddress";
 
 describe("validAddress", () => {
   it("accepts emails, Telegram chats and LINE user ids (same rules as the backend)", () => {
@@ -12,5 +12,13 @@ describe("validAddress", () => {
     for (const bad of ["line:", "line:U123", "line:X0123456789abcdef0123456789abcdef", "line:U0123456789abcdef0123456789abcdeg", "line:U0123456789abcdef0123456789abcdef0"]) {
       expect(validAddress(bad), bad).toBe(false);
     }
+  });
+});
+
+describe("displayAddress", () => {
+  it("shows a LINE user id with its capital U and leaves other addresses alone", () => {
+    expect(displayAddress("line:ub345e5d492c48c02a3eaa279924c52d2")).toBe("line:Ub345e5d492c48c02a3eaa279924c52d2");
+    expect(displayAddress("line:Ub345e5d492c48c02a3eaa279924c52d2")).toBe("line:Ub345e5d492c48c02a3eaa279924c52d2");
+    for (const other of ["a@b.co", "tg:123", "line:nope"]) expect(displayAddress(other)).toBe(other);
   });
 });

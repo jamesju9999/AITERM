@@ -39,7 +39,7 @@ import { mailListAccounts, type MailAccount } from "../../ipc/mail";
 import { systemsList, type SystemConnection } from "../../ipc/systems";
 import { useIntakeChanged } from "../../hooks/useIntakeChanged";
 import { useLocale } from "../../contexts/LocaleContext";
-import { validAddress } from "../../lib/intakeAddress";
+import { displayAddress, validAddress } from "../../lib/intakeAddress";
 import { flowSteps } from "../../lib/intakeFlow";
 import "./index.css";
 
@@ -220,7 +220,7 @@ export function IntakeView() {
                       <time className="intake__time" dateTime={new Date(i.created_at * 1000).toISOString()}>{formatTime(i.created_at)}</time>
                     </span>
                     <span className="intake__subject">{i.subject || t.intake_no_subject}</span>
-                    <span className="intake__sender">{t.intake_asker}：{i.sender_name ? `${i.sender_name} <${i.sender}>` : i.sender} · {i.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
+                    <span className="intake__sender">{t.intake_asker}：{i.sender_name ? `${i.sender_name} <${displayAddress(i.sender)}>` : displayAddress(i.sender)} · {i.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}</span>
                   </button>
                   <DeleteButton item={i} run={run} variant="row" />
                 </li>
@@ -939,7 +939,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       <ul className="intake__senders">
         {senders.map((s) => (
           <li key={s.address}>
-            {s.address} · {s.level === "internal" ? t.intake_level_internal : t.intake_level_external}
+            {displayAddress(s.address)} · {s.level === "internal" ? t.intake_level_internal : t.intake_level_external}
             {s.level === "external" && (
               <label>
                 <input
@@ -957,7 +957,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         ))}
       </ul>
       <div className="intake__field intake__field--inline">
-        <input aria-label={t.intake_sender_address} value={newAddr} placeholder="name@example.com / tg:123456" onChange={(e) => setNewAddr(e.target.value)} />
+        <input aria-label={t.intake_sender_address} value={newAddr} placeholder="name@example.com / tg:123456 / line:U…" onChange={(e) => setNewAddr(e.target.value)} />
         <select aria-label={t.intake_sender_level} value={newLevel} onChange={(e) => setNewLevel(e.target.value as Level)}>
           <option value="internal">{t.intake_level_internal}</option>
           <option value="external">{t.intake_level_external}</option>
