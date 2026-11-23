@@ -241,20 +241,20 @@ async fn list_items(State(st): St, Path(pid): Path<String>, Query(q): Query<List
     }
 }
 
-/// 項目必須屬於網址上的專案，否則一律 404（不洩漏別的專案的題目存在）。
-async fn item_of(st: &AppState, pid: &str, id: &str) -> Option<store::IntakeItem> {
-    store::get_item(&st.pools.intake, id).await.ok().flatten().filter(|i| i.project_id == pid)
+/// 題目以 id 定址（UUID）；所有成員看得到所有專案，所以不再要求網址帶專案。
+async fn item_of(st: &AppState, id: &str) -> Option<store::IntakeItem> {
+    store::get_item(&st.pools.intake, id).await.ok().flatten()
 }
 
-async fn get_item(State(st): St, Path((pid, id)): Path<(String, String)>) -> Response {
-    match item_of(&st, &pid, &id).await {
+async fn get_item(State(st): St, Path(id): Path<String>) -> Response {
+    match item_of(&st, &id).await {
         Some(i) => Json(i).into_response(),
         None => not_found(),
     }
 }
 
-async fn act(st: &AppState, me: &Me, pid: &str, id: &str, action: &str, r: impl std::future::Future<Output = Result<bool, sqlx::Error>>) -> Response {
-    if item_of(st, pid, id).await.is_none() {
+async fn act(st: &AppState, me: &Me, id: &str, action: &str, r: impl std::future::Future<Output = Result<bool, sqlx::Error>>) -> Response {
+    if item_of(st, id).await.is_none() {
         return not_found();
     }
     match r.await {
@@ -267,16 +267,16 @@ async fn act(st: &AppState, me: &Me, pid: &str, id: &str, action: &str, r: impl 
     }
 }
 
-async fn approve(State(st): St, Extension(me): Extension<Me>, Path((pid, id)): Path<(String, String)>) -> Response {
-    act(&st, &me, &pid, &id, "item.approve", store::approve(&st.pools.intake, &id)).await
+async fn approve(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>) -> Response {
+    act(&st, &me, &id, "item.approve", store::approve(&st.pools.intake, &id)).await
 }
 
-async fn reject(State(st): St, Extension(me): Extension<Me>, Path((pid, id)): Path<(String, String)>) -> Response {
-    act(&st, &me, &pid, &id, "item.reject", store::reject(&st.pools.intake, &id)).await
+async fn reject(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>) -> Response {
+    act(&st, &me, &id, "item.reject", store::reject(&st.pools.intake, &id)).await
 }
 
-async fn delete_item(State(st): St, Extension(me): Extension<Me>, Path((pid, id)): Path<(String, String)>) -> Response {
-    let r = act(&st, &me, &pid, &id, "item.delete", store::delete_item(&st.pools.intake, &id)).await;
+async fn delete_item(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>) -> Response {
+    let r = act(&st, &me, &id, "item.delete", store::delete_item(&st.pools.intake, &id)).await;
     attach::remove_dir(&st.data_dir.join("attachments"), &id);
     r
 }
@@ -286,12 +286,12 @@ pub struct DraftBody {
     pub draft: String,
 }
 
-async fn update_draft(State(st): St, Extension(me): Extension<Me>, Path((pid, id)): Path<(String, String)>, Json(b): Json<DraftBody>) -> Response {
-    act(&st, &me, &pid, &id, "item.draft", store::update_draft(&st.pools.intake, &id, &b.draft)).await
+async fn update_draft(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>, Json(b): Json<DraftBody>) -> Response {
+    act(&st, &me, &id, "item.draft", store::update_draft(&st.pools.intake, &id, &b.draft)).await
 }
 
-async fn reply(State(st): St, Extension(me): Extension<Me>, Path((pid, id)): Path<(String, String)>) -> Response {
-    if item_of(&st, &pid, &id).await.is_none() {
+async fn reply(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>) -> Response {
+    if item_of(&st, &id).await.is_none() {
         return not_found();
     }
     match crate::reply::send(&st, &id).await {
@@ -314,8 +314,8 @@ async fn not_implemented() -> Response {
 
 // ---- 附件 ----
 
-async fn attachments(State(st): St, Path((pid, id)): Path<(String, String)>) -> Response {
-    if item_of(&st, &pid, &id).await.is_none() {
+async fn attachments(State(st): St, Path(id): Path<String>) -> Response {
+    if item_of(&st, &id).await.is_none() {
         return not_found();
     }
     match store::list_attachments(&st.pools.intake, &id).await {
@@ -324,21 +324,21 @@ async fn attachments(State(st): St, Path((pid, id)): Path<(String, String)>) -> 
     }
 }
 
-async fn attachment_row(st: &AppState, pid: &str, id: &str, att: &str) -> Option<store::AttachmentRow> {
-    item_of(st, pid, id).await?;
+async fn attachment_row(st: &AppState, id: &str, att: &str) -> Option<store::AttachmentRow> {
+    item_of(st, id).await?;
     store::get_attachment(&st.pools.intake, att).await.ok().flatten().filter(|r| r.item_id == id)
 }
 
-async fn attachment_data(State(st): St, Path((pid, id, att)): Path<(String, String, String)>) -> Response {
-    let Some(row) = attachment_row(&st, &pid, &id, &att).await else { return not_found() };
+async fn attachment_data(State(st): St, Path((id, att)): Path<(String, String)>) -> Response {
+    let Some(row) = attachment_row(&st, &id, &att).await else { return not_found() };
     match attach::data_url(&st.data_dir.join("attachments"), &row) {
         Ok(u) => Json(u).into_response(),
         Err(e) => bad(&e),
     }
 }
 
-async fn attachment_text(State(st): St, Path((pid, id, att)): Path<(String, String, String)>) -> Response {
-    let Some(row) = attachment_row(&st, &pid, &id, &att).await else { return not_found() };
+async fn attachment_text(State(st): St, Path((id, att)): Path<(String, String)>) -> Response {
+    let Some(row) = attachment_row(&st, &id, &att).await else { return not_found() };
     match attach::text_preview(&st.data_dir.join("attachments"), &row) {
         Ok(t) => Json(t).into_response(),
         Err(e) => bad(&e),
@@ -440,17 +440,17 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/projects/{pid}/dropped", get(dropped))
         .route("/v1/projects/{pid}/check-folders", post(check_folders))
         .route("/v1/projects/{pid}/items", get(list_items))
-        .route("/v1/projects/{pid}/items/{id}", get(get_item).delete(delete_item))
-        .route("/v1/projects/{pid}/items/{id}/approve", post(approve))
-        .route("/v1/projects/{pid}/items/{id}/reject", post(reject))
-        .route("/v1/projects/{pid}/items/{id}/draft", put(update_draft))
-        .route("/v1/projects/{pid}/items/{id}/reply", post(reply))
-        .route("/v1/projects/{pid}/items/{id}/claim", post(not_implemented))
-        .route("/v1/projects/{pid}/items/{id}/release", post(not_implemented))
-        .route("/v1/projects/{pid}/items/{id}/result", post(not_implemented))
-        .route("/v1/projects/{pid}/items/{id}/attachments", get(attachments))
-        .route("/v1/projects/{pid}/items/{id}/attachments/{att}/data", get(attachment_data))
-        .route("/v1/projects/{pid}/items/{id}/attachments/{att}/text", get(attachment_text))
+        .route("/v1/items/{id}", get(get_item).delete(delete_item))
+        .route("/v1/items/{id}/approve", post(approve))
+        .route("/v1/items/{id}/reject", post(reject))
+        .route("/v1/items/{id}/draft", put(update_draft))
+        .route("/v1/items/{id}/reply", post(reply))
+        .route("/v1/items/{id}/claim", post(not_implemented))
+        .route("/v1/items/{id}/release", post(not_implemented))
+        .route("/v1/items/{id}/result", post(not_implemented))
+        .route("/v1/items/{id}/attachments", get(attachments))
+        .route("/v1/items/{id}/attachments/{att}/data", get(attachment_data))
+        .route("/v1/items/{id}/attachments/{att}/text", get(attachment_text))
         .route("/v1/line/unknown", get(line_unknown))
         .route("/v1/line/unknown/{id}", delete(forget_unknown))
         .route("/v1/secrets/{id}", put(set_secret).delete(clear_secret))

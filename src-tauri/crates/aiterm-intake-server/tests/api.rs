@@ -90,12 +90,14 @@ async fn items_are_listed_actioned_and_scoped_to_their_project() {
 
     let list: Vec<IntakeItem> = member.get(&format!("/v1/projects/{a}/items")).await.unwrap();
     assert_eq!(list.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec![item.id.as_str()], "只看得到自己專案的題目");
-    // 別的專案的題目，用錯的網址存取一律 404。
-    let wrong = member.request(Method::POST, &format!("/v1/projects/{a}/items/{}/approve", other.id), None).await;
+    let list_b: Vec<IntakeItem> = member.get(&format!("/v1/projects/{b}/items")).await.unwrap();
+    assert_eq!(list_b.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec![other.id.as_str()]);
+    // 不存在的題目一律 404。
+    let wrong = member.request(Method::POST, "/v1/items/no-such-item/approve", None).await;
     assert_eq!(wrong.unwrap_err(), ClientError::Server("not found".into()));
 
-    member.request(Method::POST, &format!("/v1/projects/{a}/items/{}/approve", item.id), None).await.unwrap();
-    let after: IntakeItem = member.get(&format!("/v1/projects/{a}/items/{}", item.id)).await.unwrap();
+    member.request(Method::POST, &format!("/v1/items/{}/approve", item.id), None).await.unwrap();
+    let after: IntakeItem = member.get(&format!("/v1/items/{}", item.id)).await.unwrap();
     assert_ne!(after.status, store::PENDING, "核准後不再是待核准");
 
     let audit: Vec<serde_json::Value> = srv.paired("管理", Role::Admin).await.get("/v1/audit").await.unwrap();
@@ -109,7 +111,7 @@ async fn the_claim_endpoints_are_reserved_and_answer_501() {
     let m = srv.paired("小明", Role::Member).await;
     let item = add_item(&srv, &pid, "line", "line:u0123456789abcdef0123456789abcdef", "x", store::PENDING).await;
     for action in ["claim", "release", "result"] {
-        let r = m.request(Method::POST, &format!("/v1/projects/{pid}/items/{}/{action}", item.id), None).await;
+        let r = m.request(Method::POST, &format!("/v1/items/{}/{action}", item.id), None).await;
         assert_eq!(r.unwrap_err(), ClientError::Server("not implemented".into()), "{action}");
     }
 }
@@ -127,13 +129,13 @@ async fn replying_to_a_line_item_pushes_plain_text_and_marks_it_sent() {
     admin.request(Method::PUT, "/v1/secrets/line_channel_access_token", Some(json!({"value":"TOKEN"}))).await.unwrap();
     let item = add_item(&srv, &pid, "line", "line:u0123456789abcdef0123456789abcdef", "問題", store::DRAFT).await;
     // 還沒有草稿：不能寄。
-    assert!(admin.request(Method::POST, &format!("/v1/projects/{pid}/items/{}/reply", item.id), None).await.is_err());
-    admin.request(Method::PUT, &format!("/v1/projects/{pid}/items/{}/draft", item.id), Some(json!({"draft":"請按 **確定**"}))).await.unwrap();
-    admin.request(Method::POST, &format!("/v1/projects/{pid}/items/{}/reply", item.id), None).await.unwrap();
+    assert!(admin.request(Method::POST, &format!("/v1/items/{}/reply", item.id), None).await.is_err());
+    admin.request(Method::PUT, &format!("/v1/items/{}/draft", item.id), Some(json!({"draft":"請按 **確定**"}))).await.unwrap();
+    admin.request(Method::POST, &format!("/v1/items/{}/reply", item.id), None).await.unwrap();
     let sent = &line.received_requests().await.unwrap()[0];
     let body: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
     assert_eq!(body["messages"][0]["text"], "請按 確定", "Markdown 已轉成純文字");
-    let after: IntakeItem = admin.get(&format!("/v1/projects/{pid}/items/{}", item.id)).await.unwrap();
+    let after: IntakeItem = admin.get(&format!("/v1/items/{}", item.id)).await.unwrap();
     assert_eq!(after.status, store::DONE);
 }
 
@@ -228,10 +230,10 @@ async fn no_data_endpoint_answers_without_a_token() {
         ("PUT", format!("/v1/projects/{pid}/config")),
         ("GET", format!("/v1/projects/{pid}/senders")),
         ("GET", format!("/v1/projects/{pid}/items")),
-        ("GET", format!("/v1/projects/{pid}/items/x")),
-        ("POST", format!("/v1/projects/{pid}/items/x/approve")),
-        ("POST", format!("/v1/projects/{pid}/items/x/reply")),
-        ("POST", format!("/v1/projects/{pid}/items/x/claim")),
+        ("GET", "/v1/items/x".to_string()),
+        ("POST", "/v1/items/x/approve".to_string()),
+        ("POST", "/v1/items/x/reply".to_string()),
+        ("POST", "/v1/items/x/claim".to_string()),
         ("GET", "/v1/line/unknown".into()),
         ("GET", "/v1/events".into()),
     ];
