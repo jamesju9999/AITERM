@@ -16,76 +16,16 @@ fn changed(app: &AppHandle) {
     let _ = app.emit(CHANGED_EVENT, ());
 }
 
-/// 設定頁要的資料：該專案的設定，加上「是否存過」與「是不是 Telegram 預設專案」。
-#[derive(Serialize)]
-pub struct ConfigView {
-    pub config: Config,
-    pub saved: bool,
-    pub telegram_default: bool,
-}
+pub use aiterm_intake_core::ops::{ConfigView, SenderDto};
 
 #[tauri::command]
 pub async fn intake_get_config(db: State<'_, IntakeDb>, project_id: String) -> Result<ConfigView, String> {
-    let mut config = config::load(&db.pool, &project_id).await;
-    let global = config::load_global(&db.pool).await;
-    config.web_port = global.web_port; // 埠號是所有專案共用的
-    config.line_port = global.line_port;
-    config.line_retention_days = global.line_retention_days;
-    Ok(ConfigView {
-        saved: config::exists(&db.pool, &project_id).await,
-        telegram_default: !project_id.is_empty() && global.telegram_default_project == project_id,
-        config,
-    })
-}
-
-/// 儲存前檢查會不會讓同一封信有兩個歸屬（同一信箱下別名／主旨標籤相同、專用信箱被共用）。
-async fn check_conflicts(app: &AppHandle, pool: &sqlx::SqlitePool, project_id: &str, cfg: &Config) -> Result<(), String> {
-    resolve_conflicts(pool, project_id, cfg, &super::open_projects(app)).await
-}
-
-/// 與其他**專案**衝突就拒絕並指出是哪個；與升級前遺留的「未歸屬」設定衝突，則直接把那份舊設定停用。
-/// 舊設定在畫面上看不到也關不掉，不能讓使用者被一個看不見的東西擋住；它的用途已經由新專案接手。
-async fn resolve_conflicts(pool: &sqlx::SqlitePool, project_id: &str, cfg: &Config, projects: &[(String, String)]) -> Result<(), String> {
-    for (id, name) in projects {
-        if id == project_id {
-            continue;
-        }
-        let other = config::load(pool, id).await;
-        if let Some(field) = config::conflict(cfg, &other) {
-            let what = match field {
-                "dedicated" => "這個信箱已被設為另一個專案的專用信箱，同一個信箱不能同時給多個專案",
-                "alias" => "收件別名跟另一個專案相同",
-                _ => "主旨標籤跟另一個專案相同",
-            };
-            return Err(format!("與專案「{name}」衝突：{what}"));
-        }
-    }
-    if !project_id.is_empty() {
-        let mut legacy = config::load(pool, "").await;
-        if config::conflict(cfg, &legacy).is_some() {
-            legacy.enabled = false;
-            config::save(pool, "", &legacy).await.map_err(e)?;
-        }
-    }
-    Ok(())
+    Ok(aiterm_intake_core::ops::get_config(&db.pool, &project_id).await)
 }
 
 #[tauri::command]
 pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, project_id: String, config: Config, telegram_default: bool) -> Result<(), String> {
-    let mut config = config;
-    config.reference_folders = config.reference_folders.cleaned();
-    check_conflicts(&app, &db.pool, &project_id, &config).await?;
-    let mut global = config::load_global(&db.pool).await;
-    global.web_port = config.web_port;
-    global.line_port = config.line_port;
-    global.line_retention_days = config.line_retention_days;
-    if telegram_default && !project_id.is_empty() {
-        global.telegram_default_project = project_id.clone();
-    } else if global.telegram_default_project == project_id {
-        global.telegram_default_project.clear();
-    }
-    config::save_global(&db.pool, &global).await.map_err(e)?;
-    config::save(&db.pool, &project_id, &config).await.map_err(e)?;
+    aiterm_intake_core::ops::set_config(&db.pool, &project_id, config, telegram_default, &super::open_projects(&app)).await?;
     // 網頁表單的開關／埠號可能變了。
     super::web::restart(&app).await;
     super::line_server::restart(&app).await;
@@ -192,48 +132,14 @@ pub async fn intake_list(db: State<'_, IntakeDb>, project_id: String, status: Op
     store::list_items(&db.pool, &project_id, status.as_deref()).await.map_err(e)
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct SenderDto {
-    pub address: String,
-    pub level: Level,
-    pub skip_auth: bool,
-    /// 備註名稱（例如群組叫什麼）；沒有就是空字串。
-    #[serde(default)]
-    pub label: String,
-}
-
 #[tauri::command]
 pub async fn intake_senders(db: State<'_, IntakeDb>, project_id: String) -> Result<Vec<SenderDto>, String> {
-    let labels = store::sender_labels(&db.pool, &project_id).await.map_err(e)?;
-    Ok(store::list_senders(&db.pool, &project_id)
-        .await
-        .map_err(e)?
-        .into_iter()
-        .map(|s| {
-            let label = labels.get(&super::rules::normalize(&s.address)).cloned().unwrap_or_default();
-            SenderDto { address: s.address, level: s.level, skip_auth: s.skip_auth, label }
-        })
-        .collect())
+    aiterm_intake_core::ops::list_senders(&db.pool, &project_id).await
 }
 
 #[tauri::command]
 pub async fn intake_upsert_sender(db: State<'_, IntakeDb>, project_id: String, sender: SenderDto) -> Result<(), String> {
-    if !super::rules::valid_address(&sender.address) {
-        return Err("請輸入有效的電子郵件地址，、Telegram 聊天室 tg:<chat_id>，或 LINE userId（U 開頭共 33 字元）".into());
-    }
-    let address = sender.address.clone();
-    store::upsert_sender(&db.pool, &project_id, &Sender { address: sender.address, level: sender.level, skip_auth: sender.skip_auth }).await.map_err(e)?;
-    // 有給備註就存；沒給時，LINE 群組／使用者若已知道名稱（LINE 查得到或「最近出現」記過），就用那個名稱，免得清單上只剩一串編號。
-    let mut label = sender.label;
-    if label.trim().is_empty() && store::sender_label(&db.pool, &project_id, &address).await.map_err(e)?.is_none() {
-        if let Some(id) = super::rules::normalize(&address).strip_prefix("line:") {
-            label = super::line_store::get_name(&db.pool, id).await.map_err(e)?.or(super::line_store::unknown_name(&db.pool, id).await.map_err(e)?).unwrap_or_default();
-        }
-    }
-    if !label.trim().is_empty() {
-        store::set_sender_label(&db.pool, &project_id, &address, &label).await.map_err(e)?;
-    }
-    Ok(())
+    aiterm_intake_core::ops::upsert_sender(&db.pool, &project_id, sender).await
 }
 
 /// 設定（或清除）白名單項目的備註名稱。
@@ -465,6 +371,7 @@ pub fn data_url(root: &std::path::Path, row: &store::AttachmentRow) -> Result<St
 mod conflict_tests {
     use super::*;
     use crate::intake::rules::MatchMode;
+    use aiterm_intake_core::ops::resolve_conflicts;
     use sqlx::sqlite::SqlitePoolOptions;
 
     fn cfg(tag: &str) -> Config {
