@@ -324,21 +324,20 @@ async fn attachments(State(st): St, Path(id): Path<String>) -> Response {
     }
 }
 
-async fn attachment_row(st: &AppState, id: &str, att: &str) -> Option<store::AttachmentRow> {
-    item_of(st, id).await?;
-    store::get_attachment(&st.pools.intake, att).await.ok().flatten().filter(|r| r.item_id == id)
+async fn attachment_row(st: &AppState, att: &str) -> Option<store::AttachmentRow> {
+    store::get_attachment(&st.pools.intake, att).await.ok().flatten()
 }
 
-async fn attachment_data(State(st): St, Path((id, att)): Path<(String, String)>) -> Response {
-    let Some(row) = attachment_row(&st, &id, &att).await else { return not_found() };
+async fn attachment_data(State(st): St, Path(att): Path<String>) -> Response {
+    let Some(row) = attachment_row(&st, &att).await else { return not_found() };
     match attach::data_url(&st.data_dir.join("attachments"), &row) {
         Ok(u) => Json(u).into_response(),
         Err(e) => bad(&e),
     }
 }
 
-async fn attachment_text(State(st): St, Path((id, att)): Path<(String, String)>) -> Response {
-    let Some(row) = attachment_row(&st, &id, &att).await else { return not_found() };
+async fn attachment_text(State(st): St, Path(att): Path<String>) -> Response {
+    let Some(row) = attachment_row(&st, &att).await else { return not_found() };
     match attach::text_preview(&st.data_dir.join("attachments"), &row) {
         Ok(t) => Json(t).into_response(),
         Err(e) => bad(&e),
@@ -410,6 +409,7 @@ pub struct StatusView {
     pub has_line_secret: bool,
     pub has_line_token: bool,
     pub line_listening: bool,
+    pub line_port: u16,
     pub ai_configured: bool,
     pub projects: usize,
 }
@@ -420,6 +420,7 @@ async fn status(State(st): St) -> Response {
         has_line_secret: st.secrets.get(aiterm_intake_core::line_server::LINE_SECRET_ID).is_some(),
         has_line_token: st.secrets.get(aiterm_intake_core::line_server::LINE_TOKEN_ID).is_some(),
         line_listening: crate::channels::line_listening(&st),
+        line_port: config::load_global(&st.pools.intake).await.line_port,
         ai_configured: crate::ai::configured(&settings, st.secrets.as_ref()),
         projects: project_list(&st).await.len(),
     })
@@ -449,8 +450,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/items/{id}/release", post(not_implemented))
         .route("/v1/items/{id}/result", post(not_implemented))
         .route("/v1/items/{id}/attachments", get(attachments))
-        .route("/v1/items/{id}/attachments/{att}/data", get(attachment_data))
-        .route("/v1/items/{id}/attachments/{att}/text", get(attachment_text))
+        .route("/v1/attachments/{att}/data", get(attachment_data))
+        .route("/v1/attachments/{att}/text", get(attachment_text))
         .route("/v1/line/unknown", get(line_unknown))
         .route("/v1/line/unknown/{id}", delete(forget_unknown))
         .route("/v1/secrets/{id}", put(set_secret).delete(clear_secret))

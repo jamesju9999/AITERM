@@ -242,3 +242,33 @@ async fn no_data_endpoint_answers_without_a_token() {
         assert_eq!(res.status(), 401, "{m} {p} 沒有 token 也回應了");
     }
 }
+
+#[tokio::test]
+async fn attachments_are_read_by_id_only_from_the_servers_attachment_folder() {
+    use aiterm_intake_core::attach::{save_all, Raw};
+    let srv = TestServer::start().await;
+    let pid = srv.project("甲").await;
+    let m = srv.paired("小明", Role::Member).await;
+    let item = add_item(&srv, &pid, "line", "line:u0123456789abcdef0123456789abcdef", "附檔", store::PENDING).await;
+    let root = srv.dir.path().join("attachments");
+    let (saved, _) = save_all(&root, &item.id, vec![Raw { name: "err.log".into(), bytes: "ERROR boom\n".as_bytes().to_vec() }]);
+    store::add_attachment(&srv.state().pools.intake, &item.id, &saved[0]).await.unwrap();
+
+    let rows: Vec<store::AttachmentRow> = m.get(&format!("/v1/items/{}/attachments", item.id)).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    let text: String = m.get(&format!("/v1/attachments/{}/text", rows[0].id)).await.unwrap();
+    assert_eq!(text, "ERROR boom\n");
+    assert_eq!(m.request(Method::GET, "/v1/attachments/nope/text", None).await.unwrap_err(), ClientError::Server("not found".into()));
+
+    // 資料庫被竄改、指到目錄外的檔案：不能讀。
+    let outside = srv.dir.path().join("secrets.key");
+    sqlx::query("UPDATE intake_attachments SET path = ? WHERE id = ?").bind(outside.to_string_lossy().as_ref()).bind(&rows[0].id).execute(&srv.state().pools.intake).await.unwrap();
+    assert!(m.request(Method::GET, &format!("/v1/attachments/{}/text", rows[0].id), None).await.is_err(), "目錄外的檔案不能讀");
+}
+
+#[tokio::test]
+async fn a_self_signed_server_gets_its_fingerprint_pinned() {
+    let srv = TestServer::start().await;
+    let fp = srv.state().fingerprint.clone();
+    assert_eq!(aiterm_intake_client::api::decide_pin(&srv.addr(), &fp).await, Some(fp), "自簽憑證過不了一般驗證，所以要釘指紋");
+}

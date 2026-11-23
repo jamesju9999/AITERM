@@ -137,3 +137,15 @@ impl EventStream {
         }
     }
 }
+
+/// 配對成功後決定要不要釘住憑證指紋：先用一般根憑證試連 `/v1/hello`，
+/// 通過代表 server 用的是正式憑證（公開網路），之後憑證換新也不會誤報，不釘；
+/// 通不過（自簽憑證）就釘住配對時看到的指紋。
+pub async fn decide_pin(addr: &str, fingerprint: &str) -> Option<String> {
+    let Ok((host, port)) = crate::pair::parse_addr(addr) else { return Some(fingerprint.to_string()) };
+    let plain = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().ok()?;
+    match plain.get(format!("https://{host}:{port}/v1/hello")).send().await {
+        Ok(r) if r.status().is_success() => None,
+        _ => Some(fingerprint.to_string()),
+    }
+}
