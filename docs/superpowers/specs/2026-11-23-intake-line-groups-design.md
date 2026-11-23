@@ -83,4 +83,11 @@
 
 ## 4. 實作紀錄
 
-（實作後補。）
+- 已完成：`cargo test -p app --lib` 2290 過、1 條失敗（`ai::claude_cli::tests::fake::dropping_the_future_kills_the_child`，與本功能無關；單獨連跑 3 次都過，全套並行時才偶發紅）；`npm run test` 3660 全過；`npx tsc -b` 與我改的檔案 ESLint 乾淨。
+- 新增：`intake/line_store.rs`（訊息、未知來源、名稱快取三張表）、`line_source` 的群組事件解析／`route_group`／`triage_chat`／`open_candidate`、`line_server` 的群組處理與名稱查詢、`classify::is_new_problem`、`runtime::line_triage`（接在既有 tick）、兩個 Tauri 指令（未知來源清單／忽略）、設定頁的清單與設定。
+- 與設計不同或補充：
+  - 名稱快取另開了 `line_names` 表（設計只提到查名稱）。群組名稱供開題用，自動開題在 tick 裡沒有 webhook 當下的名稱，所以要存。
+  - 保存天數 0 時，每次清理都會把所有群組訊息（含 AI 的回覆）刪光。
+  - 我方人員的判斷只看白名單裡 `line:u…` 且等級為「內部」的項目。
+  - **未實機驗證**：LINE 官方帳號後台要開「允許加入群組」；群組裡實際收到的 webhook、`mention.isSelf`、成員名稱 API、群組 push 的額度計算，都只用假資料測過，需用真的群組驗收。
+  - **已知限制**：同一群組已有未結束的題目時，之後的補充不會自動併進那一題（需 @ 一次）；自動開題的 AI 判斷在沒有 AI 或失敗時一律當成新問題。

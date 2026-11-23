@@ -16,6 +16,8 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeLineStatus: vi.fn(() => Promise.resolve({ has_secret: false, has_token: false, port: 8321, listening: false })),
   intakeLineSetCredentials: vi.fn(() => Promise.resolve()),
   intakeLineClearCredentials: vi.fn(() => Promise.resolve()),
+  intakeLineUnknown: vi.fn(() => Promise.resolve([])),
+  intakeLineForgetUnknown: vi.fn(() => Promise.resolve(true)),
   intakeProjects: vi.fn(),
   intakeAdoptLegacy: vi.fn(() => Promise.resolve()),
   intakeAssign: vi.fn(() => Promise.resolve(true)),
@@ -60,7 +62,7 @@ function cfgView(over: Partial<ipc.IntakeConfig> = {}, extra: Partial<ipc.Intake
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, line_enabled: false, line_port: 8321, channel_handling: { email: "edit", telegram: "edit", line: "diagnose", web: "edit" }, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, line_enabled: false, line_port: 8321, line_auto_open: true, line_retention_days: 30, channel_handling: { email: "edit", telegram: "edit", line: "diagnose", web: "edit" }, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
     },
     saved: true,
     telegram_default: false,
@@ -648,6 +650,47 @@ describe("IntakeView", () => {
     expect(screen.queryByText(t.intake_line_need_secret)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: t.intake_line_clear_creds }));
     await waitFor(() => expect(ipc.intakeLineClearCredentials).toHaveBeenCalled());
+  });
+
+  it("the LINE tab lists sources not yet on the allowlist and adds them in one click as internal or external, or ignores them", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ line_enabled: true }));
+    const unknown = [
+      { id: "cb345e5d492c48c02a3eaa279924c52d2", kind: "group" as const, name: "兆強客服群", count: 7, first_seen: 1, last_seen: 2 },
+      { id: "u2222222222222222222222222222222b", kind: "user" as const, name: "", count: 1, first_seen: 1, last_seen: 1 },
+    ];
+    vi.mocked(ipc.intakeLineUnknown).mockResolvedValueOnce(unknown).mockResolvedValue([unknown[1]]);
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    fireEvent.click(await screen.findByRole("tab", { name: new RegExp(t.intake_sec_line) }));
+    expect(await screen.findByText(/兆強客服群 · 7/)).toBeInTheDocument();
+    expect(screen.getByText(/line:U2222222222222222222222222222222b/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: `${t.intake_line_add_external} 兆強客服群` }));
+    await waitFor(() =>
+      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: "line:cb345e5d492c48c02a3eaa279924c52d2", level: "external", skip_auth: false }),
+    );
+    await waitFor(() => expect(ipc.intakeLineForgetUnknown).toHaveBeenCalledWith("cb345e5d492c48c02a3eaa279924c52d2"));
+    await waitFor(() => expect(screen.queryByText(/兆強客服群 · 7/)).toBeNull());
+    vi.mocked(ipc.intakeLineUnknown).mockResolvedValue([]);
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(t.intake_line_ignore) }));
+    await waitFor(() => expect(ipc.intakeLineForgetUnknown).toHaveBeenCalledWith("u2222222222222222222222222222222b"));
+    expect(await screen.findByText(t.intake_line_unknown_empty)).toBeInTheDocument();
+  });
+
+  it("the LINE tab saves the auto-open switch and the retention days", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ line_enabled: true }));
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    fireEvent.click(await screen.findByRole("tab", { name: new RegExp(t.intake_sec_line) }));
+    const retention = (await screen.findByLabelText(t.intake_line_retention)) as HTMLInputElement;
+    expect(retention.value).toBe("30");
+    fireEvent.change(retention, { target: { value: "7" } });
+    fireEvent.click(screen.getByLabelText(t.intake_line_auto_open));
+    fireEvent.click(screen.getByText(t.intake_set_save));
+    await waitFor(() =>
+      expect(ipc.intakeSetConfig).toHaveBeenCalledWith("p1", expect.objectContaining({ line_retention_days: 7, line_auto_open: false }), false),
+    );
   });
 
   it("warns when LINE is on with a secret but the webhook server is not listening", async () => {

@@ -12,6 +12,8 @@ import {
   intakeDropped,
   intakeGetConfig,
   intakeLineClearCredentials,
+  intakeLineForgetUnknown,
+  intakeLineUnknown,
   intakeLineSetCredentials,
   intakeLineStatus,
   intakeList,
@@ -27,6 +29,7 @@ import {
   type IntakeChannelHandling,
   type IntakeConfig,
   type IntakeLineStatus,
+  type IntakeLineUnknown,
   type IntakeItem,
   type IntakeProject,
   type IntakeSender,
@@ -599,6 +602,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   const [chanTab, setChanTab] = useState<"mail" | "telegram" | "line" | "web">("mail");
   const [tgDefault, setTgDefault] = useState(false);
   const [lineStatus, setLineStatus] = useState<IntakeLineStatus | null>(null);
+  const [lineUnknown, setLineUnknown] = useState<IntakeLineUnknown[]>([]);
   const [lineSecret, setLineSecret] = useState("");
   const [lineToken, setLineToken] = useState("");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
@@ -623,6 +627,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       })
       .catch((e) => onError(errText(e)));
     intakeLineStatus().then(setLineStatus).catch(() => {});
+    intakeLineUnknown().then(setLineUnknown).catch(() => {});
     mailListAccounts().then(setAccounts).catch(() => {});
     systemsList().then(setSystems).catch(() => {});
     loadSenders();
@@ -663,6 +668,27 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       await intakeLineClearCredentials();
       setLineStatus(await intakeLineStatus());
       onError(null);
+    } catch (e) {
+      onError(errText(e));
+    }
+  }
+
+  async function addLineUnknown(u: IntakeLineUnknown, level: Level) {
+    try {
+      await intakeUpsertSender(projectId, { address: `line:${u.id}`, level, skip_auth: false });
+      await intakeLineForgetUnknown(u.id);
+      setLineUnknown(await intakeLineUnknown());
+      onError(null);
+      loadSenders();
+    } catch (e) {
+      onError(errText(e));
+    }
+  }
+
+  async function ignoreLineUnknown(u: IntakeLineUnknown) {
+    try {
+      await intakeLineForgetUnknown(u.id);
+      setLineUnknown(await intakeLineUnknown());
     } catch (e) {
       onError(errText(e));
     }
@@ -853,6 +879,46 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       {cfg.line_enabled && lineStatus && !lineStatus.has_secret && <p className="intake__error">{t.intake_line_need_secret}</p>}
       {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.listening && <p className="intake__error">{t.intake_line_not_listening}</p>}
       {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.has_token && <p className="intake__error">{t.intake_line_need_token}</p>}
+      <label className="intake__field">
+        <input type="checkbox" checked={cfg.line_auto_open} onChange={(e) => set("line_auto_open", e.target.checked)} />
+        {t.intake_line_auto_open}
+      </label>
+      <p className="intake__meta intake__hint">{t.intake_line_auto_open_hint}</p>
+      <label className="intake__field">
+        {t.intake_line_retention}
+        <input
+          type="number"
+          aria-label={t.intake_line_retention}
+          min={0}
+          max={365}
+          value={cfg.line_retention_days}
+          onChange={(e) => set("line_retention_days", Math.min(365, Math.max(0, Math.floor(Number(e.target.value)) || 0)))}
+        />
+      </label>
+      <p className="intake__meta intake__hint">{t.intake_line_retention_hint}</p>
+      <div className="intake__unknown" aria-label={t.intake_line_unknown}>
+        <h4 className="intake__card-title">{t.intake_line_unknown}</h4>
+        <p className="intake__meta intake__hint">{t.intake_line_unknown_hint}</p>
+        {lineUnknown.length === 0 && <p className="intake__meta">{t.intake_line_unknown_empty}</p>}
+        <ul className="intake__senders">
+          {lineUnknown.map((u) => (
+            <li key={u.id}>
+              <span>
+                {u.kind === "group" ? t.intake_line_kind_group : t.intake_line_kind_user} · {u.name || displayAddress(`line:${u.id}`)} · {u.count}
+              </span>
+              <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_line_add_internal} ${u.name || u.id}`} onClick={() => void addLineUnknown(u, "internal")}>
+                {t.intake_line_add_internal}
+              </button>
+              <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_line_add_external} ${u.name || u.id}`} onClick={() => void addLineUnknown(u, "external")}>
+                {t.intake_line_add_external}
+              </button>
+              <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_line_ignore} ${u.name || u.id}`} onClick={() => void ignoreLineUnknown(u)}>
+                {t.intake_line_ignore}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
       {handlingField("line", t.intake_sec_line)}
           </>
         )}

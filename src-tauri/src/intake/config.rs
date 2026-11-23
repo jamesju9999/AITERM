@@ -88,6 +88,10 @@ pub struct Config {
     pub line_enabled: bool,
     /// LINE webhook 的本機埠號（所有專案共用）。
     pub line_port: u16,
+    /// 白名單內的 LINE 群組：客戶沒 @ 時，新問題也自動開題（等客戶講完、判斷是新問題、且人員還沒回才開）。
+    pub line_auto_open: bool,
+    /// LINE 群組訊息在本機保存幾天（所有專案共用；0＝不保存，此時沒有前情也不能自動開題）。
+    pub line_retention_days: u32,
     pub web_mode: WebMode,
     pub web_port: u16,
     /// 各管道的處理方式（只診斷／可改檔案）。
@@ -118,6 +122,8 @@ impl Default for Config {
             telegram_enabled: false,
             line_enabled: false,
             line_port: 8321,
+            line_auto_open: true,
+            line_retention_days: 30,
             web_mode: WebMode::Off,
             web_port: 8320,
             channel_handling: ChannelHandling::default(),
@@ -178,13 +184,14 @@ pub async fn exists(pool: &SqlitePool, project_id: &str) -> bool {
 pub struct GlobalConfig {
     pub web_port: u16,
     pub line_port: u16,
+    pub line_retention_days: u32,
     /// 主人用 `/ask 問題` 而沒指定專案時，問題進哪個專案（空＝只有一個已啟用 Telegram 的專案時用它）。
     pub telegram_default_project: String,
 }
 
 impl Default for GlobalConfig {
     fn default() -> Self {
-        Self { web_port: 8320, line_port: 8321, telegram_default_project: String::new() }
+        Self { web_port: 8320, line_port: 8321, line_retention_days: 30, telegram_default_project: String::new() }
     }
 }
 

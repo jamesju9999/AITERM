@@ -143,6 +143,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query("INSERT OR IGNORE INTO intake_project_dropped (project_id, reason, count) SELECT '', reason, count FROM intake_dropped").execute(pool).await?;
         set_setting(pool, "project_split_migrated", "1").await?;
     }
+    super::line_store::init(pool).await?;
     Ok(())
 }
 
@@ -254,6 +255,21 @@ pub async fn get_item(pool: &SqlitePool, id: &str) -> Result<Option<IntakeItem>,
 }
 
 /// 某專案的題目（新的在前）。`project_id` 為空字串＝未歸屬。
+/// 這個專案裡，這個寄件者（LINE 群組）是否還有沒結束的題目（待派送／排隊／處理中／在看板上／待寄出）。
+pub async fn has_open_for_sender(pool: &SqlitePool, project_id: &str, sender: &str) -> Result<bool, sqlx::Error> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM intake_items WHERE project_id = ? AND sender = ? AND status IN (?,?,?,?,?)")
+        .bind(project_id)
+        .bind(sender)
+        .bind(PENDING)
+        .bind(QUEUED)
+        .bind(RUNNING)
+        .bind(ON_BOARD)
+        .bind(DRAFT)
+        .fetch_one(pool)
+        .await?;
+    Ok(n > 0)
+}
+
 pub async fn list_items(pool: &SqlitePool, project_id: &str, status: Option<&str>) -> Result<Vec<IntakeItem>, sqlx::Error> {
     match status {
         Some(s) => sqlx::query_as("SELECT * FROM intake_items WHERE project_id = ? AND status = ? ORDER BY created_at DESC, rowid DESC").bind(project_id).bind(s).fetch_all(pool).await,

@@ -30,6 +30,7 @@ pub async fn intake_get_config(db: State<'_, IntakeDb>, project_id: String) -> R
     let global = config::load_global(&db.pool).await;
     config.web_port = global.web_port; // 埠號是所有專案共用的
     config.line_port = global.line_port;
+    config.line_retention_days = global.line_retention_days;
     Ok(ConfigView {
         saved: config::exists(&db.pool, &project_id).await,
         telegram_default: !project_id.is_empty() && global.telegram_default_project == project_id,
@@ -75,6 +76,7 @@ pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, project_
     let mut global = config::load_global(&db.pool).await;
     global.web_port = config.web_port;
     global.line_port = config.line_port;
+    global.line_retention_days = config.line_retention_days;
     if telegram_default && !project_id.is_empty() {
         global.telegram_default_project = project_id.clone();
     } else if global.telegram_default_project == project_id {
@@ -541,6 +543,18 @@ mod tests {
         std::fs::write(&secret, "密碼").unwrap();
         assert!(text_preview(root.path(), &row(&secret)).is_err(), "目錄外的檔案不能讀");
     }
+}
+
+/// 最近出現、但還沒加入白名單的 LINE 來源（群組／使用者），給設定頁一鍵加入。
+#[tauri::command]
+pub async fn intake_line_unknown(db: State<'_, IntakeDb>) -> Result<Vec<super::line_store::Unknown>, String> {
+    super::line_store::list_unknown(&db.pool).await.map_err(e)
+}
+
+/// 從「未加入白名單」清單移除一筆（加入白名單後，或使用者選擇忽略）。
+#[tauri::command]
+pub async fn intake_line_forget_unknown(db: State<'_, IntakeDb>, id: String) -> Result<bool, String> {
+    super::line_store::forget_unknown(&db.pool, &id.to_lowercase()).await.map_err(e)
 }
 
 /// LINE 設定頁要的狀態：憑證是否已設定（憑證本身不外傳）、埠號、伺服器是否在聽。

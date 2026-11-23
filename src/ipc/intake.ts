@@ -62,6 +62,10 @@ export interface IntakeConfig {
   line_enabled: boolean;
   /** LINE webhook 的本機埠號（所有專案共用）。 */
   line_port: number;
+  /** 白名單內的 LINE 群組：客戶沒 @ 時，新問題也自動開題。 */
+  line_auto_open: boolean;
+  /** LINE 群組訊息在本機保存幾天（所有專案共用；0＝不保存）。 */
+  line_retention_days: number;
   web_mode: "off" | "local" | "lan";
   web_port: number;
   /** 各管道的處理方式。 */
@@ -135,6 +139,17 @@ export interface IntakeLineStatus {
   /** webhook 伺服器是否正在本機聽。 */
   listening: boolean;
 }
+/** 最近出現、但還沒加入白名單的 LINE 來源。 */
+export interface IntakeLineUnknown {
+  id: string;
+  kind: "group" | "user";
+  name: string;
+  count: number;
+  first_seen: number;
+  last_seen: number;
+}
+export const intakeLineUnknown = () => invoke<IntakeLineUnknown[]>("intake_line_unknown");
+export const intakeLineForgetUnknown = (id: string) => invoke<boolean>("intake_line_forget_unknown", { id });
 export const intakeLineStatus = () => invoke<IntakeLineStatus>("intake_line_status");
 /** 空字串＝不變。 */
 export const intakeLineSetCredentials = (channelSecret: string, accessToken: string) =>

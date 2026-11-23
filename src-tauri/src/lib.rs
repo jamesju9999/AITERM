@@ -591,6 +591,8 @@ pub fn run() {
             intake::commands::intake_get_config,
             intake::commands::intake_set_config,
             intake::commands::intake_line_status,
+            intake::commands::intake_line_unknown,
+            intake::commands::intake_line_forget_unknown,
             intake::commands::intake_line_set_credentials,
             intake::commands::intake_line_clear_credentials,
             intake::commands::intake_list,

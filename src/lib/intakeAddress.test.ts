@@ -3,7 +3,7 @@ import { displayAddress, validAddress } from "./intakeAddress";
 
 describe("validAddress", () => {
   it("accepts emails, Telegram chats and LINE user ids (same rules as the backend)", () => {
-    for (const ok of ["a@b.co", "tg:12345", "tg:-1001234", "line:U0123456789abcdef0123456789abcdef", "U0123456789abcdef0123456789abcdef", "  u0123456789ABCDEF0123456789abcdef ", "LINE:u0123456789ABCDEF0123456789abcdef"]) {
+    for (const ok of ["a@b.co", "tg:12345", "tg:-1001234", "line:U0123456789abcdef0123456789abcdef", "U0123456789abcdef0123456789abcdef", "Cb345e5d492c48c02a3eaa279924c52d2", "line:r0123456789abcdef0123456789abcdef", "  u0123456789ABCDEF0123456789abcdef ", "LINE:u0123456789ABCDEF0123456789abcdef"]) {
       expect(validAddress(ok), ok).toBe(true);
     }
   });
@@ -19,6 +19,7 @@ describe("displayAddress", () => {
   it("shows a LINE user id with its capital U and leaves other addresses alone", () => {
     expect(displayAddress("line:ub345e5d492c48c02a3eaa279924c52d2")).toBe("line:Ub345e5d492c48c02a3eaa279924c52d2");
     expect(displayAddress("line:Ub345e5d492c48c02a3eaa279924c52d2")).toBe("line:Ub345e5d492c48c02a3eaa279924c52d2");
+    expect(displayAddress("line:cb345e5d492c48c02a3eaa279924c52d2")).toBe("line:Cb345e5d492c48c02a3eaa279924c52d2");
     for (const other of ["a@b.co", "tg:123", "line:nope"]) expect(displayAddress(other)).toBe(other);
   });
 });

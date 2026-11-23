@@ -127,6 +127,9 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
         store::fail(&db.pool, &id, "Claude Code 沒有收到提問，已退回待派送").await.ok();
         touched = true;
     }
+    if line_triage(app, &db.pool).await {
+        touched = true;
+    }
     if route_and_settle(app, &db.pool).await {
         touched = true;
     }
@@ -166,6 +169,72 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
     if touched {
         changed(app);
     }
+}
+
+/// 群組裡客戶一批訊息是不是新問題；沒有 AI、逾時或失敗一律當新問題（寧可多開，不漏客戶）。
+async fn ai_is_new_problem<R: Runtime>(app: &AppHandle<R>, text: &str) -> bool {
+    let Some(router) = app.try_state::<AiRouter>() else { return true };
+    let Ok(provider) = router.resolve().await else { return true };
+    tokio::time::timeout(Duration::from_secs(30), classify::is_new_problem(provider, text)).await.ok().and_then(|r| r.ok()).unwrap_or(true)
+}
+
+/// LINE 群組：客戶沒 @ 的新問題自動開題。等客戶講完（靜默）、我方人員還沒回、該群組沒有未結束的題目、AI 判斷是新問題，才開。
+/// 回傳有沒有開出新題。
+async fn line_triage<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool) -> bool {
+    use super::{line_source, line_store};
+    let retention = config::load_global(pool).await.line_retention_days;
+    let now = chrono::Utc::now().timestamp();
+    line_store::purge_expired(pool, retention, now).await.ok();
+    let Ok(chats) = line_store::chats_with_unhandled(pool).await else { return false };
+    if chats.is_empty() {
+        return false;
+    }
+    let cands: Vec<super::telegram_source::Candidate> =
+        super::all_configs(app, pool).await.into_iter().map(|(id, name, cfg)| super::telegram_source::Candidate { id, name, cfg }).collect();
+    let mut opened = false;
+    for key in chats {
+        // 這個群組在哪個啟用 LINE 的專案白名單裡（只有一個才處理）。
+        let mut hits = Vec::new();
+        for c in cands.iter().filter(|c| c.cfg.line_enabled) {
+            let senders = store::list_senders(pool, &c.id).await.unwrap_or_default();
+            if let Some(s) = senders.iter().find(|s| rules::normalize(&s.address) == key) {
+                let staff: std::collections::HashSet<String> = senders
+                    .iter()
+                    .filter(|x| x.level == rules::Level::Internal)
+                    .filter_map(|x| rules::normalize(&x.address).strip_prefix("line:").filter(|id| id.starts_with('u')).map(str::to_string))
+                    .collect();
+                hits.push((c, s.level, staff));
+            }
+        }
+        let [(project, level, staff)] = hits.as_slice() else { continue };
+        // 沒開自動開題：把累積的訊息標成已處理，免得之後才打開時一次湧出一堆舊題。
+        if !project.cfg.line_auto_open {
+            if let Ok(all) = line_store::unhandled(pool, &key).await {
+                if let Some(last) = all.last() {
+                    line_store::mark_handled(pool, &key, last.id).await.ok();
+                }
+            }
+            continue;
+        }
+        let Ok(line_source::Triage::Candidate { messages, upto }) = line_source::triage_chat(pool, &key, staff, line_source::QUIET_SECS, now).await else { continue };
+        // 已經有一題在處理：不再開新題（補充請客戶 @ 一次）。
+        if store::has_open_for_sender(pool, &project.id, &key).await.unwrap_or(false) {
+            line_store::mark_handled(pool, &key, upto).await.ok();
+            continue;
+        }
+        let text = messages.iter().map(|m| format!("{}: {}", if m.name.is_empty() { "customer" } else { &m.name }, m.text)).collect::<Vec<_>>().join("\n");
+        if !ai_is_new_problem(app, &text).await {
+            line_store::mark_handled(pool, &key, upto).await.ok();
+            continue;
+        }
+        let group = line_store::get_name(pool, key.strip_prefix("line:").unwrap_or(&key)).await.ok().flatten().unwrap_or_default();
+        match line_source::open_candidate(pool, project, *level, &key, &group, messages, upto, now, &super::attach::root()).await {
+            Ok(super::queue::Ingested::Queued(_)) => opened = true,
+            Ok(_) => {}
+            Err(e) => log::warn!("intake: LINE 自動開題失敗：{e}"),
+        }
+    }
+    opened
 }
 
 /// 初篩分類，逾時或失敗一律當「要改程式」。
@@ -471,7 +540,13 @@ pub async fn send_reply<R: Runtime>(app: &AppHandle<R>, item_id: &str) -> Result
     if item.source == "line" {
         let to = super::line_source::reply_target(&item.sender).ok_or("無法判斷要回覆的 LINE 使用者")?;
         let token = super::line_server::token(app)?;
-        super::line_server::push(&token, &to, &filter::redact(&body)).await?;
+        let text = filter::redact(&body);
+        super::line_server::push(&token, &to, &text).await?;
+        // 回到群組的內容也記進前情，下次開題時 AI 看得到自己說過什麼，也讓人員／AI 已回覆的判斷成立。
+        if super::line_source::is_chat_key(&item.sender) {
+            let new = super::line_store::NewMessage { chat: &item.sender, msg_id: &format!("ai-{item_id}"), user_id: "", name: "AI 助理", text: &text, ts: chrono::Utc::now().timestamp(), outgoing: true };
+            super::line_store::insert_message(&db.pool, &new).await.ok();
+        }
         store::mark_sent(&db.pool, item_id).await.map_err(|e| e.to_string())?;
         changed(app);
         return Ok(());
@@ -613,6 +688,74 @@ mod board_wiring_tests {
         let again = insert_item(&pool, mk("line", "m-line-2")).await.unwrap().unwrap();
         tick(&h).await;
         assert_eq!(store::get_item(&pool, &again.id).await.unwrap().unwrap().kind.as_deref(), Some("code_change"));
+    }
+
+    const LG: &str = "Cb345e5d492c48c02a3eaa279924c52d2";
+    const LSTAFF: &str = "u1111111111111111111111111111111a";
+
+    async fn line_group_app(auto_open: bool) -> (tauri::App<tauri::test::MockRuntime>, sqlx::SqlitePool, crate::projects::ProjectHandle, tempfile::TempDir) {
+        let app = tauri::test::mock_app();
+        let h = app.handle().clone();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        store::init_schema(&pool).await.unwrap();
+        h.manage(IntakeDb { pool: pool.clone() });
+        h.manage(Arc::new(IntakeRuntime { registry: dispatcher::Registry::default(), tick_lock: tokio::sync::Mutex::new(()) }));
+        h.manage(Arc::new(PtyManager::new()));
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let project = reg.create(parent.path(), "demo", "").await.unwrap();
+        h.manage(reg);
+        let cfg = config::Config { route: config::Route::Terminal, line_enabled: true, line_auto_open: auto_open, ..config::Config::default() };
+        config::save(&pool, &project.id, &cfg).await.unwrap();
+        crate::intake::store::upsert_sender(&pool, &project.id, &rules::Sender { address: format!("line:{LG}"), level: Level::External, skip_auth: false }).await.unwrap();
+        crate::intake::store::upsert_sender(&pool, &project.id, &rules::Sender { address: format!("line:{LSTAFF}"), level: Level::Internal, skip_auth: false }).await.unwrap();
+        (app, pool, project, parent)
+    }
+    async fn say_in_group(pool: &sqlx::SqlitePool, id: &str, user: &str, text: &str, ago: i64) {
+        use crate::intake::line_store::{insert_message, NewMessage};
+        let key = format!("line:{}", LG.to_lowercase());
+        insert_message(pool, &NewMessage { chat: &key, msg_id: id, user_id: &user.to_lowercase(), name: if user == LSTAFF { "旭婷" } else { "介琳" }, text, ts: chrono::Utc::now().timestamp() - ago, outgoing: false }).await.unwrap();
+    }
+
+    /// 整條接線：客戶沒 @ 講完問題（安靜超過 90 秒）→ 下一輪 tick 自動開題；同一群組已有未結束的題就不再開；人員先回了就不開。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tick_opens_an_item_for_a_customers_new_problem_without_a_mention() {
+        let (app, pool, project, _d) = line_group_app(true).await;
+        let h = app.handle().clone();
+        say_in_group(&pool, "1", "U2222222222222222222222222222222b", "ARESPP 打不開加密檔", 200).await;
+        say_in_group(&pool, "2", "U2222222222222222222222222222222b", "錯誤代碼 0x80", 190).await;
+        tick(&h).await;
+        let items = store::list_items(&pool, &project.id, None).await.unwrap();
+        assert_eq!(items.len(), 1, "{items:?}");
+        let it = &items[0];
+        assert_eq!((it.source.as_str(), it.status.as_str(), it.sender_level.as_str()), ("line", store::PENDING, "external"), "客戶群組是外部，要核准才派送");
+        assert!(it.body.contains("ARESPP 打不開加密檔") && it.body.contains("錯誤代碼 0x80"), "{}", it.body);
+        // 再來一則：已有未結束的題，不再開新題。
+        say_in_group(&pool, "3", "U2222222222222222222222222222222b", "還是一樣", 120).await;
+        tick(&h).await;
+        assert_eq!(store::list_items(&pool, &project.id, None).await.unwrap().len(), 1);
+        assert!(crate::intake::line_store::unhandled(&pool, &format!("line:{}", LG.to_lowercase())).await.unwrap().is_empty(), "已標成已處理，之後不會湧出");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tick_does_not_open_when_the_customer_is_still_typing_or_staff_already_replied_or_the_switch_is_off() {
+        // 客戶才剛講完 30 秒：等。
+        let (app, pool, project, _d) = line_group_app(true).await;
+        let h = app.handle().clone();
+        say_in_group(&pool, "1", "U2222222222222222222222222222222b", "請問", 30).await;
+        tick(&h).await;
+        assert!(store::list_items(&pool, &project.id, None).await.unwrap().is_empty());
+        // 人員接著回了 → 不開，並把這批標成已處理。
+        say_in_group(&pool, "2", LSTAFF, "我來看", 20).await;
+        crate::intake::line_store::insert_message(&pool, &crate::intake::line_store::NewMessage { chat: &format!("line:{}", LG.to_lowercase()), msg_id: "late", user_id: "u2222222222222222222222222222222b", name: "介琳", text: "好", ts: chrono::Utc::now().timestamp() - 200, outgoing: false }).await.unwrap();
+        tick(&h).await;
+        assert!(store::list_items(&pool, &project.id, None).await.unwrap().is_empty(), "人員已在處理");
+        // 關掉自動開題：累積的訊息標成已處理，不開題。
+        let (app2, pool2, project2, _d2) = line_group_app(false).await;
+        say_in_group(&pool2, "1", "U2222222222222222222222222222222b", "請問怎麼設定", 300).await;
+        tick(app2.handle()).await;
+        assert!(store::list_items(&pool2, &project2.id, None).await.unwrap().is_empty());
+        assert!(crate::intake::line_store::unhandled(&pool2, &format!("line:{}", LG.to_lowercase())).await.unwrap().is_empty());
     }
 
     async fn canvas_app() -> (tauri::App<tauri::test::MockRuntime>, sqlx::SqlitePool, crate::projects::ProjectHandle, tempfile::TempDir) {

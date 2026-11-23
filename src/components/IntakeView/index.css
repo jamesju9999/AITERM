@@ -21,6 +21,7 @@
 .intake__badge { font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; align-self: center; background: rgba(148, 163, 184, 0.15); color: #94a3b8; white-space: nowrap; }
 .intake__badge--pending, .intake__badge--draft { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
 .intake__badge--running, .intake__badge--queued, .intake__badge--on_board { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
+.intake__unknown { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .intake__rowbadges { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .intake__badge--channel { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
 .intake__badge--done { background: rgba(16, 185, 129, 0.15); color: #34d399; }
