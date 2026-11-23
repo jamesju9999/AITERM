@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { IntakeView } from "./index";
@@ -60,7 +60,7 @@ function cfgView(over: Partial<ipc.IntakeConfig> = {}, extra: Partial<ipc.Intake
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, line_enabled: false, line_port: 8321, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, line_enabled: false, line_port: 8321, channel_handling: { email: "edit", telegram: "edit", line: "diagnose", web: "edit" }, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
     },
     saved: true,
     telegram_default: false,
@@ -341,6 +341,51 @@ describe("IntakeView", () => {
     expect(screen.getByText(t.intake_verify_failed)).toBeInTheDocument();
     expect(screen.queryByText(t.intake_verify_passed)).toBeNull();
     expect(screen.getByText(t.intake_kind_code_change)).toBeInTheDocument();
+  });
+
+  it("every channel tab has its own handling choice, LINE defaults to diagnose-only, and the choice is saved per channel", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ enabled: true }));
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    const sel = async (name: string) => (await screen.findByLabelText(`${name} ${t.intake_handling}`)) as HTMLSelectElement;
+    // 信箱（預設分頁）：可改檔案
+    expect((await sel(t.intake_sec_mailbox)).value).toBe("edit");
+    expect(screen.getByText(t.intake_handling_edit_hint)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: new RegExp(t.intake_sec_line) }));
+    const line = await sel(t.intake_sec_line);
+    expect(line.value).toBe("diagnose");
+    expect(screen.getByText(t.intake_handling_diagnose_hint)).toBeInTheDocument();
+    fireEvent.change(line, { target: { value: "edit" } });
+    expect(screen.getByText(t.intake_handling_edit_hint)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: new RegExp(t.intake_sec_telegram) }));
+    fireEvent.change(await sel(t.intake_sec_telegram), { target: { value: "diagnose" } });
+    fireEvent.click(screen.getByRole("tab", { name: new RegExp(t.intake_sec_web) }));
+    expect((await sel(t.intake_sec_web)).value).toBe("edit");
+    fireEvent.click(screen.getByText(t.intake_set_save));
+    await waitFor(() =>
+      expect(ipc.intakeSetConfig).toHaveBeenCalledWith(
+        "p1",
+        expect.objectContaining({ channel_handling: { email: "edit", telegram: "diagnose", line: "edit", web: "edit" } }),
+        false,
+      ),
+    );
+  });
+
+  it("each row of the question list says which channel the question came from", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([
+      item({ id: "a", source: "email", subject: "信來的" }),
+      item({ id: "b", source: "telegram", subject: "電報來的" }),
+      item({ id: "c", source: "line", subject: "LINE來的" }),
+      item({ id: "d", source: "web", subject: "表單來的" }),
+    ]);
+    wrap();
+    const list = await screen.findByRole("list", { name: t.intake_tab });
+    const rowOf = (subject: string) => within(list).getByText(subject).closest("li") as HTMLElement;
+    expect(rowOf("信來的")).toHaveTextContent(t.intake_sec_mailbox);
+    expect(rowOf("電報來的")).toHaveTextContent(t.intake_sec_telegram);
+    expect(rowOf("LINE來的")).toHaveTextContent(t.intake_sec_line);
+    expect(rowOf("表單來的")).toHaveTextContent(t.intake_sec_web);
   });
 
   it("settings: the dispatch target defaults to the board, explains each choice, and saves the agent canvas", async () => {

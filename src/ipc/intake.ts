@@ -5,6 +5,14 @@ export type IntakeStatus = "pending" | "queued" | "running" | "on_board" | "draf
 export type Level = "internal" | "external";
 export type MatchMode = "alias" | "subject_tag" | "alias_or_tag" | "dedicated";
 export type DispatchMode = "auto" | "manual";
+/** 一個管道收到的問題要怎麼處理：只診斷（不改檔案）或可改檔案。 */
+export type IntakeHandling = "diagnose" | "edit";
+export interface IntakeChannelHandling {
+  email: IntakeHandling;
+  telegram: IntakeHandling;
+  line: IntakeHandling;
+  web: IntakeHandling;
+}
 export type IntakeRoute = "terminal" | "board" | "canvas" | "system";
 
 export interface IntakeItem {
@@ -56,6 +64,8 @@ export interface IntakeConfig {
   line_port: number;
   web_mode: "off" | "local" | "lan";
   web_port: number;
+  /** 各管道的處理方式。 */
+  channel_handling: IntakeChannelHandling;
   /** 問題派送到哪裡處理。 */
   route: IntakeRoute;
   /** 派送目標是系統連線時，要用哪個系統（SystemConnection.id）。 */

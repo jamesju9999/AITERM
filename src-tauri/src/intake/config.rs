@@ -26,6 +26,32 @@ pub enum Route {
     System,
 }
 
+/// 一個管道收到的問題要怎麼處理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Handling {
+    /// 只診斷與回答：一律視為提問，不做「要改程式」的初篩與修復驗證，並要求 AI 不修改檔案。
+    Diagnose,
+    /// 可改檔案：AI 初篩，要改程式的依派送目標處理並做修復驗證。
+    Edit,
+}
+
+/// 每個管道各自的處理方式。信箱／Telegram／網頁表單維持原本行為（可改檔案），LINE 預設只診斷。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelHandling {
+    pub email: Handling,
+    pub telegram: Handling,
+    pub line: Handling,
+    pub web: Handling,
+}
+
+impl Default for ChannelHandling {
+    fn default() -> Self {
+        Self { email: Handling::Edit, telegram: Handling::Edit, line: Handling::Diagnose, web: Handling::Edit }
+    }
+}
+
 /// 網頁表單的開放範圍。外網沒有獨立模式：`Lan` 綁 0.0.0.0，要從外網進來請自備反向代理／Tunnel。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,6 +90,8 @@ pub struct Config {
     pub line_port: u16,
     pub web_mode: WebMode,
     pub web_port: u16,
+    /// 各管道的處理方式（只診斷／可改檔案）。
+    pub channel_handling: ChannelHandling,
     /// 問題派送到哪裡處理。
     pub route: Route,
     /// 派送目標是系統連線時，要用哪個系統（`SystemConnection.id`）。
@@ -92,6 +120,7 @@ impl Default for Config {
             line_port: 8321,
             web_mode: WebMode::Off,
             web_port: 8320,
+            channel_handling: ChannelHandling::default(),
             route: Route::Board,
             system_id: String::new(),
         }
@@ -99,6 +128,18 @@ impl Default for Config {
 }
 
 impl Config {
+    /// 依題目來源（`email`／`telegram`／`line`／`web`）取處理方式；不認得的來源保守沿用原行為（可改檔案）。
+    pub fn handling(&self, source: &str) -> Handling {
+        let h = &self.channel_handling;
+        match source {
+            "email" => h.email,
+            "telegram" => h.telegram,
+            "line" => h.line,
+            "web" => h.web,
+            _ => Handling::Edit,
+        }
+    }
+
     pub fn rules(&self) -> Settings {
         Settings {
             mode: self.mode,
@@ -193,6 +234,26 @@ mod tests {
 
     fn c(mode: MatchMode, alias: &str, tag: &str) -> Config {
         Config { enabled: true, account_id: "acc".into(), mode, alias: alias.into(), tag: tag.into(), ..Config::default() }
+    }
+
+    #[test]
+    fn handling_defaults_keep_old_channels_editable_and_make_line_diagnose_only() {
+        let c = Config::default();
+        assert_eq!(
+            ["email", "telegram", "line", "web"].map(|s| c.handling(s)),
+            [Handling::Edit, Handling::Edit, Handling::Diagnose, Handling::Edit]
+        );
+        assert_eq!(c.handling("something-new"), Handling::Edit, "不認得的來源沿用原行為");
+    }
+
+    #[test]
+    fn a_config_saved_before_this_field_existed_still_loads_with_defaults() {
+        let old: Config = serde_json::from_str(r#"{"enabled":true,"telegram_enabled":true}"#).unwrap();
+        assert_eq!(old.channel_handling, ChannelHandling::default());
+        let partial: Config = serde_json::from_str(r#"{"channel_handling":{"line":"edit"}}"#).unwrap();
+        assert_eq!((partial.handling("line"), partial.handling("email")), (Handling::Edit, Handling::Edit));
+        let json = serde_json::to_string(&Config::default()).unwrap();
+        assert!(json.contains(r#""line":"diagnose""#), "{json}");
     }
 
     #[test]

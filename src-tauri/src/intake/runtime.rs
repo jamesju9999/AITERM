@@ -156,7 +156,8 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
         }
         if let Err(e) = {
             let images = store::list_attachments(&db.pool, &item.id).await.unwrap_or_default();
-            crate::tasks::dispatch::write_then_submit(&pty, &tab, &dispatcher::build_prompt(&item, &images)).await
+            let diagnose = config::load(&db.pool, &item.project_id).await.handling(&item.source) == config::Handling::Diagnose;
+            crate::tasks::dispatch::write_then_submit(&pty, &tab, &dispatcher::build_prompt(&item, &images, diagnose)).await
         } {
             rt.registry.release(&tab);
             store::fail(&db.pool, &item.id, &format!("無法送進終端機：{e}")).await.ok();
@@ -168,7 +169,11 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// 初篩分類，逾時或失敗一律當「要改程式」。
-async fn classify_item<R: Runtime>(app: &AppHandle<R>, item: &store::IntakeItem) -> classify::Kind {
+/// 該題管道設為「只診斷」時一律是提問，不必（也不該）再問 AI。
+async fn classify_item<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, item: &store::IntakeItem) -> classify::Kind {
+    if config::load(pool, &item.project_id).await.handling(&item.source) == config::Handling::Diagnose {
+        return classify::Kind::Question;
+    }
     match app.try_state::<AiRouter>() {
         Some(router) => match router.resolve().await {
             Ok(provider) => tokio::time::timeout(Duration::from_secs(30), classify::classify(provider, &item.subject, &item.body))
@@ -288,7 +293,7 @@ async fn route_board<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, ha
     let Ok(Some(repo)) = crate::tasks::formations::repo_path(&handle.pool).await else { return false };
     let Ok(items) = store::list_unrouted(pool, &handle.id).await else { return false };
     for item in items {
-        let kind = classify_item(app, &item).await;
+        let kind = classify_item(app, pool, &item).await;
         // 分類要先存：建卡失敗時項目留在原狀態，之後由分頁領取也不必再分類。
         store::set_kind(pool, &item.id, kind.as_str(), None).await.ok();
         match board::route_item(pool, handle, &item, &repo, kind == classify::Kind::Question).await {
@@ -308,7 +313,7 @@ async fn route_canvas<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, h
             Some("question") => classify::Kind::Question,
             Some(_) => classify::Kind::CodeChange,
             None => {
-                let k = classify_item(app, &item).await;
+                let k = classify_item(app, pool, &item).await;
                 store::set_kind(pool, &item.id, k.as_str(), None).await.ok();
                 touched = true;
                 k
@@ -350,7 +355,7 @@ async fn prepare<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, pty: &
     let kind = match item.kind.as_deref() {
         Some("question") => classify::Kind::Question,
         Some(_) => classify::Kind::CodeChange,
-        None => classify_item(app, item).await,
+        None => classify_item(app, pool, item).await,
     };
     let head = if kind == classify::Kind::CodeChange {
         match pty.get_cwd(tab) {
@@ -568,6 +573,43 @@ mod board_wiring_tests {
         let got = store::get_item(&pool, &item.id).await.unwrap().unwrap();
         assert_eq!((got.status.as_str(), got.kind), (store::QUEUED, None));
         assert!(tasks::list_tasks(&project.pool).await.unwrap().is_empty());
+    }
+
+    /// 同樣的內文：LINE（預設只診斷）建出唯讀問答卡，信箱（可改檔案）建出一般卡；兩者都不需要 AI。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_diagnose_only_channel_becomes_a_read_only_card_while_an_editable_one_does_not() {
+        let app = tauri::test::mock_app();
+        let h = app.handle().clone();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        store::init_schema(&pool).await.unwrap();
+        h.manage(IntakeDb { pool: pool.clone() });
+        h.manage(Arc::new(IntakeRuntime { registry: dispatcher::Registry::default(), tick_lock: tokio::sync::Mutex::new(()) }));
+        h.manage(Arc::new(PtyManager::new()));
+        let parent = tempfile::tempdir().unwrap();
+        let reg = ProjectRegistry::new();
+        let project = reg.create(parent.path(), "demo", "").await.unwrap();
+        crate::tasks::repo_check::save_project_repo(&project.pool, "/work/repo").await.unwrap();
+        h.manage(reg);
+        let mk = |source: &'static str, mid: &'static str| NewItem { project_id: &project.id, id: None, source, sender: "a@corp.com", level: Level::Internal, subject: "請實做 js", body: "請實做一個函式", message_id: mid, status: store::QUEUED };
+        let via_line = insert_item(&pool, mk("line", "m-line")).await.unwrap().unwrap();
+        let via_mail = insert_item(&pool, mk("email", "m-mail")).await.unwrap().unwrap();
+        tick(&h).await;
+        let line = store::get_item(&pool, &via_line.id).await.unwrap().unwrap();
+        let mail = store::get_item(&pool, &via_mail.id).await.unwrap().unwrap();
+        assert_eq!(line.kind.as_deref(), Some("question"), "只診斷：不論措辭都是提問");
+        assert_eq!(mail.kind.as_deref(), Some("code_change"), "可改檔案：沒有 AI 時保守當成要改程式");
+        let card = tasks::get_task(&project.pool, line.board_task_id.as_ref().unwrap()).await.unwrap().unwrap();
+        assert!(card.body.contains("不是要你改程式"), "{}", card.body);
+        let card = tasks::get_task(&project.pool, mail.board_task_id.as_ref().unwrap()).await.unwrap().unwrap();
+        assert!(!card.body.contains("不是要你改程式"), "{}", card.body);
+
+        // 把 LINE 改成可改檔案之後，新的 LINE 問題就不再被當成提問。
+        let mut cfg = config::load(&pool, &project.id).await;
+        cfg.channel_handling.line = config::Handling::Edit;
+        config::save(&pool, &project.id, &cfg).await.unwrap();
+        let again = insert_item(&pool, mk("line", "m-line-2")).await.unwrap().unwrap();
+        tick(&h).await;
+        assert_eq!(store::get_item(&pool, &again.id).await.unwrap().unwrap().kind.as_deref(), Some("code_change"));
     }
 
     async fn canvas_app() -> (tauri::App<tauri::test::MockRuntime>, sqlx::SqlitePool, crate::projects::ProjectHandle, tempfile::TempDir) {

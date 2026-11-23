@@ -24,6 +24,7 @@ import {
   intakeUpdateDraft,
   intakeUpsertSender,
   type IntakeAttachment,
+  type IntakeChannelHandling,
   type IntakeConfig,
   type IntakeLineStatus,
   type IntakeItem,
@@ -54,6 +55,17 @@ function savedProject(): string | null {
 }
 
 const STATUSES: IntakeStatus[] = ["pending", "queued", "running", "on_board", "draft", "done", "rejected"];
+
+/** 題目來源（`item.source`）在畫面上的管道名稱。 */
+function channelName(source: string, t: ReturnType<typeof useLocale>["t"]): string {
+  switch (source) {
+    case "email": return t.intake_sec_mailbox;
+    case "telegram": return t.intake_sec_telegram;
+    case "line": return t.intake_sec_line;
+    case "web": return t.intake_sec_web;
+    default: return source;
+  }
+}
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -216,7 +228,10 @@ export function IntakeView() {
                     onClick={() => setSelectedId(i.id)}
                   >
                     <span className="intake__rowtop">
-                      <span className={`intake__badge intake__badge--${i.status}`}>{i.status === "on_board" && i.route_kind?.startsWith("canvas") ? t.intake_status_on_canvas : t[`intake_status_${i.status}` as const]}</span>
+                      <span className="intake__rowbadges">
+                        <span className={`intake__badge intake__badge--${i.status}`}>{i.status === "on_board" && i.route_kind?.startsWith("canvas") ? t.intake_status_on_canvas : t[`intake_status_${i.status}` as const]}</span>
+                        <span className="intake__badge intake__badge--channel" title={t.intake_channel}>{channelName(i.source, t)}</span>
+                      </span>
                       <time className="intake__time" dateTime={new Date(i.created_at * 1000).toISOString()}>{formatTime(i.created_at)}</time>
                     </span>
                     <span className="intake__subject">{i.subject || t.intake_no_subject}</span>
@@ -479,7 +494,7 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
           <span className={`intake__level intake__level--${item.sender_level}`}>
             {item.sender_level === "internal" ? t.intake_level_internal : t.intake_level_external}
           </span>
-          <span className="intake__chip">{item.source}</span>
+          <span className="intake__chip" title={t.intake_channel}>{channelName(item.source, t)}</span>
           {item.kind && <span className="intake__chip">{item.kind === "code_change" ? t.intake_kind_code_change : t.intake_kind_question}</span>}
           <span className="intake__meta">{new Date(item.created_at * 1000).toLocaleString()}</span>
         </div>
@@ -664,6 +679,23 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
     }
   }
 
+  const handlingField = (ch: keyof IntakeChannelHandling, label: string) => (
+    <>
+      <label className="intake__field">
+        {t.intake_handling}
+        <select
+          aria-label={`${label} ${t.intake_handling}`}
+          value={cfg.channel_handling[ch]}
+          onChange={(e) => set("channel_handling", { ...cfg.channel_handling, [ch]: e.target.value as IntakeChannelHandling[typeof ch] })}
+        >
+          <option value="diagnose">{t.intake_handling_diagnose}</option>
+          <option value="edit">{t.intake_handling_edit}</option>
+        </select>
+      </label>
+      <p className="intake__meta intake__hint">{cfg.channel_handling[ch] === "diagnose" ? t.intake_handling_diagnose_hint : t.intake_handling_edit_hint}</p>
+    </>
+  );
+
   const needsAlias = cfg.mode === "alias" || cfg.mode === "alias_or_tag";
   const needsTag = cfg.mode === "subject_tag" || cfg.mode === "alias_or_tag";
 
@@ -764,6 +796,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         {t.intake_set_auth_server}
         <input value={cfg.auth_server} onChange={(e) => set("auth_server", e.target.value)} />
       </label>
+      {handlingField("email", t.intake_sec_mailbox)}
           </>
         )}
         {chanTab === "telegram" && (
@@ -777,6 +810,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         <input type="checkbox" checked={tgDefault} onChange={(e) => { setSaved(false); setTgDefault(e.target.checked); }} />
         {t.intake_set_tg_default}
       </label>
+      {handlingField("telegram", t.intake_sec_telegram)}
           </>
         )}
         {chanTab === "line" && (
@@ -819,6 +853,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       {cfg.line_enabled && lineStatus && !lineStatus.has_secret && <p className="intake__error">{t.intake_line_need_secret}</p>}
       {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.listening && <p className="intake__error">{t.intake_line_not_listening}</p>}
       {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.has_token && <p className="intake__error">{t.intake_line_need_token}</p>}
+      {handlingField("line", t.intake_sec_line)}
           </>
         )}
         {chanTab === "web" && (
@@ -847,6 +882,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         </p>
       )}
       {cfg.web_mode === "lan" && <p className="intake__error">{t.intake_web_lan_warning}</p>}
+      {handlingField("web", t.intake_sec_web)}
           </>
         )}
         </div>
