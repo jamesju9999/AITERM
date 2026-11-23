@@ -20,9 +20,12 @@ pub const DIAGNOSE_NOTICE: &str = "【診斷模式】這個管道目前設定為
 
 fn is_absolute_like(p: &str) -> bool {
     let b = p.as_bytes();
+    // 與目前平台無關：`/…`、`\…`、`~…`、`C:\…`、UNC 都不是「相對於專案資料夾」。
+    // （Windows 的 `Path::is_absolute("/docs")` 是 false，不能只靠它。）
     p.starts_with('~')
+        || p.starts_with('/')
+        || p.starts_with('\\')
         || std::path::Path::new(p).is_absolute()
-        || p.starts_with("\\\\")
         || (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
 }
 
@@ -266,6 +269,10 @@ mod tests {
         assert!(n.contains("- /docs/faq\n") && n.contains("- C:\\docs\\手冊\n") && n.contains("- ~/notes\n"), "{n}");
         assert!(n.contains("- docs/internal（相對於專案資料夾）"), "{n}");
         assert_eq!(n.matches("相對於專案資料夾").count(), 1, "絕對路徑與 ~ 不加註記");
+        // 與平台無關：開頭是 `/`、`\`（含 UNC）或磁碟代號的都不是相對路徑（Windows 的 `Path::is_absolute("/docs")` 是 false）。
+        let m = refs_note(&["/x/y".into(), "\\\\srv\\docs".into(), "\\rooted".into(), "D:/docs".into(), "rel/dir".into()]);
+        assert_eq!(m.matches("相對於專案資料夾").count(), 1, "{m}");
+        assert!(m.contains("- rel/dir（相對於專案資料夾）"), "{m}");
     }
 
     #[test]
