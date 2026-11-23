@@ -13,6 +13,7 @@ pub struct Running {
 
 impl Running {
     pub async fn stop(mut self) {
+        crate::channels::stop(&self.state);
         if let Some(tx) = self.shutdown.take() {
             let _ = tx.send(());
         }
@@ -28,6 +29,8 @@ pub async fn start(bind: SocketAddr, state: Arc<AppState>, identity: Identity) -
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let addr = listener.local_addr()?;
     let app = crate::routes::build(state.clone());
+    crate::channels::reload(&state).await;
+    crate::channels::start_ticker(&state);
     let (tx, rx) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(crate::tls::serve(listener, app, identity, rx));
     Ok(Running { addr, state, shutdown: Some(tx), task })

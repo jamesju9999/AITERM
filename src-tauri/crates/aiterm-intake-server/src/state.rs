@@ -38,6 +38,9 @@ pub struct AppState {
     pub pools: Pools,
     pub secrets: Arc<FileSecrets>,
     pub ai: Arc<crate::ai::ServerAi>,
+    pub channels: crate::channels::Channels,
+    /// 收訊管道（LINE webhook）綁定的位址；預設只收本機（前面通常有反向代理或 Tunnel）。
+    pub channel_bind: std::net::IpAddr,
     pub events: Arc<Broadcast>,
     pub fingerprint: String,
     pub data_dir: PathBuf,
@@ -50,6 +53,6 @@ pub struct AppState {
 impl AppState {
     pub fn new(pools: Pools, secrets: Arc<FileSecrets>, fingerprint: String, data_dir: PathBuf) -> Arc<Self> {
         let ai = Arc::new(crate::ai::ServerAi::new(pools.intake.clone(), secrets.clone()));
-        Arc::new(Self { pools, secrets, ai, events: Broadcast::new(), fingerprint, data_dir, backoff: AuthBackoff::new(), version: env!("CARGO_PKG_VERSION").to_string(), line_api_base: parking_lot::Mutex::new(aiterm_intake_core::line_server::API_BASE.to_string()) })
+        Arc::new(Self { pools, secrets, ai, channels: Default::default(), channel_bind: std::net::Ipv4Addr::LOCALHOST.into(), events: Broadcast::new(), fingerprint, data_dir, backoff: AuthBackoff::new(), version: env!("CARGO_PKG_VERSION").to_string(), line_api_base: parking_lot::Mutex::new(aiterm_intake_core::line_server::API_BASE.to_string()) })
     }
 }

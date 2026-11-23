@@ -4,6 +4,7 @@ pub use aiterm_intake_core::attach;
 pub mod board;
 pub use aiterm_intake_core::classify;
 pub mod ai_adapter;
+pub use aiterm_intake_core::pipeline;
 pub mod commands;
 pub use aiterm_intake_core::config;
 pub use aiterm_intake_core::dispatcher;

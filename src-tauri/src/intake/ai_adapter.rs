@@ -38,3 +38,16 @@ impl AiComplete for ProviderAi {
         ask(self.0.clone(), system.to_string(), user.to_string()).await.map_err(|e| format!("{e:?}"))
     }
 }
+
+/// 每次呼叫才向 `AiRouter` 取目前設定的供應商；沒設定或失敗就回錯誤（呼叫端用各自的預設值）。
+pub struct RouterAi<R: tauri::Runtime>(pub tauri::AppHandle<R>);
+
+#[async_trait::async_trait]
+impl<R: tauri::Runtime> AiComplete for RouterAi<R> {
+    async fn complete(&self, system: &str, user: &str) -> Result<String, String> {
+        use tauri::Manager;
+        let router = self.0.try_state::<crate::ai::router::AiRouter>().ok_or("尚未設定 AI")?;
+        let provider = router.resolve().await.map_err(|e| format!("{e:?}"))?;
+        ProviderAi(provider).complete(system, user).await
+    }
+}
