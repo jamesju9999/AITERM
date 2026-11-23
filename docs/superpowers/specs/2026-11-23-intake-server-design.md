@@ -19,6 +19,7 @@
 | Server 形態 | **獨立的無頭 server 程式**（沿用 `aiterm-host` 的做法），不是「AITERM 開伺服器模式」 |
 | 連線與認證 | **沿用遠端終端機的機制**：TLS＋驗證碼（SAS）配對；配對後發長期 token |
 | 網路情境 | **內網／VPN 與公開網路都支援**：協定相同，只差憑證來源 |
+| Server 的 AI | **Server 自己設定 AI 供應商與金鑰**，行為與本機相同（使用者選 A，否決「② 先不啟用 AI」）。理由：AI 分類有兩處（見下），沒有 AI 時群組會太吵、其他管道全被當成要改程式 |
 | 範圍 | 拆成四個子專案依序做（見下）。**本 spec 詳細設計 ①②，③④只定介面與方向**，各自開工前再補 spec |
 
 ## 範圍切分
@@ -43,6 +44,8 @@
 | `intake/` 共約 9100 行；多數模組**已不依賴 Tauri**：`store`、`config`、`rules`、`dispatcher`、`line_source`、`line_store`、`line_text`、`telegram_source`、`mail_source`、`queue`、`refs`、`verify`、`tabcd`、`attach`、`classify`、`filter`、`smtp` 的 `AppHandle`／`tauri::` 出現次數為 0 | `src-tauri/src/intake/*.rs` |
 | Tauri 耦合集中在 `commands.rs`（54 處）、`runtime.rs`（32）、`mod.rs`（9）、`line_server.rs`（8）、`web.rs`（6）、`board.rs`（1） | 同上 |
 | 耦合的種類只有幾種：① `app.try_state::<IntakeDb>()` 取資料庫 ② `SecretStore` 取祕密（LINE 憑證、郵件密碼） ③ `app.emit(CHANGED_EVENT)` 通知前端 ④ `ProjectRegistry`（專案與其資料庫） ⑤ `AiRouter`（分類用的 AI） ⑥ `PtyManager`／工作看板／canvas／系統連線（派工） | `runtime.rs`、`mod.rs` |
+| AI 分類有兩處，都經 `AiRouter` 送一小段提示詞（30 秒逾時）：① `classify::classify` 判斷題目是「問答」還是「要改程式」，決定走終端機回答或看板卡片（診斷模式下不呼叫 AI、一律問答；失敗預設要改程式）；② `classify::is_new_problem` 判斷 LINE 群組訊息是不是新問題（失敗預設是新問題） | `runtime.rs` 的 `classify_item`、`ai_is_new_problem`；`classify.rs` |
+| `ai/` 目錄（約 7400 行）**沒有任何 `tauri::`／`AppHandle`**，`AiRouter` 只依賴 `ConfigStore`（設定）與 `SecretStore`（金鑰） | `src-tauri/src/ai/` |
 | 前端已經用「`CHANGED_EVENT` 到了就重抓」的模式，不吃增量資料 | `src/components/IntakeView/index.tsx` |
 | `aiterm-core` 已有 TLS（`tls.rs`）、SAS 配對（`auth.rs`）、WebSocket 協定（`protocol.rs`）、server（`server.rs`）、退避（`backoff.rs`），**但它的模型是「單一終端機分頁、每次連線都要主控端即時同意」** | `crates/aiterm-core/src/share/` |
 | `aiterm-host` 是現成的無頭程式範本（clap、tokio、有 keyfile、有端到端測試） | `crates/aiterm-host/` |
@@ -88,7 +91,7 @@
 |---|---|---|---|
 | `secret(id) -> Option<String>` | `SecretStore` | 檔案金鑰（沿用 `aiterm-host` 的 keyfile 做法）；不可用系統鑰匙圈 | `SecretStore` |
 | `changed()` | `app.emit(CHANGED_EVENT)` | 推播給所有已連線的 Client | `app.emit` |
-| `ask_ai(prompt) -> String` | `AiRouter` | 呼叫設定的 AI（需要在 server 上設定 API 金鑰；見「開放問題」） | `AiRouter` |
+| `ai() -> Arc<dyn AiProvider>` | `AiRouter` | server 自己的 AI 設定（見「Server 的 AI 設定」） | `AiRouter` |
 
 派工（終端機／看板／canvas）**不放進 core 介面**：它是 ③④ 的事，而且本來就在不搬的部分。
 
@@ -133,6 +136,16 @@
 
 **推播用「changed＋重抓」而不是增量**：前端現在就是這個模式，改增量要動整個畫面的資料流，而且問題清單量不大。要求是「清單與狀態一致」，不是「毫秒級」。
 
+### Server 的 AI 設定
+
+`ai/` 沒有 Tauri 耦合，所以 server 直接重用同一份供應商實作，不另寫一套。①要把 `ai/`（含它依賴的 `ConfigStore`、`SecretStore` 的可攜部分）一起抽到可被 server 引用的 crate；若 `ConfigStore`／`SecretStore` 本身依賴 Tauri 或系統鑰匙圈，就在 crate 邊界換成 trait，由 AITERM 與 server 各自實作（server 用檔案金鑰）。
+
+- **支援**：用 API 金鑰的供應商（OpenAI、Anthropic API、OpenAI 相容、Ollama 等）。
+- **不支援（②）**：需要瀏覽器互動登入的訂閱 OAuth（Anthropic／Codex／Gemini 的訂閱登入）。無頭 server 沒有瀏覽器，這部分另開需求。
+- **設定方式**：管理員用 API 設定（Client 的設定頁，admin 限定）或 server 的 CLI（`aiterm-intake-server ai set …`）；金鑰與其他祕密一樣只寫不讀、只存 server。
+- **沒設定時**：行為與本機沒設定 AI 時相同（分類失敗的預設值），並在 `GET /v1/status` 與 Client 設定頁顯示「尚未設定 AI」，讓管理員知道群組自動開題與題目分類沒有生效。
+- **費用**：Server 上的 AI 呼叫算 server 管理員的金鑰額度；稽核紀錄記錄分類呼叫次數。
+
 ### 認證與角色
 
 **配對**（重用 `aiterm-core::share::{tls, auth}` 的 TLS 與 commit-then-reveal SAS）：
@@ -154,7 +167,7 @@
 | 看清單、詳情、附件 | ✔ | ✔ |
 | 回覆、核准、駁回、改狀態 | ✔ | ✔ |
 | 改白名單與標籤 | | ✔ |
-| 改管道設定、設定祕密 | | ✔ |
+| 改管道設定、設定祕密（含 AI 金鑰） | | ✔ |
 | 配對新成員、撤銷成員 | | ✔（在 server 本機 CLI） |
 
 **防濫用**：配對端點每個來源 IP 限速並用 `backoff.rs` 的指數退避；token 錯誤一律回 401 且不透露是否存在；撤銷立即生效（下一個請求就 401，WebSocket 立即斷線）；所有動作記稽核紀錄（誰、何時、哪一題、做了什麼）。
@@ -198,12 +211,12 @@
 - **② 完成後 server 不會自動處理**：題目收進來、顯示在清單、可以人工回覆，但不會自動診斷，要等 ③ 或 ④。使用者要知道這個中間狀態。
 - 「回覆」是以 server 身分送出（LINE／信件的寄件者是同一個），不是成員個人的身分。稽核紀錄會記是誰按的。
 - 公開網路模式的安全性取決於憑證與 server 本身的維運（作業系統更新、防火牆）；程式只負責 token、速率限制與稽核，不替使用者做網路防護。
-- AI 分類（判斷是不是新問題等）在 server 上需要自己的 AI 金鑰；沒設定時走現有的「失敗就當成新問題」預設。
+- Server 的 AI 只支援 API 金鑰類供應商，不支援訂閱 OAuth；沒設定 AI 時，LINE 群組每段安靜後都會被當成新問題、其他管道的題目都被當成要改程式（與本機沒設 AI 時相同），所以管理員應該設定。
 - 一個 server 一份設定一個資料庫；不支援多組織隔離。
 
 ## 開放問題（寫計畫時先釘死，必要時回來問使用者）
 
-1. **Server 上的 AI 分類**：`classify` 與 LINE 群組的「是不是新問題」目前用 `AiRouter`（使用者在 AITERM 設定的供應商與金鑰）。Server 要自己設定 API 金鑰，還是 ② 先不啟用 AI 分類（群組開題退回「每則都當候選」）？傾向後者，因為 ② 不含處理。
+1. ~~Server 上的 AI 分類~~：**已決定**，server 自己設定 AI 供應商與金鑰（見「Server 的 AI 設定」）。仍待確認：`ConfigStore`／`SecretStore` 能否直接搬進 crate，還是要換成 trait；用編譯結果判斷。
 2. **多專案**：本機的問題收集是「每個專案各有設定」。Server 是單專案夠用，還是要對應多個專案？傾向單專案，多專案等真有需求。
 3. **`verify.rs`／`tabcd.rs` 是否綁終端機**：決定它們留在 AITERM 還是進 core，用編譯結果判斷。
 4. **網頁表單**：`web.rs`（1044 行）現在是 AITERM 內嵌的小 HTTP server。Server 版要沿用同一份程式，還是併進 API 的同一個埠？傾向沿用、獨立埠，改動最小。
