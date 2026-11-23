@@ -1,5 +1,5 @@
 //! 問題收集的使用者設定，以 JSON 存在 `intake_settings`。
-use super::rules::{MatchMode, Settings};
+use crate::rules::{MatchMode, Settings};
 use super::store;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -257,7 +257,7 @@ pub async fn save_global(pool: &SqlitePool, g: &GlobalConfig) -> Result<(), sqlx
 /// 兩個專案的設定會不會讓同一封信有兩個歸屬。回傳衝突的欄位（`dedicated`／`alias`／`tag`）。
 /// 只有「兩邊都啟用、用同一個信箱帳號」才可能衝突。
 pub fn conflict(a: &Config, b: &Config) -> Option<&'static str> {
-    use super::rules::MatchMode::*;
+    use crate::rules::MatchMode::*;
     if !a.enabled || !b.enabled || a.account_id.is_empty() || a.account_id != b.account_id {
         return None;
     }
@@ -279,7 +279,7 @@ pub fn conflict(a: &Config, b: &Config) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intake::rules::MatchMode;
+    use crate::rules::MatchMode;
 
     fn c(mode: MatchMode, alias: &str, tag: &str) -> Config {
         Config { enabled: true, account_id: "acc".into(), mode, alias: alias.into(), tag: tag.into(), ..Config::default() }

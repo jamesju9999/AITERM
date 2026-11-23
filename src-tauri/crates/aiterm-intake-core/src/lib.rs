@@ -1,3 +1,17 @@
 //! 問題收集核心：資料、規則與收訊，不依賴 Tauri。
 //! AITERM 與 aiterm-intake-server 共用這一份邏輯。
 pub mod host;
+pub mod attach;
+pub mod filter;
+pub mod rules;
+pub mod refs;
+pub mod line_text;
+pub mod config;
+pub mod queue;
+pub mod line_store;
+pub mod dispatcher;
+pub mod smtp;
+pub mod store;
+pub mod line_source;
+pub mod telegram_source;
+pub mod mail_source;

@@ -2,10 +2,10 @@
 //!
 //! 先只看標頭做判斷；通過才讀內文入庫。不符合的信不寫進 `intake.db`
 //! （郵件分頁自己的快取不受影響），只累計丟棄計數。
-use super::attach::Raw;
-use super::config::Config;
-use super::queue::{self, drop_reason, Ingested};
-use super::rules::{self, Decision, Headers};
+use crate::attach::Raw;
+use crate::config::Config;
+use crate::queue::{self, drop_reason, Ingested};
+use crate::rules::{self, Decision, Headers};
 use super::store;
 use mail_parser::{HeaderValue, MessageParser, MimeHeaders};
 use sqlx::SqlitePool;
@@ -111,7 +111,7 @@ fn fnv(b: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intake::rules::{Level, MatchMode, Sender};
+    use crate::rules::{Level, MatchMode, Sender};
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn pool() -> SqlitePool {

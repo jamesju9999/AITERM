@@ -1,8 +1,8 @@
 //! 各管道共用的入列：頻率限制、依層級決定起始狀態、去重。
-use super::attach::{self, Raw};
-use super::config::{Config, DispatchMode};
-use super::rules::{self, Level};
-use super::store::{self, NewItem};
+use crate::attach::{self, Raw};
+use crate::config::{Config, DispatchMode};
+use crate::rules::{self, Level};
+use crate::store::{self, NewItem};
 use sqlx::SqlitePool;
 use std::path::Path;
 

@@ -1,26 +1,26 @@
 //! 問題收集（Intake）：外部問題進獨立佇列，循序派給終端機裡的 AI Agent。
 //! 設計：docs/superpowers/specs/2026-11-05-intake-queue-design.md
-pub mod attach;
+pub use aiterm_intake_core::attach;
 pub mod board;
 pub mod classify;
 pub mod commands;
-pub mod config;
-pub mod dispatcher;
-pub mod filter;
+pub use aiterm_intake_core::config;
+pub use aiterm_intake_core::dispatcher;
+pub use aiterm_intake_core::filter;
 pub mod line_server;
-pub mod line_store;
-pub mod line_source;
-pub mod line_text;
-pub mod mail_source;
-pub mod queue;
-pub mod refs;
+pub use aiterm_intake_core::line_store;
+pub use aiterm_intake_core::line_source;
+pub use aiterm_intake_core::line_text;
+pub use aiterm_intake_core::mail_source;
+pub use aiterm_intake_core::queue;
+pub use aiterm_intake_core::refs;
 #[cfg(test)]
 mod rehearsal;
-pub mod rules;
+pub use aiterm_intake_core::rules;
 pub mod runtime;
-pub mod smtp;
-pub mod telegram_source;
-pub mod store;
+pub use aiterm_intake_core::smtp;
+pub use aiterm_intake_core::telegram_source;
+pub use aiterm_intake_core::store;
 pub mod tabcd;
 pub mod verify;
 pub mod web;

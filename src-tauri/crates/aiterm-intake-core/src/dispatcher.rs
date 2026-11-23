@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::store::{AttachmentRow, IntakeItem};
+use crate::store::{AttachmentRow, IntakeItem};
 
 pub fn marker_for(item_id: &str) -> String {
     format!("[INTAKE#{}]", item_id.chars().take(8).collect::<String>())
@@ -79,7 +79,7 @@ pub fn build_prompt(item: &IntakeItem, images: &[AttachmentRow], diagnose: bool)
         subject = item.subject,
         body = item.body,
         pics = pics,
-        note = format!("{}{}", if diagnose { diagnose_note() } else { String::new() }, if item.source == "line" { super::line_text::PLAIN_NOTE } else { "" }),
+        note = format!("{}{}", if diagnose { diagnose_note() } else { String::new() }, if item.source == "line" { crate::line_text::PLAIN_NOTE } else { "" }),
     )
 }
 

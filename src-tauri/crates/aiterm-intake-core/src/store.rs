@@ -2,7 +2,7 @@
 //!
 //! 狀態：`pending`（等你按派送）→ `queued`（可被接收端領取）→ `running` →
 //! `done` 或 `draft`（外部回覆待寄出）→ `done`；`rejected` 為終態。
-use super::rules::{Level, Sender};
+use crate::rules::{Level, Sender};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 
@@ -150,7 +150,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query("INSERT OR IGNORE INTO intake_project_dropped (project_id, reason, count) SELECT '', reason, count FROM intake_dropped").execute(pool).await?;
         set_setting(pool, "project_split_migrated", "1").await?;
     }
-    super::line_store::init(pool).await?;
+    crate::line_store::init(pool).await?;
     Ok(())
 }
 
@@ -388,7 +388,7 @@ pub struct AttachmentRow {
     pub size: i64,
 }
 
-pub async fn add_attachment(pool: &SqlitePool, item_id: &str, a: &super::attach::Saved) -> Result<(), sqlx::Error> {
+pub async fn add_attachment(pool: &SqlitePool, item_id: &str, a: &crate::attach::Saved) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO intake_attachments (id, item_id, filename, path, mime, size) VALUES (?,?,?,?,?,?)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(item_id).bind(&a.filename).bind(&a.path).bind(a.mime).bind(a.size)
         .execute(pool).await?;
@@ -415,13 +415,13 @@ struct SenderRow {
 pub async fn upsert_sender(pool: &SqlitePool, project_id: &str, s: &Sender) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO intake_project_senders (project_id, address, level, skip_auth) VALUES (?,?,?,?)
                  ON CONFLICT(project_id, address) DO UPDATE SET level = excluded.level, skip_auth = excluded.skip_auth")
-        .bind(project_id).bind(super::rules::normalize(&s.address)).bind(level_str(s.level)).bind(s.skip_auth)
+        .bind(project_id).bind(crate::rules::normalize(&s.address)).bind(level_str(s.level)).bind(s.skip_auth)
         .execute(pool).await?;
     Ok(())
 }
 
 pub async fn delete_sender(pool: &SqlitePool, project_id: &str, address: &str) -> Result<bool, sqlx::Error> {
-    let address = super::rules::normalize(address);
+    let address = crate::rules::normalize(address);
     sqlx::query("DELETE FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(&address).execute(pool).await?;
     Ok(sqlx::query("DELETE FROM intake_project_senders WHERE project_id = ? AND address = ?").bind(project_id).bind(&address)
         .execute(pool).await?.rows_affected() > 0)
@@ -434,7 +434,7 @@ pub fn clean_label(label: &str) -> String {
 
 /// 設定白名單項目的備註；空白＝清掉。
 pub async fn set_sender_label(pool: &SqlitePool, project_id: &str, address: &str, label: &str) -> Result<(), sqlx::Error> {
-    let (address, label) = (super::rules::normalize(address), clean_label(label));
+    let (address, label) = (crate::rules::normalize(address), clean_label(label));
     if label.is_empty() {
         sqlx::query("DELETE FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(address).execute(pool).await?;
     } else {
@@ -445,7 +445,7 @@ pub async fn set_sender_label(pool: &SqlitePool, project_id: &str, address: &str
 }
 
 pub async fn sender_label(pool: &SqlitePool, project_id: &str, address: &str) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar("SELECT label FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(super::rules::normalize(address)).fetch_optional(pool).await
+    sqlx::query_scalar("SELECT label FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(crate::rules::normalize(address)).fetch_optional(pool).await
 }
 
 pub async fn sender_labels(pool: &SqlitePool, project_id: &str) -> Result<std::collections::HashMap<String, String>, sqlx::Error> {
@@ -683,7 +683,7 @@ mod tests {
         let mk = |mid: &'static str| NewItem { project_id: "", id: None, source: "email", sender: "a@corp.com", level: Level::Internal, subject: "s", body: "b", message_id: mid, status: QUEUED };
         let a = insert_item(&p, mk("m1")).await.unwrap().unwrap();
         let b = insert_item(&p, mk("m2")).await.unwrap().unwrap();
-        add_attachment(&p, &a.id, &crate::intake::attach::Saved { filename: "x.png".into(), path: "/x/x.png".into(), mime: "image/png", size: 1 }).await.unwrap();
+        add_attachment(&p, &a.id, &crate::attach::Saved { filename: "x.png".into(), path: "/x/x.png".into(), mime: "image/png", size: 1 }).await.unwrap();
         claim_next(&p, "", "tab").await.unwrap(); // a 變成 running
         assert!(!delete_item(&p, &a.id).await.unwrap(), "處理中不能刪");
         assert!(delete_item(&p, &b.id).await.unwrap());
@@ -755,7 +755,7 @@ mod tests {
     async fn sender_labels_are_cleaned_scoped_to_a_project_cleared_by_blank_and_removed_with_the_sender() {
         let p = pool().await;
         let a = "line:Cb345e5d492c48c02a3eaa279924c52d2";
-        upsert_sender(&p, "p1", &crate::intake::rules::Sender { address: a.into(), level: crate::intake::rules::Level::External, skip_auth: false }).await.unwrap();
+        upsert_sender(&p, "p1", &crate::rules::Sender { address: a.into(), level: crate::rules::Level::External, skip_auth: false }).await.unwrap();
         set_sender_label(&p, "p1", a, "  範例科技\n客服群 ").await.unwrap();
         assert_eq!(sender_label(&p, "p1", a).await.unwrap().as_deref(), Some("範例科技客服群"));
         assert_eq!(sender_label(&p, "p1", &a.to_uppercase()).await.unwrap().as_deref(), Some("範例科技客服群"), "地址大小寫不影響");

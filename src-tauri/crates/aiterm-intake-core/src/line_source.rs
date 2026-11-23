@@ -4,11 +4,11 @@
 //! 沒有「主人」：所有寄件者都必須在白名單，等級依白名單。
 //! 設計：docs/superpowers/specs/2026-11-23-intake-line-design.md
 use super::attach;
-use super::line_store::{self, LineMessage, NewMessage};
-use super::queue::{self, Ingested};
-use super::rules::{self, Level};
+use crate::line_store::{self, LineMessage, NewMessage};
+use crate::queue::{self, Ingested};
+use crate::rules::{self, Level};
 use super::store;
-use super::telegram_source::{subject_of, Candidate};
+use crate::telegram_source::{subject_of, Candidate};
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
@@ -184,7 +184,7 @@ pub fn parse_events(body: &[u8]) -> Vec<Incoming> {
 
 /// 內容切成不超過 `max` 字元的段落（依行，再不行依字元）。
 pub fn split_message(text: &str, max: usize) -> Vec<String> {
-    super::telegram_source::split_message(text, max)
+    crate::telegram_source::split_message(text, max)
 }
 
 /// 決定訊息屬於哪個專案再入列：`line:<id>` 在哪個（已啟用 LINE 的）專案的白名單就進哪個。
@@ -428,8 +428,8 @@ pub async fn open_candidate(pool: &SqlitePool, project: &Candidate, level: Level
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intake::config::Config;
-    use crate::intake::rules::Sender;
+    use crate::config::Config;
+    use crate::rules::Sender;
     use sqlx::sqlite::SqlitePoolOptions;
 
     const UID: &str = "U0123456789abcdef0123456789abcdef";
