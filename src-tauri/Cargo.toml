@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/aiterm-core", "crates/aiterm-host", "crates/aiterm-elevated-host"]
+members = [".", "crates/aiterm-core", "crates/aiterm-host", "crates/aiterm-elevated-host", "crates/aiterm-intake-core"]
 
 [package]
 name = "app"
@@ -22,6 +22,7 @@ tauri-build = { version = "2.5.6", features = [] }
 
 [dependencies]
 aiterm-core = { path = "crates/aiterm-core" }
+aiterm-intake-core = { path = "crates/aiterm-intake-core" }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 ignore = "0.4"
 serde = { version = "1.0", features = ["derive"] }
