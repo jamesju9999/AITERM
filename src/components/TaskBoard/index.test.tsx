@@ -1046,8 +1046,12 @@ describe("ProjectBoard", () => {
     try {
       const { fireEvent } = await import("@testing-library/react");
       fireEvent.mouseDown(dragWrap, { clientX: 100, clientY: 100, button: 0 });
-      fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
-      expect(queuedCol.className).toContain("task-column--drop-target");
+      // 卡片出現的那一刻，註冊 mousemove 監聽的 effect 可能還沒跑完（監聽器還拿著空的任務清單），
+      // 單次 mouseMove 會偶爾落空。每次重試都重新送一次 mouseMove，等監聽器就緒。
+      await waitFor(() => {
+        fireEvent.mouseMove(window, { clientX: 100, clientY: 120 });
+        expect(queuedCol.className).toContain("task-column--drop-target");
+      });
       fireEvent.mouseUp(window, { clientX: 100, clientY: 120 });
     } finally {
       document.elementFromPoint = originalElementFromPoint;
