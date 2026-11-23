@@ -45,6 +45,7 @@ aes-gcm = "0.10"
 dirs = "6"
 
 [dev-dependencies]
+aiterm-intake-client = { path = "../aiterm-intake-client" }
 tempfile = "3"
 tokio-tungstenite = "0.29"
 wiremock = "0.6"

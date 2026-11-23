@@ -5,46 +5,15 @@
 //! 所以中間人沒有邀請碼就既偽造不了證明，也無法冒充 server。
 //! 長期 token 只存雜湊；比對靠雜湊後查表（256 bit 隨機值）。
 use rand::RngCore;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 
 pub const INVITE_TTL_SECS: i64 = 15 * 60;
 pub const MAX_INVITE_ATTEMPTS: i64 = 5;
-/// 去掉容易混淆的字元（I、L、O、0、1）的 base32。
-const ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-const ID_LEN: usize = 6;
-const SECRET_LEN: usize = 16;
+use aiterm_intake_core::api::invite::{ALPHABET, ID_LEN, SECRET_LEN};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    Member,
-    Admin,
-}
-
-impl Role {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Role::Member => "member",
-            Role::Admin => "admin",
-        }
-    }
-    pub fn parse(s: &str) -> Option<Role> {
-        match s {
-            "member" => Some(Role::Member),
-            "admin" => Some(Role::Admin),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct Me {
-    pub id: String,
-    pub name: String,
-    pub role: Role,
-}
+pub use aiterm_intake_core::api::{Me, Role};
 
 fn random_chars(n: usize) -> String {
     let mut rng = rand::rng();
@@ -62,28 +31,7 @@ fn random_chars(n: usize) -> String {
         .collect()
 }
 
-/// 每 4 個字元以 `-` 分組，方便抄寫。
-pub fn format_code(id: &str, secret: &str) -> String {
-    let all = format!("{id}{secret}");
-    all.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join("-")
-}
-
-/// 使用者貼上的邀請碼 → `(公開編號, 祕密)`。忽略大小寫、空白與 `-`；長度不對回 `None`。
-pub fn parse_code(input: &str) -> Option<(String, String)> {
-    let clean: String = input.chars().filter(|c| !c.is_whitespace() && *c != '-').map(|c| c.to_ascii_uppercase()).collect();
-    if clean.len() != ID_LEN + SECRET_LEN || !clean.bytes().all(|b| ALPHABET.contains(&b)) {
-        return None;
-    }
-    Some((clean[..ID_LEN].to_string(), clean[ID_LEN..].to_string()))
-}
-
-/// 配對互證用的金鑰：由祕密導出，與公開編號無關。
-pub fn invite_key(secret: &str) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(b"aiterm-intake-invite-v1");
-    h.update(secret.as_bytes());
-    h.finalize().into()
-}
+pub use aiterm_intake_core::api::invite::{format_code, invite_key, parse_code};
 
 pub struct NewInvite {
     pub code: String,
@@ -199,16 +147,6 @@ mod tests {
 
     async fn pool() -> SqlitePool {
         crate::db::open_memory().await.unwrap().server
-    }
-
-    #[test]
-    fn a_code_round_trips_through_formatting_and_forgiving_parsing() {
-        let c = format_code("ABCDEF", "GHJKMNPQRSTUVWXY");
-        assert_eq!(c, "ABCD-EFGH-JKMN-PQRS-TUVW-XY");
-        assert_eq!(parse_code(&c), Some(("ABCDEF".into(), "GHJKMNPQRSTUVWXY".into())));
-        assert_eq!(parse_code("  abcd-efgh-jkmn-pqrs-tuvw-xy \n"), parse_code(&c), "忽略大小寫與空白");
-        assert_eq!(parse_code("ABCD-EFGH"), None, "太短");
-        assert_eq!(parse_code("ABCD-EFGH-JKMN-PQRS-TUVW-X0"), None, "0 不在字母表");
     }
 
     #[tokio::test]

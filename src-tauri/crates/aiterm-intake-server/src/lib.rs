@@ -3,3 +3,6 @@ pub mod audit;
 pub mod db;
 pub mod members;
 pub mod secrets;
+pub mod pairing;
+pub mod state;
+pub mod tls;
