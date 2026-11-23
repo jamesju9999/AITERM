@@ -717,7 +717,7 @@ mod board_wiring_tests {
     async fn say_in_group(pool: &sqlx::SqlitePool, id: &str, user: &str, text: &str, ago: i64) {
         use crate::intake::line_store::{insert_message, NewMessage};
         let key = format!("line:{}", LG.to_lowercase());
-        insert_message(pool, &NewMessage { chat: &key, msg_id: id, user_id: &user.to_lowercase(), name: if user == LSTAFF { "旭婷" } else { "介琳" }, text, ts: chrono::Utc::now().timestamp() - ago, outgoing: false }).await.unwrap();
+        insert_message(pool, &NewMessage { chat: &key, msg_id: id, user_id: &user.to_lowercase(), name: if user == LSTAFF { "小華" } else { "小明" }, text, ts: chrono::Utc::now().timestamp() - ago, outgoing: false }).await.unwrap();
     }
 
     /// 整條接線：客戶沒 @ 講完問題（安靜超過 90 秒）→ 下一輪 tick 自動開題；同一群組已有未結束的題就不再開；人員先回了就不開。
@@ -750,7 +750,7 @@ mod board_wiring_tests {
         assert!(store::list_items(&pool, &project.id, None).await.unwrap().is_empty());
         // 人員接著回了 → 不開，並把這批標成已處理。
         say_in_group(&pool, "2", LSTAFF, "我來看", 20).await;
-        crate::intake::line_store::insert_message(&pool, &crate::intake::line_store::NewMessage { chat: &format!("line:{}", LG.to_lowercase()), msg_id: "late", user_id: "u2222222222222222222222222222222b", name: "介琳", text: "好", ts: chrono::Utc::now().timestamp() - 200, outgoing: false }).await.unwrap();
+        crate::intake::line_store::insert_message(&pool, &crate::intake::line_store::NewMessage { chat: &format!("line:{}", LG.to_lowercase()), msg_id: "late", user_id: "u2222222222222222222222222222222b", name: "小明", text: "好", ts: chrono::Utc::now().timestamp() - 200, outgoing: false }).await.unwrap();
         tick(&h).await;
         assert!(store::list_items(&pool, &project.id, None).await.unwrap().is_empty(), "人員已在處理");
         // 關掉自動開題：累積的訊息標成已處理，不開題。

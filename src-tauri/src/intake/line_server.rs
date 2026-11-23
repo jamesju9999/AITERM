@@ -527,18 +527,18 @@ mod tests {
     async fn member_and_group_names_come_from_line_and_are_cached() {
         let server = MockServer::start().await;
         Mock::given(method("GET")).and(path(format!("/v2/bot/group/{GROUP}/member/{MEMBER}"))).and(header("authorization", "Bearer tok"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "displayName": "介琳" }))).expect(1).mount(&server).await;
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "displayName": "小明" }))).expect(1).mount(&server).await;
         Mock::given(method("GET")).and(path(format!("/v2/bot/group/{GROUP}/summary")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "groupName": "兆強客服群" }))).expect(1).mount(&server).await;
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "groupName": "範例客服群" }))).expect(1).mount(&server).await;
         let (r, pool, _) = app_with(Some("tok".into()), server.uri()).await;
         allow_group(&pool).await;
         assert_eq!(signed(&r, &group_text("1", "請看", false)).await, StatusCode::OK);
         assert_eq!(signed(&r, &group_text("2", "請看", true)).await, StatusCode::OK);
         let m = line_store::get_by_msg_id(&pool, &gkey(), "1").await.unwrap().unwrap();
-        assert_eq!(m.name, "介琳");
+        assert_eq!(m.name, "小明");
         let it = &store::list_items(&pool, "", None).await.unwrap()[0];
-        assert_eq!(it.sender_name.as_deref(), Some("兆強客服群 / 介琳"));
-        assert!(it.body.contains("兆強客服群"), "{}", it.body);
+        assert_eq!(it.sender_name.as_deref(), Some("範例客服群 / 小明"));
+        assert!(it.body.contains("範例客服群"), "{}", it.body);
         // wiremock 的 expect(1)：第二則沒有再查名稱（快取生效）。
     }
 

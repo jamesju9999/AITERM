@@ -636,7 +636,7 @@ mod tests {
     }
     async fn grp(p: &SqlitePool, cands: &[Candidate], m: &GroupMsg<'_>, retention: u32, now: i64) -> Ingested {
         let tmp = tempfile::tempdir().unwrap();
-        route_group(p, cands, m, "兆強客服群", retention, now, tmp.path()).await.unwrap()
+        route_group(p, cands, m, "範例客服群", retention, now, tmp.path()).await.unwrap()
     }
     fn gkey() -> String {
         sender_key(GROUP)
@@ -676,22 +676,22 @@ mod tests {
         let p = pool().await;
         allow_key(&p, "", &format!("line:{GROUP}"), Level::External).await;
         let c = [cand("", true)];
-        grp(&p, &c, &gm("1", CUSTOMER, "介琳", "ARESPP 開不了加密檔", 100, false), 30, 200).await;
-        grp(&p, &c, &gm("2", STAFF, "旭婷", "請問版本是？", 110, false), 30, 200).await;
-        let Ingested::Queued(id) = grp(&p, &c, &gm("3", CUSTOMER, "介琳", "@AI助理 6.0.9273，請幫我看", 120, true), 30, 200).await else { panic!() };
+        grp(&p, &c, &gm("1", CUSTOMER, "小明", "ARESPP 開不了加密檔", 100, false), 30, 200).await;
+        grp(&p, &c, &gm("2", STAFF, "小華", "請問版本是？", 110, false), 30, 200).await;
+        let Ingested::Queued(id) = grp(&p, &c, &gm("3", CUSTOMER, "小明", "@AI助理 6.0.9273，請幫我看", 120, true), 30, 200).await else { panic!() };
         let it = store::get_item(&p, &id).await.unwrap().unwrap();
         assert_eq!((it.source.as_str(), it.sender.as_str(), it.sender_level.as_str(), it.status.as_str()), ("line", gkey().as_str(), "external", store::PENDING));
         assert_eq!(it.subject, "6.0.9273，請幫我看", "標題去掉開頭的 @名稱");
-        assert_eq!(it.sender_name.as_deref(), Some("兆強客服群 / 介琳"));
+        assert_eq!(it.sender_name.as_deref(), Some("範例客服群 / 小明"));
         assert_eq!(it.message_id, format!("{}:3", gkey()));
         let b = &it.body;
         let (ctx, ask) = b.split_once("── 提問 ──").unwrap();
-        assert!(ctx.contains("兆強客服群") && ctx.contains("── 前情 ──") && ctx.contains("ARESPP 開不了加密檔") && ctx.contains("旭婷") && ctx.contains("請問版本是？"), "{b}");
+        assert!(ctx.contains("範例客服群") && ctx.contains("── 前情 ──") && ctx.contains("ARESPP 開不了加密檔") && ctx.contains("小華") && ctx.contains("請問版本是？"), "{b}");
         assert!(ask.contains("6.0.9273，請幫我看") && !ask.contains("開不了加密檔"), "{b}");
         // 這則之後，同一群組的這批已標成已處理。
         assert!(line_store::unhandled(&p, &gkey()).await.unwrap().iter().all(|m| m.msg_id != "3"));
         // 同一則 @ 重送：不重複開題。
-        assert_eq!(grp(&p, &c, &gm("3", CUSTOMER, "介琳", "@AI助理 6.0.9273，請幫我看", 120, true), 30, 200).await, Ingested::Duplicate);
+        assert_eq!(grp(&p, &c, &gm("3", CUSTOMER, "小明", "@AI助理 6.0.9273，請幫我看", 120, true), 30, 200).await, Ingested::Duplicate);
         assert_eq!(store::list_items(&p, "", None).await.unwrap().len(), 1);
     }
 
@@ -763,18 +763,18 @@ mod tests {
         let p = pool().await;
         allow_key(&p, "", &format!("line:{GROUP}"), Level::External).await;
         say(&p, "1", CUSTOMER, "客戶", "請問怎麼設定", 1000).await;
-        say(&p, "2", STAFF, "旭婷", "我來看", 1010).await;
+        say(&p, "2", STAFF, "小華", "我來看", 1010).await;
         assert_eq!(triage_chat(&p, &gkey(), &staff_set(), 90, 2000).await.unwrap(), Triage::Skipped, "人員已在回覆");
         assert_eq!(triage_chat(&p, &gkey(), &staff_set(), 90, 2000).await.unwrap(), Triage::Idle, "已標成已處理");
         // 只有人員講話。
-        say(&p, "3", STAFF, "旭婷", "內部備忘", 3000).await;
+        say(&p, "3", STAFF, "小華", "內部備忘", 3000).await;
         assert_eq!(triage_chat(&p, &gkey(), &staff_set(), 90, 4000).await.unwrap(), Triage::Skipped);
         // AI 自己已回覆（outgoing）也算有人處理。
         say(&p, "4", CUSTOMER, "客戶", "又一個問題", 5000).await;
         line_store::insert_message(&p, &line_store::NewMessage { chat: &gkey(), msg_id: "ai-1", user_id: "", name: "AI 助理", text: "已回覆", ts: 5010, outgoing: true }).await.unwrap();
         assert_eq!(triage_chat(&p, &gkey(), &staff_set(), 90, 6000).await.unwrap(), Triage::Skipped);
         // 沒有人員名單時，所有人都是客戶。
-        say(&p, "5", STAFF, "旭婷", "我是誰", 7000).await;
+        say(&p, "5", STAFF, "小華", "我是誰", 7000).await;
         assert!(matches!(triage_chat(&p, &gkey(), &Default::default(), 90, 8000).await.unwrap(), Triage::Candidate { .. }));
     }
 
@@ -782,13 +782,13 @@ mod tests {
     async fn opening_a_candidate_uses_the_earlier_talk_as_context_and_marks_everything_up_to_it_handled() {
         let p = pool().await;
         allow_key(&p, "", &format!("line:{GROUP}"), Level::External).await;
-        say(&p, "0", STAFF, "旭婷", "昨天已更新到最新版", 500).await;
-        say(&p, "1", CUSTOMER, "介琳", "今天又打不開了", 1000).await;
-        say(&p, "2", CUSTOMER, "介琳", "畫面一直轉圈", 1010).await;
+        say(&p, "0", STAFF, "小華", "昨天已更新到最新版", 500).await;
+        say(&p, "1", CUSTOMER, "小明", "今天又打不開了", 1000).await;
+        say(&p, "2", CUSTOMER, "小明", "畫面一直轉圈", 1010).await;
         let Triage::Candidate { messages, upto } = triage_chat(&p, &gkey(), &staff_set(), 90, 2000).await.unwrap() else { panic!() };
         let tmp = tempfile::tempdir().unwrap();
         let project = cand("", true);
-        let Ingested::Queued(id) = open_candidate(&p, &project, Level::External, &gkey(), "兆強客服群", messages, upto, 2000, tmp.path()).await.unwrap() else { panic!() };
+        let Ingested::Queued(id) = open_candidate(&p, &project, Level::External, &gkey(), "範例客服群", messages, upto, 2000, tmp.path()).await.unwrap() else { panic!() };
         let it = store::get_item(&p, &id).await.unwrap().unwrap();
         assert_eq!(it.message_id, format!("{}:auto:1", gkey()));
         let (ctx, ask) = it.body.split_once("── 提問 ──").unwrap();
@@ -802,13 +802,13 @@ mod tests {
     async fn without_a_group_name_the_whitelist_label_identifies_the_group_in_the_item() {
         let p = pool().await;
         allow_key(&p, "", &format!("line:{GROUP}"), Level::External).await;
-        store::set_sender_label(&p, "", &format!("line:{GROUP}"), "  兆強科技客服群\n").await.unwrap();
+        store::set_sender_label(&p, "", &format!("line:{GROUP}"), "  範例科技客服群\n").await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        let m = gm("1", CUSTOMER, "介琳", "@AI 請看", 100, true);
+        let m = gm("1", CUSTOMER, "小明", "@AI 請看", 100, true);
         let r = route_group(&p, &[cand("", true)], &m, "", 30, 200, tmp.path()).await.unwrap();
         let Ingested::Queued(id) = r else { panic!() };
         let it = store::get_item(&p, &id).await.unwrap().unwrap();
-        assert_eq!(it.sender_name.as_deref(), Some("兆強科技客服群 / 介琳"));
-        assert!(it.body.contains("兆強科技客服群"), "{}", it.body);
+        assert_eq!(it.sender_name.as_deref(), Some("範例科技客服群 / 小明"));
+        assert!(it.body.contains("範例科技客服群"), "{}", it.body);
     }
 }

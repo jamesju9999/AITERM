@@ -657,25 +657,25 @@ describe("IntakeView", () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([]);
     vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ line_enabled: true }));
     const unknown = [
-      { id: "cb345e5d492c48c02a3eaa279924c52d2", kind: "group" as const, name: "兆強客服群", count: 7, first_seen: 1, last_seen: 2 },
+      { id: "cb345e5d492c48c02a3eaa279924c52d2", kind: "group" as const, name: "範例客服群", count: 7, first_seen: 1, last_seen: 2 },
       { id: "u2222222222222222222222222222222b", kind: "user" as const, name: "", count: 1, first_seen: 1, last_seen: 1 },
     ];
     vi.mocked(ipc.intakeLineUnknown).mockResolvedValueOnce(unknown).mockResolvedValue([unknown[1]]);
     wrap();
     fireEvent.click(await screen.findByText(t.intake_settings));
     // 在「白名單」區塊裡，不必切到 LINE 分頁。
-    expect(await screen.findByText("兆強客服群")).toBeInTheDocument();
+    expect(await screen.findByText("範例客服群")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: t.intake_senders })).toBeInTheDocument();
     expect(screen.getByText(`7 ${t.intake_line_times}`)).toBeInTheDocument();
     expect(screen.getByText("line:Cb345e5d492c48c02a3eaa279924c52d2")).toBeInTheDocument();
     expect(screen.getByText("line:U2222222222222222222222222222222b")).toBeInTheDocument();
     expect(screen.getByText(t.intake_line_unnamed)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: `${t.intake_line_add_external} 兆強客服群` }));
+    fireEvent.click(screen.getByRole("button", { name: `${t.intake_line_add_external} 範例客服群` }));
     await waitFor(() =>
-      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: "line:cb345e5d492c48c02a3eaa279924c52d2", level: "external", skip_auth: false, label: "兆強客服群" }),
+      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: "line:cb345e5d492c48c02a3eaa279924c52d2", level: "external", skip_auth: false, label: "範例客服群" }),
     );
     await waitFor(() => expect(ipc.intakeLineForgetUnknown).toHaveBeenCalledWith("cb345e5d492c48c02a3eaa279924c52d2"));
-    await waitFor(() => expect(screen.queryByText("兆強客服群")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("範例客服群")).toBeNull());
     vi.mocked(ipc.intakeLineUnknown).mockResolvedValue([]);
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${t.intake_line_ignore}`) }));
     await waitFor(() => expect(ipc.intakeLineForgetUnknown).toHaveBeenCalledWith("u2222222222222222222222222222222b"));
@@ -692,22 +692,22 @@ describe("IntakeView", () => {
     fireEvent.click(await screen.findByText(t.intake_settings));
     // 還沒有名稱時，加入前可以替它取一個。
     const box = await screen.findByLabelText(new RegExp(`^${t.intake_sender_label} ${group}`));
-    fireEvent.change(box, { target: { value: "  兆強科技客服群 " } });
+    fireEvent.change(box, { target: { value: "  範例科技客服群 " } });
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${t.intake_line_add_external}`) }));
     await waitFor(() =>
-      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: `line:${group}`, level: "external", skip_auth: false, label: "兆強科技客服群" }),
+      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: `line:${group}`, level: "external", skip_auth: false, label: "範例科技客服群" }),
     );
 
     // 白名單上同時看到備註與編號；沒有備註的也能補上。
     vi.mocked(ipc.intakeSenders).mockResolvedValue([
-      { address: `line:${group}`, level: "external", skip_auth: false, label: "兆強科技客服群" },
+      { address: `line:${group}`, level: "external", skip_auth: false, label: "範例科技客服群" },
       { address: "line:u2222222222222222222222222222222b", level: "internal", skip_auth: false, label: "" },
     ]);
     vi.mocked(ipc.intakeLineUnknown).mockResolvedValue([]);
     cleanup();
     wrap();
     fireEvent.click(await screen.findByText(t.intake_settings));
-    expect(await screen.findByText("兆強科技客服群")).toBeInTheDocument();
+    expect(await screen.findByText("範例科技客服群")).toBeInTheDocument();
     expect(screen.getByText(new RegExp(`line:C${group.slice(1)}`))).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${t.intake_sender_label_edit}`) }));
     const edit = screen.getByLabelText(new RegExp(`^${t.intake_sender_label} line:C`));

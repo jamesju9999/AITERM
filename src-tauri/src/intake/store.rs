@@ -117,7 +117,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             skip_auth INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (project_id, address)
         )",
-        // 白名單項目的備註名稱（例如「兆強科技客服群」）。LINE 取不到群組名稱時，靠它辨認是哪個群組。
+        // 白名單項目的備註名稱（例如「範例科技客服群」）。LINE 取不到群組名稱時，靠它辨認是哪個群組。
         "CREATE TABLE IF NOT EXISTS intake_sender_labels (
             project_id TEXT NOT NULL,
             address TEXT NOT NULL,
@@ -756,9 +756,9 @@ mod tests {
         let p = pool().await;
         let a = "line:Cb345e5d492c48c02a3eaa279924c52d2";
         upsert_sender(&p, "p1", &crate::intake::rules::Sender { address: a.into(), level: crate::intake::rules::Level::External, skip_auth: false }).await.unwrap();
-        set_sender_label(&p, "p1", a, "  兆強科技\n客服群 ").await.unwrap();
-        assert_eq!(sender_label(&p, "p1", a).await.unwrap().as_deref(), Some("兆強科技客服群"));
-        assert_eq!(sender_label(&p, "p1", &a.to_uppercase()).await.unwrap().as_deref(), Some("兆強科技客服群"), "地址大小寫不影響");
+        set_sender_label(&p, "p1", a, "  範例科技\n客服群 ").await.unwrap();
+        assert_eq!(sender_label(&p, "p1", a).await.unwrap().as_deref(), Some("範例科技客服群"));
+        assert_eq!(sender_label(&p, "p1", &a.to_uppercase()).await.unwrap().as_deref(), Some("範例科技客服群"), "地址大小寫不影響");
         assert_eq!(sender_label(&p, "p2", a).await.unwrap(), None, "專案之間互不相干");
         assert_eq!(sender_labels(&p, "p1").await.unwrap().len(), 1);
         set_sender_label(&p, "p1", a, "改名").await.unwrap();

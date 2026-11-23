@@ -190,7 +190,7 @@ mod tests {
         p
     }
     fn msg<'a>(chat: &'a str, id: &'a str, ts: i64, text: &'a str) -> NewMessage<'a> {
-        NewMessage { chat, msg_id: id, user_id: "u1", name: "介琳", text, ts, outgoing: false }
+        NewMessage { chat, msg_id: id, user_id: "u1", name: "小明", text, ts, outgoing: false }
     }
 
     #[tokio::test]
@@ -239,9 +239,9 @@ mod tests {
     #[tokio::test]
     async fn names_are_cached_case_insensitively_cleaned_and_blank_ones_ignored() {
         let p = pool().await;
-        set_name(&p, "Uabc", "  介琳\n").await.unwrap();
+        set_name(&p, "Uabc", "  小明\n").await.unwrap();
         set_name(&p, "uabc", "").await.unwrap();
-        assert_eq!(get_name(&p, "UABC").await.unwrap().as_deref(), Some("介琳"));
+        assert_eq!(get_name(&p, "UABC").await.unwrap().as_deref(), Some("小明"));
         assert_eq!(get_name(&p, "nobody").await.unwrap(), None);
     }
 
@@ -259,13 +259,13 @@ mod tests {
     async fn unknown_sources_are_counted_keep_the_last_known_name_and_can_be_forgotten() {
         let p = pool().await;
         note_unknown(&p, "c1", "group", "", 10).await.unwrap();
-        note_unknown(&p, "c1", "group", "兆強科技客服群", 20).await.unwrap();
+        note_unknown(&p, "c1", "group", "範例科技客服群", 20).await.unwrap();
         note_unknown(&p, "c1", "group", "", 30).await.unwrap();
-        note_unknown(&p, "u1", "user", "介琳", 25).await.unwrap();
+        note_unknown(&p, "u1", "user", "小明", 25).await.unwrap();
         let l = list_unknown(&p).await.unwrap();
         assert_eq!(l.iter().map(|u| u.id.as_str()).collect::<Vec<_>>(), vec!["c1", "u1"], "最近出現的在前");
-        assert_eq!((l[0].count, l[0].name.as_str(), l[0].first_seen, l[0].last_seen), (3, "兆強科技客服群", 10, 30));
-        assert_eq!(unknown_name(&p, "u1").await.unwrap().as_deref(), Some("介琳"));
+        assert_eq!((l[0].count, l[0].name.as_str(), l[0].first_seen, l[0].last_seen), (3, "範例科技客服群", 10, 30));
+        assert_eq!(unknown_name(&p, "u1").await.unwrap().as_deref(), Some("小明"));
         assert!(forget_unknown(&p, "c1").await.unwrap());
         assert!(!forget_unknown(&p, "c1").await.unwrap());
         assert_eq!(list_unknown(&p).await.unwrap().len(), 1);

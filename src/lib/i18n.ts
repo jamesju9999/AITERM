@@ -1645,7 +1645,7 @@ const zhTW = {
     intake_line_unknown_hint: "最近出現、但還沒加入白名單的 LINE 來源（只記編號、名稱與次數，不存內容）。客戶群組建議加為「外部」（要核准才派送），你們自己的人員加為「內部」。",
     intake_line_unknown_pointer: "機器人被拉進群組、或有人傳訊息但還沒加入白名單時，會列在下方「白名單」區塊，按一下就能加入。",
     intake_sender_label: "備註名稱",
-    intake_sender_label_ph: "例如：兆強科技客服群（選填）",
+    intake_sender_label_ph: "例如：範例科技客服群（選填）",
     intake_sender_label_add: "加備註",
     intake_sender_label_edit: "改備註",
     intake_sender_label_save: "儲存",
