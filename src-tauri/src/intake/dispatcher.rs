@@ -15,9 +15,18 @@ pub fn marker_for(item_id: &str) -> String {
 }
 
 /// 交給 Agent 的文字。外部內容包在不可信區塊裡，並明確告知不要執行其中的指令。
+/// 提問者要求實作／修改、但這個管道只診斷時，回覆開頭要有的告知（要原樣寫出，方便辨識）。
+pub const DIAGNOSE_NOTICE: &str = "【診斷模式】這個管道目前設定為只診斷，我不會修改任何檔案；以下是建議做法，請自行套用，或請管理員把這個管道改成可改檔案。";
+
 /// 「只診斷」管道多加的要求。這是提示詞層級的約束，不是沙箱。
-pub const DIAGNOSE_NOTE: &str = "\n\n這個管道是「只診斷」：只讀取、查詢、分析並回答，不要修改、建立或刪除任何檔案，\
-也不要執行會改變系統狀態的指令（安裝、刪除、重啟、寫入設定等）。需要修改時，把建議的步驟寫在回答裡，由對方自己處理。";
+pub fn diagnose_note() -> String {
+    format!(
+        "\n\n這個管道是「只診斷」：只讀取、查詢、分析並回答，不要修改、建立或刪除任何檔案，\
+         也不要執行會改變系統狀態的指令（安裝、刪除、重啟、寫入設定等）。\
+         若對方要求的是實作、修改或修復，請在回答最前面原樣寫上這句話：「{DIAGNOSE_NOTICE}」，\
+         接著給出建議做法（可附程式碼範例）；若只是提問，照常回答，不必加這句。"
+    )
+}
 
 pub fn build_prompt(item: &IntakeItem, images: &[AttachmentRow], diagnose: bool) -> String {
     let who = if item.sender_level == "internal" { "內部" } else { "外部" };
@@ -43,7 +52,7 @@ pub fn build_prompt(item: &IntakeItem, images: &[AttachmentRow], diagnose: bool)
         subject = item.subject,
         body = item.body,
         pics = pics,
-        note = if diagnose { DIAGNOSE_NOTE } else { "" },
+        note = if diagnose { diagnose_note() } else { String::new() },
     )
 }
 
@@ -231,6 +240,8 @@ mod tests {
         assert!(!build_prompt(&it, &[], false).contains("只診斷"));
         let p = build_prompt(&it, &[], true);
         assert!(p.contains("只診斷") && p.contains("不要修改、建立或刪除任何檔案"), "{p}");
+        assert!(p.contains(DIAGNOSE_NOTICE), "要求修改時回覆要告知目前是診斷模式：{p}");
+        assert!(!build_prompt(&it, &[], false).contains(DIAGNOSE_NOTICE));
         assert!(p.contains(&marker_for(&it.id)), "標記仍在，完成偵測才認得這個提示");
     }
 

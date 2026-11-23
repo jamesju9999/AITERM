@@ -294,9 +294,10 @@ async fn route_board<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, ha
     let Ok(items) = store::list_unrouted(pool, &handle.id).await else { return false };
     for item in items {
         let kind = classify_item(app, pool, &item).await;
+        let diagnose = config::load(pool, &item.project_id).await.handling(&item.source) == config::Handling::Diagnose;
         // 分類要先存：建卡失敗時項目留在原狀態，之後由分頁領取也不必再分類。
         store::set_kind(pool, &item.id, kind.as_str(), None).await.ok();
-        match board::route_item(pool, handle, &item, &repo, kind == classify::Kind::Question).await {
+        match board::route_item(pool, handle, &item, &repo, kind == classify::Kind::Question, diagnose).await {
             Ok(_) => touched = true,
             Err(e) => log::warn!("intake: 建看板卡失敗：{e}"),
         }
@@ -331,7 +332,8 @@ async fn route_canvas<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, h
             classify::Kind::Question if item.status == store::QUEUED => {
                 let all = crate::tasks::agents::list_agents(&handle.pool).await.unwrap_or_default();
                 let Ok(Some(agent)) = crate::tasks::workflow::pick_ask_agent(&handle.pool, &all).await else { continue };
-                match board::route_canvas_ask(pool, handle, &item, &agent).await {
+                let diagnose = config::load(pool, &item.project_id).await.handling(&item.source) == config::Handling::Diagnose;
+                match board::route_canvas_ask(pool, handle, &item, &agent, diagnose).await {
                     Ok(_) => touched = true,
                     Err(e) => log::warn!("intake: 建桌布問答卡失敗：{e}"),
                 }
@@ -600,8 +602,9 @@ mod board_wiring_tests {
         assert_eq!(mail.kind.as_deref(), Some("code_change"), "可改檔案：沒有 AI 時保守當成要改程式");
         let card = tasks::get_task(&project.pool, line.board_task_id.as_ref().unwrap()).await.unwrap().unwrap();
         assert!(card.body.contains("不是要你改程式"), "{}", card.body);
+        assert!(card.body.contains(dispatcher::DIAGNOSE_NOTICE), "要求實作時，回覆要告知目前是診斷模式：{}", card.body);
         let card = tasks::get_task(&project.pool, mail.board_task_id.as_ref().unwrap()).await.unwrap().unwrap();
-        assert!(!card.body.contains("不是要你改程式"), "{}", card.body);
+        assert!(!card.body.contains("不是要你改程式") && !card.body.contains(dispatcher::DIAGNOSE_NOTICE), "{}", card.body);
 
         // 把 LINE 改成可改檔案之後，新的 LINE 問題就不再被當成提問。
         let mut cfg = config::load(&pool, &project.id).await;
