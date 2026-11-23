@@ -203,7 +203,7 @@ pub async fn intake_senders(db: State<'_, IntakeDb>, project_id: String) -> Resu
 #[tauri::command]
 pub async fn intake_upsert_sender(db: State<'_, IntakeDb>, project_id: String, sender: SenderDto) -> Result<(), String> {
     if !super::rules::valid_address(&sender.address) {
-        return Err("請輸入有效的電子郵件地址，、Telegram 聊天室 tg:<chat_id>，或 LINE 使用者 line:<userId>".into());
+        return Err("請輸入有效的電子郵件地址，、Telegram 聊天室 tg:<chat_id>，或 LINE userId（U 開頭共 33 字元）".into());
     }
     store::upsert_sender(&db.pool, &project_id, &Sender { address: sender.address, level: sender.level, skip_auth: sender.skip_auth }).await.map_err(e)
 }

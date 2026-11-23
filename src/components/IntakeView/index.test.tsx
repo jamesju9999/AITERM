@@ -372,6 +372,23 @@ describe("IntakeView", () => {
     );
   });
 
+  it("a bare LINE userId can be pasted into the allowlist without the line: prefix", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ enabled: true }));
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    const box = await screen.findByLabelText(t.intake_sender_address);
+    const add = screen.getByRole("button", { name: t.intake_add });
+    fireEvent.change(box, { target: { value: "Ub345e5d492c48c02a3eaa279924c52d2" } });
+    expect(add).toBeEnabled();
+    fireEvent.click(add);
+    await waitFor(() =>
+      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: "Ub345e5d492c48c02a3eaa279924c52d2", level: "internal", skip_auth: false }),
+    );
+    fireEvent.change(box, { target: { value: "Ub345e5d492c48c02a3eaa279924c52" } });
+    expect(add).toBeDisabled();
+  });
+
   it("each row of the question list says which channel the question came from", async () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([
       item({ id: "a", source: "email", subject: "信來的" }),

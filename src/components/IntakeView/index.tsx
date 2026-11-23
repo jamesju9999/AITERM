@@ -993,7 +993,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         ))}
       </ul>
       <div className="intake__field intake__field--inline">
-        <input aria-label={t.intake_sender_address} value={newAddr} placeholder="name@example.com / tg:123456 / line:U…" onChange={(e) => setNewAddr(e.target.value)} />
+        <input aria-label={t.intake_sender_address} value={newAddr} placeholder="name@example.com / tg:123456 / U…（LINE userId）" onChange={(e) => setNewAddr(e.target.value)} />
         <select aria-label={t.intake_sender_level} value={newLevel} onChange={(e) => setNewLevel(e.target.value as Level)}>
           <option value="internal">{t.intake_level_internal}</option>
           <option value="external">{t.intake_level_external}</option>

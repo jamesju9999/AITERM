@@ -66,7 +66,12 @@ pub fn normalize(addr: &str) -> String {
         (Some(l), Some(r)) if l < r => &a[l + 1..r],
         _ => a,
     };
-    a.trim().to_lowercase()
+    let a = a.trim().to_lowercase();
+    // 直接貼 LINE 的 userId（U＋32 位十六進位）就當作 `line:<userId>`，使用者不必知道前綴。
+    if super::line_source::valid_user_id(&a) {
+        return format!("line:{a}");
+    }
+    a
 }
 
 /// 白名單可以放電子郵件地址、Telegram 聊天室 `tg:<chat_id>`，或 LINE 使用者 `line:<userId>`。
@@ -244,6 +249,17 @@ mod tests {
         assert!(!addressed_to_us(&settings(MatchMode::AliasOrTag), &h));
         assert!(addressed_to_us(&settings(MatchMode::AliasOrTag), &hdr("a@b.c", &[], "[AITerm] x", &[])));
         assert!(addressed_to_us(&settings(MatchMode::Dedicated), &h));
+    }
+
+    #[test]
+    fn a_bare_line_user_id_is_taken_as_a_line_address() {
+        let bare = "Ub345e5d492c48c02a3eaa279924c52d2";
+        assert_eq!(normalize(bare), format!("line:{}", bare.to_lowercase()));
+        assert_eq!(normalize(&format!("  {bare} ")), normalize(&format!("line:{bare}")), "有無前綴結果一致");
+        assert!(valid_address(bare));
+        for not_ids in ["Ub345e5d492c48c02a3eaa279924c52d", "Xb345e5d492c48c02a3eaa279924c52d2", "bob@corp.com", "tg:123"] {
+            assert!(!normalize(not_ids).starts_with("line:"), "{not_ids}");
+        }
     }
 
     #[test]
