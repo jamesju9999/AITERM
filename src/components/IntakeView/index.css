@@ -248,3 +248,16 @@
 .intake__refs-warn { font-size: 12px; color: #f59e0b; }
 .intake__refs-row button { flex: none; white-space: nowrap; }
 .intake__settings .intake__refs .intake__field--inline input { flex: 1 1 280px; max-width: none; }
+
+/* 設定頁排版：分組小標題、收合的說明、行寬限制 */
+.intake__group { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--border, #2a2a2a); }
+.intake__group-title { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; color: var(--text-secondary, #888); }
+.intake__settings .intake__hint { max-width: 78ch; line-height: 1.6; }
+.intake__more { margin-left: 26px; max-width: 78ch; }
+.intake__more summary { cursor: pointer; width: fit-content; font-size: 12px; color: var(--text-secondary, #888); }
+.intake__more summary:hover { color: var(--text-primary, #eee); }
+.intake__settings .intake__more .intake__hint { margin: 4px 0 0; }
+.intake__settings input:not([type="checkbox"]):not([type="number"]) { max-width: 420px; }
+.intake__settings .intake__creds-note { margin-left: 8px; align-self: center; }
+.intake__dirty { font-size: 13px; color: #f59e0b; }
+.intake__refs + .intake__refs { margin-top: 6px; }

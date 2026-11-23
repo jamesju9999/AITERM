@@ -7,14 +7,10 @@ export type MatchMode = "alias" | "subject_tag" | "alias_or_tag" | "dedicated";
 export type DispatchMode = "auto" | "manual";
 /** 一個管道收到的問題要怎麼處理：只診斷（不改檔案）或可改檔案。 */
 export type IntakeHandling = "diagnose" | "edit";
-/** 各管道的參考資料夾（派送給 AI 時，提示詞要它先到這些資料夾找資料）。 */
-export interface IntakeChannelRefs {
-  /** 所有管道共用。 */
+/** 參考資料夾：共用的所有題目都帶；僅內部的只有等級是「內部」的題目才另外帶。 */
+export interface IntakeRefFolders {
   shared: string[];
-  email: string[];
-  telegram: string[];
-  line: string[];
-  web: string[];
+  internal: string[];
 }
 /** 參考資料夾的檢查結果。 */
 export interface IntakeFolderCheck {
@@ -93,8 +89,8 @@ export interface IntakeConfig {
   web_port: number;
   /** 各管道的處理方式。 */
   channel_handling: IntakeChannelHandling;
-  /** 各管道的參考資料夾。 */
-  channel_refs: IntakeChannelRefs;
+  /** 參考資料夾（共用＋僅內部另加）。 */
+  reference_folders: IntakeRefFolders;
   /** 問題派送到哪裡處理。 */
   route: IntakeRoute;
   /** 派送目標是系統連線時，要用哪個系統（SystemConnection.id）。 */

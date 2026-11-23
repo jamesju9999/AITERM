@@ -52,17 +52,15 @@ impl Default for ChannelHandling {
     }
 }
 
-/// 每個管道各自的「參考資料夾」：派送給 AI 時，提示詞會要它回答前先到這些資料夾找資料。
+/// 「參考資料夾」：派送給 AI 時，提示詞會要它回答前先到這些資料夾找資料。
+/// 隱私的邊界是題目的等級（內部／外部），不是來自哪個管道：
+/// `shared` 所有題目都帶（放可對外的資料）；`internal` 只有等級是「內部」的題目才另外帶（放內部排查筆記等）。
 /// 允許絕對路徑、`~` 開頭與相對於專案資料夾的路徑。預設都是空（不加任何提示）。
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ChannelRefs {
-    /// 所有管道共用：每個管道派送時都會帶上（再加上該管道自己的）。
+pub struct RefFolders {
     pub shared: Vec<String>,
-    pub email: Vec<String>,
-    pub telegram: Vec<String>,
-    pub line: Vec<String>,
-    pub web: Vec<String>,
+    pub internal: Vec<String>,
 }
 
 /// 去頭尾空白、略過空白項、去重（保留第一次出現的順序）。
@@ -77,9 +75,9 @@ pub fn clean_paths(paths: &[String]) -> Vec<String> {
     out
 }
 
-impl ChannelRefs {
+impl RefFolders {
     pub fn cleaned(&self) -> Self {
-        Self { shared: clean_paths(&self.shared), email: clean_paths(&self.email), telegram: clean_paths(&self.telegram), line: clean_paths(&self.line), web: clean_paths(&self.web) }
+        Self { shared: clean_paths(&self.shared), internal: clean_paths(&self.internal) }
     }
 }
 
@@ -129,8 +127,8 @@ pub struct Config {
     pub web_port: u16,
     /// 各管道的處理方式（只診斷／可改檔案）。
     pub channel_handling: ChannelHandling,
-    /// 各管道的參考資料夾。
-    pub channel_refs: ChannelRefs,
+    /// 參考資料夾（共用＋僅內部另加）。
+    pub reference_folders: RefFolders,
     /// 問題派送到哪裡處理。
     pub route: Route,
     /// 派送目標是系統連線時，要用哪個系統（`SystemConnection.id`）。
@@ -163,7 +161,7 @@ impl Default for Config {
             web_mode: WebMode::Off,
             web_port: 8320,
             channel_handling: ChannelHandling::default(),
-            channel_refs: ChannelRefs::default(),
+            reference_folders: RefFolders::default(),
             route: Route::Board,
             system_id: String::new(),
         }
@@ -171,18 +169,11 @@ impl Default for Config {
 }
 
 impl Config {
-    /// 依題目來源取實際要帶給 AI 的參考資料夾：所有管道共用的，加上該管道自己的（去重，共用的在前）。
-    /// 不認得的來源只回共用的。
-    pub fn refs_for(&self, source: &str) -> Vec<String> {
-        let r = &self.channel_refs;
-        let own: &[String] = match source {
-            "email" => &r.email,
-            "telegram" => &r.telegram,
-            "line" => &r.line,
-            "web" => &r.web,
-            _ => &[],
-        };
-        clean_paths(&[r.shared.as_slice(), own].concat())
+    /// 實際要帶給 AI 的參考資料夾：共用的，加上（題目等級是內部時）僅內部另加的；去重，共用的在前。
+    pub fn refs_for(&self, internal: bool) -> Vec<String> {
+        let r = &self.reference_folders;
+        let extra: &[String] = if internal { &r.internal } else { &[] };
+        clean_paths(&[r.shared.as_slice(), extra].concat())
     }
 
     /// 依題目來源（`email`／`telegram`／`line`／`web`）取處理方式；不認得的來源保守沿用原行為（可改檔案）。
@@ -295,26 +286,18 @@ mod tests {
     }
 
     #[test]
-    fn reference_folders_are_per_channel_cleaned_and_default_to_none() {
+    fn reference_folders_split_by_level_are_cleaned_and_default_to_none() {
         let c = Config::default();
-        assert!(["email", "telegram", "line", "web", "x"].iter().all(|s| c.refs_for(s).is_empty()));
-        // 共用的資料夾每個管道都會帶上，再加上各自的（去重，共用的在前）；未知來源只拿到共用的。
-        let mut s = Config::default();
-        s.channel_refs.shared = vec!["/docs/public".into(), "/docs/faq".into()];
-        s.channel_refs.line = vec!["/docs/faq".into(), "/docs/line-only".into()];
-        assert_eq!(s.refs_for("line"), vec!["/docs/public", "/docs/faq", "/docs/line-only"]);
-        assert_eq!(s.refs_for("email"), vec!["/docs/public", "/docs/faq"]);
-        assert_eq!(s.refs_for("x"), vec!["/docs/public", "/docs/faq"]);
-        let old: Config = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
-        assert_eq!(old.channel_refs, ChannelRefs::default(), "舊設定缺欄位仍可讀");
+        assert!(c.refs_for(true).is_empty() && c.refs_for(false).is_empty());
+        let old: Config = serde_json::from_str(r#"{"enabled":true,"channel_refs":{"email":["/x"]}}"#).unwrap();
+        assert_eq!(old.reference_folders, RefFolders::default(), "舊設定缺欄位（或有不認得的欄位）仍可讀");
         let mut c = Config::default();
-        c.channel_refs.line = vec!["/docs/faq".into()];
-        c.channel_refs.email = vec!["/docs/all".into(), "~/notes".into()];
-        assert_eq!(c.refs_for("line"), vec!["/docs/faq"]);
-        assert_eq!(c.refs_for("email").len(), 2);
-        assert!(c.refs_for("web").is_empty(), "各管道互不相干");
-        let dirty = ChannelRefs { line: vec!["  /a ".into(), "".into(), "/a".into(), "   ".into(), "b".into()], ..Default::default() };
-        assert_eq!(dirty.cleaned().line, vec!["/a", "b"]);
+        c.reference_folders.shared = vec!["/docs/public".into(), "/docs/faq".into()];
+        c.reference_folders.internal = vec!["/docs/faq".into(), "/docs/notes".into()];
+        assert_eq!(c.refs_for(false), vec!["/docs/public", "/docs/faq"], "外部題目只拿到共用的");
+        assert_eq!(c.refs_for(true), vec!["/docs/public", "/docs/faq", "/docs/notes"], "內部題目再加上僅內部的（去重）");
+        let dirty = RefFolders { shared: vec!["  /a ".into(), "".into(), "/a".into(), "   ".into(), "b".into()], internal: vec![" /i ".into()] };
+        assert_eq!((dirty.cleaned().shared, dirty.cleaned().internal), (vec!["/a".to_string(), "b".to_string()], vec!["/i".to_string()]));
     }
 
     #[test]

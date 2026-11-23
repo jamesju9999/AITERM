@@ -73,7 +73,7 @@ async fn resolve_conflicts(pool: &sqlx::SqlitePool, project_id: &str, cfg: &Conf
 #[tauri::command]
 pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, project_id: String, config: Config, telegram_default: bool) -> Result<(), String> {
     let mut config = config;
-    config.channel_refs = config.channel_refs.cleaned();
+    config.reference_folders = config.reference_folders.cleaned();
     check_conflicts(&app, &db.pool, &project_id, &config).await?;
     let mut global = config::load_global(&db.pool).await;
     global.web_port = config.web_port;

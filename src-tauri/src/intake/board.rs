@@ -48,7 +48,7 @@ fn card_title(item: &IntakeItem) -> String {
 /// `question`＝提問：卡片內文要求唯讀回答，不改任何檔案。
 /// 該題管道設定的「參考資料夾」提示（沒設就是空字串）。
 async fn refs_text(intake: &SqlitePool, item: &IntakeItem) -> String {
-    super::dispatcher::refs_note(&super::config::load(intake, &item.project_id).await.refs_for(&item.source))
+    super::dispatcher::refs_note(&super::config::load(intake, &item.project_id).await.refs_for(item.sender_level == "internal"))
 }
 
 pub async fn route_item(intake: &SqlitePool, handle: &ProjectHandle, item: &IntakeItem, repo_dir: &str, question: bool, diagnose: bool) -> Result<String, String> {
@@ -447,30 +447,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn each_channels_reference_folders_are_added_to_its_cards_only() {
+    async fn reference_folders_are_added_to_cards_by_the_items_level() {
         use crate::intake::config::{self, Config};
         let (intake, h, _d) = setup().await;
         let mut cfg = Config::default();
-        cfg.channel_refs.email = vec!["/docs/all".into(), "docs/internal".into()];
-        cfg.channel_refs.line = vec!["/docs/faq".into()];
+        cfg.reference_folders.shared = vec!["/docs/public".into(), "docs/faq".into()];
+        cfg.reference_folders.internal = vec!["/docs/notes".into()];
         config::save(&intake, "p", &cfg).await.unwrap();
-        let email = add(&intake, "e1", store::QUEUED, "信來的").await;
-        // 提問卡與要改程式的卡都附，而且是這個管道自己的清單。
-        let q = route_item(&intake, &h, &email, "/repo", true, false).await.unwrap();
+        // `add` 建的是內部題：共用的＋僅內部的，提問卡與要改程式的卡都附。
+        let internal = add(&intake, "i1", store::QUEUED, "內部問").await;
+        let q = route_item(&intake, &h, &internal, "/repo", true, false).await.unwrap();
         let q = tasks::get_task(&h.pool, &q).await.unwrap().unwrap().body;
-        assert!(q.contains("【參考資料夾】") && q.contains("- /docs/all") && q.contains("- docs/internal（相對於專案資料夾）") && !q.contains("/docs/faq"), "{q}");
-        let email2 = add(&intake, "e2", store::QUEUED, "信來的要改").await;
-        let c = route_item(&intake, &h, &email2, "/repo", false, false).await.unwrap();
-        assert!(tasks::get_task(&h.pool, &c).await.unwrap().unwrap().body.contains("- /docs/all"));
-        // 沒設參考資料夾的管道（telegram）完全不加。
-        let tg = {
-            let mut i = add(&intake, "t1", store::QUEUED, "電報來的").await;
-            sqlx::query("UPDATE intake_items SET source = 'telegram' WHERE id = ?").bind(&i.id).execute(&intake).await.unwrap();
-            i.source = "telegram".into();
+        assert!(q.contains("【參考資料夾】") && q.contains("- /docs/public") && q.contains("- docs/faq（相對於專案資料夾）") && q.contains("- /docs/notes"), "{q}");
+        let internal2 = add(&intake, "i2", store::QUEUED, "內部要改").await;
+        let c = route_item(&intake, &h, &internal2, "/repo", false, false).await.unwrap();
+        assert!(tasks::get_task(&h.pool, &c).await.unwrap().unwrap().body.contains("- /docs/notes"));
+        // 外部題：只有共用的，拿不到僅內部的。
+        let external = {
+            let mut i = add(&intake, "x1", store::QUEUED, "外部問").await;
+            sqlx::query("UPDATE intake_items SET sender_level = 'external' WHERE id = ?").bind(&i.id).execute(&intake).await.unwrap();
+            i.sender_level = "external".into();
             i
         };
-        let t = route_item(&intake, &h, &tg, "/repo", true, false).await.unwrap();
-        assert!(!tasks::get_task(&h.pool, &t).await.unwrap().unwrap().body.contains("參考資料夾"));
+        let x = route_item(&intake, &h, &external, "/repo", true, false).await.unwrap();
+        let x = tasks::get_task(&h.pool, &x).await.unwrap().unwrap().body;
+        assert!(x.contains("- /docs/public") && !x.contains("/docs/notes"), "{x}");
+        // 完全沒設定時不加任何提示。
+        config::save(&intake, "p", &Config::default()).await.unwrap();
+        let plain = add(&intake, "i3", store::QUEUED, "沒設").await;
+        let p = route_item(&intake, &h, &plain, "/repo", true, false).await.unwrap();
+        assert!(!tasks::get_task(&h.pool, &p).await.unwrap().unwrap().body.contains("參考資料夾"));
     }
 
     #[tokio::test]
@@ -653,16 +659,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canvas_ask_and_bug_cards_carry_the_channels_reference_folders() {
+    async fn canvas_ask_and_bug_cards_carry_the_reference_folders() {
         use crate::intake::config::{self, Config};
         let (intake, h, _d) = setup().await;
         let mut cfg = Config::default();
-        cfg.channel_refs.email = vec!["/docs/faq".into()];
+        cfg.reference_folders.shared = vec!["/docs/faq".into()];
+        cfg.reference_folders.internal = vec!["/docs/notes".into()];
         config::save(&intake, "p", &cfg).await.unwrap();
         let a = agent(&h, "coder", "甲").await;
         let ask = add(&intake, "m1", store::QUEUED, "怎麼登入").await;
         let id = route_canvas_ask(&intake, &h, &ask, &a, false).await.unwrap();
-        assert!(tasks::get_task(&h.pool, &id).await.unwrap().unwrap().body.contains("- /docs/faq"));
+        let body = tasks::get_task(&h.pool, &id).await.unwrap().unwrap().body;
+        assert!(body.contains("- /docs/faq") && body.contains("- /docs/notes"), "內部題兩份都帶：{body}");
         let bug = add(&intake, "m2", store::QUEUED, "修登入").await;
         let id = route_canvas_bug(&intake, &h, &bug, &a).await.unwrap();
         let body = tasks::get_task(&h.pool, &id).await.unwrap().unwrap().body;

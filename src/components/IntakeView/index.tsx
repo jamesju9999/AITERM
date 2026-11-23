@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   intakeAdoptLegacy,
@@ -30,7 +30,7 @@ import {
   intakeUpsertSender,
   type IntakeAttachment,
   type IntakeChannelHandling,
-  type IntakeChannelRefs,
+  type IntakeRefFolders,
   type IntakeFolderCheck,
   type IntakeConfig,
   type IntakeLineStatus,
@@ -622,6 +622,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   const [newAddr, setNewAddr] = useState("");
   const [newLevel, setNewLevel] = useState<Level>("internal");
   const [saved, setSaved] = useState(false);
+  const [dirty, setDirty] = useState(false);
 
   const loadSenders = useCallback(() => {
     intakeSenders(projectId).then(setSenders).catch((e) => onError(errText(e)));
@@ -643,7 +644,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
     loadSenders();
   }, [loadSenders, onError, projectId]);
 
-  const refPaths = cfg ? Array.from(new Set(Object.values(cfg.channel_refs).flat())) : [];
+  const refPaths = cfg ? Array.from(new Set([...cfg.reference_folders.shared, ...cfg.reference_folders.internal])) : [];
   const refKey = JSON.stringify(refPaths);
   useEffect(() => {
     const paths = JSON.parse(refKey) as string[];
@@ -660,6 +661,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   if (!cfg) return null;
   const set = <K extends keyof IntakeConfig>(k: K, v: IntakeConfig[K]) => {
     setSaved(false);
+    setDirty(true);
     setCfg({ ...cfg, [k]: v });
   };
 
@@ -668,6 +670,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       await intakeSetConfig(projectId, cfg!, tgDefault);
       intakeLineStatus().then(setLineStatus).catch(() => {});
       setSaved(true);
+      setDirty(false);
       setHasOwn(true);
       onError(null);
     } catch (e) {
@@ -741,6 +744,14 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
     }
   }
 
+  // 很長的說明收進「說明」裡，要看再展開，避免一整頁都是長句。
+  const hint = (text: string) => (
+    <details className="intake__more">
+      <summary>{t.intake_hint_more}</summary>
+      <p className="intake__meta intake__hint">{text}</p>
+    </details>
+  );
+
   const handlingField = (ch: keyof IntakeChannelHandling, label: string) => (
     <>
       <label className="intake__field">
@@ -754,19 +765,19 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
           <option value="edit">{t.intake_handling_edit}</option>
         </select>
       </label>
-      <p className="intake__meta intake__hint">{cfg.channel_handling[ch] === "diagnose" ? t.intake_handling_diagnose_hint : t.intake_handling_edit_hint}</p>
+      {hint(cfg.channel_handling[ch] === "diagnose" ? t.intake_handling_diagnose_hint : t.intake_handling_edit_hint)}
     </>
   );
 
-  const addRef = (ch: keyof IntakeChannelRefs, raw: string) => {
+  const addRef = (ch: keyof IntakeRefFolders, raw: string) => {
     const p = raw.trim();
-    if (!p || cfg.channel_refs[ch].includes(p)) return;
-    set("channel_refs", { ...cfg.channel_refs, [ch]: [...cfg.channel_refs[ch], p] });
+    if (!p || cfg.reference_folders[ch].includes(p)) return;
+    set("reference_folders", { ...cfg.reference_folders, [ch]: [...cfg.reference_folders[ch], p] });
     setNewRefs((m) => ({ ...m, [ch]: "" }));
   };
-  const removeRef = (ch: keyof IntakeChannelRefs, p: string) =>
-    set("channel_refs", { ...cfg.channel_refs, [ch]: cfg.channel_refs[ch].filter((x) => x !== p) });
-  const pickRef = async (ch: keyof IntakeChannelRefs) => {
+  const removeRef = (ch: keyof IntakeRefFolders, p: string) =>
+    set("reference_folders", { ...cfg.reference_folders, [ch]: cfg.reference_folders[ch].filter((x) => x !== p) });
+  const pickRef = async (ch: keyof IntakeRefFolders) => {
     try {
       const picked = await openDialog({ directory: true, multiple: false });
       if (typeof picked === "string" && picked) addRef(ch, picked);
@@ -783,12 +794,12 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
     if (c.truncated) parts.push(t.intake_refs_truncated);
     return { ok: c.readable > 0 && c.office === 0, text: parts.join("；") };
   };
-  const refsField = (ch: keyof IntakeChannelRefs, label: string) => (
+  const refList = (ch: keyof IntakeRefFolders, title: string, label: string, note: string) => (
     <div className="intake__refs">
-      <h4 className="intake__card-title">{ch === "shared" ? t.intake_refs_shared : t.intake_refs}</h4>
-      <p className="intake__meta intake__hint">{ch === "shared" ? t.intake_refs_shared_hint : t.intake_refs_hint}</p>
+      <h4 className="intake__group-title">{title}</h4>
+      <p className="intake__meta intake__hint">{note}</p>
       <ul className="intake__refs-list" aria-label={`${label} ${t.intake_refs}`}>
-        {cfg.channel_refs[ch].map((p) => {
+        {cfg.reference_folders[ch].map((p) => {
           const st = refStatus(refChecks[p]);
           return (
             <li key={p} className="intake__refs-row">
@@ -822,6 +833,13 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
           {t.intake_refs_pick}
         </button>
       </div>
+    </div>
+  );
+
+  const group = (title: string, children: ReactNode) => (
+    <div className="intake__group">
+      <h4 className="intake__group-title">{title}</h4>
+      {children}
     </div>
   );
 
@@ -925,8 +943,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         {t.intake_set_auth_server}
         <input value={cfg.auth_server} onChange={(e) => set("auth_server", e.target.value)} />
       </label>
-      {handlingField("email", t.intake_sec_mailbox)}
-      {refsField("email", t.intake_sec_mailbox)}
+      {group(t.intake_grp_handling, handlingField("email", t.intake_sec_mailbox))}
           </>
         )}
         {chanTab === "telegram" && (
@@ -935,13 +952,12 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         <input type="checkbox" checked={cfg.telegram_enabled} onChange={(e) => set("telegram_enabled", e.target.checked)} />
         {t.intake_set_telegram}
       </label>
-      <p className="intake__meta intake__hint">{t.intake_set_telegram_hint}</p>
+      {hint(t.intake_set_telegram_hint)}
       <label className="intake__field">
-        <input type="checkbox" checked={tgDefault} onChange={(e) => { setSaved(false); setTgDefault(e.target.checked); }} />
+        <input type="checkbox" checked={tgDefault} onChange={(e) => { setSaved(false); setDirty(true); setTgDefault(e.target.checked); }} />
         {t.intake_set_tg_default}
       </label>
-      {handlingField("telegram", t.intake_sec_telegram)}
-      {refsField("telegram", t.intake_sec_telegram)}
+      {group(t.intake_grp_handling, handlingField("telegram", t.intake_sec_telegram))}
           </>
         )}
         {chanTab === "line" && (
@@ -950,7 +966,9 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         <input type="checkbox" checked={cfg.line_enabled} onChange={(e) => set("line_enabled", e.target.checked)} />
         {t.intake_set_line}
       </label>
-      <p className="intake__meta intake__hint">{t.intake_set_line_hint}</p>
+      {hint(t.intake_set_line_hint)}
+      {group(t.intake_grp_connect, (
+        <>
       <label className="intake__field">
         {t.intake_line_secret}
         <input type="password" autoComplete="off" value={lineSecret} placeholder={lineStatus?.has_secret ? t.intake_line_saved : ""} onChange={(e) => setLineSecret(e.target.value)} />
@@ -968,6 +986,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
             {t.intake_line_clear_creds}
           </button>
         )}
+        <span className="intake__meta intake__creds-note">{t.intake_line_creds_note}</span>
       </div>
       <label className="intake__field">
         {t.intake_set_line_port}
@@ -984,16 +1003,21 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       {cfg.line_enabled && lineStatus && !lineStatus.has_secret && <p className="intake__error">{t.intake_line_need_secret}</p>}
       {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.listening && <p className="intake__error">{t.intake_line_not_listening}</p>}
       {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.has_token && <p className="intake__error">{t.intake_line_need_token}</p>}
+        </>
+      ))}
+      {group(t.intake_grp_behavior, (
+        <>
       <label className="intake__field">
         <input type="checkbox" checked={cfg.line_auto_open} onChange={(e) => set("line_auto_open", e.target.checked)} />
         {t.intake_line_auto_open}
       </label>
-      <p className="intake__meta intake__hint">{t.intake_line_auto_open_hint}</p>
+      {hint(t.intake_line_auto_open_hint)}
       <label className="intake__field">
         <input type="checkbox" checked={cfg.line_test_mode} onChange={(e) => set("line_test_mode", e.target.checked)} />
         {t.intake_line_test_mode}
       </label>
-      <p className={`intake__meta intake__hint ${cfg.line_test_mode ? "intake__error" : ""}`}>{t.intake_line_test_mode_hint}</p>
+      {cfg.line_test_mode && <p className="intake__error">{t.intake_line_test_mode_on}</p>}
+      {hint(t.intake_line_test_mode_hint)}
       <label className="intake__field">
         {t.intake_line_retention}
         <input
@@ -1005,10 +1029,11 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
           onChange={(e) => set("line_retention_days", Math.min(365, Math.max(0, Math.floor(Number(e.target.value)) || 0)))}
         />
       </label>
-      <p className="intake__meta intake__hint">{t.intake_line_retention_hint}</p>
+      {hint(t.intake_line_retention_hint)}
       <p className="intake__meta intake__hint">{t.intake_line_unknown_pointer}</p>
-      {handlingField("line", t.intake_sec_line)}
-      {refsField("line", t.intake_sec_line)}
+        </>
+      ))}
+      {group(t.intake_grp_handling, handlingField("line", t.intake_sec_line))}
           </>
         )}
         {chanTab === "web" && (
@@ -1037,12 +1062,10 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         </p>
       )}
       {cfg.web_mode === "lan" && <p className="intake__error">{t.intake_web_lan_warning}</p>}
-      {handlingField("web", t.intake_sec_web)}
-      {refsField("web", t.intake_sec_web)}
+      {group(t.intake_grp_handling, handlingField("web", t.intake_sec_web))}
           </>
         )}
         </div>
-      {refsField("shared", t.intake_refs_shared_label)}
       </section>
       <div className="intake__cols">
       <div className="intake__col">
@@ -1125,6 +1148,12 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         />
       </label>
       </section>
+      <section className="intake__card">
+        <h3 className="intake__card-title">{t.intake_refs}</h3>
+        {hint(t.intake_refs_hint)}
+        {refList("shared", t.intake_refs_shared, t.intake_refs_shared_label, t.intake_refs_shared_note)}
+        {refList("internal", t.intake_refs_internal, t.intake_refs_internal_label, t.intake_refs_internal_note)}
+      </section>
       </div>
       </div>
       <section className="intake__card intake__card--grow">
@@ -1195,7 +1224,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         ))}
       </ul>
       <div className="intake__field intake__field--inline">
-        <input aria-label={t.intake_sender_address} value={newAddr} placeholder="name@example.com / tg:123456 / U…（LINE userId）" onChange={(e) => setNewAddr(e.target.value)} />
+        <input aria-label={t.intake_sender_address} value={newAddr} placeholder={t.intake_sender_ph} onChange={(e) => setNewAddr(e.target.value)} />
         <select aria-label={t.intake_sender_level} value={newLevel} onChange={(e) => setNewLevel(e.target.value as Level)}>
           <option value="internal">{t.intake_level_internal}</option>
           <option value="external">{t.intake_level_external}</option>
@@ -1255,6 +1284,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
           {t.intake_set_save}
         </button>
         {saved && <span className="intake__saved" role="status">✓ {t.intake_set_saved}</span>}
+        {dirty && !saved && <span className="intake__dirty" role="status">● {t.intake_unsaved}</span>}
       </div>
     </div>
   );

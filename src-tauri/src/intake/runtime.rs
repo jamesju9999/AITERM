@@ -161,7 +161,7 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
             let images = store::list_attachments(&db.pool, &item.id).await.unwrap_or_default();
             let cfg = config::load(&db.pool, &item.project_id).await;
             let diagnose = cfg.handling(&item.source) == config::Handling::Diagnose;
-            let prompt = format!("{}{}", dispatcher::build_prompt(&item, &images, diagnose), dispatcher::refs_note(&cfg.refs_for(&item.source)));
+            let prompt = format!("{}{}", dispatcher::build_prompt(&item, &images, diagnose), dispatcher::refs_note(&cfg.refs_for(item.sender_level == "internal")));
             crate::tasks::dispatch::write_then_submit(&pty, &tab, &prompt).await
         } {
             rt.registry.release(&tab);
