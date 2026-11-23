@@ -663,16 +663,19 @@ describe("IntakeView", () => {
     wrap();
     fireEvent.click(await screen.findByText(t.intake_settings));
     fireEvent.click(await screen.findByRole("tab", { name: new RegExp(t.intake_sec_line) }));
-    expect(await screen.findByText(/兆強客服群 · 7/)).toBeInTheDocument();
-    expect(screen.getByText(/line:U2222222222222222222222222222222b/)).toBeInTheDocument();
+    expect(await screen.findByText("兆強客服群")).toBeInTheDocument();
+    expect(screen.getByText(`7 ${t.intake_line_times}`)).toBeInTheDocument();
+    expect(screen.getByText("line:Cb345e5d492c48c02a3eaa279924c52d2")).toBeInTheDocument();
+    expect(screen.getByText("line:U2222222222222222222222222222222b")).toBeInTheDocument();
+    expect(screen.getByText(t.intake_line_unnamed)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: `${t.intake_line_add_external} 兆強客服群` }));
     await waitFor(() =>
       expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: "line:cb345e5d492c48c02a3eaa279924c52d2", level: "external", skip_auth: false }),
     );
     await waitFor(() => expect(ipc.intakeLineForgetUnknown).toHaveBeenCalledWith("cb345e5d492c48c02a3eaa279924c52d2"));
-    await waitFor(() => expect(screen.queryByText(/兆強客服群 · 7/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText("兆強客服群")).toBeNull());
     vi.mocked(ipc.intakeLineUnknown).mockResolvedValue([]);
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(t.intake_line_ignore) }));
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${t.intake_line_ignore}`) }));
     await waitFor(() => expect(ipc.intakeLineForgetUnknown).toHaveBeenCalledWith("u2222222222222222222222222222222b"));
     expect(await screen.findByText(t.intake_line_unknown_empty)).toBeInTheDocument();
   });

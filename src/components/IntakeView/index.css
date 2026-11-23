@@ -21,7 +21,18 @@
 .intake__badge { font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; align-self: center; background: rgba(148, 163, 184, 0.15); color: #94a3b8; white-space: nowrap; }
 .intake__badge--pending, .intake__badge--draft { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
 .intake__badge--running, .intake__badge--queued, .intake__badge--on_board { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
-.intake__unknown { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.intake__unknown { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--border, #2a2a2a); }
+.intake__unknown .intake__card-title { margin: 0; }
+.intake__settings .intake__unknown .intake__meta { margin-left: 0; }
+.intake__unknown-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.intake__unknown-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 12px; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #2a2a2a); border-radius: 6px; font-size: 13px; }
+.intake__unknown-kind { flex: none; font-size: 11px; line-height: 1.6; padding: 0 8px; border-radius: 999px; background: rgba(168, 85, 247, 0.15); color: #c084fc; white-space: nowrap; }
+.intake__unknown-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 240px; }
+.intake__unknown-main strong { font-weight: 600; overflow-wrap: anywhere; }
+.intake__unknown-main code { font-size: 11px; color: var(--text-secondary, #888); overflow-wrap: anywhere; }
+.intake__unknown-count { flex: none; font-size: 12px; color: var(--text-secondary, #888); white-space: nowrap; }
+.intake__unknown-actions { display: flex; flex: none; gap: 6px; margin-left: auto; }
+.intake__unknown-actions button { white-space: nowrap; }
 .intake__rowbadges { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .intake__badge--channel { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
 .intake__badge--done { background: rgba(16, 185, 129, 0.15); color: #34d399; }
