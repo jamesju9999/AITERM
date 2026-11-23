@@ -19,6 +19,8 @@
 | Server 形態 | **獨立的無頭 server 程式**（沿用 `aiterm-host` 的做法），不是「AITERM 開伺服器模式」 |
 | 連線與認證 | **沿用遠端終端機的機制**：TLS＋驗證碼（SAS）配對；配對後發長期 token |
 | 網路情境 | **內網／VPN 與公開網路都支援**：協定相同，只差憑證來源 |
+| 設定對等 | **AITERM Client 有的問題收集設定，server 都必須有，而且都能從 Client 設定**（管理員）。不是「server 只有精簡版設定」，也不是「要登入 server 改檔案」。見「設定對等」 |
+| 專案 | 因設定對等，**server 支援多個專案**（取代原先「單一專案」的傾向）；每個專案各自的設定、白名單、佇列，與本機模式一致 |
 | Server 的 AI | **Server 自己設定 AI 供應商與金鑰**，行為與本機相同（使用者選 A，否決「② 先不啟用 AI」）。理由：AI 分類有兩處（見下），沒有 AI 時群組會太吵、其他管道全被當成要改程式 |
 | 範圍 | 拆成四個子專案依序做（見下）。**本 spec 詳細設計 ①②，③④只定介面與方向**，各自開工前再補 spec |
 
@@ -122,12 +124,13 @@
 | 路徑 | 說明 |
 |---|---|
 | `POST /v1/pair/start`、`/v1/pair/finish` | 配對（見「認證」），唯一不需 token 的端點 |
-| `GET /v1/items?status=&source=&q=` | 問題清單 |
-| `GET /v1/items/{id}` | 單題詳情（含附件清單、回覆草稿、前情） |
-| `GET /v1/items/{id}/attachments/{name}` | 附件下載 |
-| `POST /v1/items/{id}/reply`、`/approve`、`/reject`、`/status` | 動作；等同現在的 Tauri 指令 |
-| `GET /v1/senders`、`PUT /v1/senders/{key}` 等 | 白名單（含標籤） |
-| `GET /v1/config`、`PUT /v1/config` | 管道設定（**不含祕密**，只回「已設定／未設定」） |
+| `GET/POST/DELETE /v1/projects` | 專案管理（POST、DELETE 限管理員） |
+| `GET /v1/projects/{pid}/items?status=&source=&q=` | 問題清單 |
+| `GET /v1/projects/{pid}/items/{id}` | 單題詳情（含附件清單、回覆草稿、前情） |
+| `GET /v1/projects/{pid}/items/{id}/attachments/{name}` | 附件下載 |
+| `POST /v1/projects/{pid}/items/{id}/reply`、`/approve`、`/reject`、`/status` | 動作；等同現在的 Tauri 指令 |
+| `GET /v1/projects/{pid}/senders`、`PUT …/senders/{key}` 等 | 白名單（含標籤） |
+| `GET/PUT /v1/projects/{pid}/config`、`GET/PUT /v1/global-config` | 管道設定（**不含祕密**，只回「已設定／未設定」） |
 | `PUT /v1/secrets/{id}` | 設定祕密（管理員，只寫不讀） |
 | `GET /v1/status` | 各管道連線狀態 |
 | `GET /v1/events`（WebSocket） | 推播 `{"type":"changed","seq":N}`；Client 收到就重抓。斷線重連後用 `seq` 判斷要不要重抓 |
@@ -135,6 +138,37 @@
 這些端點**一一對應 `commands.rs` 現有的 Tauri 指令**，所以 Client 端不需要新概念。
 
 **推播用「changed＋重抓」而不是增量**：前端現在就是這個模式，改增量要動整個畫面的資料流，而且問題清單量不大。要求是「清單與狀態一致」，不是「毫秒級」。
+
+### 設定對等
+
+**原則**：本機模式的問題收集有哪些設定，server 就有同一組，並且全部能從 Client 的設定頁編輯。不另做一套精簡版。
+
+| 設定 | 範圍 | 在 server 的處理 |
+|---|---|---|
+| 各管道開關、連接資訊（Email 帳號、Telegram、LINE、網頁表單的埠與表單） | 每專案 | 存 server；祕密只寫不讀 |
+| LINE：憑證、埠、群組自動開題、測試模式、保留天數 | 每專案（保留天數同步到全域） | 同上 |
+| 每管道處理方式（只診斷／可改檔案） | 每專案 | 同上 |
+| 白名單與標籤、未知來源清單 | 每專案 | 同上 |
+| 參考資料夾（共用／僅內部另加） | 每專案 | **路徑是 server 檔案系統上的路徑**；路徑檢查（找不到、可讀檔案數、Office 檔提醒）在 server 執行並回傳 |
+| 修復驗證設定 | 每專案 | 同上 |
+| AI 供應商與金鑰 | 全域 | 見「Server 的 AI 設定」 |
+| 郵件帳號（收信／寄信用） | 全域 | 存 server；祕密只寫不讀 |
+
+**做法**：`config` 與 `senders` 的讀寫 API 由 `commands.rs` 現有的指令一對一產生（見「API」），資料形狀用同一份型別（放在 core），**新增設定欄位時只改一處**，Client 與 server 自動一致。為防漏，加一個測試：列舉 `Config` 的所有欄位，確認每一個都經過 `PUT /v1/projects/{pid}/config` 往返不丟失。
+
+**與本機模式不同、必須處理的地方**：
+- **資料夾選擇器**：Client 的「選擇資料夾…」挑的是本機路徑，對 server 沒有意義。Remote 模式下停用選擇器，改成手動輸入 server 上的路徑，並顯示「這是 server 上的路徑」。
+- **相對路徑**：「相對於專案資料夾」在 server 上要有「專案資料夾」。每個 server 專案有一個**工作資料夾**（server 檔案系統上的路徑，建立專案時設定，可為空；空則相對路徑不可用並提示）。③ 自動處理時也在這個資料夾裡執行。
+- **本機專屬設定不上傳**：只屬於這台電腦的偏好（視窗版面、收合狀態等）留在本機，不算問題收集設定。
+
+### 專案（多專案）
+
+Server 管理多個專案，與本機一致：每個專案有 `project_id`、名稱、工作資料夾、各自的設定／白名單／佇列。現有 schema 已經是 `project_id` 分表（`intake_settings`、`intake_project_senders`、佇列），所以多專案在資料層不需新設計。
+
+- **API**：路徑帶專案，例如 `/v1/projects/{pid}/items`；`GET/POST/DELETE /v1/projects` 管理專案（管理員）。
+- **成員與專案**：初期**所有成員看所有專案**；不做「成員只能看某些專案」（有需要再加，現在加是過度設計）。
+- **Client**：專案切換沿用現有 AITERM 的專案選擇，Remote 模式下專案清單來自 server。
+- **管道與專案的對應**：LINE 群組與 Email 來源要歸到哪個專案，沿用本機的做法（白名單屬於專案）；同一個 LINE Channel 的 webhook 一個位址，所以**一個 LINE Channel 對應一個專案**（本機也是這樣）。
 
 ### Server 的 AI 設定
 
@@ -194,7 +228,7 @@
 
 - Server 的資料庫**沿用現有 schema**（`store::init_schema` 等），不另設計一份，因此 core 搬移後兩邊用同一份遷移程式。
 - 「本機 → server」的**資料搬遷不在本 spec**：先不做，使用者從乾淨的 server 開始（白名單與設定在 server 重設）。要匯入現有佇列時另開需求。
-- **專案（project）**：本機模式的問題收集設定與資料庫掛在 `ProjectRegistry` 的專案下。Server 初期是**單一「專案」**（一份設定、一個資料庫）。多專案的 server 見「開放問題」。
+- **專案（project）**：見「專案（多專案）」。
 
 ## 介面（③④ 預留，不在本 spec 實作）
 
@@ -212,12 +246,12 @@
 - 「回覆」是以 server 身分送出（LINE／信件的寄件者是同一個），不是成員個人的身分。稽核紀錄會記是誰按的。
 - 公開網路模式的安全性取決於憑證與 server 本身的維運（作業系統更新、防火牆）；程式只負責 token、速率限制與稽核，不替使用者做網路防護。
 - Server 的 AI 只支援 API 金鑰類供應商，不支援訂閱 OAuth；沒設定 AI 時，LINE 群組每段安靜後都會被當成新問題、其他管道的題目都被當成要改程式（與本機沒設 AI 時相同），所以管理員應該設定。
-- 一個 server 一份設定一個資料庫；不支援多組織隔離。
+- 不支援多組織隔離；所有成員看得到 server 上所有專案。
 
 ## 開放問題（寫計畫時先釘死，必要時回來問使用者）
 
 1. ~~Server 上的 AI 分類~~：**已決定**，server 自己設定 AI 供應商與金鑰（見「Server 的 AI 設定」）。仍待確認：`ConfigStore`／`SecretStore` 能否直接搬進 crate，還是要換成 trait；用編譯結果判斷。
-2. **多專案**：本機的問題收集是「每個專案各有設定」。Server 是單專案夠用，還是要對應多個專案？傾向單專案，多專案等真有需求。
+2. ~~多專案~~：**已決定**，支援多專案（設定對等的必然結果）。仍待確認：本機 `ProjectRegistry` 的專案是「磁碟資料夾＋自己的 tasks.db」，server 的專案只需要設定、白名單與佇列，不需要看板資料庫；寫計畫時確認哪些欄位真的用得到。
 3. **`verify.rs`／`tabcd.rs` 是否綁終端機**：決定它們留在 AITERM 還是進 core，用編譯結果判斷。
 4. **網頁表單**：`web.rs`（1044 行）現在是 AITERM 內嵌的小 HTTP server。Server 版要沿用同一份程式，還是併進 API 的同一個埠？傾向沿用、獨立埠，改動最小。
 5. **Server 的作業系統**：目標是 Linux（VPS／Docker）與 macOS／Windows 常駐機器都能跑。CI 是否要為 server 多一組發佈產物（比照 `aiterm-host` 的 `host-v*` tag 分家發佈）？傾向是，另開 `intake-server-v*` tag，**不與桌面版 Release 混在一起**。
