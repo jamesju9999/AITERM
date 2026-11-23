@@ -5,7 +5,6 @@ use crate::line_source::{self, GroupMsg, MAX_PER_REQUEST, SEGMENT_CHARS};
 use crate::line_store;
 use crate::queue::Ingested;
 use crate::telegram_source::Candidate;
-use crate::attach;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
