@@ -547,7 +547,7 @@ pub async fn send_reply<R: Runtime>(app: &AppHandle<R>, item_id: &str) -> Result
     if item.source == "line" {
         let to = super::line_source::reply_target(&item.sender).ok_or("無法判斷要回覆的 LINE 使用者")?;
         let token = super::line_server::token(app)?;
-        let text = filter::redact(&body);
+        let text = super::line_text::to_plain(&filter::redact(&body));
         super::line_server::push(&token, &to, &text).await?;
         // 回到群組的內容也記進前情，下次開題時 AI 看得到自己說過什麼，也讓人員／AI 已回覆的判斷成立。
         if super::line_source::is_chat_key(&item.sender) {

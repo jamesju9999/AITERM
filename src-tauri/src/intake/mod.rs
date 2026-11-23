@@ -10,6 +10,7 @@ pub mod filter;
 pub mod line_server;
 pub mod line_store;
 pub mod line_source;
+pub mod line_text;
 pub mod mail_source;
 pub mod queue;
 pub mod refs;

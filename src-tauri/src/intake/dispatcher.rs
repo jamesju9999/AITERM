@@ -79,7 +79,7 @@ pub fn build_prompt(item: &IntakeItem, images: &[AttachmentRow], diagnose: bool)
         subject = item.subject,
         body = item.body,
         pics = pics,
-        note = if diagnose { diagnose_note() } else { String::new() },
+        note = format!("{}{}", if diagnose { diagnose_note() } else { String::new() }, if item.source == "line" { super::line_text::PLAIN_NOTE } else { "" }),
     )
 }
 
@@ -284,6 +284,14 @@ mod tests {
         assert!(p.contains(DIAGNOSE_NOTICE), "要求修改時回覆要告知目前是診斷模式：{p}");
         assert!(!build_prompt(&it, &[], false).contains(DIAGNOSE_NOTICE));
         assert!(p.contains(&marker_for(&it.id)), "標記仍在，完成偵測才認得這個提示");
+    }
+
+    #[test]
+    fn only_a_line_prompt_asks_for_plain_text() {
+        let mut it = item("abcdef1234567890", "external");
+        assert!(!build_prompt(&it, &[], false).contains("不要使用 **粗體**"));
+        it.source = "line".into();
+        assert!(build_prompt(&it, &[], false).contains("不要使用 **粗體**"));
     }
 
     #[test]
