@@ -42,11 +42,14 @@ import {
   type Level,
 } from "../../ipc/intake";
 import { MailIcon } from "../Icons";
+import type { IntakeRemoteStatus } from "../../ipc/intake";
 import { MarkdownText } from "../../lib/markdown";
 import { useNavigate } from "react-router-dom";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
 import { systemsList, type SystemConnection } from "../../ipc/systems";
 import { useIntakeChanged } from "../../hooks/useIntakeChanged";
+import { useIntakeRemote } from "../../hooks/useIntakeRemote";
+import { ConnectionCard } from "./ConnectionCard";
 import { useLocale } from "../../contexts/LocaleContext";
 import { displayAddress, validAddress } from "../../lib/intakeAddress";
 import { flowSteps } from "../../lib/intakeFlow";
@@ -93,6 +96,8 @@ export function IntakeView() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+  const remote = useIntakeRemote();
+  const [showConn, setShowConn] = useState(false);
 
   const loadProjects = useCallback(() => {
     intakeProjects()
@@ -185,17 +190,27 @@ export function IntakeView() {
           {unassigned > 0 && <option value="">{t.intake_unassigned} ({unassigned})</option>}
         </select>
         {!inUnassigned && !noProject && (
-          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showSettings} onClick={() => setShowSettings((v) => !v)}>
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showSettings} onClick={() => { setShowConn(false); setShowSettings((v) => !v); }}>
             {showSettings ? t.intake_settings_back : t.intake_settings}
           </button>
         )}
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showConn} onClick={() => setShowConn((v) => !v)}>
+          {t.intake_conn_button}
+        </button>
       </div>
+      {remote.connected && (
+        <div className={`intake__remote ${remote.online && !remote.error ? "" : "intake__remote--off"}`} role="status">
+          {t.intake_conn_banner}：{remote.addr}（{remote.name}）{remote.online ? "" : ` — ${t.intake_conn_offline}`}
+        </div>
+      )}
       {error && <div className="intake__error" role="alert">{error}</div>}
 
-      {noProject ? (
+      {showConn ? (
+        <ConnectionCard status={remote} />
+      ) : noProject ? (
         <p className="intake__empty">{t.intake_no_projects}</p>
       ) : showSettings && !inUnassigned ? (
-        <SettingsPanel key={projectId} projectId={projectId} projectName={current?.name ?? ""} legacySettings={legacySettings} onError={setError} />
+        <SettingsPanel key={projectId} projectId={projectId} projectName={current?.name ?? ""} legacySettings={legacySettings} remote={remote} onError={setError} />
       ) : (
         <>
           {inUnassigned && <AdoptBar projects={projects} run={run} />}
@@ -599,9 +614,11 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
   );
 }
 
-function SettingsPanel({ projectId, projectName, legacySettings, onError }: { projectId: string; projectName: string; legacySettings: boolean; onError: (m: string | null) => void }) {
+function SettingsPanel({ projectId, projectName, legacySettings, remote, onError }: { projectId: string; projectName: string; legacySettings: boolean; remote: IntakeRemoteStatus; onError: (m: string | null) => void }) {
   const { t } = useLocale();
   const navigate = useNavigate();
+  // 連到 server 時：設定是 server 的，只有管理員能改；資料夾是 server 上的路徑，不能用本機的選擇器。
+  const readOnly = remote.connected && remote.role !== "admin";
   const [cfg, setCfg] = useState<IntakeConfig | null>(null);
   const [hasOwn, setHasOwn] = useState(true);
   const [chanTab, setChanTab] = useState<"mail" | "telegram" | "line" | "web">("mail");
@@ -829,10 +846,13 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_refs_add}`} disabled={!(newRefs[ch] ?? "").trim()} onClick={() => addRef(ch, newRefs[ch] ?? "")}>
           {t.intake_refs_add}
         </button>
-        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_refs_pick}`} onClick={() => void pickRef(ch)}>
-          {t.intake_refs_pick}
-        </button>
+        {!remote.connected && (
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_refs_pick}`} onClick={() => void pickRef(ch)}>
+            {t.intake_refs_pick}
+          </button>
+        )}
       </div>
+      {remote.connected && <p className="intake__meta intake__hint">{t.intake_conn_server_path}</p>}
     </div>
   );
 
@@ -849,6 +869,9 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   return (
     <div className="intake__settings">
       <div className="intake__editing">{t.intake_editing_project.replace("{name}", projectName)}</div>
+      {readOnly && <div className="intake__meta intake__readonly" role="status">{t.intake_conn_readonly}</div>}
+      {remote.connected && <div className="intake__meta intake__hint">{t.intake_conn_channels_note}</div>}
+      <fieldset className="intake__fieldset" disabled={readOnly}>
       {!hasOwn && legacySettings && (
         <div className="intake__banner intake__adopt">
           <span>{t.intake_copy_legacy_hint}</span>
@@ -1286,6 +1309,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         {saved && <span className="intake__saved" role="status">✓ {t.intake_set_saved}</span>}
         {dirty && !saved && <span className="intake__dirty" role="status">● {t.intake_unsaved}</span>}
       </div>
+      </fieldset>
     </div>
   );
 }

@@ -261,3 +261,29 @@
 .intake__settings .intake__creds-note { margin-left: 8px; align-self: center; }
 .intake__dirty { font-size: 13px; color: #f59e0b; }
 .intake__refs + .intake__refs { margin-top: 6px; }
+
+/* 連到 server（Client 模式） */
+.intake__remote {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--accent, #4f8cff) 14%, transparent);
+}
+.intake__remote--off {
+  background: color-mix(in srgb, #d97706 18%, transparent);
+}
+.intake__conn-line { margin: 4px 0; }
+.intake__conn-state { margin: 4px 0 8px; font-size: 12px; }
+.intake__conn-state--on { color: #16a34a; }
+.intake__conn-state--off { color: #d97706; }
+.intake__warn { color: #d97706; }
+.intake__readonly { margin: 4px 0 8px; }
+/* 唯讀時整份設定停用；fieldset 本身不要有預設的框與寬度。 */
+.intake__fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: contents;
+}

@@ -219,3 +219,29 @@ export const intakeAttachments = (itemId: string) => invoke<IntakeAttachment[]>(
 /** 純文字附件（log、txt…）的前 64KB，給預覽。 */
 export const intakeAttachmentText = (id: string) => invoke<string>("intake_attachment_text", { id });
 export const intakeAttachmentData = (id: string) => invoke<string>("intake_attachment_data", { id });
+
+// ───────── 連到 server（Client 模式）─────────
+
+export const INTAKE_REMOTE_EVENT = "intake://remote";
+
+export type IntakeRemoteRole = "member" | "admin";
+
+export interface IntakeRemoteStatus {
+  /** 已連到 server（本機的收訊與派送因此停止）。 */
+  connected: boolean;
+  /** WebSocket 目前連得上；false 代表離線，清單是最後一次的內容。 */
+  online: boolean;
+  addr: string;
+  name: string;
+  role: IntakeRemoteRole | null;
+  /** 需要使用者處理的原因（已被移除、憑證改變、版本不相容）；正常為 null。 */
+  error: string | null;
+}
+
+export const intakeRemoteStatus = () => invoke<IntakeRemoteStatus>("intake_remote_status");
+/** 用邀請碼配對並連線。 */
+export const intakeRemotePair = (addr: string, code: string) => invoke<IntakeRemoteStatus>("intake_remote_pair", { addr, code });
+export const intakeRemoteDisconnect = () => invoke<void>("intake_remote_disconnect");
+export function onIntakeRemote(cb: (s: IntakeRemoteStatus) => void): Promise<UnlistenFn> {
+  return listen<IntakeRemoteStatus>(INTAKE_REMOTE_EVENT, (e) => cb(e.payload));
+}

@@ -41,6 +41,9 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeAttachments: vi.fn(() => Promise.resolve([])),
   intakeAttachmentData: vi.fn(),
   intakeAttachmentText: vi.fn(),
+  intakeRemoteStatus: vi.fn(() => Promise.resolve({ connected: false, online: false, addr: "", name: "", role: null, error: null })),
+  intakeRemotePair: vi.fn(),
+  intakeRemoteDisconnect: vi.fn(() => Promise.resolve()),
 }));
 import * as ipc from "../../ipc/intake";
 import { mailListAccounts } from "../../ipc/mail";
@@ -84,6 +87,8 @@ beforeEach(() => {
   vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [P1, P2], unassigned: 0, legacy_settings: false });
   // clearAllMocks 不會清掉 mockResolvedValue 設過的實作，上一個測試的附圖會漏進來。
   vi.mocked(ipc.intakeAttachments).mockResolvedValue([]);
+  // 同理：上一個測試設成「已連線」的狀態不能漏進來。
+  vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: false, online: false, addr: "", name: "", role: null, error: null });
 });
 
 describe("IntakeView", () => {
@@ -864,5 +869,66 @@ describe("IntakeView", () => {
   it("accepts telegram chat ids in the allowlist but rejects malformed addresses", () => {
     for (const ok of ["a@b.co", "tg:123", "TG:-100123"]) expect(validAddress(ok), ok).toBe(true);
     for (const bad of ["", "tg:", "tg:abc", "a@b", "a b@c.de", "@c.de"]) expect(validAddress(bad), bad).toBe(false);
+  });
+
+  describe("connected to a server", () => {
+    const remoteStatus = (role: "admin" | "member", over: Partial<ipc.IntakeRemoteStatus> = {}): ipc.IntakeRemoteStatus => ({
+      connected: true, online: true, addr: "192.168.1.20:8443", name: "小華", role, error: null, ...over,
+    });
+    async function openSettings() {
+      vi.mocked(ipc.intakeList).mockResolvedValue([]);
+      vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView());
+      render(<LocaleProvider><MemoryRouter><IntakeView /></MemoryRouter></LocaleProvider>);
+      fireEvent.click(await screen.findByText(t.intake_settings));
+      await screen.findByText(t.intake_set_save);
+    }
+
+    it("shows which server it is connected to", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("member"));
+      vi.mocked(ipc.intakeList).mockResolvedValue([]);
+      render(<LocaleProvider><MemoryRouter><IntakeView /></MemoryRouter></LocaleProvider>);
+      const banner = await screen.findByText(new RegExp(`${t.intake_conn_banner}：192\\.168\\.1\\.20:8443`));
+      expect(banner.textContent).toContain("小華");
+    });
+
+    it("marks the banner as offline while the server is unreachable", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("member", { online: false }));
+      vi.mocked(ipc.intakeList).mockResolvedValue([]);
+      render(<LocaleProvider><MemoryRouter><IntakeView /></MemoryRouter></LocaleProvider>);
+      expect((await screen.findByText(new RegExp(t.intake_conn_banner))).textContent).toContain(t.intake_conn_offline);
+    });
+
+    it("makes the settings read-only for a member and says why", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("member"));
+      await openSettings();
+      expect(screen.getByText(t.intake_conn_readonly)).toBeTruthy();
+      // 控制項被停用是因為包在 disabled 的 fieldset 裡，`.disabled` 屬性看不到，要用 :disabled 判斷。
+      expect(screen.getByRole("button", { name: t.intake_set_save }).matches(":disabled")).toBe(true);
+      expect(screen.getByLabelText(t.intake_set_enabled).matches(":disabled")).toBe(true);
+    });
+
+    it("lets an administrator edit, and replaces the local folder picker with a server-path hint", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      await openSettings();
+      expect(screen.queryByText(t.intake_conn_readonly)).toBeNull();
+      expect(screen.getByRole("button", { name: t.intake_set_save }).matches(":disabled")).toBe(false);
+      expect(screen.queryAllByRole("button", { name: new RegExp(t.intake_refs_pick) })).toHaveLength(0);
+      expect(screen.getAllByText(t.intake_conn_server_path).length).toBeGreaterThan(0);
+    });
+
+    it("keeps the local folder picker and shows no server notices in local mode", async () => {
+      await openSettings();
+      expect(screen.queryByText(t.intake_conn_readonly)).toBeNull();
+      expect(screen.queryByText(t.intake_conn_channels_note)).toBeNull();
+      expect(screen.getAllByRole("button", { name: new RegExp(t.intake_refs_pick) }).length).toBeGreaterThan(0);
+    });
+
+    it("opens the connection card from the bar even when there are no projects yet", async () => {
+      vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [], unassigned: 0, legacy_settings: false });
+      vi.mocked(ipc.intakeList).mockResolvedValue([]);
+      render(<LocaleProvider><MemoryRouter><IntakeView /></MemoryRouter></LocaleProvider>);
+      fireEvent.click(await screen.findByRole("button", { name: t.intake_conn_button }));
+      expect(await screen.findByLabelText(t.intake_conn_addr)).toBeTruthy();
+    });
   });
 });
