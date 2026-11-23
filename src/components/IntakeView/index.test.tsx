@@ -63,7 +63,7 @@ function cfgView(over: Partial<ipc.IntakeConfig> = {}, extra: Partial<ipc.Intake
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, line_enabled: false, line_port: 8321, line_auto_open: true, line_retention_days: 30, channel_handling: { email: "edit", telegram: "edit", line: "diagnose", web: "edit" }, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, line_enabled: false, line_port: 8321, line_auto_open: true, line_test_mode: false, line_retention_days: 30, channel_handling: { email: "edit", telegram: "edit", line: "diagnose", web: "edit" }, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
     },
     saved: true,
     telegram_default: false,

@@ -90,6 +90,8 @@ pub struct Config {
     pub line_port: u16,
     /// 白名單內的 LINE 群組：客戶沒 @ 時，新問題也自動開題（等客戶講完、判斷是新問題、且人員還沒回才開）。
     pub line_auto_open: bool,
+    /// 測試模式：自動開題時，白名單裡「內部」的 LINE 使用者也當成客戶（平常他們被當成我方人員而略過），方便用自己的帳號測試。
+    pub line_test_mode: bool,
     /// LINE 群組訊息在本機保存幾天（所有專案共用；0＝不保存，此時沒有前情也不能自動開題）。
     pub line_retention_days: u32,
     pub web_mode: WebMode,
@@ -123,6 +125,7 @@ impl Default for Config {
             line_enabled: false,
             line_port: 8321,
             line_auto_open: true,
+            line_test_mode: false,
             line_retention_days: 30,
             web_mode: WebMode::Off,
             web_port: 8320,

@@ -901,6 +901,11 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       </label>
       <p className="intake__meta intake__hint">{t.intake_line_auto_open_hint}</p>
       <label className="intake__field">
+        <input type="checkbox" checked={cfg.line_test_mode} onChange={(e) => set("line_test_mode", e.target.checked)} />
+        {t.intake_line_test_mode}
+      </label>
+      <p className={`intake__meta intake__hint ${cfg.line_test_mode ? "intake__error" : ""}`}>{t.intake_line_test_mode_hint}</p>
+      <label className="intake__field">
         {t.intake_line_retention}
         <input
           type="number"

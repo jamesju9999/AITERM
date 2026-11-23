@@ -198,8 +198,10 @@ async fn line_triage<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool) ->
         for c in cands.iter().filter(|c| c.cfg.line_enabled) {
             let senders = store::list_senders(pool, &c.id).await.unwrap_or_default();
             if let Some(s) = senders.iter().find(|s| rules::normalize(&s.address) == key) {
+                // 測試模式：沒有「我方人員」，所有人（含自己）都當客戶。
                 let staff: std::collections::HashSet<String> = senders
                     .iter()
+                    .filter(|_| !c.cfg.line_test_mode)
                     .filter(|x| x.level == rules::Level::Internal)
                     .filter_map(|x| rules::normalize(&x.address).strip_prefix("line:").filter(|id| id.starts_with('u')).map(str::to_string))
                     .collect();
@@ -759,6 +761,20 @@ mod board_wiring_tests {
         tick(app2.handle()).await;
         assert!(store::list_items(&pool2, &project2.id, None).await.unwrap().is_empty());
         assert!(crate::intake::line_store::unhandled(&pool2, &format!("line:{}", LG.to_lowercase())).await.unwrap().is_empty());
+    }
+
+    /// 測試模式：白名單裡「內部」的人（平常被當成我方人員而略過）發的話也會自動開題，方便單人測試。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_mode_treats_internal_line_users_as_customers() {
+        for (test_mode, expected) in [(false, 0usize), (true, 1usize)] {
+            let (app, pool, project, _d) = line_group_app(true).await;
+            let mut cfg = config::load(&pool, &project.id).await;
+            cfg.line_test_mode = test_mode;
+            config::save(&pool, &project.id, &cfg).await.unwrap();
+            say_in_group(&pool, "1", LSTAFF, "我自己測試：請問怎麼設定", 200).await;
+            tick(app.handle()).await;
+            assert_eq!(store::list_items(&pool, &project.id, None).await.unwrap().len(), expected, "test_mode={test_mode}");
+        }
     }
 
     async fn canvas_app() -> (tauri::App<tauri::test::MockRuntime>, sqlx::SqlitePool, crate::projects::ProjectHandle, tempfile::TempDir) {

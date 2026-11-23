@@ -64,6 +64,8 @@ export interface IntakeConfig {
   line_port: number;
   /** 白名單內的 LINE 群組：客戶沒 @ 時，新問題也自動開題。 */
   line_auto_open: boolean;
+  /** 測試模式：內部人員的訊息也當成客戶訊息。 */
+  line_test_mode: boolean;
   /** LINE 群組訊息在本機保存幾天（所有專案共用；0＝不保存）。 */
   line_retention_days: number;
   web_mode: "off" | "local" | "lan";
