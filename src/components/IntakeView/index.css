@@ -30,6 +30,13 @@
 .intake__unknown-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 240px; }
 .intake__unknown-main strong { font-weight: 600; overflow-wrap: anywhere; }
 .intake__unknown-main code { font-size: 11px; color: var(--text-secondary, #888); overflow-wrap: anywhere; }
+.intake__sender-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.intake__sender-main strong { font-weight: 600; overflow-wrap: anywhere; }
+.intake__sender-main input { max-width: none; width: 100%; }
+.intake__sender-addr { font-size: 11px; color: var(--text-secondary, #888); overflow-wrap: anywhere; }
+.intake__sender-actions { display: flex; flex: none; gap: 6px; margin-left: auto; }
+.intake__senders li .intake__sender-actions button { margin-left: 0; white-space: nowrap; }
+.intake__settings .intake__unknown-label { flex: 0 1 200px; min-width: 120px; }
 .intake__unknown-count { flex: none; font-size: 12px; color: var(--text-secondary, #888); white-space: nowrap; }
 .intake__unknown-actions { display: flex; flex: none; gap: 6px; margin-left: auto; }
 .intake__unknown-actions button { white-space: nowrap; }

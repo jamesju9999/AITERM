@@ -195,11 +195,23 @@ pub struct SenderDto {
     pub address: String,
     pub level: Level,
     pub skip_auth: bool,
+    /// 備註名稱（例如群組叫什麼）；沒有就是空字串。
+    #[serde(default)]
+    pub label: String,
 }
 
 #[tauri::command]
 pub async fn intake_senders(db: State<'_, IntakeDb>, project_id: String) -> Result<Vec<SenderDto>, String> {
-    Ok(store::list_senders(&db.pool, &project_id).await.map_err(e)?.into_iter().map(|s| SenderDto { address: s.address, level: s.level, skip_auth: s.skip_auth }).collect())
+    let labels = store::sender_labels(&db.pool, &project_id).await.map_err(e)?;
+    Ok(store::list_senders(&db.pool, &project_id)
+        .await
+        .map_err(e)?
+        .into_iter()
+        .map(|s| {
+            let label = labels.get(&super::rules::normalize(&s.address)).cloned().unwrap_or_default();
+            SenderDto { address: s.address, level: s.level, skip_auth: s.skip_auth, label }
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -207,7 +219,25 @@ pub async fn intake_upsert_sender(db: State<'_, IntakeDb>, project_id: String, s
     if !super::rules::valid_address(&sender.address) {
         return Err("請輸入有效的電子郵件地址，、Telegram 聊天室 tg:<chat_id>，或 LINE userId（U 開頭共 33 字元）".into());
     }
-    store::upsert_sender(&db.pool, &project_id, &Sender { address: sender.address, level: sender.level, skip_auth: sender.skip_auth }).await.map_err(e)
+    let address = sender.address.clone();
+    store::upsert_sender(&db.pool, &project_id, &Sender { address: sender.address, level: sender.level, skip_auth: sender.skip_auth }).await.map_err(e)?;
+    // 有給備註就存；沒給時，LINE 群組／使用者若已知道名稱（LINE 查得到或「最近出現」記過），就用那個名稱，免得清單上只剩一串編號。
+    let mut label = sender.label;
+    if label.trim().is_empty() && store::sender_label(&db.pool, &project_id, &address).await.map_err(e)?.is_none() {
+        if let Some(id) = super::rules::normalize(&address).strip_prefix("line:") {
+            label = super::line_store::get_name(&db.pool, id).await.map_err(e)?.or(super::line_store::unknown_name(&db.pool, id).await.map_err(e)?).unwrap_or_default();
+        }
+    }
+    if !label.trim().is_empty() {
+        store::set_sender_label(&db.pool, &project_id, &address, &label).await.map_err(e)?;
+    }
+    Ok(())
+}
+
+/// 設定（或清除）白名單項目的備註名稱。
+#[tauri::command]
+pub async fn intake_set_sender_label(db: State<'_, IntakeDb>, project_id: String, address: String, label: String) -> Result<(), String> {
+    store::set_sender_label(&db.pool, &project_id, &address, &label).await.map_err(e)
 }
 
 #[tauri::command]

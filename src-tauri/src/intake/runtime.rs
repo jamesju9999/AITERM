@@ -227,7 +227,10 @@ async fn line_triage<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool) ->
             line_store::mark_handled(pool, &key, upto).await.ok();
             continue;
         }
-        let group = line_store::get_name(pool, key.strip_prefix("line:").unwrap_or(&key)).await.ok().flatten().unwrap_or_default();
+        let mut group = line_store::get_name(pool, key.strip_prefix("line:").unwrap_or(&key)).await.ok().flatten().unwrap_or_default();
+        if group.is_empty() {
+            group = store::sender_label(pool, &project.id, &key).await.ok().flatten().unwrap_or_default();
+        }
         match line_source::open_candidate(pool, project, *level, &key, &group, messages, upto, now, &super::attach::root()).await {
             Ok(super::queue::Ingested::Queued(_)) => opened = true,
             Ok(_) => {}

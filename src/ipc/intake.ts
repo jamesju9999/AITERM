@@ -80,6 +80,8 @@ export interface IntakeSender {
   address: string;
   level: Level;
   skip_auth: boolean;
+  /** 備註名稱（例如群組叫什麼）；沒有就是空字串。新增時可不給。 */
+  label?: string;
 }
 
 export const INTAKE_CHANGED_EVENT = "intake://changed";
@@ -160,6 +162,9 @@ export const intakeSetConfig = (projectId: string, config: IntakeConfig, telegra
 export const intakeList = (projectId: string, status?: IntakeStatus) =>
   invoke<IntakeItem[]>("intake_list", { projectId, status: status ?? null });
 export const intakeSenders = (projectId: string) => invoke<IntakeSender[]>("intake_senders", { projectId });
+/** 設定（或傳空字串清除）白名單項目的備註名稱。 */
+export const intakeSetSenderLabel = (projectId: string, address: string, label: string) =>
+  invoke<void>("intake_set_sender_label", { projectId, address, label });
 export const intakeUpsertSender = (projectId: string, sender: IntakeSender) => invoke<void>("intake_upsert_sender", { projectId, sender });
 export const intakeDeleteSender = (projectId: string, address: string) => invoke<boolean>("intake_delete_sender", { projectId, address });
 export const intakeDropped = (projectId: string) => invoke<[string, number][]>("intake_dropped", { projectId });

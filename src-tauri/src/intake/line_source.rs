@@ -351,6 +351,14 @@ pub async fn route_group(pool: &SqlitePool, cands: &[Candidate], m: &GroupMsg<'_
             return Ok(Ingested::Dropped("ambiguous_project"));
         }
     };
+    // 取不到群組名稱時，用白名單上的備註名稱辨認。
+    let label;
+    let group_name = if group_name.is_empty() {
+        label = store::sender_label(pool, &project.id, &key).await?.unwrap_or_default();
+        label.as_str()
+    } else {
+        group_name
+    };
     let new = NewMessage { chat: &key, msg_id: m.message_id, user_id: &m.user_id.to_lowercase(), name: m.name, text, ts: m.ts, outgoing: false };
     let row = if retention_days > 0 {
         match line_store::insert_message(pool, &new).await? {
@@ -788,5 +796,19 @@ mod tests {
         assert!(line_store::unhandled(&p, &gkey()).await.unwrap().is_empty());
         assert_eq!(triage_chat(&p, &gkey(), &staff_set(), 90, 3000).await.unwrap(), Triage::Idle);
         assert!(store::has_open_for_sender(&p, "", &gkey()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn without_a_group_name_the_whitelist_label_identifies_the_group_in_the_item() {
+        let p = pool().await;
+        allow_key(&p, "", &format!("line:{GROUP}"), Level::External).await;
+        store::set_sender_label(&p, "", &format!("line:{GROUP}"), "  兆強科技客服群\n").await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let m = gm("1", CUSTOMER, "介琳", "@AI 請看", 100, true);
+        let r = route_group(&p, &[cand("", true)], &m, "", 30, 200, tmp.path()).await.unwrap();
+        let Ingested::Queued(id) = r else { panic!() };
+        let it = store::get_item(&p, &id).await.unwrap().unwrap();
+        assert_eq!(it.sender_name.as_deref(), Some("兆強科技客服群 / 介琳"));
+        assert!(it.body.contains("兆強科技客服群"), "{}", it.body);
     }
 }

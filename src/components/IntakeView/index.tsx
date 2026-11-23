@@ -22,6 +22,7 @@ import {
   intakeReject,
   intakeSendReply,
   intakeSenders,
+  intakeSetSenderLabel,
   intakeSetConfig,
   intakeUpdateDraft,
   intakeUpsertSender,
@@ -603,6 +604,9 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   const [tgDefault, setTgDefault] = useState(false);
   const [lineStatus, setLineStatus] = useState<IntakeLineStatus | null>(null);
   const [lineUnknown, setLineUnknown] = useState<IntakeLineUnknown[]>([]);
+  const [unknownLabels, setUnknownLabels] = useState<Record<string, string>>({});
+  const [editingAddr, setEditingAddr] = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState("");
   const [lineSecret, setLineSecret] = useState("");
   const [lineToken, setLineToken] = useState("");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
@@ -675,9 +679,21 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
 
   async function addLineUnknown(u: IntakeLineUnknown, level: Level) {
     try {
-      await intakeUpsertSender(projectId, { address: `line:${u.id}`, level, skip_auth: false });
+      const label = (unknownLabels[u.id] ?? u.name).trim();
+      await intakeUpsertSender(projectId, { address: `line:${u.id}`, level, skip_auth: false, label });
       await intakeLineForgetUnknown(u.id);
       setLineUnknown(await intakeLineUnknown());
+      onError(null);
+      loadSenders();
+    } catch (e) {
+      onError(errText(e));
+    }
+  }
+
+  async function saveLabel(address: string) {
+    try {
+      await intakeSetSenderLabel(projectId, address, editLabel);
+      setEditingAddr(null);
       onError(null);
       loadSenders();
     } catch (e) {
@@ -1019,7 +1035,29 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       <ul className="intake__senders">
         {senders.map((s) => (
           <li key={s.address}>
-            {displayAddress(s.address)} · {s.level === "internal" ? t.intake_level_internal : t.intake_level_external}
+            <span className="intake__sender-main">
+              {editingAddr === s.address ? (
+                <input
+                  autoFocus
+                  aria-label={`${t.intake_sender_label} ${displayAddress(s.address)}`}
+                  value={editLabel}
+                  maxLength={60}
+                  placeholder={t.intake_sender_label_ph}
+                  onChange={(e) => setEditLabel(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void saveLabel(s.address);
+                    if (e.key === "Escape") setEditingAddr(null);
+                  }}
+                />
+              ) : (
+                <>
+                  {s.label && <strong>{s.label}</strong>}
+                  <span className={s.label ? "intake__sender-addr" : undefined}>
+                    {displayAddress(s.address)} · {s.level === "internal" ? t.intake_level_internal : t.intake_level_external}
+                  </span>
+                </>
+              )}
+            </span>
             {s.level === "external" && (
               <label>
                 <input
@@ -1030,9 +1068,32 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
                 {t.intake_skip_auth}
               </label>
             )}
-            <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void intakeDeleteSender(projectId, s.address).then(loadSenders)}>
-              {t.intake_remove}
-            </button>
+            <span className="intake__sender-actions">
+              {editingAddr === s.address ? (
+                <>
+                  <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => void saveLabel(s.address)}>
+                    {t.intake_sender_label_save}
+                  </button>
+                  <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => setEditingAddr(null)}>
+                    {t.intake_sender_label_cancel}
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm"
+                  aria-label={`${s.label ? t.intake_sender_label_edit : t.intake_sender_label_add} ${displayAddress(s.address)}`}
+                  onClick={() => {
+                    setEditingAddr(s.address);
+                    setEditLabel(s.label ?? "");
+                  }}
+                >
+                  {s.label ? t.intake_sender_label_edit : t.intake_sender_label_add}
+                </button>
+              )}
+              <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_remove} ${displayAddress(s.address)}`} onClick={() => void intakeDeleteSender(projectId, s.address).then(loadSenders)}>
+                {t.intake_remove}
+              </button>
+            </span>
           </li>
         ))}
       </ul>
@@ -1060,7 +1121,15 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
                     <strong>{u.name || t.intake_line_unnamed}</strong>
                     <code>{displayAddress(`line:${u.id}`)}</code>
                   </span>
-                  <span className="intake__unknown-count">{u.count} {t.intake_line_times}</span>
+                  <input
+                  className="intake__unknown-label"
+                  aria-label={`${t.intake_sender_label} ${label}`}
+                  value={unknownLabels[u.id] ?? u.name}
+                  maxLength={60}
+                  placeholder={t.intake_sender_label_ph}
+                  onChange={(e) => setUnknownLabels((m) => ({ ...m, [u.id]: e.target.value }))}
+                />
+                <span className="intake__unknown-count">{u.count} {t.intake_line_times}</span>
                   <span className="intake__unknown-actions">
                     <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_line_add_internal} ${label}`} onClick={() => void addLineUnknown(u, "internal")}>
                       {t.intake_line_add_internal}

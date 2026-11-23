@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within, cleanup } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { IntakeView } from "./index";
@@ -32,6 +32,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeSetConfig: vi.fn(() => Promise.resolve()),
   intakeSenders: vi.fn(() => Promise.resolve([])),
   intakeUpsertSender: vi.fn(() => Promise.resolve()),
+  intakeSetSenderLabel: vi.fn(() => Promise.resolve()),
   intakeDeleteSender: vi.fn(() => Promise.resolve(true)),
   intakeDropped: vi.fn(() => Promise.resolve([["not_allowed", 3]])),
   intakeAttachments: vi.fn(() => Promise.resolve([])),
@@ -671,7 +672,7 @@ describe("IntakeView", () => {
     expect(screen.getByText(t.intake_line_unnamed)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: `${t.intake_line_add_external} 兆強客服群` }));
     await waitFor(() =>
-      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: "line:cb345e5d492c48c02a3eaa279924c52d2", level: "external", skip_auth: false }),
+      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: "line:cb345e5d492c48c02a3eaa279924c52d2", level: "external", skip_auth: false, label: "兆強客服群" }),
     );
     await waitFor(() => expect(ipc.intakeLineForgetUnknown).toHaveBeenCalledWith("cb345e5d492c48c02a3eaa279924c52d2"));
     await waitFor(() => expect(screen.queryByText("兆強客服群")).toBeNull());
@@ -680,6 +681,46 @@ describe("IntakeView", () => {
     await waitFor(() => expect(ipc.intakeLineForgetUnknown).toHaveBeenCalledWith("u2222222222222222222222222222222b"));
     // 清單空了就整塊消失。
     await waitFor(() => expect(screen.queryByText(t.intake_line_unknown)).toBeNull());
+  });
+
+  it("a source without a name can be given one while adding it, and the label is shown on the allowlist and can be changed later", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ line_enabled: true }));
+    const group = "cb345e5d492c48c02a3eaa279924c52d2";
+    vi.mocked(ipc.intakeLineUnknown).mockResolvedValue([{ id: group, kind: "group", name: "", count: 3, first_seen: 1, last_seen: 2 }]);
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    // 還沒有名稱時，加入前可以替它取一個。
+    const box = await screen.findByLabelText(new RegExp(`^${t.intake_sender_label} ${group}`));
+    fireEvent.change(box, { target: { value: "  兆強科技客服群 " } });
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${t.intake_line_add_external}`) }));
+    await waitFor(() =>
+      expect(ipc.intakeUpsertSender).toHaveBeenCalledWith("p1", { address: `line:${group}`, level: "external", skip_auth: false, label: "兆強科技客服群" }),
+    );
+
+    // 白名單上同時看到備註與編號；沒有備註的也能補上。
+    vi.mocked(ipc.intakeSenders).mockResolvedValue([
+      { address: `line:${group}`, level: "external", skip_auth: false, label: "兆強科技客服群" },
+      { address: "line:u2222222222222222222222222222222b", level: "internal", skip_auth: false, label: "" },
+    ]);
+    vi.mocked(ipc.intakeLineUnknown).mockResolvedValue([]);
+    cleanup();
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    expect(await screen.findByText("兆強科技客服群")).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`line:C${group.slice(1)}`))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${t.intake_sender_label_edit}`) }));
+    const edit = screen.getByLabelText(new RegExp(`^${t.intake_sender_label} line:C`));
+    fireEvent.change(edit, { target: { value: "新名字" } });
+    fireEvent.keyDown(edit, { key: "Enter" });
+    await waitFor(() => expect(ipc.intakeSetSenderLabel).toHaveBeenCalledWith("p1", `line:${group}`, "新名字"));
+    // 沒有備註的項目顯示「加備註」。
+    expect(screen.getByRole("button", { name: new RegExp(`^${t.intake_sender_label_add} line:U2222`) })).toBeInTheDocument();
+    // Esc 取消，不會存。
+    vi.mocked(ipc.intakeSetSenderLabel).mockClear();
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${t.intake_sender_label_add} line:U2222`) }));
+    fireEvent.keyDown(screen.getByLabelText(new RegExp(`^${t.intake_sender_label} line:U2222`)), { key: "Escape" });
+    expect(ipc.intakeSetSenderLabel).not.toHaveBeenCalled();
   });
 
   it("the LINE tab saves the auto-open switch and the retention days", async () => {

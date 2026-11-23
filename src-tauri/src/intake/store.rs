@@ -117,6 +117,13 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             skip_auth INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (project_id, address)
         )",
+        // 白名單項目的備註名稱（例如「兆強科技客服群」）。LINE 取不到群組名稱時，靠它辨認是哪個群組。
+        "CREATE TABLE IF NOT EXISTS intake_sender_labels (
+            project_id TEXT NOT NULL,
+            address TEXT NOT NULL,
+            label TEXT NOT NULL,
+            PRIMARY KEY (project_id, address)
+        )",
         "CREATE TABLE IF NOT EXISTS intake_project_dropped (
             project_id TEXT NOT NULL,
             reason TEXT NOT NULL,
@@ -414,8 +421,36 @@ pub async fn upsert_sender(pool: &SqlitePool, project_id: &str, s: &Sender) -> R
 }
 
 pub async fn delete_sender(pool: &SqlitePool, project_id: &str, address: &str) -> Result<bool, sqlx::Error> {
-    Ok(sqlx::query("DELETE FROM intake_project_senders WHERE project_id = ? AND address = ?").bind(project_id).bind(super::rules::normalize(address))
+    let address = super::rules::normalize(address);
+    sqlx::query("DELETE FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(&address).execute(pool).await?;
+    Ok(sqlx::query("DELETE FROM intake_project_senders WHERE project_id = ? AND address = ?").bind(project_id).bind(&address)
         .execute(pool).await?.rows_affected() > 0)
+}
+
+/// 備註名稱來自使用者輸入，清掉控制字元、截短。
+pub fn clean_label(label: &str) -> String {
+    label.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(60).collect::<String>().trim().to_string()
+}
+
+/// 設定白名單項目的備註；空白＝清掉。
+pub async fn set_sender_label(pool: &SqlitePool, project_id: &str, address: &str, label: &str) -> Result<(), sqlx::Error> {
+    let (address, label) = (super::rules::normalize(address), clean_label(label));
+    if label.is_empty() {
+        sqlx::query("DELETE FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(address).execute(pool).await?;
+    } else {
+        sqlx::query("INSERT INTO intake_sender_labels (project_id, address, label) VALUES (?,?,?) ON CONFLICT(project_id, address) DO UPDATE SET label = excluded.label")
+            .bind(project_id).bind(address).bind(label).execute(pool).await?;
+    }
+    Ok(())
+}
+
+pub async fn sender_label(pool: &SqlitePool, project_id: &str, address: &str) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT label FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(super::rules::normalize(address)).fetch_optional(pool).await
+}
+
+pub async fn sender_labels(pool: &SqlitePool, project_id: &str) -> Result<std::collections::HashMap<String, String>, sqlx::Error> {
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT address, label FROM intake_sender_labels WHERE project_id = ?").bind(project_id).fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
 }
 
 pub async fn list_senders(pool: &SqlitePool, project_id: &str) -> Result<Vec<Sender>, sqlx::Error> {
@@ -714,5 +749,25 @@ mod tests {
         assert!(!assign_item(&p, &owned.id, "b").await.unwrap(), "已歸屬的不可被搬走");
         assert_eq!(get_item(&p, &old.id).await.unwrap().unwrap().project_id, "b");
         assert_eq!(get_item(&p, &owned.id).await.unwrap().unwrap().project_id, "a");
+    }
+
+    #[tokio::test]
+    async fn sender_labels_are_cleaned_scoped_to_a_project_cleared_by_blank_and_removed_with_the_sender() {
+        let p = pool().await;
+        let a = "line:Cb345e5d492c48c02a3eaa279924c52d2";
+        upsert_sender(&p, "p1", &crate::intake::rules::Sender { address: a.into(), level: crate::intake::rules::Level::External, skip_auth: false }).await.unwrap();
+        set_sender_label(&p, "p1", a, "  兆強科技\n客服群 ").await.unwrap();
+        assert_eq!(sender_label(&p, "p1", a).await.unwrap().as_deref(), Some("兆強科技客服群"));
+        assert_eq!(sender_label(&p, "p1", &a.to_uppercase()).await.unwrap().as_deref(), Some("兆強科技客服群"), "地址大小寫不影響");
+        assert_eq!(sender_label(&p, "p2", a).await.unwrap(), None, "專案之間互不相干");
+        assert_eq!(sender_labels(&p, "p1").await.unwrap().len(), 1);
+        set_sender_label(&p, "p1", a, "改名").await.unwrap();
+        assert_eq!(sender_label(&p, "p1", a).await.unwrap().as_deref(), Some("改名"));
+        assert_eq!(clean_label(&"長".repeat(100)).chars().count(), 60);
+        set_sender_label(&p, "p1", a, "   ").await.unwrap();
+        assert_eq!(sender_label(&p, "p1", a).await.unwrap(), None);
+        set_sender_label(&p, "p1", a, "又設回來").await.unwrap();
+        assert!(delete_sender(&p, "p1", a).await.unwrap());
+        assert_eq!(sender_label(&p, "p1", a).await.unwrap(), None, "移除白名單項目時備註一併刪除");
     }
 }
