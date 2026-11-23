@@ -2,7 +2,8 @@
 //! 設計：docs/superpowers/specs/2026-11-05-intake-queue-design.md
 pub use aiterm_intake_core::attach;
 pub mod board;
-pub mod classify;
+pub use aiterm_intake_core::classify;
+pub mod ai_adapter;
 pub mod commands;
 pub use aiterm_intake_core::config;
 pub use aiterm_intake_core::dispatcher;

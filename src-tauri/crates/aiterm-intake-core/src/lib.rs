@@ -15,3 +15,5 @@ pub mod store;
 pub mod line_source;
 pub mod telegram_source;
 pub mod mail_source;
+pub mod classify;
+pub mod web;

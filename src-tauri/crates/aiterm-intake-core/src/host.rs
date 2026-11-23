@@ -14,10 +14,10 @@ pub trait Notifier: Send + Sync {
     fn changed(&self);
 }
 
-/// 一次性文字補全，供題目分類與「是不是新問題」使用。
+/// 一次性文字補全（系統提示加使用者文字），供題目分類與「是不是新問題」使用。
 #[async_trait::async_trait]
 pub trait AiComplete: Send + Sync {
-    async fn complete(&self, prompt: &str) -> Result<String, String>;
+    async fn complete(&self, system: &str, user: &str) -> Result<String, String>;
 }
 
 pub type SharedSecrets = Arc<dyn Secrets>;

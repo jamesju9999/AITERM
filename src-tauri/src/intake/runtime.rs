@@ -177,7 +177,7 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
 async fn ai_is_new_problem<R: Runtime>(app: &AppHandle<R>, text: &str) -> bool {
     let Some(router) = app.try_state::<AiRouter>() else { return true };
     let Ok(provider) = router.resolve().await else { return true };
-    tokio::time::timeout(Duration::from_secs(30), classify::is_new_problem(provider, text)).await.ok().and_then(|r| r.ok()).unwrap_or(true)
+    tokio::time::timeout(Duration::from_secs(30), classify::is_new_problem(&super::ai_adapter::ProviderAi(provider), text)).await.ok().and_then(|r| r.ok()).unwrap_or(true)
 }
 
 /// LINE 群組：客戶沒 @ 的新問題自動開題。等客戶講完（靜默）、我方人員還沒回、該群組沒有未結束的題目、AI 判斷是新問題，才開。
@@ -252,7 +252,7 @@ async fn classify_item<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, 
     }
     match app.try_state::<AiRouter>() {
         Some(router) => match router.resolve().await {
-            Ok(provider) => tokio::time::timeout(Duration::from_secs(30), classify::classify(provider, &item.subject, &item.body))
+            Ok(provider) => tokio::time::timeout(Duration::from_secs(30), classify::classify(&super::ai_adapter::ProviderAi(provider), &item.subject, &item.body))
                 .await
                 .ok()
                 .and_then(|r| r.ok())

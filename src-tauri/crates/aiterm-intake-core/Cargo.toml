@@ -26,6 +26,9 @@ mail-parser = "0.11"
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 parking_lot = "0.12"
 
+axum = { version = "0.8", features = ["ws"] }
+
 [dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
 wiremock = "0.6"
