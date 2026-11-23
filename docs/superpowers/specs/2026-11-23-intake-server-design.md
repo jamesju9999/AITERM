@@ -1,7 +1,7 @@
 # 問題收集 Server 版（無頭 server＋AITERM Client 模式）— 設計
 
 日期：2026-11-23
-狀態：待使用者核可
+狀態：開放問題已全部決定，待使用者核可整份 spec
 
 ## 問題
 
@@ -253,8 +253,8 @@ Server 管理多個專案，與本機一致：每個專案有 `project_id`、名
 1. ~~Server 上的 AI 分類~~：**已決定**，server 自己設定 AI 供應商與金鑰（見「Server 的 AI 設定」）。仍待確認：`ConfigStore`／`SecretStore` 能否直接搬進 crate，還是要換成 trait；用編譯結果判斷。
 2. ~~多專案~~：**已決定**，支援多專案（設定對等的必然結果）。仍待確認：本機 `ProjectRegistry` 的專案是「磁碟資料夾＋自己的 tasks.db」，server 的專案只需要設定、白名單與佇列，不需要看板資料庫；寫計畫時確認哪些欄位真的用得到。
 3. **`verify.rs`／`tabcd.rs` 是否綁終端機**：決定它們留在 AITERM 還是進 core，用編譯結果判斷。
-4. **網頁表單**：`web.rs`（1044 行）現在是 AITERM 內嵌的小 HTTP server。Server 版要沿用同一份程式，還是併進 API 的同一個埠？傾向沿用、獨立埠，改動最小。
-5. **Server 的作業系統**：目標是 Linux（VPS／Docker）與 macOS／Windows 常駐機器都能跑。CI 是否要為 server 多一組發佈產物（比照 `aiterm-host` 的 `host-v*` tag 分家發佈）？傾向是，另開 `intake-server-v*` tag，**不與桌面版 Release 混在一起**。
+4. ~~網頁表單~~：**已決定**，沿用 `web.rs`，在 server 上用獨立埠，與 LINE webhook、API 各自一個埠；程式不動。
+5. ~~發佈方式~~：**已決定**，另開 `intake-server-v*` tag，比照 `host-v*` 與桌面版分家，版號各自起算；**不與桌面版 Release 混在一起**。仍待確認：要發哪些平台的產物（Linux x86_64／arm64、macOS、Windows，是否附 Docker 映像），寫計畫時決定，預設先 Linux x86_64＋macOS arm64。
 
 ## 測試策略
 
