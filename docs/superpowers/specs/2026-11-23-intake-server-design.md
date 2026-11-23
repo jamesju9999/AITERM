@@ -21,6 +21,7 @@
 | 網路情境 | **內網／VPN 與公開網路都支援**：協定相同，只差憑證來源 |
 | 設定對等 | **AITERM Client 有的問題收集設定，server 都必須有，而且都能從 Client 設定**（管理員）。不是「server 只有精簡版設定」，也不是「要登入 server 改檔案」。見「設定對等」 |
 | 專案 | 因設定對等，**server 支援多個專案**（取代原先「單一專案」的傾向）；每個專案各自的設定、白名單、佇列，與本機模式一致 |
+| 看板與 Agent 協作 | **也要做成 server 版**（使用者選 B），且**執行位置兩者並存**：卡片可指定在 server 或某成員電腦執行。這是獨立的大專案（`tasks/` 約 2.3 萬行，含 worktree、終端機、驗收、自動合併），**另開 spec，不併入本 spec**；見「與看板、Agent 協作的關係」 |
 | Server 的 AI | **Server 自己設定 AI 供應商與金鑰**，行為與本機相同（使用者選 A，否決「② 先不啟用 AI」）。理由：AI 分類有兩處（見下），沒有 AI 時群組會太吵、其他管道全被當成要改程式 |
 | 範圍 | 拆成四個子專案依序做（見下）。**本 spec 詳細設計 ①②，③④只定介面與方向**，各自開工前再補 spec |
 
@@ -30,12 +31,30 @@
 |---|---|---|---|
 | ① | 抽出 `aiterm-intake-core` crate，AITERM 行為不變 | 使用者看不到變化；地基 | **詳細** |
 | ② | `aiterm-intake-server`＋Client 模式（看、回覆、核准、改狀態、設定） | 大家看到同一份清單與狀態；server 24 小時收訊 | **詳細** |
-| ③ | Server 自動處理（無頭跑 Claude Code） | Server 自己診斷並回覆 | 只定介面 |
-| ④ | Client 領取處理（claim／release／回報） | 成員接手處理 | 只定介面 |
+| ③ | Server 自動處理（無頭跑 Claude Code） | Server 自己診斷並回覆 | 只定介面；與看板／Agent 協作 server 化有重疊，到時重新檢視範圍 |
+| ④ | Client 領取處理（claim／release／回報） | 成員接手處理 | 只定介面；同上 |
+| ⑤ | 看板與 Agent 協作 server 化 | 大家共用看板與 Agent 協作 | **另開 spec**，見「與看板、Agent 協作的關係」 |
 
 **為什麼這個順序**：② 做完就達到「大家看到相同清單與狀態」，且不碰最難的「無頭跑 Claude Code」。② 完成後 server 能收訊但**不會自動處理**，題目停在待處理，直到 ③ 或 ④ 上線；這是已知且接受的中間狀態（見「已知限制」）。
 
-**明確不含（①②）**：自動處理、領取處理、AnyDesk 連線、知識庫檢索、多組織／多租戶、Server 的網頁管理介面、行動版 Client。
+**明確不含（①②）**：自動處理、領取處理、看板與 Agent 協作的 server 化（獨立 spec）、AnyDesk 連線、知識庫檢索、多組織／多租戶、Server 的網頁管理介面、行動版 Client。
+
+## 與看板、Agent 協作的關係
+
+問題收集處理題目時會派到終端機分頁、工作看板卡片、Agent 協作（canvas）卡片或系統連線。使用者要求看板與 Agent 協作**也成為 server 版**，且執行位置兩者並存。這件事的規模與本 spec 不同量級，所以：
+
+**事實**：`tasks/` 約 2.3 萬行（看板、派工、Agent 協作、排程、驗收、編制、worktree 管理），加上 `AgentCanvas` 前端。它不只是資料，還包含執行：開 git worktree、啟動 Claude Code／Codex 終端機、監看輸出、驗收、自動合併。
+
+**決定**：
+1. **獨立 spec、獨立專案**：「看板與 Agent 協作 server 化」另寫一份 spec，不併入本 spec。
+2. **執行位置並存**：每張卡片有「執行位置」——`server` 或某位成員的機器。
+   - **階段一（資料共用，執行在各人電腦）**：卡片、狀態、對話記錄、Agent 編制存 server，大家看同一份；領取者的 AITERM 在自己機器上開 worktree、跑 Claude Code，並把狀態回報 server。不需要把程式碼放上 server。
+   - **階段二（執行在 server）**：Server 上有程式碼倉庫，卡片在 server 開 worktree 與跑 Claude Code，成員用遠端終端機觀看與操作（重用遠端終端機分享的機制）。前提是 server 能無頭跑 Claude Code，這同時是本 spec 子專案 ③ 的前提。
+3. **本 spec 預留的介面**（只存、不使用）：`items.claimed_by／claimed_at／claim_expires_at`、`claim／release／result` 端點（見「介面」）、題目對應卡片的欄位（`board_card_id`、`canvas_card_id` 本來就在題目上，保留並加上「卡片所在位置」）。
+
+**整體順序**：問題收集 ①② → 看板與 Agent 協作 server 化（獨立 spec，階段一→二）→ 子專案 ③④（server 自動處理、成員領取處理）會建立在它之上，到時回頭檢視 ③④ 的範圍是否與它重疊。
+
+**風險（獨立 spec 要面對）**：多人同時編輯卡片、worktree 與分支在哪台機器、合併權限、驗收者與 Agent 的狀態同步、Agent 協作的定時器由誰執行（server 或 client 重複觸發）、離線的領取者造成卡片卡死。這些不在本 spec 設計。
 
 ## 現況調查（設計的事實基礎）
 
