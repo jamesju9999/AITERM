@@ -11,6 +11,9 @@ import {
   intakeDeleteSender,
   intakeDropped,
   intakeGetConfig,
+  intakeLineClearCredentials,
+  intakeLineSetCredentials,
+  intakeLineStatus,
   intakeList,
   intakeProjects,
   intakeRefresh,
@@ -22,6 +25,7 @@ import {
   intakeUpsertSender,
   type IntakeAttachment,
   type IntakeConfig,
+  type IntakeLineStatus,
   type IntakeItem,
   type IntakeProject,
   type IntakeSender,
@@ -577,8 +581,11 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   const navigate = useNavigate();
   const [cfg, setCfg] = useState<IntakeConfig | null>(null);
   const [hasOwn, setHasOwn] = useState(true);
-  const [chanTab, setChanTab] = useState<"mail" | "telegram" | "web">("mail");
+  const [chanTab, setChanTab] = useState<"mail" | "telegram" | "line" | "web">("mail");
   const [tgDefault, setTgDefault] = useState(false);
+  const [lineStatus, setLineStatus] = useState<IntakeLineStatus | null>(null);
+  const [lineSecret, setLineSecret] = useState("");
+  const [lineToken, setLineToken] = useState("");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [systems, setSystems] = useState<SystemConnection[]>([]);
   const [senders, setSenders] = useState<IntakeSender[]>([]);
@@ -600,6 +607,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         setTgDefault(v.telegram_default);
       })
       .catch((e) => onError(errText(e)));
+    intakeLineStatus().then(setLineStatus).catch(() => {});
     mailListAccounts().then(setAccounts).catch(() => {});
     systemsList().then(setSystems).catch(() => {});
     loadSenders();
@@ -614,8 +622,31 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   async function save() {
     try {
       await intakeSetConfig(projectId, cfg!, tgDefault);
+      intakeLineStatus().then(setLineStatus).catch(() => {});
       setSaved(true);
       setHasOwn(true);
+      onError(null);
+    } catch (e) {
+      onError(errText(e));
+    }
+  }
+
+  async function saveLineCredentials() {
+    try {
+      await intakeLineSetCredentials(lineSecret, lineToken);
+      setLineSecret("");
+      setLineToken("");
+      setLineStatus(await intakeLineStatus());
+      onError(null);
+    } catch (e) {
+      onError(errText(e));
+    }
+  }
+
+  async function clearLineCredentials() {
+    try {
+      await intakeLineClearCredentials();
+      setLineStatus(await intakeLineStatus());
       onError(null);
     } catch (e) {
       onError(errText(e));
@@ -672,6 +703,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
           {([
             ["mail", t.intake_sec_mailbox, cfg.account_id ? t.intake_tab_set : t.intake_tab_unset, !!cfg.account_id],
             ["telegram", t.intake_sec_telegram, cfg.telegram_enabled ? t.intake_tab_on : t.intake_tab_off, cfg.telegram_enabled],
+            ["line", t.intake_sec_line, cfg.line_enabled ? t.intake_tab_on : t.intake_tab_off, cfg.line_enabled],
             ["web", t.intake_sec_web, cfg.web_mode !== "off" ? t.intake_tab_on : t.intake_tab_off, cfg.web_mode !== "off"],
           ] as const).map(([key, label, status, on]) => (
             <button
@@ -745,6 +777,48 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         <input type="checkbox" checked={tgDefault} onChange={(e) => { setSaved(false); setTgDefault(e.target.checked); }} />
         {t.intake_set_tg_default}
       </label>
+          </>
+        )}
+        {chanTab === "line" && (
+          <>
+      <label className="intake__field">
+        <input type="checkbox" checked={cfg.line_enabled} onChange={(e) => set("line_enabled", e.target.checked)} />
+        {t.intake_set_line}
+      </label>
+      <p className="intake__meta intake__hint">{t.intake_set_line_hint}</p>
+      <label className="intake__field">
+        {t.intake_line_secret}
+        <input type="password" autoComplete="off" value={lineSecret} placeholder={lineStatus?.has_secret ? t.intake_line_saved : ""} onChange={(e) => setLineSecret(e.target.value)} />
+      </label>
+      <label className="intake__field">
+        {t.intake_line_token}
+        <input type="password" autoComplete="off" value={lineToken} placeholder={lineStatus?.has_token ? t.intake_line_saved : ""} onChange={(e) => setLineToken(e.target.value)} />
+      </label>
+      <div className="intake__field intake__field--row">
+        <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={!lineSecret.trim() && !lineToken.trim()} onClick={saveLineCredentials}>
+          {t.intake_line_save_creds}
+        </button>
+        {(lineStatus?.has_secret || lineStatus?.has_token) && (
+          <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={clearLineCredentials}>
+            {t.intake_line_clear_creds}
+          </button>
+        )}
+      </div>
+      <label className="intake__field">
+        {t.intake_set_line_port}
+        <input
+          type="number"
+          aria-label={t.intake_set_line_port}
+          min={1024}
+          max={65535}
+          value={cfg.line_port}
+          onChange={(e) => set("line_port", Math.min(65535, Math.max(1024, Number(e.target.value) || 8321)))}
+        />
+      </label>
+      <p className="intake__meta">{t.intake_line_webhook}：http://127.0.0.1:{cfg.line_port}/line/webhook</p>
+      {cfg.line_enabled && lineStatus && !lineStatus.has_secret && <p className="intake__error">{t.intake_line_need_secret}</p>}
+      {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.listening && <p className="intake__error">{t.intake_line_not_listening}</p>}
+      {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.has_token && <p className="intake__error">{t.intake_line_need_token}</p>}
           </>
         )}
         {chanTab === "web" && (

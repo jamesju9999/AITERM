@@ -51,6 +51,9 @@ export interface IntakeConfig {
   verify_command: string;
   verify_timeout_secs: number;
   telegram_enabled: boolean;
+  line_enabled: boolean;
+  /** LINE webhook 的本機埠號（所有專案共用）。 */
+  line_port: number;
   web_mode: "off" | "local" | "lan";
   web_port: number;
   /** 問題派送到哪裡處理。 */
@@ -114,6 +117,19 @@ export const intakeAdoptLegacy = (projectId: string) => invoke<void>("intake_ado
 export const intakeAssign = (id: string, projectId: string) => invoke<boolean>("intake_assign", { id, projectId });
 export const intakeCopyLegacyConfig = (projectId: string) => invoke<void>("intake_copy_legacy_config", { projectId });
 export const intakeGetConfig = (projectId: string) => invoke<IntakeConfigView>("intake_get_config", { projectId });
+export interface IntakeLineStatus {
+  /** 憑證本身不會回傳，只告知有沒有存。 */
+  has_secret: boolean;
+  has_token: boolean;
+  port: number;
+  /** webhook 伺服器是否正在本機聽。 */
+  listening: boolean;
+}
+export const intakeLineStatus = () => invoke<IntakeLineStatus>("intake_line_status");
+/** 空字串＝不變。 */
+export const intakeLineSetCredentials = (channelSecret: string, accessToken: string) =>
+  invoke<void>("intake_line_set_credentials", { channelSecret, accessToken });
+export const intakeLineClearCredentials = () => invoke<void>("intake_line_clear_credentials");
 export const intakeSetConfig = (projectId: string, config: IntakeConfig, telegramDefault: boolean) =>
   invoke<void>("intake_set_config", { projectId, config, telegramDefault });
 export const intakeList = (projectId: string, status?: IntakeStatus) =>

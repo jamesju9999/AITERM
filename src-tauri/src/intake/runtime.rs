@@ -65,6 +65,12 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, activity: &Arc<ClaudeActivity>) {
         super::web::restart(&h).await;
     });
 
+    app.manage(Arc::new(super::line_server::LineServer::default()));
+    let h = app.clone();
+    tauri::async_runtime::spawn(async move {
+        super::line_server::restart(&h).await;
+    });
+
     let h = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
@@ -451,6 +457,14 @@ pub async fn send_reply<R: Runtime>(app: &AppHandle<R>, item_id: &str) -> Result
             .map_err(|e| e.to_string())?
             .ok_or("尚未設定 Telegram 機器人")?;
         crate::telegram::send_to_chat(&token, chat, &filter::redact(&body), reply_to).await?;
+        store::mark_sent(&db.pool, item_id).await.map_err(|e| e.to_string())?;
+        changed(app);
+        return Ok(());
+    }
+    if item.source == "line" {
+        let to = super::line_source::reply_target(&item.sender).ok_or("無法判斷要回覆的 LINE 使用者")?;
+        let token = super::line_server::token(app)?;
+        super::line_server::push(&token, &to, &filter::redact(&body)).await?;
         store::mark_sent(&db.pool, item_id).await.map_err(|e| e.to_string())?;
         changed(app);
         return Ok(());

@@ -58,6 +58,10 @@ pub struct Config {
     pub verify_timeout_secs: u64,
     /// 是否接收 Telegram 來的問題（需先在設定裡設好機器人）。
     pub telegram_enabled: bool,
+    /// 是否接收 LINE 來的問題（需先設好官方帳號的憑證，並讓 LINE 連得到本機 webhook）。
+    pub line_enabled: bool,
+    /// LINE webhook 的本機埠號（所有專案共用）。
+    pub line_port: u16,
     pub web_mode: WebMode,
     pub web_port: u16,
     /// 問題派送到哪裡處理。
@@ -84,6 +88,8 @@ impl Default for Config {
             verify_command: String::new(),
             verify_timeout_secs: 600,
             telegram_enabled: false,
+            line_enabled: false,
+            line_port: 8321,
             web_mode: WebMode::Off,
             web_port: 8320,
             route: Route::Board,
@@ -130,13 +136,14 @@ pub async fn exists(pool: &SqlitePool, project_id: &str) -> bool {
 #[serde(default)]
 pub struct GlobalConfig {
     pub web_port: u16,
+    pub line_port: u16,
     /// 主人用 `/ask 問題` 而沒指定專案時，問題進哪個專案（空＝只有一個已啟用 Telegram 的專案時用它）。
     pub telegram_default_project: String,
 }
 
 impl Default for GlobalConfig {
     fn default() -> Self {
-        Self { web_port: 8320, telegram_default_project: String::new() }
+        Self { web_port: 8320, line_port: 8321, telegram_default_project: String::new() }
     }
 }
 

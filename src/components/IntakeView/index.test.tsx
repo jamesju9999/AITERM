@@ -13,6 +13,9 @@ vi.mock("../../ipc/mail", () => ({ mailListAccounts: vi.fn(() => Promise.resolve
 vi.mock("../../ipc/intake", async (orig) => ({
   ...(await orig<typeof import("../../ipc/intake")>()),
   intakeList: vi.fn(),
+  intakeLineStatus: vi.fn(() => Promise.resolve({ has_secret: false, has_token: false, port: 8321, listening: false })),
+  intakeLineSetCredentials: vi.fn(() => Promise.resolve()),
+  intakeLineClearCredentials: vi.fn(() => Promise.resolve()),
   intakeProjects: vi.fn(),
   intakeAdoptLegacy: vi.fn(() => Promise.resolve()),
   intakeAssign: vi.fn(() => Promise.resolve(true)),
@@ -57,7 +60,7 @@ function cfgView(over: Partial<ipc.IntakeConfig> = {}, extra: Partial<ipc.Intake
       enabled: false, account_id: "", mode: "alias_or_tag", alias: "", tag: "[AITerm]", auth_server: "",
       internal_without_auth: false, dispatch_internal: "auto", dispatch_external: "manual",
       reply_internal_auto: true, reply_external_auto: false, rate_limit_per_hour: 10,
-      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
+      verify_command: "", verify_timeout_secs: 600, telegram_enabled: false, line_enabled: false, line_port: 8321, web_mode: "off", web_port: 8320, route: "board", system_id: "", ...over,
     },
     saved: true,
     telegram_default: false,
@@ -556,6 +559,44 @@ describe("IntakeView", () => {
     expect(tg).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText(t.intake_set_tg_default)).toBeInTheDocument();
     expect(screen.queryByLabelText(t.intake_set_account)).toBeNull();
+  });
+
+  it("the LINE tab saves credentials without ever showing them back, and warns about what is missing", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ line_enabled: true }));
+    vi.mocked(ipc.intakeLineStatus).mockResolvedValue({ has_secret: false, has_token: false, port: 8321, listening: false });
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    const tab = await screen.findByRole("tab", { name: new RegExp(t.intake_sec_line) });
+    expect(tab).toHaveTextContent(t.intake_tab_on);
+    fireEvent.click(tab);
+    expect(await screen.findByText(t.intake_line_need_secret)).toBeInTheDocument();
+    expect(screen.getByText(/127\.0\.0\.1:8321\/line\/webhook/)).toBeInTheDocument();
+    const save = screen.getByRole("button", { name: t.intake_line_save_creds });
+    expect(save).toBeDisabled();
+    expect(screen.queryByRole("button", { name: t.intake_line_clear_creds })).toBeNull();
+    fireEvent.change(screen.getByLabelText(t.intake_line_secret), { target: { value: "sec" } });
+    fireEvent.change(screen.getByLabelText(t.intake_line_token), { target: { value: "tok" } });
+    vi.mocked(ipc.intakeLineStatus).mockResolvedValue({ has_secret: true, has_token: true, port: 8321, listening: true });
+    fireEvent.click(save);
+    await waitFor(() => expect(ipc.intakeLineSetCredentials).toHaveBeenCalledWith("sec", "tok"));
+    // 儲存後輸入框清空、改以「已儲存」提示，憑證不會回填。
+    await waitFor(() => expect(screen.getByLabelText(t.intake_line_secret)).toHaveValue(""));
+    expect(screen.getByLabelText(t.intake_line_secret)).toHaveAttribute("placeholder", t.intake_line_saved);
+    expect(screen.queryByText(t.intake_line_need_secret)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: t.intake_line_clear_creds }));
+    await waitFor(() => expect(ipc.intakeLineClearCredentials).toHaveBeenCalled());
+  });
+
+  it("warns when LINE is on with a secret but the webhook server is not listening", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ line_enabled: true }));
+    vi.mocked(ipc.intakeLineStatus).mockResolvedValue({ has_secret: true, has_token: false, port: 8321, listening: false });
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    fireEvent.click(await screen.findByRole("tab", { name: new RegExp(t.intake_sec_line) }));
+    expect(await screen.findByText(t.intake_line_not_listening)).toBeInTheDocument();
+    expect(screen.getByText(t.intake_line_need_token)).toBeInTheDocument();
   });
 
   it("warns when the selected mailbox account has receiving disabled, and not when it is enabled", async () => {

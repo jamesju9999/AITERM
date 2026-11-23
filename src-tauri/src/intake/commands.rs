@@ -29,6 +29,7 @@ pub async fn intake_get_config(db: State<'_, IntakeDb>, project_id: String) -> R
     let mut config = config::load(&db.pool, &project_id).await;
     let global = config::load_global(&db.pool).await;
     config.web_port = global.web_port; // 埠號是所有專案共用的
+    config.line_port = global.line_port;
     Ok(ConfigView {
         saved: config::exists(&db.pool, &project_id).await,
         telegram_default: !project_id.is_empty() && global.telegram_default_project == project_id,
@@ -73,6 +74,7 @@ pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, project_
     check_conflicts(&app, &db.pool, &project_id, &config).await?;
     let mut global = config::load_global(&db.pool).await;
     global.web_port = config.web_port;
+    global.line_port = config.line_port;
     if telegram_default && !project_id.is_empty() {
         global.telegram_default_project = project_id.clone();
     } else if global.telegram_default_project == project_id {
@@ -82,6 +84,7 @@ pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, project_
     config::save(&db.pool, &project_id, &config).await.map_err(e)?;
     // 網頁表單的開關／埠號可能變了。
     super::web::restart(&app).await;
+    super::line_server::restart(&app).await;
     changed(&app);
     Ok(())
 }
@@ -200,7 +203,7 @@ pub async fn intake_senders(db: State<'_, IntakeDb>, project_id: String) -> Resu
 #[tauri::command]
 pub async fn intake_upsert_sender(db: State<'_, IntakeDb>, project_id: String, sender: SenderDto) -> Result<(), String> {
     if !super::rules::valid_address(&sender.address) {
-        return Err("請輸入有效的電子郵件地址，或 Telegram 聊天室 tg:<chat_id>".into());
+        return Err("請輸入有效的電子郵件地址，、Telegram 聊天室 tg:<chat_id>，或 LINE 使用者 line:<userId>".into());
     }
     store::upsert_sender(&db.pool, &project_id, &Sender { address: sender.address, level: sender.level, skip_auth: sender.skip_auth }).await.map_err(e)
 }
@@ -538,4 +541,32 @@ mod tests {
         std::fs::write(&secret, "密碼").unwrap();
         assert!(text_preview(root.path(), &row(&secret)).is_err(), "目錄外的檔案不能讀");
     }
+}
+
+/// LINE 設定頁要的狀態：憑證是否已設定（憑證本身不外傳）、埠號、伺服器是否在聽。
+#[tauri::command]
+pub async fn intake_line_status(app: AppHandle) -> Result<super::line_server::Status, String> {
+    Ok(super::line_server::status(&app).await)
+}
+
+/// 儲存 LINE 憑證。空字串代表「不變」（畫面不會回填已存的憑證）。存完重啟 webhook 伺服器。
+#[tauri::command]
+pub async fn intake_line_set_credentials(app: AppHandle, secrets: State<'_, Arc<crate::secret::SecretStore>>, channel_secret: String, access_token: String) -> Result<(), String> {
+    for (id, value) in [(super::line_server::LINE_SECRET_ID, channel_secret), (super::line_server::LINE_TOKEN_ID, access_token)] {
+        let v = value.trim();
+        if !v.is_empty() {
+            secrets.set(id, v).map_err(|e| e.to_string())?;
+        }
+    }
+    super::line_server::restart(&app).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn intake_line_clear_credentials(app: AppHandle, secrets: State<'_, Arc<crate::secret::SecretStore>>) -> Result<(), String> {
+    for id in [super::line_server::LINE_SECRET_ID, super::line_server::LINE_TOKEN_ID] {
+        secrets.delete(id).map_err(|e| e.to_string())?;
+    }
+    super::line_server::restart(&app).await;
+    Ok(())
 }

@@ -69,9 +69,12 @@ pub fn normalize(addr: &str) -> String {
     a.trim().to_lowercase()
 }
 
-/// 白名單可以放電子郵件地址，或 Telegram 聊天室 `tg:<chat_id>`。
+/// 白名單可以放電子郵件地址、Telegram 聊天室 `tg:<chat_id>`，或 LINE 使用者 `line:<userId>`。
 pub fn valid_address(addr: &str) -> bool {
     let a = normalize(addr);
+    if let Some(id) = a.strip_prefix("line:") {
+        return super::line_source::valid_user_id(id);
+    }
     if let Some(id) = a.strip_prefix("tg:") {
         return id.parse::<i64>().is_ok();
     }
