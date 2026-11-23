@@ -1,0 +1,139 @@
+//! 配對後的 API 呼叫：HTTPS（釘住憑證指紋）帶 Bearer token，以及 WebSocket 變動推播。
+use crate::pin::{client_config, PinVerifier};
+use crate::ClientError;
+use aiterm_intake_core::api::{Event, Hello, PROTOCOL};
+use futures_util::StreamExt;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use std::sync::Arc;
+use std::time::Duration;
+
+#[derive(Clone)]
+pub struct Api {
+    base: String,
+    host: String,
+    token: String,
+    fingerprint: Option<String>,
+    http: reqwest::Client,
+}
+
+fn map_send_error(e: reqwest::Error) -> ClientError {
+    let chain = format!("{e:?}");
+    if chain.contains("fingerprint mismatch") {
+        ClientError::FingerprintChanged
+    } else {
+        ClientError::Offline(e.to_string())
+    }
+}
+
+impl Api {
+    /// `addr` 是 `host:port` 或 `https://host:port`。`fingerprint` 有值就只信那個憑證（內網自簽）；
+    /// 沒有就用一般的根憑證驗證（公開網路的正式憑證）。
+    pub fn new(addr: &str, token: &str, fingerprint: Option<String>) -> Result<Self, ClientError> {
+        let (host, port) = crate::pair::parse_addr(addr)?;
+        let mut b = reqwest::Client::builder().timeout(Duration::from_secs(30));
+        if fingerprint.is_some() {
+            b = b.use_preconfigured_tls(client_config(PinVerifier::new(fingerprint.clone())));
+        }
+        let http = b.build().map_err(|e| ClientError::Offline(e.to_string()))?;
+        Ok(Self { base: format!("https://{host}:{port}"), host: format!("{host}:{port}"), token: token.to_string(), fingerprint, http })
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// 通用呼叫。成功回 JSON（沒有內容就是 `Null`）。
+    pub async fn request(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, ClientError> {
+        let mut req = self.http.request(method, format!("{}{}", self.base, path)).bearer_auth(&self.token);
+        if let Some(b) = body {
+            req = req.json(&b);
+        }
+        let res = req.send().await.map_err(map_send_error)?;
+        let status = res.status();
+        match status.as_u16() {
+            401 => return Err(ClientError::Revoked),
+            403 => return Err(ClientError::Forbidden),
+            _ => {}
+        }
+        let text = res.text().await.map_err(|e| ClientError::Offline(e.to_string()))?;
+        if !status.is_success() {
+            let msg = serde_json::from_str::<Value>(&text).ok().and_then(|v| v["error"].as_str().map(str::to_string)).unwrap_or_else(|| format!("HTTP {status}"));
+            return Err(ClientError::Server(msg));
+        }
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|e| ClientError::Server(format!("回應不是預期的格式：{e}")))
+    }
+
+    pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
+        self.typed(reqwest::Method::GET, path, None).await
+    }
+
+    pub async fn typed<T: DeserializeOwned>(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<T, ClientError> {
+        let v = self.request(method, path, body).await?;
+        serde_json::from_value(v).map_err(|e| ClientError::Server(format!("回應不是預期的格式：{e}")))
+    }
+
+    /// 確認 server 的協定版本與此版本相容。
+    pub async fn check_version(&self) -> Result<Hello, ClientError> {
+        let hello: Hello = self.get("/v1/hello").await?;
+        if hello.protocol != PROTOCOL {
+            return Err(ClientError::Incompatible { server: hello.protocol, client: PROTOCOL });
+        }
+        Ok(hello)
+    }
+
+    /// 開 WebSocket 並回傳事件串流。連上後 server 會先送一則目前的 seq。
+    pub async fn events(&self) -> Result<EventStream, ClientError> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use tokio_tungstenite::tungstenite::http::HeaderValue;
+        let verifier = PinVerifier::new(self.fingerprint.clone());
+        let cfg = client_config(verifier);
+        let mut req = format!("wss://{}/v1/events", self.host).into_client_request().map_err(|e| ClientError::Server(e.to_string()))?;
+        req.headers_mut().insert("authorization", HeaderValue::from_str(&format!("Bearer {}", self.token)).map_err(|e| ClientError::Server(e.to_string()))?);
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
+        let (host, port) = crate::pair::parse_addr(&self.host)?;
+        let tcp = tokio::net::TcpStream::connect((host.as_str(), port)).await.map_err(|e| ClientError::Offline(e.to_string()))?;
+        let name = rustls::pki_types::ServerName::try_from(host.clone()).map_err(|_| ClientError::BadAddress)?;
+        let tls = connector.connect(name, tcp).await.map_err(|e| {
+            let s = format!("{e:?}");
+            if s.contains("fingerprint mismatch") {
+                ClientError::FingerprintChanged
+            } else {
+                ClientError::Offline(e.to_string())
+            }
+        })?;
+        let (ws, _) = tokio_tungstenite::client_async(req, tls).await.map_err(|e| {
+            if format!("{e:?}").contains("401") {
+                ClientError::Revoked
+            } else {
+                ClientError::Offline(e.to_string())
+            }
+        })?;
+        Ok(EventStream { ws })
+    }
+}
+
+pub struct EventStream {
+    ws: tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+}
+
+impl EventStream {
+    /// 下一則事件；連線結束回 `None`。
+    pub async fn next(&mut self) -> Option<Event> {
+        use tokio_tungstenite::tungstenite::Message;
+        loop {
+            match self.ws.next().await? {
+                Ok(Message::Text(t)) => {
+                    if let Ok(ev) = serde_json::from_str::<Event>(&t) {
+                        return Some(ev);
+                    }
+                }
+                Ok(Message::Close(_)) | Err(_) => return None,
+                Ok(_) => {}
+            }
+        }
+    }
+}

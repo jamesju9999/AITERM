@@ -1,4 +1,5 @@
 //! AITerm 連線 aiterm-intake-server 的 Client：配對、釘住憑證指紋、之後帶 token 呼叫 API。
+pub mod api;
 pub mod pair;
 pub mod pin;
 

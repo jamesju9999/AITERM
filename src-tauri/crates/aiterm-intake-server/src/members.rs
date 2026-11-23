@@ -123,6 +123,11 @@ pub async fn verify_token(pool: &SqlitePool, token: &str) -> Option<Me> {
     Some(Me { id, name, role: Role::parse(&role)? })
 }
 
+/// 這位成員現在還有效（沒被撤銷）嗎？已建立的連線靠它在撤銷後立即斷線。
+pub async fn is_active(pool: &SqlitePool, id: &str) -> bool {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM members WHERE id = ? AND revoked_at IS NULL").bind(id).fetch_one(pool).await.unwrap_or(0) > 0
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct MemberRow {
     pub id: String,

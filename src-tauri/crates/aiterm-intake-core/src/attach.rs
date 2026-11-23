@@ -210,3 +210,41 @@ mod tests {
         assert_eq!((saved.len(), skipped), (MAX_TOTAL_BYTES / MAX_BYTES, 5 - MAX_TOTAL_BYTES / MAX_BYTES));
     }
 }
+
+pub const PREVIEW_BYTES: usize = 64 * 1024;
+
+pub fn text_preview(root: &std::path::Path, row: &crate::store::AttachmentRow) -> Result<String, String> {
+    use std::io::Read;
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(&row.path).canonicalize().map_err(|e| e.to_string())?;
+    if !path.starts_with(&root) {
+        return Err("附件路徑不在允許的目錄內".into());
+    }
+    let mut buf = Vec::new();
+    std::fs::File::open(&path).and_then(|f| f.take(PREVIEW_BYTES as u64 + 4).read_to_end(&mut buf)).map_err(|e| e.to_string())?;
+    // 以內容判斷，不信資料庫裡的 mime 欄位。
+    if !looks_like_text(&buf) {
+        return Err("這個檔案不是純文字，無法預覽".into());
+    }
+    let cut = buf.len() > PREVIEW_BYTES;
+    buf.truncate(PREVIEW_BYTES);
+    // 截斷可能切在多位元組字元中間：用 lossy 轉換，只會多一個替代字元。
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    if cut {
+        text.push_str("\n…（內容太長，只顯示前 64KB）");
+    }
+    Ok(text)
+}
+
+pub fn data_url(root: &std::path::Path, row: &crate::store::AttachmentRow) -> Result<String, String> {
+    use base64::Engine;
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(&row.path).canonicalize().map_err(|e| e.to_string())?;
+    if !path.starts_with(&root) {
+        return Err("附圖路徑不在允許的目錄內".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    // 以內容判斷 MIME，不信資料庫裡的欄位。
+    let (mime, _) = sniff(&bytes).ok_or("檔案內容不是支援的圖片")?;
+    Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}

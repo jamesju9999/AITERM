@@ -37,15 +37,19 @@ impl Notifier for Broadcast {
 pub struct AppState {
     pub pools: Pools,
     pub secrets: Arc<FileSecrets>,
+    pub ai: Arc<crate::ai::ServerAi>,
     pub events: Arc<Broadcast>,
     pub fingerprint: String,
     pub data_dir: PathBuf,
     pub backoff: AuthBackoff,
     pub version: String,
+    /// LINE API 位址；測試時指向假的 server。
+    pub line_api_base: parking_lot::Mutex<String>,
 }
 
 impl AppState {
     pub fn new(pools: Pools, secrets: Arc<FileSecrets>, fingerprint: String, data_dir: PathBuf) -> Arc<Self> {
-        Arc::new(Self { pools, secrets, events: Broadcast::new(), fingerprint, data_dir, backoff: AuthBackoff::new(), version: env!("CARGO_PKG_VERSION").to_string() })
+        let ai = Arc::new(crate::ai::ServerAi::new(pools.intake.clone(), secrets.clone()));
+        Arc::new(Self { pools, secrets, ai, events: Broadcast::new(), fingerprint, data_dir, backoff: AuthBackoff::new(), version: env!("CARGO_PKG_VERSION").to_string(), line_api_base: parking_lot::Mutex::new(aiterm_intake_core::line_server::API_BASE.to_string()) })
     }
 }

@@ -131,6 +131,7 @@ dependencies = [
  "aiterm-core",
  "aiterm-intake-core",
  "anyhow",
+ "futures-util",
  "reqwest 0.12.28",
  "rustls",
  "serde",
@@ -139,6 +140,8 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
+ "url",
 ]
 
 [[package]]

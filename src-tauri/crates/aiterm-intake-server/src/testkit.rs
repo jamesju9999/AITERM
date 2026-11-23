@@ -27,6 +27,18 @@ impl TestServer {
     pub fn state(&self) -> &Arc<AppState> {
         &self.running.state
     }
+    /// 配對一位成員，回傳可呼叫 API 的 Client。
+    pub async fn paired(&self, name: &str, role: Role) -> aiterm_intake_client::api::Api {
+        let code = self.invite(name, role).await;
+        let p = aiterm_intake_client::pair::pair(&self.addr(), &code).await.expect("配對");
+        aiterm_intake_client::api::Api::new(&self.addr(), &p.token, Some(p.response.fingerprint)).unwrap()
+    }
+    /// 在 server 上直接建一個專案，回傳 id。
+    pub async fn project(&self, name: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO projects(id, name, work_dir, created_at) VALUES (?,?,?,?)").bind(&id).bind(name).bind("").bind(db::now()).execute(&self.state().pools.server).await.unwrap();
+        id
+    }
     /// 直接建一個邀請，回傳邀請碼。
     pub async fn invite(&self, name: &str, role: Role) -> String {
         members::create_invite(&self.state().pools.server, name, role, db::now()).await.unwrap().code

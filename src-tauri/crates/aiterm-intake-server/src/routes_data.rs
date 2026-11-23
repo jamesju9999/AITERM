@@ -1,0 +1,460 @@
+//! 資料端點：專案、設定、白名單、問題清單與動作、附件、祕密、AI、稽核。
+//! 處理邏輯盡量呼叫 core 的 `ops` 與 `store`（與 AITERM 的 Tauri 指令同一份），這裡只做收請求、權限與通知。
+use crate::members::Me;
+use crate::routes::{api_error, Admin};
+use crate::state::AppState;
+use aiterm_intake_core::host::{Notifier, Secrets};
+use aiterm_intake_core::ops::{self, ConfigView, SenderDto};
+use aiterm_intake_core::{attach, config, line_store, refs, store};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{delete, get, post, put};
+use axum::{Extension, Json, Router};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+type St = State<Arc<AppState>>;
+
+fn internal(e: impl ToString) -> Response {
+    api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+}
+
+fn bad(msg: &str) -> Response {
+    api_error(StatusCode::BAD_REQUEST, msg)
+}
+
+fn not_found() -> Response {
+    api_error(StatusCode::NOT_FOUND, "not found")
+}
+
+// ---- 專案 ----
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct ProjectRow {
+    pub id: String,
+    pub name: String,
+    pub work_dir: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ProjectSummary {
+    pub id: String,
+    pub name: String,
+    pub work_dir: String,
+    pub open_count: i64,
+    pub total: i64,
+    pub enabled: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ProjectBody {
+    pub name: String,
+    #[serde(default)]
+    pub work_dir: String,
+}
+
+pub async fn project_list(st: &AppState) -> Vec<ProjectRow> {
+    sqlx::query_as("SELECT id, name, work_dir FROM projects ORDER BY name, id").fetch_all(&st.pools.server).await.unwrap_or_default()
+}
+
+async fn project_exists(st: &AppState, pid: &str) -> bool {
+    project_list(st).await.iter().any(|p| p.id == pid)
+}
+
+async fn list_projects(State(st): St) -> Response {
+    let counts = store::project_counts(&st.pools.intake).await.unwrap_or_default();
+    let mut out = Vec::new();
+    for p in project_list(&st).await {
+        let (open_count, total) = counts.iter().find(|(id, _, _)| *id == p.id).map(|(_, o, t)| (*o, *t)).unwrap_or((0, 0));
+        let enabled = config::load(&st.pools.intake, &p.id).await.enabled;
+        out.push(ProjectSummary { id: p.id, name: p.name, work_dir: p.work_dir, open_count, total, enabled });
+    }
+    Json(out).into_response()
+}
+
+async fn create_project(State(st): St, Admin(me): Admin, Json(b): Json<ProjectBody>) -> Response {
+    let name = b.name.trim();
+    if name.is_empty() {
+        return bad("專案名稱不能是空的");
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let r = sqlx::query("INSERT INTO projects(id, name, work_dir, created_at) VALUES (?,?,?,?)").bind(&id).bind(name).bind(b.work_dir.trim()).bind(crate::db::now()).execute(&st.pools.server).await;
+    if let Err(e) = r {
+        return internal(e);
+    }
+    crate::audit::record(&st.pools.server, &me.name, "project.create", &id).await;
+    st.events.changed();
+    (StatusCode::CREATED, Json(ProjectRow { id, name: name.to_string(), work_dir: b.work_dir.trim().to_string() })).into_response()
+}
+
+async fn update_project(State(st): St, Admin(me): Admin, Path(pid): Path<String>, Json(b): Json<ProjectBody>) -> Response {
+    let name = b.name.trim();
+    if name.is_empty() {
+        return bad("專案名稱不能是空的");
+    }
+    match sqlx::query("UPDATE projects SET name = ?, work_dir = ? WHERE id = ?").bind(name).bind(b.work_dir.trim()).bind(&pid).execute(&st.pools.server).await {
+        Ok(r) if r.rows_affected() == 1 => {
+            crate::audit::record(&st.pools.server, &me.name, "project.update", &pid).await;
+            st.events.changed();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(_) => not_found(),
+        Err(e) => internal(e),
+    }
+}
+
+async fn delete_project(State(st): St, Admin(me): Admin, Path(pid): Path<String>) -> Response {
+    match sqlx::query("DELETE FROM projects WHERE id = ?").bind(&pid).execute(&st.pools.server).await {
+        Ok(r) if r.rows_affected() == 1 => {
+            crate::audit::record(&st.pools.server, &me.name, "project.delete", &pid).await;
+            st.events.changed();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(_) => not_found(),
+        Err(e) => internal(e),
+    }
+}
+
+// ---- 設定與白名單 ----
+
+async fn get_config(State(st): St, Path(pid): Path<String>) -> Response {
+    if !project_exists(&st, &pid).await {
+        return not_found();
+    }
+    Json(ops::get_config(&st.pools.intake, &pid).await).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct SetConfig {
+    pub config: config::Config,
+    #[serde(default)]
+    pub telegram_default: bool,
+}
+
+async fn set_config(State(st): St, Admin(me): Admin, Path(pid): Path<String>, Json(b): Json<SetConfig>) -> Response {
+    if !project_exists(&st, &pid).await {
+        return not_found();
+    }
+    let projects: Vec<(String, String)> = project_list(&st).await.into_iter().map(|p| (p.id, p.name)).collect();
+    if let Err(e) = ops::set_config(&st.pools.intake, &pid, b.config, b.telegram_default, &projects).await {
+        return bad(&e);
+    }
+    crate::audit::record(&st.pools.server, &me.name, "config.set", &pid).await;
+    crate::channels::reload(&st).await;
+    st.events.changed();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn list_senders(State(st): St, Path(pid): Path<String>) -> Response {
+    match ops::list_senders(&st.pools.intake, &pid).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+async fn upsert_sender(State(st): St, Admin(me): Admin, Path(pid): Path<String>, Json(s): Json<SenderDto>) -> Response {
+    let addr = s.address.clone();
+    if let Err(e) = ops::upsert_sender(&st.pools.intake, &pid, s).await {
+        return bad(&e);
+    }
+    crate::audit::record(&st.pools.server, &me.name, "sender.upsert", &addr).await;
+    st.events.changed();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Deserialize)]
+pub struct AddressBody {
+    pub address: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+async fn set_label(State(st): St, Admin(_): Admin, Path(pid): Path<String>, Json(b): Json<AddressBody>) -> Response {
+    match store::set_sender_label(&st.pools.intake, &pid, &b.address, &b.label).await {
+        Ok(()) => {
+            st.events.changed();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => internal(e),
+    }
+}
+
+async fn delete_sender(State(st): St, Admin(me): Admin, Path(pid): Path<String>, Json(b): Json<AddressBody>) -> Response {
+    match store::delete_sender(&st.pools.intake, &pid, &b.address).await {
+        Ok(r) => {
+            crate::audit::record(&st.pools.server, &me.name, "sender.delete", &b.address).await;
+            st.events.changed();
+            Json(r).into_response()
+        }
+        Err(e) => internal(e),
+    }
+}
+
+async fn dropped(State(st): St, Path(pid): Path<String>) -> Response {
+    match store::dropped_counts(&st.pools.intake, &pid).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct Paths {
+    pub paths: Vec<String>,
+}
+
+/// 參考資料夾檢查：路徑是 server 檔案系統上的路徑，所以在 server 上檢查。
+async fn check_folders(State(st): St, Path(pid): Path<String>, Json(b): Json<Paths>) -> Response {
+    let base = project_list(&st).await.into_iter().find(|p| p.id == pid).map(|p| p.work_dir).filter(|d| !d.is_empty());
+    let base = base.map(std::path::PathBuf::from);
+    Json(b.paths.iter().map(|p| refs::check(p, base.as_deref())).collect::<Vec<_>>()).into_response()
+}
+
+async fn line_unknown(State(st): St) -> Response {
+    match line_store::list_unknown(&st.pools.intake).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+async fn forget_unknown(State(st): St, Admin(_): Admin, Path(id): Path<String>) -> Response {
+    match line_store::forget_unknown(&st.pools.intake, &id).await {
+        Ok(r) => {
+            st.events.changed();
+            Json(r).into_response()
+        }
+        Err(e) => internal(e),
+    }
+}
+
+// ---- 問題清單與動作 ----
+
+#[derive(Deserialize)]
+pub struct ListQuery {
+    pub status: Option<String>,
+}
+
+async fn list_items(State(st): St, Path(pid): Path<String>, Query(q): Query<ListQuery>) -> Response {
+    match store::list_items(&st.pools.intake, &pid, q.status.as_deref()).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+/// 項目必須屬於網址上的專案，否則一律 404（不洩漏別的專案的題目存在）。
+async fn item_of(st: &AppState, pid: &str, id: &str) -> Option<store::IntakeItem> {
+    store::get_item(&st.pools.intake, id).await.ok().flatten().filter(|i| i.project_id == pid)
+}
+
+async fn get_item(State(st): St, Path((pid, id)): Path<(String, String)>) -> Response {
+    match item_of(&st, &pid, &id).await {
+        Some(i) => Json(i).into_response(),
+        None => not_found(),
+    }
+}
+
+async fn act(st: &AppState, me: &Me, pid: &str, id: &str, action: &str, r: impl std::future::Future<Output = Result<bool, sqlx::Error>>) -> Response {
+    if item_of(st, pid, id).await.is_none() {
+        return not_found();
+    }
+    match r.await {
+        Ok(done) => {
+            crate::audit::record(&st.pools.server, &me.name, action, id).await;
+            st.events.changed();
+            Json(done).into_response()
+        }
+        Err(e) => internal(e),
+    }
+}
+
+async fn approve(State(st): St, Extension(me): Extension<Me>, Path((pid, id)): Path<(String, String)>) -> Response {
+    act(&st, &me, &pid, &id, "item.approve", store::approve(&st.pools.intake, &id)).await
+}
+
+async fn reject(State(st): St, Extension(me): Extension<Me>, Path((pid, id)): Path<(String, String)>) -> Response {
+    act(&st, &me, &pid, &id, "item.reject", store::reject(&st.pools.intake, &id)).await
+}
+
+async fn delete_item(State(st): St, Extension(me): Extension<Me>, Path((pid, id)): Path<(String, String)>) -> Response {
+    let r = act(&st, &me, &pid, &id, "item.delete", store::delete_item(&st.pools.intake, &id)).await;
+    attach::remove_dir(&st.data_dir.join("attachments"), &id);
+    r
+}
+
+#[derive(Deserialize)]
+pub struct DraftBody {
+    pub draft: String,
+}
+
+async fn update_draft(State(st): St, Extension(me): Extension<Me>, Path((pid, id)): Path<(String, String)>, Json(b): Json<DraftBody>) -> Response {
+    act(&st, &me, &pid, &id, "item.draft", store::update_draft(&st.pools.intake, &id, &b.draft)).await
+}
+
+async fn reply(State(st): St, Extension(me): Extension<Me>, Path((pid, id)): Path<(String, String)>) -> Response {
+    if item_of(&st, &pid, &id).await.is_none() {
+        return not_found();
+    }
+    match crate::reply::send(&st, &id).await {
+        Ok(()) => {
+            crate::audit::record(&st.pools.server, &me.name, "item.reply", &id).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(msg) => {
+            store::set_error(&st.pools.intake, &id, &format!("寄出失敗：{msg}")).await.ok();
+            st.events.changed();
+            bad(&msg)
+        }
+    }
+}
+
+/// 預留給「領取處理」（子專案 ④）：先回 501，介面與欄位先固定。
+async fn not_implemented() -> Response {
+    api_error(StatusCode::NOT_IMPLEMENTED, "not implemented")
+}
+
+// ---- 附件 ----
+
+async fn attachments(State(st): St, Path((pid, id)): Path<(String, String)>) -> Response {
+    if item_of(&st, &pid, &id).await.is_none() {
+        return not_found();
+    }
+    match store::list_attachments(&st.pools.intake, &id).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+async fn attachment_row(st: &AppState, pid: &str, id: &str, att: &str) -> Option<store::AttachmentRow> {
+    item_of(st, pid, id).await?;
+    store::get_attachment(&st.pools.intake, att).await.ok().flatten().filter(|r| r.item_id == id)
+}
+
+async fn attachment_data(State(st): St, Path((pid, id, att)): Path<(String, String, String)>) -> Response {
+    let Some(row) = attachment_row(&st, &pid, &id, &att).await else { return not_found() };
+    match attach::data_url(&st.data_dir.join("attachments"), &row) {
+        Ok(u) => Json(u).into_response(),
+        Err(e) => bad(&e),
+    }
+}
+
+async fn attachment_text(State(st): St, Path((pid, id, att)): Path<(String, String, String)>) -> Response {
+    let Some(row) = attachment_row(&st, &pid, &id, &att).await else { return not_found() };
+    match attach::text_preview(&st.data_dir.join("attachments"), &row) {
+        Ok(t) => Json(t).into_response(),
+        Err(e) => bad(&e),
+    }
+}
+
+// ---- 祕密、AI、狀態、稽核 ----
+
+/// 可以經由 API 設定的祕密（白名單，避免任意寫入）。
+pub const SETTABLE_SECRETS: [&str; 3] = [aiterm_intake_core::line_server::LINE_SECRET_ID, aiterm_intake_core::line_server::LINE_TOKEN_ID, crate::ai::API_KEY_SECRET];
+
+#[derive(Deserialize)]
+pub struct SecretBody {
+    pub value: String,
+}
+
+async fn set_secret(State(st): St, Admin(me): Admin, Path(id): Path<String>, Json(b): Json<SecretBody>) -> Response {
+    if !SETTABLE_SECRETS.contains(&id.as_str()) {
+        return bad("不認得這個祕密");
+    }
+    if b.value.trim().is_empty() {
+        return bad("內容不能是空的");
+    }
+    if let Err(e) = st.secrets.set(&id, b.value.trim()) {
+        return internal(e);
+    }
+    crate::audit::record(&st.pools.server, &me.name, "secret.set", &id).await;
+    crate::channels::reload(&st).await;
+    st.events.changed();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn clear_secret(State(st): St, Admin(me): Admin, Path(id): Path<String>) -> Response {
+    if !SETTABLE_SECRETS.contains(&id.as_str()) {
+        return bad("不認得這個祕密");
+    }
+    if let Err(e) = st.secrets.delete(&id) {
+        return internal(e);
+    }
+    crate::audit::record(&st.pools.server, &me.name, "secret.clear", &id).await;
+    crate::channels::reload(&st).await;
+    st.events.changed();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AiView {
+    pub settings: crate::ai::AiSettings,
+    pub configured: bool,
+}
+
+async fn get_ai(State(st): St) -> Response {
+    let settings = crate::ai::load(&st.pools.intake).await;
+    let configured = crate::ai::configured(&settings, st.secrets.as_ref());
+    Json(AiView { settings, configured }).into_response()
+}
+
+async fn set_ai(State(st): St, Admin(me): Admin, Json(s): Json<crate::ai::AiSettings>) -> Response {
+    if let Err(e) = crate::ai::save(&st.pools.intake, &s).await {
+        return bad(&e);
+    }
+    crate::audit::record(&st.pools.server, &me.name, "ai.set", &s.provider).await;
+    st.events.changed();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct StatusView {
+    pub has_line_secret: bool,
+    pub has_line_token: bool,
+    pub line_listening: bool,
+    pub ai_configured: bool,
+    pub projects: usize,
+}
+
+async fn status(State(st): St) -> Response {
+    let settings = crate::ai::load(&st.pools.intake).await;
+    Json(StatusView {
+        has_line_secret: st.secrets.get(aiterm_intake_core::line_server::LINE_SECRET_ID).is_some(),
+        has_line_token: st.secrets.get(aiterm_intake_core::line_server::LINE_TOKEN_ID).is_some(),
+        line_listening: crate::channels::line_listening(&st),
+        ai_configured: crate::ai::configured(&settings, st.secrets.as_ref()),
+        projects: project_list(&st).await.len(),
+    })
+    .into_response()
+}
+
+async fn audit_log(State(st): St, Admin(_): Admin) -> Response {
+    Json(crate::audit::recent(&st.pools.server, 200).await).into_response()
+}
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/v1/projects", get(list_projects).post(create_project))
+        .route("/v1/projects/{pid}", put(update_project).delete(delete_project))
+        .route("/v1/projects/{pid}/config", get(get_config).put(set_config))
+        .route("/v1/projects/{pid}/senders", get(list_senders).put(upsert_sender).delete(delete_sender))
+        .route("/v1/projects/{pid}/senders/label", put(set_label))
+        .route("/v1/projects/{pid}/dropped", get(dropped))
+        .route("/v1/projects/{pid}/check-folders", post(check_folders))
+        .route("/v1/projects/{pid}/items", get(list_items))
+        .route("/v1/projects/{pid}/items/{id}", get(get_item).delete(delete_item))
+        .route("/v1/projects/{pid}/items/{id}/approve", post(approve))
+        .route("/v1/projects/{pid}/items/{id}/reject", post(reject))
+        .route("/v1/projects/{pid}/items/{id}/draft", put(update_draft))
+        .route("/v1/projects/{pid}/items/{id}/reply", post(reply))
+        .route("/v1/projects/{pid}/items/{id}/claim", post(not_implemented))
+        .route("/v1/projects/{pid}/items/{id}/release", post(not_implemented))
+        .route("/v1/projects/{pid}/items/{id}/result", post(not_implemented))
+        .route("/v1/projects/{pid}/items/{id}/attachments", get(attachments))
+        .route("/v1/projects/{pid}/items/{id}/attachments/{att}/data", get(attachment_data))
+        .route("/v1/projects/{pid}/items/{id}/attachments/{att}/text", get(attachment_text))
+        .route("/v1/line/unknown", get(line_unknown))
+        .route("/v1/line/unknown/{id}", delete(forget_unknown))
+        .route("/v1/secrets/{id}", put(set_secret).delete(clear_secret))
+        .route("/v1/ai", get(get_ai).put(set_ai))
+        .route("/v1/status", get(status))
+        .route("/v1/audit", get(audit_log))
+}
