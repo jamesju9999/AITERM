@@ -27,6 +27,14 @@ impl Broadcast {
     }
 }
 
+impl Broadcast {
+    /// 測試用：不透過 trait 直接觸發一次變動通知。
+    #[doc(hidden)]
+    pub fn changed_for_test(&self) {
+        Notifier::changed(self);
+    }
+}
+
 impl Notifier for Broadcast {
     fn changed(&self) {
         let n = self.seq.fetch_add(1, Ordering::SeqCst) + 1;

@@ -16,6 +16,7 @@ pub use aiterm_intake_core::line_text;
 pub use aiterm_intake_core::mail_source;
 pub use aiterm_intake_core::queue;
 pub use aiterm_intake_core::refs;
+pub mod remote;
 #[cfg(test)]
 mod rehearsal;
 pub use aiterm_intake_core::rules;
@@ -78,6 +79,9 @@ pub(crate) async fn all_configs<R: tauri::Runtime>(app: &tauri::AppHandle<R>, po
 /// 郵件輪詢每收到一封信就呼叫。依各專案的別名／標籤決定歸屬；沒有專案符合就什麼都不做。
 pub async fn on_mail<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_id: &str, raw: &[u8]) {
     use tauri::{Emitter, Manager};
+    if remote::is_remote(app) {
+        return;
+    }
     let Some(db) = app.try_state::<IntakeDb>() else { return };
     let candidates: Vec<mail_source::Candidate> = all_configs(app, &db.pool)
         .await
@@ -108,6 +112,9 @@ pub async fn owns_account<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_
 /// 呼叫端不要再當一般訊息轉送。
 pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: i64, message_id: i64, text: &str, is_owner: bool, photos: Vec<(String, String)>, sender_name: &str) -> bool {
     use tauri::{Emitter, Manager};
+    if remote::is_remote(app) {
+        return false;
+    }
     let Some(db) = app.try_state::<IntakeDb>() else { return false };
     let cands: Vec<telegram_source::Candidate> = all_configs(app, &db.pool)
         .await

@@ -60,14 +60,12 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, activity: &Arc<ClaudeActivity>) {
     }));
 
     app.manage(Arc::new(super::web::WebServer::default()));
-    let h = app.clone();
-    tauri::async_runtime::spawn(async move {
-        super::web::restart(&h).await;
-    });
-
     app.manage(Arc::new(super::line_server::LineServer::default()));
+    // 先還原上次連到 server 的狀態，再決定本機的收訊要不要開（連到 server 時本機不收）。
     let h = app.clone();
     tauri::async_runtime::spawn(async move {
+        super::remote::restore(&h).await;
+        super::web::restart(&h).await;
         super::line_server::restart(&h).await;
     });
 
@@ -111,6 +109,10 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
     ) else {
         return;
     };
+    // 連到 server 時，題目由 server 收與處理，本機不派送。
+    if super::remote::is_remote(app) {
+        return;
+    }
     let _guard = rt.tick_lock.lock().await;
     let mut touched = false;
     for tab in rt.registry.tabs() {

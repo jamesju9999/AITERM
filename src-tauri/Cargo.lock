@@ -350,7 +350,9 @@ version = "1.23.1"
 dependencies = [
  "aes-gcm",
  "aiterm-core",
+ "aiterm-intake-client",
  "aiterm-intake-core",
+ "aiterm-intake-server",
  "anydoc",
  "anyhow",
  "argon2",

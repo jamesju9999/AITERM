@@ -304,6 +304,7 @@ pub fn run() {
         .manage(kb_db)
         .manage(mail_db)
         .manage(intake_db)
+        .manage(std::sync::Arc::new(intake::remote::RemoteState::default()))
         .manage(project_registry)
         .manage(tokio::sync::Mutex::new(MailState::new()))
         .manage(mail::manager::MailSyncSignals::new())
@@ -588,6 +589,9 @@ pub fn run() {
             pty_close,
             claude_activity::commands::claude_activity_snapshot,
             claude_activity::commands::claude_activity_tool_detail,
+            intake::commands::intake_remote_status,
+            intake::commands::intake_remote_pair,
+            intake::commands::intake_remote_disconnect,
             intake::commands::intake_get_config,
             intake::commands::intake_set_config,
             intake::commands::intake_line_status,

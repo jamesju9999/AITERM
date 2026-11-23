@@ -1,12 +1,30 @@
 //! Tauri 指令：設定、白名單、清單、派送、分頁接收端。
 use super::config::{self, Config};
 use super::rules::{Level, Sender};
+use super::remote::RemoteState;
 use super::runtime::{self, IntakeRuntime};
 use super::store::{self, IntakeItem};
 use super::{IntakeDb, CHANGED_EVENT};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
+
+/// 連到 server 時，指令改走 Remote（回傳形狀與本機相同）；沒連線就繼續往下走本機路徑。
+macro_rules! remote_or {
+    ($rs:expr, $api:ident => $call:expr) => {
+        if let Some($api) = $rs.active() {
+            return $call.await.map_err(|e| super::remote::fail(&$rs, e));
+        }
+    };
+}
+
+fn local_only(rs: &RemoteState) -> Result<(), String> {
+    if rs.active().is_some() {
+        Err(super::remote::LOCAL_ONLY.to_string())
+    } else {
+        Ok(())
+    }
+}
 
 fn e(err: sqlx::Error) -> String {
     err.to_string()
@@ -19,12 +37,14 @@ fn changed(app: &AppHandle) {
 pub use aiterm_intake_core::ops::{ConfigView, SenderDto};
 
 #[tauri::command]
-pub async fn intake_get_config(db: State<'_, IntakeDb>, project_id: String) -> Result<ConfigView, String> {
+pub async fn intake_get_config(db: State<'_, IntakeDb>, project_id: String, rs: State<'_, Arc<RemoteState>>) -> Result<ConfigView, String> {
+    remote_or!(rs, api => super::remote::get_config(&api, &project_id));
     Ok(aiterm_intake_core::ops::get_config(&db.pool, &project_id).await)
 }
 
 #[tauri::command]
-pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, project_id: String, config: Config, telegram_default: bool) -> Result<(), String> {
+pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, project_id: String, config: Config, telegram_default: bool, rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
+    remote_or!(rs, api => super::remote::set_config(&api, &project_id, &config, telegram_default));
     aiterm_intake_core::ops::set_config(&db.pool, &project_id, config, telegram_default, &super::open_projects(&app)).await?;
     // 網頁表單的開關／埠號可能變了。
     super::web::restart(&app).await;
@@ -35,7 +55,8 @@ pub async fn intake_set_config(app: AppHandle, db: State<'_, IntakeDb>, project_
 
 /// 「未歸屬」的舊設定與白名單複製到這個專案（不刪除舊的）。
 #[tauri::command]
-pub async fn intake_copy_legacy_config(app: AppHandle, db: State<'_, IntakeDb>, project_id: String) -> Result<(), String> {
+pub async fn intake_copy_legacy_config(app: AppHandle, db: State<'_, IntakeDb>, project_id: String, rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
+    local_only(&rs)?;
     if project_id.is_empty() {
         return Err("請先選一個專案".into());
     }
@@ -71,7 +92,8 @@ pub struct ProjectsView {
 }
 
 #[tauri::command]
-pub async fn intake_projects(app: AppHandle, db: State<'_, IntakeDb>, reg: State<'_, crate::projects::ProjectRegistry>) -> Result<ProjectsView, String> {
+pub async fn intake_projects(app: AppHandle, db: State<'_, IntakeDb>, reg: State<'_, crate::projects::ProjectRegistry>, rs: State<'_, Arc<RemoteState>>) -> Result<ProjectsView, String> {
+    remote_or!(rs, api => super::remote::projects(&api));
     let counts = store::project_counts(&db.pool).await.map_err(e)?;
     let count_of = |id: &str| counts.iter().find(|(p, _, _)| p == id).map(|(_, o, t)| (*o, *t)).unwrap_or((0, 0));
     let mut handles = reg.all();
@@ -110,7 +132,8 @@ async fn adopt(pool: &sqlx::SqlitePool, project_id: &str) -> Result<(), sqlx::Er
 
 /// 把所有「未歸屬」的舊資料歸給這個專案。
 #[tauri::command]
-pub async fn intake_adopt_legacy(app: AppHandle, db: State<'_, IntakeDb>, project_id: String) -> Result<(), String> {
+pub async fn intake_adopt_legacy(app: AppHandle, db: State<'_, IntakeDb>, project_id: String, rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
+    local_only(&rs)?;
     if project_id.is_empty() {
         return Err("請先選一個專案".into());
     }
@@ -121,40 +144,47 @@ pub async fn intake_adopt_legacy(app: AppHandle, db: State<'_, IntakeDb>, projec
 
 /// 把單一未歸屬的題目指派到專案。
 #[tauri::command]
-pub async fn intake_assign(app: AppHandle, db: State<'_, IntakeDb>, id: String, project_id: String) -> Result<bool, String> {
+pub async fn intake_assign(app: AppHandle, db: State<'_, IntakeDb>, id: String, project_id: String, rs: State<'_, Arc<RemoteState>>) -> Result<bool, String> {
+    local_only(&rs)?;
     let r = store::assign_item(&db.pool, &id, &project_id).await.map_err(e)?;
     changed(&app);
     Ok(r)
 }
 
 #[tauri::command]
-pub async fn intake_list(db: State<'_, IntakeDb>, project_id: String, status: Option<String>) -> Result<Vec<IntakeItem>, String> {
+pub async fn intake_list(db: State<'_, IntakeDb>, project_id: String, status: Option<String>, rs: State<'_, Arc<RemoteState>>) -> Result<Vec<IntakeItem>, String> {
+    remote_or!(rs, api => super::remote::list(&api, &project_id, status.as_deref()));
     store::list_items(&db.pool, &project_id, status.as_deref()).await.map_err(e)
 }
 
 #[tauri::command]
-pub async fn intake_senders(db: State<'_, IntakeDb>, project_id: String) -> Result<Vec<SenderDto>, String> {
+pub async fn intake_senders(db: State<'_, IntakeDb>, project_id: String, rs: State<'_, Arc<RemoteState>>) -> Result<Vec<SenderDto>, String> {
+    remote_or!(rs, api => super::remote::senders(&api, &project_id));
     aiterm_intake_core::ops::list_senders(&db.pool, &project_id).await
 }
 
 #[tauri::command]
-pub async fn intake_upsert_sender(db: State<'_, IntakeDb>, project_id: String, sender: SenderDto) -> Result<(), String> {
+pub async fn intake_upsert_sender(db: State<'_, IntakeDb>, project_id: String, sender: SenderDto, rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
+    remote_or!(rs, api => super::remote::upsert_sender(&api, &project_id, &sender));
     aiterm_intake_core::ops::upsert_sender(&db.pool, &project_id, sender).await
 }
 
 /// 設定（或清除）白名單項目的備註名稱。
 #[tauri::command]
-pub async fn intake_set_sender_label(db: State<'_, IntakeDb>, project_id: String, address: String, label: String) -> Result<(), String> {
+pub async fn intake_set_sender_label(db: State<'_, IntakeDb>, project_id: String, address: String, label: String, rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
+    remote_or!(rs, api => super::remote::set_sender_label(&api, &project_id, &address, &label));
     store::set_sender_label(&db.pool, &project_id, &address, &label).await.map_err(e)
 }
 
 #[tauri::command]
-pub async fn intake_delete_sender(db: State<'_, IntakeDb>, project_id: String, address: String) -> Result<bool, String> {
+pub async fn intake_delete_sender(db: State<'_, IntakeDb>, project_id: String, address: String, rs: State<'_, Arc<RemoteState>>) -> Result<bool, String> {
+    remote_or!(rs, api => super::remote::delete_sender(&api, &project_id, &address));
     store::delete_sender(&db.pool, &project_id, &address).await.map_err(e)
 }
 
 #[tauri::command]
-pub async fn intake_dropped(db: State<'_, IntakeDb>, project_id: String) -> Result<Vec<(String, i64)>, String> {
+pub async fn intake_dropped(db: State<'_, IntakeDb>, project_id: String, rs: State<'_, Arc<RemoteState>>) -> Result<Vec<(String, i64)>, String> {
+    remote_or!(rs, api => super::remote::dropped(&api, &project_id));
     store::dropped_counts(&db.pool, &project_id).await.map_err(e)
 }
 
@@ -172,7 +202,10 @@ pub struct RefreshResult {
 /// 「重新整理」：立刻去這個專案設定的信箱收一次信，收完再通知畫面重新載入。
 /// 做法是重啟該信箱的背景任務——它連上線後一定先同步一次——並等同步結束的訊號。
 #[tauri::command]
-pub async fn intake_refresh(app: AppHandle, db: State<'_, IntakeDb>, project_id: String) -> Result<RefreshResult, String> {
+pub async fn intake_refresh(app: AppHandle, db: State<'_, IntakeDb>, project_id: String, rs: State<'_, Arc<RemoteState>>) -> Result<RefreshResult, String> {
+    if rs.active().is_some() {
+        return Ok(super::remote::refresh_result());
+    }
     let cfg = config::load(&db.pool, &project_id).await;
     let before = store::list_items(&db.pool, &project_id, None).await.map_err(e)?.len() as i64;
     let mut out = RefreshResult { polled: false, ok: true, new_items: 0, error: None };
@@ -209,21 +242,24 @@ pub async fn intake_refresh(app: AppHandle, db: State<'_, IntakeDb>, project_id:
 }
 
 #[tauri::command]
-pub async fn intake_approve(app: AppHandle, db: State<'_, IntakeDb>, id: String) -> Result<bool, String> {
+pub async fn intake_approve(app: AppHandle, db: State<'_, IntakeDb>, id: String, rs: State<'_, Arc<RemoteState>>) -> Result<bool, String> {
+    remote_or!(rs, api => super::remote::item_action(&api, &id, "approve"));
     let r = store::approve(&db.pool, &id).await.map_err(e)?;
     changed(&app);
     Ok(r)
 }
 
 #[tauri::command]
-pub async fn intake_reject(app: AppHandle, db: State<'_, IntakeDb>, id: String) -> Result<bool, String> {
+pub async fn intake_reject(app: AppHandle, db: State<'_, IntakeDb>, id: String, rs: State<'_, Arc<RemoteState>>) -> Result<bool, String> {
+    remote_or!(rs, api => super::remote::item_action(&api, &id, "reject"));
     let r = store::reject(&db.pool, &id).await.map_err(e)?;
     changed(&app);
     Ok(r)
 }
 
 #[tauri::command]
-pub async fn intake_delete(app: AppHandle, db: State<'_, IntakeDb>, id: String) -> Result<bool, String> {
+pub async fn intake_delete(app: AppHandle, db: State<'_, IntakeDb>, id: String, rs: State<'_, Arc<RemoteState>>) -> Result<bool, String> {
+    remote_or!(rs, api => super::remote::item_action(&api, &id, "delete"));
     let r = store::delete_item(&db.pool, &id).await.map_err(e)?;
     if r {
         super::attach::remove_dir(&super::attach::root(), &id);
@@ -233,14 +269,16 @@ pub async fn intake_delete(app: AppHandle, db: State<'_, IntakeDb>, id: String) 
 }
 
 #[tauri::command]
-pub async fn intake_update_draft(app: AppHandle, db: State<'_, IntakeDb>, id: String, draft: String) -> Result<bool, String> {
+pub async fn intake_update_draft(app: AppHandle, db: State<'_, IntakeDb>, id: String, draft: String, rs: State<'_, Arc<RemoteState>>) -> Result<bool, String> {
+    remote_or!(rs, api => super::remote::update_draft(&api, &id, &draft));
     let r = store::update_draft(&db.pool, &id, &draft).await.map_err(e)?;
     changed(&app);
     Ok(r)
 }
 
 #[tauri::command]
-pub async fn intake_send_reply(app: AppHandle, db: State<'_, IntakeDb>, id: String) -> Result<(), String> {
+pub async fn intake_send_reply(app: AppHandle, db: State<'_, IntakeDb>, id: String, rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
+    remote_or!(rs, api => super::remote::send_reply(&api, &id));
     let r = runtime::send_reply(&app, &id).await;
     if let Err(msg) = &r {
         store::set_error(&db.pool, &id, &format!("寄出失敗：{msg}")).await.ok();
@@ -251,7 +289,8 @@ pub async fn intake_send_reply(app: AppHandle, db: State<'_, IntakeDb>, id: Stri
 
 /// 這個分頁開始接收問題。
 #[tauri::command]
-pub async fn intake_tab_start(app: AppHandle, rt: State<'_, Arc<IntakeRuntime>>, tab_id: String, project_id: String) -> Result<(), String> {
+pub async fn intake_tab_start(app: AppHandle, rt: State<'_, Arc<IntakeRuntime>>, tab_id: String, project_id: String, rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
+    local_only(&rs)?;
     rt.registry.register(&tab_id, &project_id);
     changed(&app);
     runtime::tick(&app).await;
@@ -284,7 +323,9 @@ pub async fn intake_tab_cd(
     pty: State<'_, Arc<crate::pty::PtyManager>>,
     tab_id: String,
     project_id: String,
+    rs: State<'_, Arc<RemoteState>>,
 ) -> Result<String, String> {
+    local_only(&rs)?;
     let handle = reg.get(&project_id).ok_or("找不到這個專案")?;
     let dir = crate::tasks::repo_check::saved_project_repo(&handle.pool)
         .await
@@ -298,7 +339,10 @@ pub async fn intake_tab_cd(
 }
 
 #[tauri::command]
-pub fn intake_tabs(rt: State<'_, Arc<IntakeRuntime>>, pty: State<'_, Arc<crate::pty::PtyManager>>) -> Vec<TabDto> {
+pub fn intake_tabs(rt: State<'_, Arc<IntakeRuntime>>, pty: State<'_, Arc<crate::pty::PtyManager>>, rs: State<'_, Arc<RemoteState>>) -> Vec<TabDto> {
+    if rs.active().is_some() {
+        return Vec::new();
+    }
     rt.registry
         .tabs()
         .into_iter()
@@ -311,20 +355,23 @@ pub fn intake_tabs(rt: State<'_, Arc<IntakeRuntime>>, pty: State<'_, Arc<crate::
 }
 
 #[tauri::command]
-pub async fn intake_attachments(db: State<'_, IntakeDb>, item_id: String) -> Result<Vec<store::AttachmentRow>, String> {
+pub async fn intake_attachments(db: State<'_, IntakeDb>, item_id: String, rs: State<'_, Arc<RemoteState>>) -> Result<Vec<store::AttachmentRow>, String> {
+    remote_or!(rs, api => super::remote::attachments(&api, &item_id));
     store::list_attachments(&db.pool, &item_id).await.map_err(e)
 }
 
 /// 讀出附圖內容，回傳 `data:` URL 給前端顯示。只讀我們自己存放目錄底下的檔案。
 #[tauri::command]
-pub async fn intake_attachment_data(db: State<'_, IntakeDb>, id: String) -> Result<String, String> {
+pub async fn intake_attachment_data(db: State<'_, IntakeDb>, id: String, rs: State<'_, Arc<RemoteState>>) -> Result<String, String> {
+    remote_or!(rs, api => super::remote::attachment(&api, &id, "data"));
     let row = store::get_attachment(&db.pool, &id).await.map_err(e)?.ok_or("找不到附圖")?;
     data_url(&super::attach::root(), &row)
 }
 
 /// 純文字附件（log、txt、json…）的前 64KB，給畫面預覽。只讀我們自己存放目錄底下的檔案。
 #[tauri::command]
-pub async fn intake_attachment_text(db: State<'_, IntakeDb>, id: String) -> Result<String, String> {
+pub async fn intake_attachment_text(db: State<'_, IntakeDb>, id: String, rs: State<'_, Arc<RemoteState>>) -> Result<String, String> {
+    remote_or!(rs, api => super::remote::attachment(&api, &id, "text"));
     let row = store::get_attachment(&db.pool, &id).await.map_err(e)?.ok_or("找不到附件")?;
     text_preview(&super::attach::root(), &row)
 }
@@ -451,7 +498,8 @@ mod tests {
 /// 檢查參考資料夾：存不存在、是不是資料夾、Claude Code 讀得到／讀不了的檔案有多少。
 /// 相對路徑接在這個專案的程式庫資料夾後面（沒有就對不上）。
 #[tauri::command]
-pub async fn intake_check_folders(app: AppHandle, project_id: String, paths: Vec<String>) -> Result<Vec<super::refs::FolderCheck>, String> {
+pub async fn intake_check_folders(app: AppHandle, project_id: String, paths: Vec<String>, rs: State<'_, Arc<RemoteState>>) -> Result<Vec<super::refs::FolderCheck>, String> {
+    remote_or!(rs, api => super::remote::check_folders(&api, &project_id, &paths));
     use tauri::Manager;
     let base: Option<std::path::PathBuf> = match app.try_state::<crate::projects::ProjectRegistry>().and_then(|r| r.get(&project_id)) {
         Some(h) => crate::tasks::formations::repo_path(&h.pool).await.ok().flatten().map(std::path::PathBuf::from),
@@ -464,25 +512,37 @@ pub async fn intake_check_folders(app: AppHandle, project_id: String, paths: Vec
 
 /// 最近出現、但還沒加入白名單的 LINE 來源（群組／使用者），給設定頁一鍵加入。
 #[tauri::command]
-pub async fn intake_line_unknown(db: State<'_, IntakeDb>) -> Result<Vec<super::line_store::Unknown>, String> {
+pub async fn intake_line_unknown(db: State<'_, IntakeDb>, rs: State<'_, Arc<RemoteState>>) -> Result<Vec<super::line_store::Unknown>, String> {
+    remote_or!(rs, api => super::remote::line_unknown(&api));
     super::line_store::list_unknown(&db.pool).await.map_err(e)
 }
 
 /// 從「未加入白名單」清單移除一筆（加入白名單後，或使用者選擇忽略）。
 #[tauri::command]
-pub async fn intake_line_forget_unknown(db: State<'_, IntakeDb>, id: String) -> Result<bool, String> {
+pub async fn intake_line_forget_unknown(db: State<'_, IntakeDb>, id: String, rs: State<'_, Arc<RemoteState>>) -> Result<bool, String> {
+    remote_or!(rs, api => super::remote::forget_unknown(&api, &id));
     super::line_store::forget_unknown(&db.pool, &id.to_lowercase()).await.map_err(e)
 }
 
 /// LINE 設定頁要的狀態：憑證是否已設定（憑證本身不外傳）、埠號、伺服器是否在聽。
 #[tauri::command]
-pub async fn intake_line_status(app: AppHandle) -> Result<super::line_server::Status, String> {
+pub async fn intake_line_status(app: AppHandle, rs: State<'_, Arc<RemoteState>>) -> Result<super::line_server::Status, String> {
+    remote_or!(rs, api => super::remote::line_status(&api));
     Ok(super::line_server::status(&app).await)
 }
 
 /// 儲存 LINE 憑證。空字串代表「不變」（畫面不會回填已存的憑證）。存完重啟 webhook 伺服器。
 #[tauri::command]
-pub async fn intake_line_set_credentials(app: AppHandle, secrets: State<'_, Arc<crate::secret::SecretStore>>, channel_secret: String, access_token: String) -> Result<(), String> {
+pub async fn intake_line_set_credentials(app: AppHandle, secrets: State<'_, Arc<crate::secret::SecretStore>>, channel_secret: String, access_token: String, rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
+    if let Some(api) = rs.active() {
+        for (id, value) in [(super::line_server::LINE_SECRET_ID, &channel_secret), (super::line_server::LINE_TOKEN_ID, &access_token)] {
+            let v = value.trim();
+            if !v.is_empty() {
+                super::remote::set_secret(&api, id, v).await.map_err(|e| super::remote::fail(&rs, e))?;
+            }
+        }
+        return Ok(());
+    }
     for (id, value) in [(super::line_server::LINE_SECRET_ID, channel_secret), (super::line_server::LINE_TOKEN_ID, access_token)] {
         let v = value.trim();
         if !v.is_empty() {
@@ -494,10 +554,35 @@ pub async fn intake_line_set_credentials(app: AppHandle, secrets: State<'_, Arc<
 }
 
 #[tauri::command]
-pub async fn intake_line_clear_credentials(app: AppHandle, secrets: State<'_, Arc<crate::secret::SecretStore>>) -> Result<(), String> {
+pub async fn intake_line_clear_credentials(app: AppHandle, secrets: State<'_, Arc<crate::secret::SecretStore>>, rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
+    if let Some(api) = rs.active() {
+        for id in [super::line_server::LINE_SECRET_ID, super::line_server::LINE_TOKEN_ID] {
+            super::remote::clear_secret(&api, id).await.map_err(|e| super::remote::fail(&rs, e))?;
+        }
+        return Ok(());
+    }
     for id in [super::line_server::LINE_SECRET_ID, super::line_server::LINE_TOKEN_ID] {
         secrets.delete(id).map_err(|e| e.to_string())?;
     }
     super::line_server::restart(&app).await;
     Ok(())
+}
+
+// ───────── 連到 server（Client 模式）─────────
+
+#[tauri::command]
+pub fn intake_remote_status(rs: State<'_, Arc<RemoteState>>) -> super::remote::RemoteStatus {
+    rs.status()
+}
+
+/// 用邀請碼配對並連到 server；成功後本機的收訊與派送停止。
+#[tauri::command]
+pub async fn intake_remote_pair(app: AppHandle, addr: String, code: String) -> Result<super::remote::RemoteStatus, String> {
+    super::remote::connect(&app, &addr, &code).await
+}
+
+/// 中斷連線並切回本機。
+#[tauri::command]
+pub async fn intake_remote_disconnect(app: AppHandle) -> Result<(), String> {
+    super::remote::disconnect(&app).await
 }

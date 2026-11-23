@@ -14,6 +14,14 @@ pub struct LineServer {
 }
 
 impl LineServer {
+    /// 停止本機的 webhook 伺服器（連到 server 時用）。
+    pub fn stop(&self) {
+        if let Some(h) = self.handle.lock().take() {
+            h.abort();
+        }
+        self.listening.store(false, Ordering::SeqCst);
+    }
+
     pub fn listening(&self) -> bool {
         self.listening.load(Ordering::SeqCst)
     }
@@ -26,6 +34,10 @@ fn secret_of<R: Runtime>(app: &AppHandle<R>, id: &str) -> Option<String> {
 /// 依目前設定（重新）啟動 webhook 伺服器：任一專案啟用 LINE 且已設 Channel secret 才開。
 pub async fn restart<R: Runtime>(app: &AppHandle<R>) {
     let Some(server) = app.try_state::<Arc<LineServer>>() else { return };
+    if super::remote::is_remote(app) {
+        server.stop();
+        return;
+    }
     if let Some(h) = server.handle.lock().take() {
         h.abort();
     }

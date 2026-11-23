@@ -11,9 +11,22 @@ pub struct WebServer {
     handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
+impl WebServer {
+    /// 停止本機的網頁表單伺服器（連到 server 時用）。
+    pub fn stop(&self) {
+        if let Some(h) = self.handle.lock().take() {
+            h.abort();
+        }
+    }
+}
+
 /// 依目前設定（重新）啟動網頁表單伺服器。
 pub async fn restart<R: Runtime>(app: &AppHandle<R>) {
     let Some(server) = app.try_state::<Arc<WebServer>>() else { return };
+    if super::remote::is_remote(app) {
+        server.stop();
+        return;
+    }
     if let Some(h) = server.handle.lock().take() {
         h.abort();
     }

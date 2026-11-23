@@ -23,6 +23,7 @@ tauri-build = { version = "2.5.6", features = [] }
 [dependencies]
 aiterm-core = { path = "crates/aiterm-core" }
 aiterm-intake-core = { path = "crates/aiterm-intake-core" }
+aiterm-intake-client = { path = "crates/aiterm-intake-client" }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 ignore = "0.4"
 serde = { version = "1.0", features = ["derive"] }
@@ -122,6 +123,7 @@ pulldown-cmark = { version = "0.12", default-features = false, features = ["html
 [dev-dependencies]
 wiremock = "0.6"
 tauri = { version = "2.10.3", features = ["test"] }
+aiterm-intake-server = { path = "crates/aiterm-intake-server" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
