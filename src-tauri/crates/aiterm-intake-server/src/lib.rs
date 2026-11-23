@@ -6,3 +6,7 @@ pub mod secrets;
 pub mod pairing;
 pub mod state;
 pub mod tls;
+pub mod routes;
+pub mod server;
+#[doc(hidden)]
+pub mod testkit;

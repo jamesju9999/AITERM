@@ -43,6 +43,7 @@ tower-service = "0.3"
 uuid = { version = "1", features = ["v4", "serde"] }
 aes-gcm = "0.10"
 dirs = "6"
+tempfile = "3"
 
 [dev-dependencies]
 aiterm-intake-client = { path = "../aiterm-intake-client" }
@@ -50,3 +51,4 @@ tempfile = "3"
 tokio-tungstenite = "0.29"
 wiremock = "0.6"
 tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
