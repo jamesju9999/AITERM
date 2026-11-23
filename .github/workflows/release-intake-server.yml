@@ -1,0 +1,213 @@
+name: Release Intake Server
+
+# 問題收集 Server（aiterm-intake-server）有自己的 tag 前綴、版本號與變更記錄，
+# 與桌面版 AITerm（tag v*）和 aiterm-host（tag host-v*）完全分開。
+# 桌面版與 Server 靠 `/v1/hello` 的協定版本在連線時互檢，不靠版本號相等。
+#
+# 這條線只建立 **draft** release 並上傳各平台執行檔與 SHA256SUMS，不會自動公開；
+# 確認執行檔與說明後由人在 GitHub 上按發佈。
+on:
+  push:
+    tags:
+      - 'intake-server-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive the version
+        id: ver
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#intake-server-v}"
+          if [ "$VERSION" = "$TAG" ] || [ -z "$VERSION" ]; then
+            echo "::error::tag 必須是 intake-server-vX.Y.Z"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # 版本號的真實來源是 Cargo.toml，CI 只驗證、不改寫。
+      - name: The tag and Cargo.toml must agree
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          BASE="${VERSION%%-*}"
+          MANIFEST=src-tauri/crates/aiterm-intake-server/Cargo.toml
+          IN_FILE=$(python3 -c "import re,sys;print(re.search(r'^version = \"(.*)\"', open(sys.argv[1], encoding='utf-8').read(), re.M).group(1))" "$MANIFEST")
+          if [ "$IN_FILE" != "$BASE" ]; then
+            echo "::error::$MANIFEST 寫的是 $IN_FILE，tag 要的是 $BASE。先改 Cargo.toml 再重打 tag。"
+            exit 1
+          fi
+
+      - name: Generate the changelog draft
+        id: changelog
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          PREV=$(git describe --tags --abbrev=0 --match 'intake-server-v*' "$TAG^" 2>/dev/null || true)
+          RANGE=${PREV:+$PREV..}$TAG
+          {
+            echo "list<<CHANGELOG_EOF"
+            git log --pretty=format:%s "$RANGE" \
+              | python3 scripts/release_notes.py draft "v$VERSION" CHANGELOG-intake-server.md
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or reuse the draft release
+        uses: ./.github/actions/create-draft-release
+        with:
+          tag: ${{ github.ref_name }}
+          name: AITerm 問題收集 Server ${{ steps.ver.outputs.version }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ## AITerm 問題收集 Server ${{ steps.ver.outputs.version }}
+
+            `aiterm-intake-server` 是常駐的問題收集 server：收 LINE 訊息、保存共用的問題清單，
+            讓團隊每個人的 AITerm 連上來看同一份清單與處理狀態。桌面版 AITerm 的更新在
+            [另一則 release](https://github.com/${{ github.repository }}/releases/latest)。
+
+            ### 更新項目
+            <!-- changelog:start -->
+            ${{ steps.changelog.outputs.list }}
+            <!-- changelog:end -->
+
+            ### 使用
+            下載對應平台的壓縮檔，解壓後：
+            ```
+            ./aiterm-intake-server init --san <對外的主機名稱或 IP>
+            ./aiterm-intake-server project add <專案名稱>
+            ./aiterm-intake-server pair --name <成員> --role admin --address <host:8443>
+            ./aiterm-intake-server run
+            ```
+            完整說明見 [docs/intake-server.md](https://github.com/${{ github.repository }}/blob/master/docs/intake-server.md)。
+
+            下載後可用 `aiterm-intake-server-${{ steps.ver.outputs.version }}-SHA256SUMS` 核對：
+            `sha256sum -c --ignore-missing aiterm-intake-server-${{ steps.ver.outputs.version }}-SHA256SUMS`
+            （macOS 用 `shasum -a 256 -c --ignore-missing`）。
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: intake-server-${{ matrix.target }}
+
+      - name: Install musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      # 先測再建：發出去的執行檔必須是測試過的那一份程式碼。
+      # 只測 server 相關的 crate；它們不需要 uv／db2 sidecar。
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test -p aiterm-intake-core -p aiterm-intake-client -p aiterm-intake-server --no-fail-fast
+
+      - name: Build
+        working-directory: src-tauri
+        run: cargo build -p aiterm-intake-server --release --target ${{ matrix.target }}
+
+      # 編得過不代表跑得動：真的建資料夾、產生憑證與資料庫。
+      # 交叉編譯的目標沒有（這四個都是本機架構）。
+      - name: Run it once
+        working-directory: src-tauri
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXE="./target/${{ matrix.target }}/release/aiterm-intake-server${{ matrix.os == 'windows-latest' && '.exe' || '' }}"
+          "$EXE" --data-dir "$RUNNER_TEMP/intake-smoke" init
+          "$EXE" --data-dir "$RUNNER_TEMP/intake-smoke" status
+
+      - name: Package
+        working-directory: src-tauri
+        shell: bash
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          NAME="aiterm-intake-server-${VERSION}-${{ matrix.target }}"
+          BIN="aiterm-intake-server${{ matrix.os == 'windows-latest' && '.exe' || '' }}"
+          mkdir -p "dist/$NAME"
+          cp "target/${{ matrix.target }}/release/$BIN" "dist/$NAME/"
+          cp ../docs/intake-server.md "dist/$NAME/README.md"
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "$NAME.zip" "$NAME" >/dev/null
+          else
+            tar czf "$NAME.tar.gz" "$NAME"
+          fi
+          ls -la
+
+      - name: Upload to the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          NAME="aiterm-intake-server-${VERSION}-${{ matrix.target }}"
+          cd src-tauri/dist
+          gh release upload "$TAG" "$NAME.${{ matrix.archive }}" --clobber
+
+  checksums:
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checksum every asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir sums && cd sums
+          gh release download "$TAG" --pattern "aiterm-intake-server-${VERSION}-*" --dir .
+          # 重跑時 release 上已有舊的 SHA256SUMS，要先排除，否則它的雜湊會被算進新清單。
+          rm -f "aiterm-intake-server-${VERSION}-SHA256SUMS"
+          sha256sum aiterm-intake-server-* | sort -k2 > "aiterm-intake-server-${VERSION}-SHA256SUMS"
+          cat "aiterm-intake-server-${VERSION}-SHA256SUMS"
+          gh release upload "$TAG" "aiterm-intake-server-${VERSION}-SHA256SUMS" --clobber
