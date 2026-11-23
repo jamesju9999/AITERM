@@ -51,6 +51,14 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn with_channel_bind(pools: Pools, secrets: Arc<FileSecrets>, fingerprint: String, data_dir: PathBuf, channel_bind: std::net::IpAddr) -> Arc<Self> {
+        let me = Self::new(pools, secrets, fingerprint, data_dir);
+        // `new` 回傳 Arc；剛建立時只有一個參照，可以直接改。
+        let mut me = Arc::try_unwrap(me).ok().expect("剛建立的 AppState 只有一個參照");
+        me.channel_bind = channel_bind;
+        Arc::new(me)
+    }
+
     pub fn new(pools: Pools, secrets: Arc<FileSecrets>, fingerprint: String, data_dir: PathBuf) -> Arc<Self> {
         let ai = Arc::new(crate::ai::ServerAi::new(pools.intake.clone(), secrets.clone()));
         Arc::new(Self { pools, secrets, ai, channels: Default::default(), channel_bind: std::net::Ipv4Addr::LOCALHOST.into(), events: Broadcast::new(), fingerprint, data_dir, backoff: AuthBackoff::new(), version: env!("CARGO_PKG_VERSION").to_string(), line_api_base: parking_lot::Mutex::new(aiterm_intake_core::line_server::API_BASE.to_string()) })

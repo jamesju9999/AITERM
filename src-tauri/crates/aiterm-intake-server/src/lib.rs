@@ -2,6 +2,7 @@
 pub mod ai;
 pub mod audit;
 pub mod channels;
+pub mod cli;
 pub mod db;
 pub mod events;
 pub mod members;
