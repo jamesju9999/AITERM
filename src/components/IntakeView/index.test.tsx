@@ -662,8 +662,9 @@ describe("IntakeView", () => {
     vi.mocked(ipc.intakeLineUnknown).mockResolvedValueOnce(unknown).mockResolvedValue([unknown[1]]);
     wrap();
     fireEvent.click(await screen.findByText(t.intake_settings));
-    fireEvent.click(await screen.findByRole("tab", { name: new RegExp(t.intake_sec_line) }));
+    // 在「白名單」區塊裡，不必切到 LINE 分頁。
     expect(await screen.findByText("兆強客服群")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: t.intake_senders })).toBeInTheDocument();
     expect(screen.getByText(`7 ${t.intake_line_times}`)).toBeInTheDocument();
     expect(screen.getByText("line:Cb345e5d492c48c02a3eaa279924c52d2")).toBeInTheDocument();
     expect(screen.getByText("line:U2222222222222222222222222222222b")).toBeInTheDocument();
@@ -677,7 +678,8 @@ describe("IntakeView", () => {
     vi.mocked(ipc.intakeLineUnknown).mockResolvedValue([]);
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${t.intake_line_ignore}`) }));
     await waitFor(() => expect(ipc.intakeLineForgetUnknown).toHaveBeenCalledWith("u2222222222222222222222222222222b"));
-    expect(await screen.findByText(t.intake_line_unknown_empty)).toBeInTheDocument();
+    // 清單空了就整塊消失。
+    await waitFor(() => expect(screen.queryByText(t.intake_line_unknown)).toBeNull());
   });
 
   it("the LINE tab saves the auto-open switch and the retention days", async () => {

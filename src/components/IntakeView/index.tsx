@@ -896,37 +896,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         />
       </label>
       <p className="intake__meta intake__hint">{t.intake_line_retention_hint}</p>
-      <div className="intake__unknown" aria-label={t.intake_line_unknown}>
-        <h4 className="intake__card-title">{t.intake_line_unknown}</h4>
-        <p className="intake__meta intake__hint">{t.intake_line_unknown_hint}</p>
-        {lineUnknown.length === 0 && <p className="intake__meta">{t.intake_line_unknown_empty}</p>}
-        <ul className="intake__unknown-list">
-          {lineUnknown.map((u) => {
-            const label = u.name || u.id;
-            return (
-              <li key={u.id} className="intake__unknown-row">
-                <span className="intake__unknown-kind">{u.kind === "group" ? t.intake_line_kind_group : t.intake_line_kind_user}</span>
-                <span className="intake__unknown-main">
-                  <strong>{u.name || t.intake_line_unnamed}</strong>
-                  <code>{displayAddress(`line:${u.id}`)}</code>
-                </span>
-                <span className="intake__unknown-count">{u.count} {t.intake_line_times}</span>
-                <span className="intake__unknown-actions">
-                  <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_line_add_internal} ${label}`} onClick={() => void addLineUnknown(u, "internal")}>
-                    {t.intake_line_add_internal}
-                  </button>
-                  <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_line_add_external} ${label}`} onClick={() => void addLineUnknown(u, "external")}>
-                    {t.intake_line_add_external}
-                  </button>
-                  <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_line_ignore} ${label}`} onClick={() => void ignoreLineUnknown(u)}>
-                    {t.intake_line_ignore}
-                  </button>
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
+      <p className="intake__meta intake__hint">{t.intake_line_unknown_pointer}</p>
       {handlingField("line", t.intake_sec_line)}
           </>
         )}
@@ -1076,6 +1046,38 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
           {t.intake_add}
         </button>
       </div>
+      {lineUnknown.length > 0 && (
+        <div className="intake__unknown" aria-label={t.intake_line_unknown}>
+          <h4 className="intake__card-title">{t.intake_line_unknown}</h4>
+          <p className="intake__meta intake__hint">{t.intake_line_unknown_hint}</p>
+          <ul className="intake__unknown-list">
+            {lineUnknown.map((u) => {
+              const label = u.name || u.id;
+              return (
+                <li key={u.id} className="intake__unknown-row">
+                  <span className="intake__unknown-kind">{u.kind === "group" ? t.intake_line_kind_group : t.intake_line_kind_user}</span>
+                  <span className="intake__unknown-main">
+                    <strong>{u.name || t.intake_line_unnamed}</strong>
+                    <code>{displayAddress(`line:${u.id}`)}</code>
+                  </span>
+                  <span className="intake__unknown-count">{u.count} {t.intake_line_times}</span>
+                  <span className="intake__unknown-actions">
+                    <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_line_add_internal} ${label}`} onClick={() => void addLineUnknown(u, "internal")}>
+                      {t.intake_line_add_internal}
+                    </button>
+                    <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_line_add_external} ${label}`} onClick={() => void addLineUnknown(u, "external")}>
+                      {t.intake_line_add_external}
+                    </button>
+                    <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${t.intake_line_ignore} ${label}`} onClick={() => void ignoreLineUnknown(u)}>
+                      {t.intake_line_ignore}
+                    </button>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
       {dropped.length > 0 && (
         <p className="intake__meta">
           {t.intake_dropped}：{dropped.map(([r, n]) => `${r} ${n}`).join("、")}
