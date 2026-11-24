@@ -942,7 +942,7 @@ describe("IntakeView", () => {
       vi.mocked(mailListAccounts).mockResolvedValue([{ id: "a1", email: "bot@example.com", enabled: true }] as never);
       vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
       await openSettings();
-      expect(await screen.findByText(t.intake_server_mail_off)).toBeTruthy();
+      expect(await screen.findByText(t.intake_server_mail_off_short)).toBeTruthy();
       const apply = screen.getByRole("button", { name: t.intake_server_mail_apply });
       expect(apply.matches(":disabled")).toBe(true);
       fireEvent.change(screen.getByLabelText(t.intake_server_mail_pick), { target: { value: "a1" } });

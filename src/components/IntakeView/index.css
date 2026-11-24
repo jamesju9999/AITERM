@@ -289,3 +289,12 @@
   min-width: 0;
   display: contents;
 }
+
+/* Server 寄信帳號卡片 */
+.intake__mailcard { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--border, #2a2a2a); border-radius: 8px; background: rgba(255, 255, 255, 0.02); min-width: 0; }
+.intake__mailcard-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.intake__mailcard-now { margin: 0; font-size: 13px; color: var(--text-primary, #e0e0e0); }
+.intake__mailcard-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.intake__mailcard-row select { padding: 6px 10px; background: var(--bg-primary, #0a0b14); color: inherit; border: 1px solid var(--border, #333); border-radius: 6px; }
+.intake__mailcard-ok { font-size: 12px; color: #4ade80; }
+.intake__mailcard-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary, #888); }
