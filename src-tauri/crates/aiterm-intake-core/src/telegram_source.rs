@@ -3,10 +3,10 @@
 //! 身分由 Telegram 保證（chat id 無法偽造），所以不需要 SPF/DKIM 的對應物：
 //! - 機器人主人的聊天室：訊息以 `/ask ` 開頭才算問題（其餘照舊轉送給作用中的分頁），視為內部。
 //! - 其他聊天室：`tg:<chat_id>` 必須在白名單內，等級依白名單。
-use super::attach::Raw;
-use super::config::Config;
-use super::queue::{self, Ingested};
-use super::rules::{self, Level};
+use crate::attach::Raw;
+use crate::config::Config;
+use crate::queue::{self, Ingested};
+use crate::rules::{self, Level};
 use super::store;
 use sqlx::SqlitePool;
 use std::future::Future;
@@ -226,7 +226,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intake::rules::Sender;
+    use crate::rules::Sender;
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn pool() -> SqlitePool {

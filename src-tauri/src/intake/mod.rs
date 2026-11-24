@@ -1,26 +1,30 @@
 //! 問題收集（Intake）：外部問題進獨立佇列，循序派給終端機裡的 AI Agent。
 //! 設計：docs/superpowers/specs/2026-11-05-intake-queue-design.md
-pub mod attach;
+pub use aiterm_intake_core::attach;
 pub mod board;
-pub mod classify;
+pub use aiterm_intake_core::classify;
+pub mod ai_adapter;
+pub use aiterm_intake_core::pipeline;
 pub mod commands;
-pub mod config;
-pub mod dispatcher;
-pub mod filter;
+pub use aiterm_intake_core::config;
+pub use aiterm_intake_core::dispatcher;
+pub use aiterm_intake_core::filter;
 pub mod line_server;
-pub mod line_store;
-pub mod line_source;
-pub mod line_text;
-pub mod mail_source;
-pub mod queue;
-pub mod refs;
+pub use aiterm_intake_core::line_store;
+pub use aiterm_intake_core::line_source;
+pub use aiterm_intake_core::line_text;
+pub use aiterm_intake_core::mail_source;
+pub use aiterm_intake_core::queue;
+pub use aiterm_intake_core::refs;
+pub mod remote;
+pub mod remote_work;
 #[cfg(test)]
 mod rehearsal;
-pub mod rules;
+pub use aiterm_intake_core::rules;
 pub mod runtime;
-pub mod smtp;
-pub mod telegram_source;
-pub mod store;
+pub use aiterm_intake_core::smtp;
+pub use aiterm_intake_core::telegram_source;
+pub use aiterm_intake_core::store;
 pub mod tabcd;
 pub mod verify;
 pub mod web;
@@ -76,6 +80,9 @@ pub(crate) async fn all_configs<R: tauri::Runtime>(app: &tauri::AppHandle<R>, po
 /// 郵件輪詢每收到一封信就呼叫。依各專案的別名／標籤決定歸屬；沒有專案符合就什麼都不做。
 pub async fn on_mail<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_id: &str, raw: &[u8]) {
     use tauri::{Emitter, Manager};
+    if remote::is_remote(app) {
+        return;
+    }
     let Some(db) = app.try_state::<IntakeDb>() else { return };
     let candidates: Vec<mail_source::Candidate> = all_configs(app, &db.pool)
         .await
@@ -106,6 +113,9 @@ pub async fn owns_account<R: tauri::Runtime>(app: &tauri::AppHandle<R>, account_
 /// 呼叫端不要再當一般訊息轉送。
 pub async fn on_telegram<R: tauri::Runtime>(app: &tauri::AppHandle<R>, chat_id: i64, message_id: i64, text: &str, is_owner: bool, photos: Vec<(String, String)>, sender_name: &str) -> bool {
     use tauri::{Emitter, Manager};
+    if remote::is_remote(app) {
+        return false;
+    }
     let Some(db) = app.try_state::<IntakeDb>() else { return false };
     let cands: Vec<telegram_source::Candidate> = all_configs(app, &db.pool)
         .await

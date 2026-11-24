@@ -18,7 +18,7 @@ pub struct Outgoing<'a> {
 }
 
 fn key(a: &str) -> String {
-    super::rules::normalize(a)
+    crate::rules::normalize(a)
 }
 
 /// 算出回信的「其他收件人」與「副本」：原信 To／Cc 去掉寄件人、我們自己（收信帳號與別名）和重複；

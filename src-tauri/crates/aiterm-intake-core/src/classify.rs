@@ -1,8 +1,5 @@
 //! 派工前的初篩：這是「提問」還是「要改程式」。只有後者才套用修復驗證。
-use crate::ai::{AiError, AiProvider, ChatMessage, GenerateChunk, GenerateRequest, QueryMode};
-use crate::commands::ai::extract_json_from_response;
-use std::sync::Arc;
-use tokio::sync::mpsc;
+use crate::host::AiComplete;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -37,35 +34,9 @@ pub fn parse(raw: &str) -> Kind {
     }
 }
 
-/// 把一段文字連同系統提示丟給 AI，收完整段回覆。
-async fn ask(provider: Arc<dyn AiProvider>, system_prompt: String, text: String) -> Result<String, AiError> {
-    let req = GenerateRequest {
-        system_prompt,
-        messages: vec![ChatMessage { role: "user".into(), content: serde_json::Value::String(text), tool_call_id: None, tool_calls: None }],
-        context: Default::default(),
-        mode: QueryMode::SingleCommand,
-        max_tokens: None,
-    };
-    let (tx, mut rx) = mpsc::channel::<GenerateChunk>(16);
-    let p = provider.clone();
-    let join = tokio::spawn(async move { p.generate(req, tx).await });
-    let mut buf = String::new();
-    while let Some(chunk) = rx.recv().await {
-        buf.push_str(&chunk.delta);
-        if chunk.done {
-            break;
-        }
-    }
-    match join.await {
-        Ok(Ok(())) => Ok(buf),
-        Ok(Err(e)) => Err(e),
-        Err(e) => Err(AiError::Network { message: e.to_string() }),
-    }
-}
-
-pub async fn classify(provider: Arc<dyn AiProvider>, subject: &str, body: &str) -> Result<Kind, AiError> {
+pub async fn classify(ai: &dyn AiComplete, subject: &str, body: &str) -> Result<Kind, String> {
     let text: String = format!("Subject: {subject}\n\n{body}").chars().take(4000).collect();
-    Ok(parse(&ask(provider, prompt(), text).await?))
+    Ok(parse(&ai.complete(&prompt(), &text).await?))
 }
 
 /// 群組裡客戶的一批訊息：是不是需要我方處理的「新問題或請求」？
@@ -84,9 +55,59 @@ pub fn parse_support(raw: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(&cleaned).ok().and_then(|v| v.get("new_problem").and_then(|k| k.as_bool())).unwrap_or(true)
 }
 
-pub async fn is_new_problem(provider: Arc<dyn AiProvider>, messages: &str) -> Result<bool, AiError> {
+pub async fn is_new_problem(ai: &dyn AiComplete, messages: &str) -> Result<bool, String> {
     let text: String = messages.chars().take(4000).collect();
-    Ok(parse_support(&ask(provider, support_prompt(), text).await?))
+    Ok(parse_support(&ai.complete(&support_prompt(), &text).await?))
+}
+
+/// 取出模型回覆裡的 JSON 物件：去掉 <think> 區塊、程式碼圍欄與前後說明文字。
+pub fn extract_json_from_response(raw: &str) -> String {
+    // 1. Strip <think>...</think> blocks (DeepSeek, Qwen thinking mode)
+    let without_think = {
+        let mut s = raw.to_string();
+        while let (Some(start), Some(end)) = (s.find("<think>"), s.find("</think>")) {
+            if start < end {
+                s.drain(start..end + "</think>".len());
+            } else {
+                break;
+            }
+        }
+        s
+    };
+
+    // 2. Strip markdown code fences: ```json ... ``` or ``` ... ```
+    let without_fences = {
+        let trimmed = without_think.trim();
+        if trimmed.starts_with("```") {
+            // Find the first newline after the opening fence
+            if let Some(newline_pos) = trimmed.find('\n') {
+                let inner = &trimmed[newline_pos + 1..];
+                // Strip the closing fence
+                if let Some(close_pos) = inner.rfind("```") {
+                    inner[..close_pos].trim().to_string()
+                } else {
+                    inner.trim().to_string()
+                }
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        }
+    };
+
+    // 3. Find the first `{` — skip any preamble text before the JSON object
+    if let Some(json_start) = without_fences.find('{') {
+        // Find the matching last `}` to get the full JSON object
+        let json_candidate = &without_fences[json_start..];
+        if let Some(json_end) = json_candidate.rfind('}') {
+            return json_candidate[..=json_end].to_string();
+        }
+        return json_candidate.to_string();
+    }
+
+    // Fallback: return as-is (will fail JSON parsing with a meaningful error)
+    without_fences
 }
 
 #[cfg(test)]
@@ -122,5 +143,28 @@ mod tests {
     fn prompt_defaults_to_the_safer_answer_and_marks_input_untrusted() {
         let p = prompt();
         assert!(p.contains("When unsure") && p.contains("untrusted"));
+    }
+
+    struct Fake(Result<String, String>);
+    #[async_trait::async_trait]
+    impl AiComplete for Fake {
+        async fn complete(&self, _system: &str, _user: &str) -> Result<String, String> {
+            self.0.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn classify_uses_the_completion_and_surfaces_errors() {
+        let q = Fake(Ok(r#"{"kind":"question"}"#.into()));
+        assert_eq!(classify(&q, "s", "b").await, Ok(Kind::Question));
+        let bad = Fake(Err("down".into()));
+        assert_eq!(classify(&bad, "s", "b").await, Err("down".to_string()));
+        assert_eq!(is_new_problem(&Fake(Ok(r#"{"new_problem":false}"#.into())), "hi").await, Ok(false));
+    }
+
+    #[test]
+    fn json_is_extracted_from_think_blocks_and_fences() {
+        assert_eq!(extract_json_from_response("<think>x</think>```json\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(extract_json_from_response("sure: {\"a\":1} done"), "{\"a\":1}");
     }
 }

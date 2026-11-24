@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- 模擬瀏覽器環境，型別只會礙事 */
-// 網頁提問頁是 Rust 後端內嵌的一份 HTML（src-tauri/src/intake/web_page.html）。
+// 網頁提問頁是 Rust 後端內嵌的一份 HTML（src-tauri/crates/aiterm-intake-core/src/web_page.html）。
 // 這裡用 jsdom 真的載入、執行它，模擬後端回應，驗證整段操作流程。
-import raw from "../../src-tauri/src/intake/web_page.html?raw";
-import css from "../../src-tauri/src/intake/web_base.css?raw";
+import raw from "../../src-tauri/crates/aiterm-intake-core/src/web_page.html?raw";
+import css from "../../src-tauri/crates/aiterm-intake-core/src/web_base.css?raw";
 import { JSDOM } from "jsdom";
 import { describe, it, expect } from "vitest";
 

@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 pub struct IntakeRuntime {
     pub registry: dispatcher::Registry,
     /// 派送迴圈與「開始接收」指令都會呼叫 `tick`；不序列化的話兩邊可能同時看到同一個閒置分頁。
-    tick_lock: tokio::sync::Mutex<()>,
+    pub(super) tick_lock: tokio::sync::Mutex<()>,
 }
 
 fn changed<R: Runtime>(app: &AppHandle<R>) {
@@ -37,8 +37,11 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, activity: &Arc<ClaudeActivity>) {
             if let Some(item_id) = r.registry.unregister_active(sid) {
                 let h = h.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Some(db) = h.try_state::<IntakeDb>() {
-                        store::fail(&db.pool, &item_id, "Claude Code 已結束，這題沒有完成").await.ok();
+                    // 從 server 領來的題目回報給 server；本機的題目退回本機的佇列。
+                    if !super::remote_work::abandon(&h, &item_id, "Claude Code 已結束，這題沒有完成", false).await {
+                        if let Some(db) = h.try_state::<IntakeDb>() {
+                            store::fail(&db.pool, &item_id, "Claude Code 已結束，這題沒有完成").await.ok();
+                        }
                     }
                     changed(&h);
                 });
@@ -60,14 +63,12 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, activity: &Arc<ClaudeActivity>) {
     }));
 
     app.manage(Arc::new(super::web::WebServer::default()));
-    let h = app.clone();
-    tauri::async_runtime::spawn(async move {
-        super::web::restart(&h).await;
-    });
-
     app.manage(Arc::new(super::line_server::LineServer::default()));
+    // 先還原上次連到 server 的狀態，再決定本機的收訊要不要開（連到 server 時本機不收）。
     let h = app.clone();
     tauri::async_runtime::spawn(async move {
+        super::remote::restore(&h).await;
+        super::web::restart(&h).await;
         super::line_server::restart(&h).await;
     });
 
@@ -112,6 +113,11 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
     let _guard = rt.tick_lock.lock().await;
+    // 連到 server 時，本機不收也不派送本機的題目；改成向 server 領取（續約、自動領取、收掉出事的分頁）。
+    if super::remote::is_remote(app) {
+        super::remote_work::tick(app, &rt, &pty).await;
+        return;
+    }
     let mut touched = false;
     for tab in rt.registry.tabs() {
         if pty.size(&tab).is_none() {
@@ -173,75 +179,13 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// 群組裡客戶一批訊息是不是新問題；沒有 AI、逾時或失敗一律當新問題（寧可多開，不漏客戶）。
-async fn ai_is_new_problem<R: Runtime>(app: &AppHandle<R>, text: &str) -> bool {
-    let Some(router) = app.try_state::<AiRouter>() else { return true };
-    let Ok(provider) = router.resolve().await else { return true };
-    tokio::time::timeout(Duration::from_secs(30), classify::is_new_problem(provider, text)).await.ok().and_then(|r| r.ok()).unwrap_or(true)
-}
-
-/// LINE 群組：客戶沒 @ 的新問題自動開題。等客戶講完（靜默）、我方人員還沒回、該群組沒有未結束的題目、AI 判斷是新問題，才開。
-/// 回傳有沒有開出新題。
+/// LINE 群組：客戶沒 @ 的新問題自動開題。流程在 core 的 `pipeline::line_triage`（server 共用），
+/// 這裡只負責把 AITERM 的專案設定與 AI 供應商接上去。回傳有沒有開出新題。
 async fn line_triage<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool) -> bool {
-    use super::{line_source, line_store};
-    let retention = config::load_global(pool).await.line_retention_days;
-    let now = chrono::Utc::now().timestamp();
-    line_store::purge_expired(pool, retention, now).await.ok();
-    let Ok(chats) = line_store::chats_with_unhandled(pool).await else { return false };
-    if chats.is_empty() {
-        return false;
-    }
     let cands: Vec<super::telegram_source::Candidate> =
         super::all_configs(app, pool).await.into_iter().map(|(id, name, cfg)| super::telegram_source::Candidate { id, name, cfg }).collect();
-    let mut opened = false;
-    for key in chats {
-        // 這個群組在哪個啟用 LINE 的專案白名單裡（只有一個才處理）。
-        let mut hits = Vec::new();
-        for c in cands.iter().filter(|c| c.cfg.line_enabled) {
-            let senders = store::list_senders(pool, &c.id).await.unwrap_or_default();
-            if let Some(s) = senders.iter().find(|s| rules::normalize(&s.address) == key) {
-                // 測試模式：沒有「我方人員」，所有人（含自己）都當客戶。
-                let staff: std::collections::HashSet<String> = senders
-                    .iter()
-                    .filter(|_| !c.cfg.line_test_mode)
-                    .filter(|x| x.level == rules::Level::Internal)
-                    .filter_map(|x| rules::normalize(&x.address).strip_prefix("line:").filter(|id| id.starts_with('u')).map(str::to_string))
-                    .collect();
-                hits.push((c, s.level, staff));
-            }
-        }
-        let [(project, level, staff)] = hits.as_slice() else { continue };
-        // 沒開自動開題：把累積的訊息標成已處理，免得之後才打開時一次湧出一堆舊題。
-        if !project.cfg.line_auto_open {
-            if let Ok(all) = line_store::unhandled(pool, &key).await {
-                if let Some(last) = all.last() {
-                    line_store::mark_handled(pool, &key, last.id).await.ok();
-                }
-            }
-            continue;
-        }
-        let Ok(line_source::Triage::Candidate { messages, upto }) = line_source::triage_chat(pool, &key, staff, line_source::QUIET_SECS, now).await else { continue };
-        // 已經有一題在處理：不再開新題（補充請客戶 @ 一次）。
-        if store::has_open_for_sender(pool, &project.id, &key).await.unwrap_or(false) {
-            line_store::mark_handled(pool, &key, upto).await.ok();
-            continue;
-        }
-        let text = messages.iter().map(|m| format!("{}: {}", if m.name.is_empty() { "customer" } else { &m.name }, m.text)).collect::<Vec<_>>().join("\n");
-        if !ai_is_new_problem(app, &text).await {
-            line_store::mark_handled(pool, &key, upto).await.ok();
-            continue;
-        }
-        let mut group = line_store::get_name(pool, key.strip_prefix("line:").unwrap_or(&key)).await.ok().flatten().unwrap_or_default();
-        if group.is_empty() {
-            group = store::sender_label(pool, &project.id, &key).await.ok().flatten().unwrap_or_default();
-        }
-        match line_source::open_candidate(pool, project, *level, &key, &group, messages, upto, now, &super::attach::root()).await {
-            Ok(super::queue::Ingested::Queued(_)) => opened = true,
-            Ok(_) => {}
-            Err(e) => log::warn!("intake: LINE 自動開題失敗：{e}"),
-        }
-    }
-    opened
+    let ai = super::ai_adapter::RouterAi(app.clone());
+    super::pipeline::line_triage(pool, &cands, &ai, &super::attach::root()).await
 }
 
 /// 初篩分類，逾時或失敗一律當「要改程式」。
@@ -252,7 +196,7 @@ async fn classify_item<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, 
     }
     match app.try_state::<AiRouter>() {
         Some(router) => match router.resolve().await {
-            Ok(provider) => tokio::time::timeout(Duration::from_secs(30), classify::classify(provider, &item.subject, &item.body))
+            Ok(provider) => tokio::time::timeout(Duration::from_secs(30), classify::classify(&super::ai_adapter::ProviderAi(provider), &item.subject, &item.body))
                 .await
                 .ok()
                 .and_then(|r| r.ok())
@@ -456,6 +400,10 @@ pub async fn complete<R: Runtime>(app: &AppHandle<R>, tab: &str, item_id: &str, 
 }
 
 async fn finish_item<R: Runtime>(app: &AppHandle<R>, tab: &str, item_id: &str, answer: Option<String>) {
+    // 從 server 領來的題目：結果交回 server（變成草稿，由人看過再寄出）。
+    if super::remote_work::complete(app, item_id, answer.clone()).await {
+        return;
+    }
     let Some(db) = app.try_state::<IntakeDb>() else { return };
     let Some(answer) = answer else {
         store::fail(&db.pool, item_id, "無法取得 Agent 的回答").await.ok();

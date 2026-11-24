@@ -14,6 +14,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeTabStart: vi.fn(() => Promise.resolve()),
   intakeTabStop: vi.fn(() => Promise.resolve()),
   intakeTabCd: vi.fn(() => Promise.resolve("/work/one")),
+  intakeRemoteStatus: vi.fn(() => Promise.resolve({ connected: false, online: false, addr: "", name: "", role: null, error: null })),
 }));
 import * as ipc from "../../ipc/intake";
 
@@ -29,6 +30,7 @@ beforeEach(() => {
   vi.mocked(getSessionCwd).mockResolvedValue("/work/two/src");
   vi.mocked(ipc.intakeTabCd).mockResolvedValue("/work/one");
   vi.mocked(ipc.intakeTabs).mockResolvedValue([]);
+  vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: false, online: false, addr: "", name: "", role: null, error: null });
   vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: TWO, unassigned: 0, legacy_settings: false });
 });
 
@@ -119,5 +121,26 @@ describe("IntakeToggle", () => {
     expect(ipc.intakeTabs).toHaveBeenCalled();
     expect(screen.getByText(t.intake_toggle_off)).toBeInTheDocument();
     expect(screen.getByRole("button")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("stays usable while connected to a server and explains that items come from the server", async () => {
+    vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: true, online: true, addr: "h:1", name: "小華", role: "admin", error: null });
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: ONE, unassigned: 0, legacy_settings: false });
+    vi.mocked(ipc.intakeTabs).mockResolvedValueOnce([]).mockResolvedValue([{ tab_id: "pty-1", project_id: "p1", claude_ready: true }]);
+    wrap();
+    const label = await screen.findByText(t.intake_toggle_off);
+    const btn = label.closest("button") as HTMLButtonElement;
+    await waitFor(() => expect(btn.title).toBe(t.intake_toggle_remote_tooltip));
+    expect(btn.disabled).toBe(false);
+    fireEvent.click(btn);
+    await waitFor(() => expect(ipc.intakeTabStart).toHaveBeenCalledWith("pty-1", "p1"));
+  });
+
+  it("shows the reason when starting fails instead of doing nothing", async () => {
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: ONE, unassigned: 0, legacy_settings: false });
+    vi.mocked(ipc.intakeTabStart).mockRejectedValueOnce("這個專案沒有設定");
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_toggle_off));
+    expect((await screen.findByRole("alert")).textContent).toContain("這個專案沒有設定");
   });
 });

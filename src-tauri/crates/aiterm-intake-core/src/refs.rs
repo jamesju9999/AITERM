@@ -10,7 +10,7 @@ pub const OFFICE: &[&str] = &["doc", "docx", "docm", "odt", "ppt", "pptx", "pps"
 /// 最多看這麼多個項目（檔案與資料夾），超過就停並標示已截斷。
 pub const MAX_ENTRIES: usize = 5000;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct FolderCheck {
     pub path: String,
     pub exists: bool,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { intakeProjects, intakeTabCd, intakeTabStart, intakeTabStop, intakeTabs, type IntakeProject } from "../../ipc/intake";
 import { getSessionCwd } from "../../ipc/fs";
 import { useIntakeChanged } from "../../hooks/useIntakeChanged";
+import { useIntakeRemote } from "../../hooks/useIntakeRemote";
 import { useLocale } from "../../contexts/LocaleContext";
 import { isUnder, projectForCwd } from "../../lib/intakeProject";
 import { MailIcon } from "../Icons";
@@ -20,6 +21,9 @@ export function IntakeToggle({ sessionId }: Props) {
   const [names, setNames] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [cdError, setCdError] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
+  // 連到 server 時，這個分頁從 server 領題目（提示文字不同）；其餘操作與本機相同。
+  const remote = useIntakeRemote();
   const [picking, setPicking] = useState<{ projects: IntakeProject[]; choice: string; cwd: string | null } | null>(null);
 
   const refresh = useCallback(() => {
@@ -38,10 +42,14 @@ export function IntakeToggle({ sessionId }: Props) {
 
   async function start(project: string) {
     setBusy(true);
+    setStartError(null);
     try {
       await intakeTabStart(sessionId, project);
       setPicking(null);
       refresh();
+    } catch (e) {
+      // 以前這裡沒接，後端拒絕時畫面完全沒反應。
+      setStartError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -99,7 +107,7 @@ export function IntakeToggle({ sessionId }: Props) {
     <div className="aiterm-intake-toggle">
       <button
         className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm ${on ? "aiterm-intake-toggle--on" : ""} ${on && !ready ? "aiterm-intake-toggle--waiting" : ""}`}
-        title={on && !ready ? t.intake_toggle_waiting_hint : t.intake_toggle_tooltip}
+        title={on && !ready ? t.intake_toggle_waiting_hint : remote.connected ? t.intake_toggle_remote_tooltip : t.intake_toggle_tooltip}
         aria-pressed={on}
         disabled={busy}
         onClick={(e) => {
@@ -111,6 +119,7 @@ export function IntakeToggle({ sessionId }: Props) {
         <MailIcon size={14} />
         <span>{on ? `${t.intake_toggle_on}${names[projectId] ? `：${names[projectId]}` : ""}${ready ? "" : `（${t.intake_toggle_waiting}）`}` : t.intake_toggle_off}</span>
       </button>
+      {startError && <p className="aiterm-intake-toggle__err" role="alert">{startError}</p>}
       {picking && (
         <div className="aiterm-intake-toggle__pop" role="dialog" onClick={(e) => e.stopPropagation()}>
           {picking.projects.length === 0 ? (

@@ -68,7 +68,7 @@ pub fn normalize(addr: &str) -> String {
     };
     let a = a.trim().to_lowercase();
     // 直接貼 LINE 的 userId（U＋32 位十六進位）就當作 `line:<userId>`，使用者不必知道前綴。
-    if super::line_source::valid_line_id(&a) {
+    if crate::line_source::valid_line_id(&a) {
         return format!("line:{a}");
     }
     a
@@ -78,7 +78,7 @@ pub fn normalize(addr: &str) -> String {
 pub fn valid_address(addr: &str) -> bool {
     let a = normalize(addr);
     if let Some(id) = a.strip_prefix("line:") {
-        return super::line_source::valid_line_id(id);
+        return crate::line_source::valid_line_id(id);
     }
     if let Some(id) = a.strip_prefix("tg:") {
         return id.parse::<i64>().is_ok();

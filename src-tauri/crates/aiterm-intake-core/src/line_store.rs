@@ -124,7 +124,7 @@ pub async fn message_count(pool: &SqlitePool, chat: &str) -> Result<i64, sqlx::E
     sqlx::query_scalar("SELECT COUNT(*) FROM line_messages WHERE chat = ?").bind(chat).fetch_one(pool).await
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct Unknown {
     pub id: String,
     pub kind: String,

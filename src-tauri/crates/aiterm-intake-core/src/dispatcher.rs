@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::store::{AttachmentRow, IntakeItem};
+use crate::store::{AttachmentRow, IntakeItem};
 
 pub fn marker_for(item_id: &str) -> String {
     format!("[INTAKE#{}]", item_id.chars().take(8).collect::<String>())
@@ -79,7 +79,7 @@ pub fn build_prompt(item: &IntakeItem, images: &[AttachmentRow], diagnose: bool)
         subject = item.subject,
         body = item.body,
         pics = pics,
-        note = format!("{}{}", if diagnose { diagnose_note() } else { String::new() }, if item.source == "line" { super::line_text::PLAIN_NOTE } else { "" }),
+        note = format!("{}{}", if diagnose { diagnose_note() } else { String::new() }, if item.source == "line" { crate::line_text::PLAIN_NOTE } else { "" }),
     )
 }
 
@@ -249,7 +249,7 @@ mod tests {
             id: id.into(), source: "email".into(), sender: "bob@corp.com".into(), sender_level: level.into(),
             subject: "壞掉了".into(), body: "請修".into(), message_id: "m".into(), status: "running".into(),
             tab_id: None, reply_draft: None, error: None, created_at: 0, updated_at: 0,
-            kind: None, snapshot_head: None, verification: None, verified: None, sender_name: None, project_id: String::new(), to_addrs: None, cc_addrs: None, board_task_id: None, route_kind: None,
+            kind: None, snapshot_head: None, verification: None, verified: None, sender_name: None, project_id: String::new(), to_addrs: None, cc_addrs: None, board_task_id: None, route_kind: None, claimed_by: None, claimed_at: None, claim_expires_at: None,
         }
     }
 

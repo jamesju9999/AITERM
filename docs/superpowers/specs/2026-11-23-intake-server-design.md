@@ -1,7 +1,7 @@
 # 問題收集 Server 版（無頭 server＋AITERM Client 模式）— 設計
 
 日期：2026-11-23
-狀態：開放問題已全部決定，待使用者核可整份 spec
+狀態：已核可並實作 ①②（見文末「實作期間的偏差」）
 
 ## 問題
 
@@ -314,3 +314,22 @@ Server 管理多個專案，與本機一致：每個專案有 `project_id`、名
 5. AITERM 的 `IntakeBackend`、Remote 實作、設定頁「連線」區塊、離線處理。
 6. 整合測試、中間人測試、實機驗收。
 7. 發佈產物與流程（`intake-server-v*` tag），文件（如何在 VPS 部署、如何配對成員）。
+
+## 實作期間的偏差（①② 已實作，以此為準）
+
+實作時查證後做的調整；上面的設計文字沒有逐處改寫，衝突時以這一節為準。
+
+| 項目 | spec 原寫 | 實作 | 原因 |
+|---|---|---|---|
+| 配對 | TLS＋4 位數 SAS，口頭核對，管理員在 server 確認 | **邀請碼當預先共享的祕密，雙方對「這條 TLS 連線的 exporter」做 HMAC 互證**（重用 `aiterm-core::share::auth`），不需要口頭核對與 server 端確認；邀請碼 6 字元編號＋16 字元祕密（約 80 bit），一次性、15 分鐘、錯 5 次作廢，來源 IP 退避 | 邀請碼本來就由管理員針對特定成員產生，已是授權；互證綁定連線，中間人沒有祕密就偽造不了任何一方的證明，比 4 位數 SAS 強，也少兩個人工步驟。有測試：別條連線的證明被拒、不知道祕密的假 server 不被信任 |
+| 公開網路憑證 | 一般憑證驗證 | 配對後先用一般根憑證試連 `/v1/hello`，通過就不釘指紋（公開網路），不通過就釘配對時看到的指紋 | 自簽才需要釘；正式憑證換新時不能誤報 |
+| 資料庫 | `members.db` | `server.db`（成員、邀請、稽核、專案）＋ core 的 `intake.db` | 合併成員、邀請、稽核、專案四張表 |
+| 題目端點 | `/v1/projects/{pid}/items/{id}/…`、`/status` | **`/v1/items/{id}/approve｜reject｜draft｜reply`、`DELETE /v1/items/{id}`**；附件 `/v1/attachments/{att}/data｜text`；沒有 `/status` 端點 | AITerm 的指令只帶題目 id；題目狀態只能經由核准、駁回、草稿、回覆改變（與桌面版相同）。清單仍是 `/v1/projects/{pid}/items` |
+| 全域設定 | `/v1/global-config` | `GET/PUT /v1/ai`、`PUT/DELETE /v1/secrets/{id}`（只接受白名單內的祕密 id）、`/v1/status` | 埠號與保留天數在每個專案設定裡，由 `ops::set_config` 同步到全域，不需要另一個端點 |
+| AI | 抽出 `ai/` 供 server 重用 | **不搬 `ai/`**（依賴 pty、chatgpt_web、usage 等），core 定義 `AiComplete`，server 內建最小的一次性補全 client（openai、anthropic、openai_compat、ollama） | 搬動規模遠超過收益；功能（server 自己設供應商與金鑰）不變 |
+| 收訊管道 | LINE、網頁表單先做，Email、Telegram 隨後 | **只有 LINE**；Email、Telegram、網頁表單在 server 上尚未支援（設定會存，但不收訊也不能回覆） | 這三個管道需要 server 端的 SMTP／IMAP／Telegram 與網頁表單寄驗證碼，是獨立工作；文件、CHANGELOG 與畫面都明說 |
+| 預留 | `claim／release／result` 回 501 | ①② 時是 501；**④ 已實作**（見 `2026-11-24-intake-claim-design.md`），`claimed_by／claimed_at／claim_expires_at` 已加到資料表並有舊資料庫升級測試 | ④ 開工 |
+| 發佈 | `intake-server-v*` tag，Linux x86_64＋macOS arm64 | tag 如預期；平台改為 Linux x86_64／aarch64（musl）、macOS arm64、Windows x64；只建 **draft** release，不自動公開 | 比照 `host-v*` 的做法與平台；公開由人確認 |
+| Client 的「重新整理」 | — | 連線時不去收信，只重新載入（server 有變動會推播） | server 自己收訊 |
+| 本機專屬功能 | — | 連線時停用：舊資料歸屬／複製（legacy）、終端機分頁接收；資料夾選擇器改成手動輸入 server 路徑 | 這些只對本機有意義 |
+

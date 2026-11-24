@@ -21,6 +21,7 @@ import {
   intakeList,
   intakeProjects,
   intakeRefresh,
+  intakeRemoteClaim,
   intakeReject,
   intakeSendReply,
   intakeSenders,
@@ -42,11 +43,14 @@ import {
   type Level,
 } from "../../ipc/intake";
 import { MailIcon } from "../Icons";
+import type { IntakeRemoteStatus } from "../../ipc/intake";
 import { MarkdownText } from "../../lib/markdown";
 import { useNavigate } from "react-router-dom";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
 import { systemsList, type SystemConnection } from "../../ipc/systems";
 import { useIntakeChanged } from "../../hooks/useIntakeChanged";
+import { useIntakeRemote } from "../../hooks/useIntakeRemote";
+import { ConnectionCard } from "./ConnectionCard";
 import { useLocale } from "../../contexts/LocaleContext";
 import { displayAddress, validAddress } from "../../lib/intakeAddress";
 import { flowSteps } from "../../lib/intakeFlow";
@@ -93,6 +97,8 @@ export function IntakeView() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+  const remote = useIntakeRemote();
+  const [showConn, setShowConn] = useState(false);
 
   const loadProjects = useCallback(() => {
     intakeProjects()
@@ -185,17 +191,27 @@ export function IntakeView() {
           {unassigned > 0 && <option value="">{t.intake_unassigned} ({unassigned})</option>}
         </select>
         {!inUnassigned && !noProject && (
-          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showSettings} onClick={() => setShowSettings((v) => !v)}>
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showSettings} onClick={() => { setShowConn(false); setShowSettings((v) => !v); }}>
             {showSettings ? t.intake_settings_back : t.intake_settings}
           </button>
         )}
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showConn} onClick={() => setShowConn((v) => !v)}>
+          {t.intake_conn_button}
+        </button>
       </div>
+      {remote.connected && (
+        <div className={`intake__remote ${remote.online && !remote.error ? "" : "intake__remote--off"}`} role="status">
+          {t.intake_conn_banner}：{remote.addr}（{remote.name}）{remote.online ? "" : ` — ${t.intake_conn_offline}`}
+        </div>
+      )}
       {error && <div className="intake__error" role="alert">{error}</div>}
 
-      {noProject ? (
+      {showConn ? (
+        <ConnectionCard status={remote} />
+      ) : noProject ? (
         <p className="intake__empty">{t.intake_no_projects}</p>
       ) : showSettings && !inUnassigned ? (
-        <SettingsPanel key={projectId} projectId={projectId} projectName={current?.name ?? ""} legacySettings={legacySettings} onError={setError} />
+        <SettingsPanel key={projectId} projectId={projectId} projectName={current?.name ?? ""} legacySettings={legacySettings} remote={remote} onError={setError} />
       ) : (
         <>
           {inUnassigned && <AdoptBar projects={projects} run={run} />}
@@ -251,7 +267,7 @@ export function IntakeView() {
             </ul>
             </div>
             <div className="intake__detail">
-              {selected ? <Detail key={selected.id} item={selected} run={run} projects={projects} /> : <p className="intake__empty">{t.intake_pick}</p>}
+              {selected ? <Detail key={selected.id} item={selected} run={run} projects={projects} remote={remote} /> : <p className="intake__empty">{t.intake_pick}</p>}
             </div>
           </div>
         </>
@@ -477,7 +493,7 @@ function FlowBar({ item }: { item: IntakeItem }) {
   );
 }
 
-function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void>; projects: IntakeProject[] }) {
+function Detail({ item, run, projects, remote }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void>; projects: IntakeProject[]; remote: IntakeRemoteStatus }) {
   const { t } = useLocale();
   const [draft, setDraft] = useState(item.reply_draft ?? "");
   const [preview, setPreview] = useState(false);
@@ -504,6 +520,11 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
           </span>
           <span className="intake__chip" title={t.intake_channel}>{channelName(item.source, t)}</span>
           {item.kind && <span className="intake__chip">{item.kind === "code_change" ? t.intake_kind_code_change : t.intake_kind_question}</span>}
+          {item.claimed_by && (item.status === "running" || item.status === "draft" || item.status === "done") && (
+            <span className="intake__chip intake__chip--claim" title={t.intake_claim_who_tip}>
+              {item.status === "running" ? t.intake_claim_running.replace("{name}", item.claimed_by) : t.intake_claim_handled.replace("{name}", item.claimed_by)}
+            </span>
+          )}
           <span className="intake__meta">{new Date(item.created_at * 1000).toLocaleString()}</span>
         </div>
       </header>
@@ -538,7 +559,7 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
             )}
           </div>
           {item.status === "done" || preview ? (
-            <div className="intake__md"><MarkdownText text={item.status === "done" ? item.reply_draft ?? "" : draft} /></div>
+            <div className={item.status === "done" ? "intake__md" : "intake__md intake__md--box"}><MarkdownText text={item.status === "done" ? item.reply_draft ?? "" : draft} /></div>
           ) : (
             <textarea className="intake__draft" value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} />
           )}
@@ -570,6 +591,11 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
             </button>
           </>
         )}
+        {item.status === "queued" && remote.connected && (
+          <button className="aiterm-btn aiterm-btn--primary" title={t.intake_claim_tip} onClick={() => void run(() => intakeRemoteClaim(item.id))}>
+            {t.intake_claim}
+          </button>
+        )}
         {item.status === "queued" && (
           <button className="aiterm-btn aiterm-btn--secondary" onClick={() => void run(() => intakeReject(item.id))}>
             {t.intake_action_reject}
@@ -599,9 +625,11 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
   );
 }
 
-function SettingsPanel({ projectId, projectName, legacySettings, onError }: { projectId: string; projectName: string; legacySettings: boolean; onError: (m: string | null) => void }) {
+function SettingsPanel({ projectId, projectName, legacySettings, remote, onError }: { projectId: string; projectName: string; legacySettings: boolean; remote: IntakeRemoteStatus; onError: (m: string | null) => void }) {
   const { t } = useLocale();
   const navigate = useNavigate();
+  // 連到 server 時：設定是 server 的，只有管理員能改；資料夾是 server 上的路徑，不能用本機的選擇器。
+  const readOnly = remote.connected && remote.role !== "admin";
   const [cfg, setCfg] = useState<IntakeConfig | null>(null);
   const [hasOwn, setHasOwn] = useState(true);
   const [chanTab, setChanTab] = useState<"mail" | "telegram" | "line" | "web">("mail");
@@ -829,10 +857,13 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_refs_add}`} disabled={!(newRefs[ch] ?? "").trim()} onClick={() => addRef(ch, newRefs[ch] ?? "")}>
           {t.intake_refs_add}
         </button>
-        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_refs_pick}`} onClick={() => void pickRef(ch)}>
-          {t.intake_refs_pick}
-        </button>
+        {!remote.connected && (
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_refs_pick}`} onClick={() => void pickRef(ch)}>
+            {t.intake_refs_pick}
+          </button>
+        )}
       </div>
+      {remote.connected && <p className="intake__meta intake__hint">{t.intake_conn_server_path}</p>}
     </div>
   );
 
@@ -849,6 +880,9 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
   return (
     <div className="intake__settings">
       <div className="intake__editing">{t.intake_editing_project.replace("{name}", projectName)}</div>
+      {readOnly && <div className="intake__meta intake__readonly" role="status">{t.intake_conn_readonly}</div>}
+      {remote.connected && <div className="intake__meta intake__hint">{t.intake_conn_channels_note}</div>}
+      <fieldset className="intake__fieldset" disabled={readOnly}>
       {!hasOwn && legacySettings && (
         <div className="intake__banner intake__adopt">
           <span>{t.intake_copy_legacy_hint}</span>
@@ -1001,7 +1035,9 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
       </label>
       <p className="intake__meta">{t.intake_line_webhook}：http://127.0.0.1:{cfg.line_port}/line/webhook</p>
       {cfg.line_enabled && lineStatus && !lineStatus.has_secret && <p className="intake__error">{t.intake_line_need_secret}</p>}
-      {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.listening && <p className="intake__error">{t.intake_line_not_listening}</p>}
+      {/* 設定還沒儲存時 server／本機根本還沒開始聽，這時說「埠號被占用」是誤報；存了還沒在聽才是真的問題。 */}
+      {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.listening && dirty && <p className="intake__meta intake__warn">{t.intake_line_unsaved_hint}</p>}
+      {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.listening && !dirty && <p className="intake__error">{t.intake_line_not_listening}</p>}
       {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.has_token && <p className="intake__error">{t.intake_line_need_token}</p>}
         </>
       ))}
@@ -1286,6 +1322,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, onError }: { pr
         {saved && <span className="intake__saved" role="status">✓ {t.intake_set_saved}</span>}
         {dirty && !saved && <span className="intake__dirty" role="status">● {t.intake_unsaved}</span>}
       </div>
+      </fieldset>
     </div>
   );
 }

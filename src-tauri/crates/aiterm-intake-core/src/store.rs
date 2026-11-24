@@ -2,7 +2,7 @@
 //!
 //! 狀態：`pending`（等你按派送）→ `queued`（可被接收端領取）→ `running` →
 //! `done` 或 `draft`（外部回覆待寄出）→ `done`；`rejected` 為終態。
-use super::rules::{Level, Sender};
+use crate::rules::{Level, Sender};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 
@@ -48,6 +48,11 @@ pub struct IntakeItem {
     pub board_task_id: Option<String>,
     /// 走看板／桌布時卡片的種類：`board`｜`canvas_bug`｜`canvas_ask`；舊資料與沒走的為 `None`（視為 `board`）。
     pub route_kind: Option<String>,
+    /// 連到 server 時，領取這題的成員名稱（server 上才會有）。
+    pub claimed_by: Option<String>,
+    pub claimed_at: Option<i64>,
+    /// 領取的租約到期時間；過了還沒續約，server 就把題目放回 `queued`。
+    pub claim_expires_at: Option<i64>,
 }
 
 pub struct NewItem<'a> {
@@ -135,7 +140,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     }
     // 第 2 期新增的欄位。CREATE 是 IF NOT EXISTS，舊資料庫不會自動長出來，逐欄補。
     let have: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('intake_items')").fetch_all(pool).await?;
-    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT"), ("to_addrs", "TEXT"), ("cc_addrs", "TEXT"), ("board_task_id", "TEXT"), ("route_kind", "TEXT")] {
+    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT"), ("to_addrs", "TEXT"), ("cc_addrs", "TEXT"), ("board_task_id", "TEXT"), ("route_kind", "TEXT"), ("claimed_by", "TEXT"), ("claimed_at", "INTEGER"), ("claim_expires_at", "INTEGER")] {
         if !have.iter().any(|c| c == col) {
             sqlx::query(&format!("ALTER TABLE intake_items ADD COLUMN {col} {ty}")).execute(pool).await?;
         }
@@ -150,7 +155,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query("INSERT OR IGNORE INTO intake_project_dropped (project_id, reason, count) SELECT '', reason, count FROM intake_dropped").execute(pool).await?;
         set_setting(pool, "project_split_migrated", "1").await?;
     }
-    super::line_store::init(pool).await?;
+    crate::line_store::init(pool).await?;
     Ok(())
 }
 
@@ -329,6 +334,80 @@ pub async fn claim_next(pool: &SqlitePool, project_id: &str, tab_id: &str) -> Re
         .bind(RUNNING).bind(tab_id).fetch_optional(pool).await
 }
 
+// ---- 領取（連到 server 時，成員用自己電腦處理題目）----
+
+/// 領取的租約長度（秒）。處理中要在這段時間內續約。
+pub const CLAIM_TTL_SECS: i64 = 15 * 60;
+
+/// 原子領取指定的題目：只有 `queued` 才領得到，同一題只有一個人成功。
+pub async fn claim_item(pool: &SqlitePool, id: &str, who: &str, now: i64) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query(
+        "UPDATE intake_items SET status = ?, claimed_by = ?, claimed_at = ?, claim_expires_at = ?, error = NULL, updated_at = ?
+         WHERE id = ? AND status = ?",
+    )
+    .bind(RUNNING).bind(who).bind(now).bind(now + CLAIM_TTL_SECS).bind(now).bind(id).bind(QUEUED)
+    .execute(pool).await?;
+    Ok(r.rows_affected() == 1)
+}
+
+/// 領這個專案最舊的 `queued`。兩個人同時領時各自拿到不同的題目（搶輸的重試下一題）。
+pub async fn claim_next_for(pool: &SqlitePool, project_id: &str, who: &str, now: i64) -> Result<Option<IntakeItem>, sqlx::Error> {
+    for _ in 0..8 {
+        let id: Option<String> = sqlx::query_scalar("SELECT id FROM intake_items WHERE status = ? AND project_id = ? ORDER BY created_at, rowid LIMIT 1")
+            .bind(QUEUED).bind(project_id).fetch_optional(pool).await?;
+        let Some(id) = id else { return Ok(None) };
+        if claim_item(pool, &id, who, now).await? {
+            return get_item(pool, &id).await;
+        }
+    }
+    Ok(None)
+}
+
+/// 續約：只有領取者、而且題目還在處理中。
+pub async fn renew_claim(pool: &SqlitePool, id: &str, who: &str, now: i64) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET claim_expires_at = ?, updated_at = ? WHERE id = ? AND status = ? AND claimed_by = ?")
+        .bind(now + CLAIM_TTL_SECS).bind(now).bind(id).bind(RUNNING).bind(who)
+        .execute(pool).await?;
+    Ok(r.rows_affected() == 1)
+}
+
+/// 放回 `queued`。`only_by` 有值時必須是該成員領的（管理員傳 `None`）。
+pub async fn release_claim(pool: &SqlitePool, id: &str, only_by: Option<&str>, now: i64) -> Result<bool, sqlx::Error> {
+    let mut sql = String::from("UPDATE intake_items SET status = ?, claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL, updated_at = ? WHERE id = ? AND status = ?");
+    if only_by.is_some() {
+        sql.push_str(" AND claimed_by = ?");
+    }
+    let mut q = sqlx::query(&sql).bind(QUEUED).bind(now).bind(id).bind(RUNNING);
+    if let Some(w) = only_by {
+        q = q.bind(w);
+    }
+    Ok(q.execute(pool).await?.rows_affected() == 1)
+}
+
+/// 領取者交結果：存成草稿（保留 `claimed_by` 當作「誰處理的」）。
+pub async fn finish_claim(pool: &SqlitePool, id: &str, who: &str, reply: &str, now: i64) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET status = ?, reply_draft = ?, claim_expires_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND status = ? AND claimed_by = ?")
+        .bind(DRAFT).bind(reply).bind(now).bind(id).bind(RUNNING).bind(who)
+        .execute(pool).await?;
+    Ok(r.rows_affected() == 1)
+}
+
+/// 領取者回報失敗：回 `pending` 並記原因，不自動重派（與本機一致）。
+pub async fn fail_claim(pool: &SqlitePool, id: &str, who: &str, error: &str, now: i64) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET status = ?, claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL, error = ?, updated_at = ? WHERE id = ? AND status = ? AND claimed_by = ?")
+        .bind(PENDING).bind(error).bind(now).bind(id).bind(RUNNING).bind(who)
+        .execute(pool).await?;
+    Ok(r.rows_affected() == 1)
+}
+
+/// 租約逾期的 `running` 放回 `queued`（領取者關機、當機或斷線）。回傳收回的題數。
+pub async fn expire_claims(pool: &SqlitePool, now: i64) -> Result<u64, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET status = ?, claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL, updated_at = ? WHERE status = ? AND claim_expires_at IS NOT NULL AND claim_expires_at < ?")
+        .bind(QUEUED).bind(now).bind(RUNNING).bind(now)
+        .execute(pool).await?;
+    Ok(r.rows_affected())
+}
+
 /// 完成並存回覆。`auto_send` 為真→`done`（呼叫端隨後寄出）；否則→`draft`。
 pub async fn finish(pool: &SqlitePool, id: &str, reply: &str, auto_send: bool) -> Result<bool, sqlx::Error> {
     let to = if auto_send { DONE } else { DRAFT };
@@ -388,7 +467,7 @@ pub struct AttachmentRow {
     pub size: i64,
 }
 
-pub async fn add_attachment(pool: &SqlitePool, item_id: &str, a: &super::attach::Saved) -> Result<(), sqlx::Error> {
+pub async fn add_attachment(pool: &SqlitePool, item_id: &str, a: &crate::attach::Saved) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO intake_attachments (id, item_id, filename, path, mime, size) VALUES (?,?,?,?,?,?)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(item_id).bind(&a.filename).bind(&a.path).bind(a.mime).bind(a.size)
         .execute(pool).await?;
@@ -415,13 +494,13 @@ struct SenderRow {
 pub async fn upsert_sender(pool: &SqlitePool, project_id: &str, s: &Sender) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO intake_project_senders (project_id, address, level, skip_auth) VALUES (?,?,?,?)
                  ON CONFLICT(project_id, address) DO UPDATE SET level = excluded.level, skip_auth = excluded.skip_auth")
-        .bind(project_id).bind(super::rules::normalize(&s.address)).bind(level_str(s.level)).bind(s.skip_auth)
+        .bind(project_id).bind(crate::rules::normalize(&s.address)).bind(level_str(s.level)).bind(s.skip_auth)
         .execute(pool).await?;
     Ok(())
 }
 
 pub async fn delete_sender(pool: &SqlitePool, project_id: &str, address: &str) -> Result<bool, sqlx::Error> {
-    let address = super::rules::normalize(address);
+    let address = crate::rules::normalize(address);
     sqlx::query("DELETE FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(&address).execute(pool).await?;
     Ok(sqlx::query("DELETE FROM intake_project_senders WHERE project_id = ? AND address = ?").bind(project_id).bind(&address)
         .execute(pool).await?.rows_affected() > 0)
@@ -434,7 +513,7 @@ pub fn clean_label(label: &str) -> String {
 
 /// 設定白名單項目的備註；空白＝清掉。
 pub async fn set_sender_label(pool: &SqlitePool, project_id: &str, address: &str, label: &str) -> Result<(), sqlx::Error> {
-    let (address, label) = (super::rules::normalize(address), clean_label(label));
+    let (address, label) = (crate::rules::normalize(address), clean_label(label));
     if label.is_empty() {
         sqlx::query("DELETE FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(address).execute(pool).await?;
     } else {
@@ -445,7 +524,7 @@ pub async fn set_sender_label(pool: &SqlitePool, project_id: &str, address: &str
 }
 
 pub async fn sender_label(pool: &SqlitePool, project_id: &str, address: &str) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar("SELECT label FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(super::rules::normalize(address)).fetch_optional(pool).await
+    sqlx::query_scalar("SELECT label FROM intake_sender_labels WHERE project_id = ? AND address = ?").bind(project_id).bind(crate::rules::normalize(address)).fetch_optional(pool).await
 }
 
 pub async fn sender_labels(pool: &SqlitePool, project_id: &str) -> Result<std::collections::HashMap<String, String>, sqlx::Error> {
@@ -530,6 +609,85 @@ mod tests {
     }
     fn new<'a>(mid: &'a str, status: &'a str) -> NewItem<'a> {
         NewItem { project_id: "", id: None, source: "email", sender: "a@corp.com", level: Level::External, subject: "s", body: "b", message_id: mid, status }
+    }
+
+    // ---- 領取 ----
+
+    #[tokio::test]
+    async fn only_a_queued_item_can_be_claimed_and_only_once() {
+        let p = pool().await;
+        let q = insert_item(&p, new("q", QUEUED)).await.unwrap().unwrap();
+        let pend = insert_item(&p, new("p", PENDING)).await.unwrap().unwrap();
+        assert!(!claim_item(&p, &pend.id, "小明", 100).await.unwrap(), "還沒核准的不能領");
+        assert!(claim_item(&p, &q.id, "小明", 100).await.unwrap());
+        assert!(!claim_item(&p, &q.id, "小華", 101).await.unwrap(), "已被領走");
+        let got = get_item(&p, &q.id).await.unwrap().unwrap();
+        assert_eq!((got.status.as_str(), got.claimed_by.as_deref(), got.claimed_at, got.claim_expires_at), (RUNNING, Some("小明"), Some(100), Some(100 + CLAIM_TTL_SECS)));
+    }
+
+    #[tokio::test]
+    async fn claim_next_hands_out_the_oldest_per_project_and_never_the_same_item_twice() {
+        let p = pool().await;
+        let mk = |project: &'static str, mid: &'static str| NewItem { project_id: project, id: None, source: "line", sender: "line:u1", level: Level::Internal, subject: mid, body: "b", message_id: mid, status: QUEUED };
+        let a1 = insert_item(&p, mk("a", "a1")).await.unwrap().unwrap();
+        let a2 = insert_item(&p, mk("a", "a2")).await.unwrap().unwrap();
+        insert_item(&p, mk("b", "b1")).await.unwrap();
+        assert_eq!(claim_next_for(&p, "a", "小明", 1).await.unwrap().unwrap().id, a1.id);
+        assert_eq!(claim_next_for(&p, "a", "小華", 1).await.unwrap().unwrap().id, a2.id, "第二個人拿到下一題，不會重複");
+        assert!(claim_next_for(&p, "a", "小明", 1).await.unwrap().is_none(), "這個專案沒有可領的了");
+        assert_eq!(claim_next_for(&p, "b", "小明", 1).await.unwrap().unwrap().subject, "b1");
+    }
+
+    #[tokio::test]
+    async fn the_lease_can_be_renewed_only_by_its_owner_and_expired_items_return_to_the_queue() {
+        let p = pool().await;
+        let it = insert_item(&p, new("m", QUEUED)).await.unwrap().unwrap();
+        claim_item(&p, &it.id, "小明", 100).await.unwrap();
+        assert!(!renew_claim(&p, &it.id, "小華", 200).await.unwrap(), "別人不能續約");
+        assert!(renew_claim(&p, &it.id, "小明", 200).await.unwrap());
+        assert_eq!(get_item(&p, &it.id).await.unwrap().unwrap().claim_expires_at, Some(200 + CLAIM_TTL_SECS));
+        assert_eq!(expire_claims(&p, 200 + CLAIM_TTL_SECS).await.unwrap(), 0, "剛好到期那一秒還算有效");
+        assert_eq!(expire_claims(&p, 200 + CLAIM_TTL_SECS + 1).await.unwrap(), 1);
+        let back = get_item(&p, &it.id).await.unwrap().unwrap();
+        assert_eq!((back.status.as_str(), back.claimed_by), (QUEUED, None));
+        assert!(!renew_claim(&p, &it.id, "小明", 300).await.unwrap(), "被收回後原領取者不能再續約");
+        assert!(claim_item(&p, &it.id, "小華", 300).await.unwrap(), "收回後別人可以領");
+    }
+
+    #[tokio::test]
+    async fn release_finish_and_fail_are_limited_to_the_claimer_except_admin_release() {
+        let p = pool().await;
+        let it = insert_item(&p, new("m", QUEUED)).await.unwrap().unwrap();
+        claim_item(&p, &it.id, "小明", 1).await.unwrap();
+        assert!(!release_claim(&p, &it.id, Some("小華"), 2).await.unwrap());
+        assert!(!finish_claim(&p, &it.id, "小華", "x", 2).await.unwrap());
+        assert!(!fail_claim(&p, &it.id, "小華", "x", 2).await.unwrap());
+        assert!(release_claim(&p, &it.id, None, 2).await.unwrap(), "管理員（不指定人）可以放回");
+        claim_item(&p, &it.id, "小明", 3).await.unwrap();
+        assert!(finish_claim(&p, &it.id, "小明", "回覆內容", 4).await.unwrap());
+        let done = get_item(&p, &it.id).await.unwrap().unwrap();
+        assert_eq!((done.status.as_str(), done.reply_draft.as_deref(), done.claimed_by.as_deref()), (DRAFT, Some("回覆內容"), Some("小明")));
+        assert!(!finish_claim(&p, &it.id, "小明", "again", 5).await.unwrap(), "交過之後不能再交");
+    }
+
+    #[tokio::test]
+    async fn a_failed_claim_goes_back_to_pending_with_the_reason() {
+        let p = pool().await;
+        let it = insert_item(&p, new("m", QUEUED)).await.unwrap().unwrap();
+        claim_item(&p, &it.id, "小明", 1).await.unwrap();
+        assert!(fail_claim(&p, &it.id, "小明", "Claude Code 已結束", 2).await.unwrap());
+        let g = get_item(&p, &it.id).await.unwrap().unwrap();
+        assert_eq!((g.status.as_str(), g.error.as_deref(), g.claimed_by), (PENDING, Some("Claude Code 已結束"), None));
+    }
+
+    #[tokio::test]
+    async fn the_claim_columns_are_added_to_an_old_database() {
+        let p = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE intake_items (id TEXT PRIMARY KEY NOT NULL, source TEXT NOT NULL, sender TEXT NOT NULL, sender_level TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, message_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, tab_id TEXT, reply_draft TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)").execute(&p).await.unwrap();
+        sqlx::query("INSERT INTO intake_items VALUES ('old','email','a','external','s','b','m','queued',NULL,NULL,NULL,1,1)").execute(&p).await.unwrap();
+        init_schema(&p).await.unwrap();
+        let old = get_item(&p, "old").await.unwrap().unwrap();
+        assert_eq!((old.subject.as_str(), old.claimed_by), ("s", None), "舊資料不變，新欄位是空的");
     }
 
     #[tokio::test]
@@ -683,7 +841,7 @@ mod tests {
         let mk = |mid: &'static str| NewItem { project_id: "", id: None, source: "email", sender: "a@corp.com", level: Level::Internal, subject: "s", body: "b", message_id: mid, status: QUEUED };
         let a = insert_item(&p, mk("m1")).await.unwrap().unwrap();
         let b = insert_item(&p, mk("m2")).await.unwrap().unwrap();
-        add_attachment(&p, &a.id, &crate::intake::attach::Saved { filename: "x.png".into(), path: "/x/x.png".into(), mime: "image/png", size: 1 }).await.unwrap();
+        add_attachment(&p, &a.id, &crate::attach::Saved { filename: "x.png".into(), path: "/x/x.png".into(), mime: "image/png", size: 1 }).await.unwrap();
         claim_next(&p, "", "tab").await.unwrap(); // a 變成 running
         assert!(!delete_item(&p, &a.id).await.unwrap(), "處理中不能刪");
         assert!(delete_item(&p, &b.id).await.unwrap());
@@ -755,7 +913,7 @@ mod tests {
     async fn sender_labels_are_cleaned_scoped_to_a_project_cleared_by_blank_and_removed_with_the_sender() {
         let p = pool().await;
         let a = "line:Cb345e5d492c48c02a3eaa279924c52d2";
-        upsert_sender(&p, "p1", &crate::intake::rules::Sender { address: a.into(), level: crate::intake::rules::Level::External, skip_auth: false }).await.unwrap();
+        upsert_sender(&p, "p1", &crate::rules::Sender { address: a.into(), level: crate::rules::Level::External, skip_auth: false }).await.unwrap();
         set_sender_label(&p, "p1", a, "  範例科技\n客服群 ").await.unwrap();
         assert_eq!(sender_label(&p, "p1", a).await.unwrap().as_deref(), Some("範例科技客服群"));
         assert_eq!(sender_label(&p, "p1", &a.to_uppercase()).await.unwrap().as_deref(), Some("範例科技客服群"), "地址大小寫不影響");
