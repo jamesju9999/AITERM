@@ -344,9 +344,7 @@ pub async fn intake_tab_cd(
 
 #[tauri::command]
 pub fn intake_tabs(rt: State<'_, Arc<IntakeRuntime>>, pty: State<'_, Arc<crate::pty::PtyManager>>, rs: State<'_, Arc<RemoteState>>) -> Vec<TabDto> {
-    if rs.active().is_some() {
-        return Vec::new();
-    }
+    let _ = &rs; // 連到 server 時分頁也照常列出：領取的題目就是派給這些分頁
     rt.registry
         .tabs()
         .into_iter()
