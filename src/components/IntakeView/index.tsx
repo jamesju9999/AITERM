@@ -559,7 +559,7 @@ function Detail({ item, run, projects, remote }: { item: IntakeItem; run: (fn: (
             )}
           </div>
           {item.status === "done" || preview ? (
-            <div className="intake__md"><MarkdownText text={item.status === "done" ? item.reply_draft ?? "" : draft} /></div>
+            <div className={item.status === "done" ? "intake__md" : "intake__md intake__md--box"}><MarkdownText text={item.status === "done" ? item.reply_draft ?? "" : draft} /></div>
           ) : (
             <textarea className="intake__draft" value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} />
           )}
