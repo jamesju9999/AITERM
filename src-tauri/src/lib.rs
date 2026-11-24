@@ -305,6 +305,7 @@ pub fn run() {
         .manage(mail_db)
         .manage(intake_db)
         .manage(std::sync::Arc::new(intake::remote::RemoteState::default()))
+        .manage(intake::commands::ServerAiLogin::default())
         .manage(project_registry)
         .manage(tokio::sync::Mutex::new(MailState::new()))
         .manage(mail::manager::MailSyncSignals::new())
@@ -596,6 +597,9 @@ pub fn run() {
             intake::commands::intake_server_telegram_status,
             intake::commands::intake_server_telegram_apply,
             intake::commands::intake_server_ai_status,
+            intake::commands::intake_server_ai_login_start,
+            intake::commands::intake_server_ai_login_complete,
+            intake::commands::intake_server_ai_logout,
             intake::commands::intake_server_ai_models,
             intake::commands::intake_server_ai_test,
             intake::commands::intake_server_ai_apply,

@@ -268,6 +268,9 @@ export interface IntakeServerAi {
   configured: boolean;
   /** 最近一次實際呼叫的結果（server 重啟後清空）。 */
   health?: { last_ok: number | null; last_ms: number | null; error: string | null };
+  /** 訂閱登入狀態：none 沒登入、ok 可用、needs_login 憑證失效要重新登入。 */
+  login?: "none" | "ok" | "needs_login";
+  login_error?: string | null;
 }
 export interface IntakeServerAiTest {
   ok: boolean;
@@ -295,3 +298,10 @@ export const intakeServerTelegramStatus = () => invoke<IntakeServerTelegram>("in
 /** `botToken` 空字串＝不變。 */
 export const intakeServerTelegramApply = (ownerChatId: string, botToken: string) =>
   invoke<void>("intake_server_telegram_apply", { ownerChatId, botToken });
+
+/** 為 server 登入訂閱：開瀏覽器走授權，回傳授權網址（瀏覽器沒開時讓使用者自己開）。 */
+export const intakeServerAiLoginStart = (provider: string) => invoke<string>("intake_server_ai_login_start", { provider });
+/** 貼回授權碼（或完整回呼網址）完成登入；憑證只交給 server，不存進這台電腦。 */
+export const intakeServerAiLoginComplete = (provider: string, codeAndState: string) =>
+  invoke<void>("intake_server_ai_login_complete", { provider, codeAndState });
+export const intakeServerAiLogout = () => invoke<void>("intake_server_ai_logout");

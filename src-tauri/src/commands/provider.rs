@@ -785,7 +785,7 @@ fn store_login_secrets(secrets: &SecretStore, entries: &[(String, String)]) -> R
     Ok(())
 }
 
-fn open_browser(url: &str) {
+pub(crate) fn open_browser(url: &str) {
     // Delegate to the `open` crate. Its Windows path launches the default browser
     // via `cmd /c start "" "<url>"` with the URL QUOTED, so ampersands in the OAuth
     // query string survive. The old hand-rolled `cmd /C start "" <url>` passed the
@@ -2118,5 +2118,37 @@ mod antigravity_tests {
                 .await;
 
         assert!(result.is_err());
+    }
+}
+
+/// `aiterm-ai-oauth`（Server 的訂閱登入用）的常數必須與這裡（AITerm 已用真實帳號驗證過的實作）一致。
+/// 兩邊各一份是刻意的：不去動既有的登入與路由；改了一邊，這裡會立刻紅燈。
+#[cfg(test)]
+mod ai_oauth_crate_pin {
+    use super::*;
+    use aiterm_ai_oauth::anthropic as shared;
+
+    #[test]
+    fn the_shared_anthropic_constants_equal_the_ones_aiterm_logs_in_with() {
+        assert_eq!(shared::CLIENT_ID, ANTHROPIC_OAUTH_CLIENT_ID);
+        assert_eq!(shared::AUTH_URL, ANTHROPIC_OAUTH_AUTH_URL);
+        assert_eq!(shared::TOKEN_URL, ANTHROPIC_OAUTH_TOKEN_URL);
+        assert_eq!(shared::REDIRECT_URI, ANTHROPIC_OAUTH_REDIRECT_URI);
+        assert_eq!(shared::REDIRECT_URI_ENCODED, ANTHROPIC_OAUTH_REDIRECT_URI_ENCODED);
+        assert_eq!(shared::SCOPE_ENCODED, ANTHROPIC_OAUTH_SCOPE_ENCODED);
+        assert_eq!(shared::OAUTH_BETA_HEADER, crate::ai::anthropic::OAUTH_BETA_HEADER);
+        assert_eq!(shared::CLAUDE_CODE_SENTINEL, crate::ai::anthropic::CLAUDE_CODE_SENTINEL);
+        assert_eq!(shared::ANTHROPIC_VERSION, crate::ai::anthropic::ANTHROPIC_VERSION);
+    }
+
+    #[test]
+    fn the_shared_auth_url_is_the_same_url_aiterm_opens_for_its_own_login() {
+        let p = shared::Pkce::new();
+        let ours = format!(
+            "{}?code=true&client_id={}&response_type=code&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
+            ANTHROPIC_OAUTH_AUTH_URL, ANTHROPIC_OAUTH_CLIENT_ID, ANTHROPIC_OAUTH_REDIRECT_URI_ENCODED, ANTHROPIC_OAUTH_SCOPE_ENCODED, p.challenge, p.state
+        );
+        assert_eq!(shared::auth_url(&p), ours);
+        assert_eq!(gen_code_challenge(&p.verifier), p.challenge, "challenge 的算法一致");
     }
 }

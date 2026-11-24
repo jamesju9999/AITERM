@@ -1,5 +1,6 @@
 //! Server 自己的 AI 設定與一次性補全（題目分類、群組「是不是新問題」用）。
-//! 只支援用 API 金鑰的供應商；訂閱 OAuth 需要瀏覽器登入，無頭 server 做不到。
+//! 支援用 API 金鑰的供應商，以及訂閱登入（OAuth，目前是 Claude）：瀏覽器登入由管理員的 AITerm 完成，
+//! 取得的憑證交給 server 存放與續期（見 `login`、`access_token`）。
 use aiterm_intake_core::host::{AiComplete, Secrets};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -8,6 +9,10 @@ use std::time::Duration;
 
 pub const SETTING_KEY: &str = "server_ai";
 pub const API_KEY_SECRET: &str = "ai_api_key";
+/// 訂閱登入的憑證（加密存放、不回傳）。
+pub const OAUTH_ACCESS: &str = "ai_oauth_access";
+pub const OAUTH_REFRESH: &str = "ai_oauth_refresh";
+pub const OAUTH_EXPIRES_AT: &str = "ai_oauth_expires_at";
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct AiSettings {
@@ -21,7 +26,12 @@ pub struct AiSettings {
     pub base_url: String,
 }
 
-pub const PROVIDERS: [&str; 4] = ["openai", "anthropic", "openai_compat", "ollama"];
+pub const PROVIDERS: [&str; 5] = ["openai", "anthropic", "openai_compat", "ollama", "anthropic_oauth"];
+
+/// 用訂閱登入（OAuth）而不是 API 金鑰的供應商。
+pub fn is_oauth(provider: &str) -> bool {
+    provider == "anthropic_oauth"
+}
 
 pub async fn load(pool: &SqlitePool) -> AiSettings {
     aiterm_intake_core::store::get_setting(pool, SETTING_KEY).await.ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
@@ -34,9 +44,15 @@ pub async fn save(pool: &SqlitePool, s: &AiSettings) -> Result<(), String> {
     aiterm_intake_core::store::set_setting(pool, SETTING_KEY, &serde_json::to_string(s).map_err(|e| e.to_string())?).await.map_err(|e| e.to_string())
 }
 
-/// 已設定供應商、模型，且（除了 Ollama）有金鑰才算可用。
+/// 已設定供應商、模型，且有憑證（訂閱登入或金鑰；Ollama 不需要）才算可用。
 pub fn configured(s: &AiSettings, secrets: &dyn Secrets) -> bool {
-    !s.provider.is_empty() && !s.model.is_empty() && (s.provider == "ollama" || secrets.get(API_KEY_SECRET).is_some())
+    if s.provider.is_empty() || s.model.is_empty() {
+        return false;
+    }
+    if is_oauth(&s.provider) {
+        return secrets.get(OAUTH_REFRESH).is_some();
+    }
+    s.provider == "ollama" || secrets.get(API_KEY_SECRET).is_some()
 }
 
 /// 最近一次實際呼叫的結果（記憶體內；重啟就清空）。
@@ -54,11 +70,126 @@ pub struct ServerAi {
     pool: SqlitePool,
     secrets: Arc<dyn Secrets>,
     health: parking_lot::Mutex<Health>,
+    /// 續期要排隊：Anthropic 的續期憑證是一次性的，兩個請求同時用同一個會讓其中一個把整組登入弄壞。
+    refresh_lock: tokio::sync::Mutex<()>,
+    /// 續期被供應商拒絕（憑證失效）時的原因；重新登入或登出後清除。
+    login_error: parking_lot::Mutex<Option<String>>,
+    /// 訂閱登入的端點；測試時指向假的伺服器。
+    endpoints: parking_lot::Mutex<aiterm_ai_oauth::anthropic::Endpoints>,
 }
+
+/// 登入狀態：`none` 沒登入、`ok` 可用、`needs_login` 憑證失效要重新登入。
+pub type LoginState = &'static str;
 
 impl ServerAi {
     pub fn new(pool: SqlitePool, secrets: Arc<dyn Secrets>) -> Self {
-        Self { pool, secrets, health: Default::default() }
+        Self { pool, secrets, health: Default::default(), refresh_lock: Default::default(), login_error: Default::default(), endpoints: Default::default() }
+    }
+
+    /// 測試用：換掉訂閱登入的端點。
+    pub fn set_oauth_endpoints(&self, ep: aiterm_ai_oauth::anthropic::Endpoints) {
+        *self.endpoints.lock() = ep;
+    }
+
+    /// 存下一次登入取得的憑證（續期憑證必須有）。
+    pub fn store_login(&self, access: &str, refresh: &str, expires_in: Option<u64>) -> Result<(), String> {
+        if access.trim().is_empty() || refresh.trim().is_empty() {
+            return Err("憑證不完整：需要存取憑證與續期憑證".into());
+        }
+        self.secrets.set(OAUTH_REFRESH, refresh.trim())?;
+        self.secrets.set(OAUTH_ACCESS, access.trim())?;
+        self.secrets.set(OAUTH_EXPIRES_AT, &(now_secs() + expires_in.unwrap_or(3600)).to_string())?;
+        *self.login_error.lock() = None;
+        Ok(())
+    }
+
+    pub fn clear_login(&self) {
+        for id in [OAUTH_ACCESS, OAUTH_REFRESH, OAUTH_EXPIRES_AT] {
+            let _ = self.secrets.delete(id);
+        }
+        *self.login_error.lock() = None;
+    }
+
+    pub fn login_state(&self) -> (LoginState, Option<String>) {
+        let err = self.login_error.lock().clone();
+        if self.secrets.get(OAUTH_REFRESH).is_none() {
+            ("none", None)
+        } else if err.is_some() {
+            ("needs_login", err)
+        } else {
+            ("ok", None)
+        }
+    }
+
+    /// 拿一個可用的存取憑證；快到期就先續期（排隊，一次只有一個在續期）。
+    pub async fn access_token(&self) -> Result<String, String> {
+        let _guard = self.refresh_lock.lock().await;
+        let access = self.secrets.get(OAUTH_ACCESS).unwrap_or_default();
+        let expires_at = self.secrets.get(OAUTH_EXPIRES_AT).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        let now = now_secs();
+        if !access.is_empty() && expires_at > now + aiterm_ai_oauth::anthropic::REFRESH_SKEW_SECS {
+            return Ok(access);
+        }
+        let Some(refresh) = self.secrets.get(OAUTH_REFRESH) else { return Err("尚未登入：請在 AITerm 為 server 登入訂閱帳號".into()) };
+        let ep = self.endpoints.lock().clone();
+        match aiterm_ai_oauth::anthropic::refresh(&ep, &refresh).await {
+            Ok(t) => {
+                // 先存新的續期憑證：舊的已經失效，存不進去就是這次登入作廢，必須明講而不是默默繼續用。
+                if let Some(new_refresh) = t.refresh.as_deref() {
+                    self.secrets.set(OAUTH_REFRESH, new_refresh).map_err(|e| format!("續期成功但新的續期憑證存不進去，需要重新登入：{e}"))?;
+                }
+                self.secrets.set(OAUTH_ACCESS, &t.access)?;
+                self.secrets.set(OAUTH_EXPIRES_AT, &(now_secs() + t.expires_in.unwrap_or(3600)).to_string())?;
+                *self.login_error.lock() = None;
+                Ok(t.access)
+            }
+            Err(e) => {
+                // 還沒真的過期就先用舊的；供應商明確拒絕（400／401）才算憑證失效、要重新登入。
+                if !access.is_empty() && expires_at > now {
+                    log::warn!("AI 續期失敗，先用現有憑證：{e}");
+                    return Ok(access);
+                }
+                if e.contains("HTTP 400") || e.contains("HTTP 401") {
+                    *self.login_error.lock() = Some(e.clone());
+                    return Err(format!("登入已失效，請在 AITerm 重新為 server 登入：{e}"));
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// 問供應商有哪些模型；訂閱型用已登入的憑證，金鑰型用 `key`。
+    pub async fn list_models(&self, s: &AiSettings, key: &str) -> Result<Vec<String>, String> {
+        if is_oauth(&s.provider) {
+            let token = self.access_token().await?;
+            let ep = self.endpoints.lock().clone();
+            return aiterm_ai_oauth::anthropic::list_models(&ep, &token).await;
+        }
+        list_models_with(s, key).await
+    }
+
+    /// 測試連線；訂閱型用已登入的憑證。
+    pub async fn test(&self, s: &AiSettings, key: &str) -> TestResult {
+        if !is_oauth(&s.provider) {
+            return test_with(s, key).await;
+        }
+        let began = std::time::Instant::now();
+        let out = if s.model.trim().is_empty() {
+            Err("請先填模型".to_string())
+        } else {
+            self.complete_oauth(s, "You are a connectivity check. Reply with the single word OK.", "ping").await
+        };
+        let ms = began.elapsed().as_millis() as u64;
+        match out {
+            Ok(text) => TestResult { ok: true, ms, message: text.trim().chars().take(80).collect() },
+            Err(e) => TestResult { ok: false, ms, message: e },
+        }
+    }
+
+    async fn complete_oauth(&self, s: &AiSettings, system: &str, user: &str) -> Result<String, String> {
+        let token = self.access_token().await?;
+        let ep = self.endpoints.lock().clone();
+        aiterm_ai_oauth::anthropic::complete(&ep, &token, &s.model, system, user).await
     }
 
     pub fn health(&self) -> Health {
@@ -80,7 +211,7 @@ impl AiComplete for ServerAi {
         }
         let key = self.secrets.get(API_KEY_SECRET).unwrap_or_default();
         let began = std::time::Instant::now();
-        let out = complete_with(&s, &key, system, user).await;
+        let out = if is_oauth(&s.provider) { self.complete_oauth(&s, system, user).await } else { complete_with(&s, &key, system, user).await };
         let mut h = self.health.lock();
         match &out {
             Ok(_) => *h = Health { last_ok: Some(crate::db::now()), last_ms: Some(began.elapsed().as_millis() as u64), error: None },
@@ -88,6 +219,10 @@ impl AiComplete for ServerAi {
         }
         out
     }
+}
+
+fn now_secs() -> u64 {
+    crate::db::now().max(0) as u64
 }
 
 /// 實際呼叫（與設定儲存分開，方便測試）。

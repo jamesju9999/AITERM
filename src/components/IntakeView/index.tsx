@@ -19,6 +19,9 @@ import {
   intakeLineSetCredentials,
   intakeLineStatus,
   intakeServerAiApply,
+  intakeServerAiLoginComplete,
+  intakeServerAiLoginStart,
+  intakeServerAiLogout,
   intakeServerAiModels,
   intakeServerAiTest,
   intakeServerAiStatus,
@@ -743,6 +746,7 @@ const AI_PROVIDERS: [string, string][] = [
   ["anthropic", "Anthropic"],
   ["openai_compat", "OpenAI 相容"],
   ["ollama", "Ollama"],
+  ["anthropic_oauth", "Claude 訂閱"],
 ];
 
 /** 連到 server 時：server 自己的 AI（題目分類與群組「是不是新問題」）。金鑰只寫入、不會被讀回。 */
@@ -810,7 +814,50 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
       setTesting(false);
     }
   }
-  const needsKey = provider !== "" && provider !== "ollama";
+  const isOauth = provider === "anthropic_oauth";
+  const needsKey = provider !== "" && provider !== "ollama" && !isOauth;
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const [paste, setPaste] = useState("");
+  async function startLogin() {
+    setBusy(true);
+    try {
+      setAuthUrl(await intakeServerAiLoginStart(provider));
+      setPaste("");
+      onError(null);
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function finishLogin() {
+    setBusy(true);
+    try {
+      await intakeServerAiLoginComplete(provider, paste);
+      setAuthUrl(null);
+      setPaste("");
+      setDone(true);
+      onError(null);
+      load();
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function logout() {
+    setBusy(true);
+    try {
+      await intakeServerAiLogout();
+      onError(null);
+      load();
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const login = ai?.login ?? "none";
   const h = ai?.health;
   const lastCall = h?.error ? `${t.intake_server_ai_last_fail}：${h.error}` : h?.last_ok ? `${t.intake_server_ai_last_ok}（${new Date(h.last_ok * 1000).toLocaleString()}，${h.last_ms ?? 0} ms）` : t.intake_server_ai_last_none;
   return (
@@ -821,8 +868,34 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
       </div>
       {ai && !ai.configured && <p className="intake__mailcard-hint">{t.intake_server_ai_off}</p>}
       {ai?.configured && <p className={`intake__mailcard-state ${h?.error ? "" : "intake__mailcard-state--on"}`}>{t.intake_server_ai_last}：{lastCall}</p>}
+      {isOauth && (
+        <div className="intake__mailcard-row">
+          <span className={`intake__mailcard-state ${login === "ok" ? "intake__mailcard-state--on" : ""}`}>
+            {login === "ok" ? t.intake_server_ai_login_ok : login === "needs_login" ? `${t.intake_server_ai_login_expired}${ai?.login_error ? `：${ai.login_error}` : ""}` : t.intake_server_ai_login_none}
+          </span>
+          {!authUrl && (
+            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy} onClick={() => void startLogin()}>
+              {t.intake_server_ai_login}
+            </button>
+          )}
+          {login !== "none" && ai?.settings.provider === "anthropic_oauth" && (
+            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy} onClick={() => void logout()}>
+              {t.intake_server_ai_logout}
+            </button>
+          )}
+        </div>
+      )}
+      {isOauth && authUrl && (
+        <div className="intake__mailcard-row">
+          <input aria-label={t.intake_server_ai_login_paste} placeholder={t.intake_server_ai_login_paste} value={paste} onChange={(e) => setPaste(e.target.value)} />
+          <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy || paste.trim() === ""} onClick={() => void finishLogin()}>
+            {t.intake_server_ai_login_finish}
+          </button>
+          <a href={authUrl} target="_blank" rel="noreferrer" className="intake__meta">{t.intake_server_ai_login_open}</a>
+        </div>
+      )}
       <div className="intake__mailcard-row">
-        <select aria-label={t.intake_server_ai_provider} value={provider} onChange={(e) => edit(() => { setProvider(e.target.value); setModels([]); })}>
+        <select aria-label={t.intake_server_ai_provider} value={provider} onChange={(e) => edit(() => { setProvider(e.target.value); setModels([]); setAuthUrl(null); })}>
           <option value="">{t.intake_server_ai_provider}</option>
           {AI_PROVIDERS.map(([id, label]) => (
             <option key={id} value={id}>{label}</option>

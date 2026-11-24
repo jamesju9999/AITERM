@@ -48,6 +48,9 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeServerMailApply: vi.fn(() => Promise.resolve()),
   intakeServerAiStatus: vi.fn(() => Promise.resolve({ settings: { provider: "", model: "", base_url: "" }, configured: false })),
   intakeServerAiApply: vi.fn(() => Promise.resolve()),
+  intakeServerAiLoginStart: vi.fn(() => Promise.resolve("https://claude.ai/oauth/authorize?x=1")),
+  intakeServerAiLoginComplete: vi.fn(() => Promise.resolve()),
+  intakeServerAiLogout: vi.fn(() => Promise.resolve()),
   intakeServerAiModels: vi.fn(() => Promise.resolve([])),
   intakeServerAiTest: vi.fn(() => Promise.resolve({ ok: true, ms: 120, message: "OK" })),
   intakeServerTelegramStatus: vi.fn(() => Promise.resolve({ settings: { owner_chat_id: "" }, has_token: false, listening: false, error: null })),
@@ -1031,6 +1034,36 @@ describe("IntakeView", () => {
       vi.mocked(ipc.intakeServerAiStatus).mockResolvedValue({ settings: { provider: "openai", model: "gpt-x", base_url: "" }, configured: true, health: { last_ok: null, last_ms: null, error: "AI 回應 HTTP 500：boom" } });
       await openSettings();
       expect((await screen.findByText(new RegExp(t.intake_server_ai_last_fail))).textContent).toContain("boom");
+    });
+
+    it("logs the server in to a Claude subscription: open the browser, paste the code, finish; no API key box", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      await openSettings();
+      fireEvent.change(await screen.findByLabelText(t.intake_server_ai_provider), { target: { value: "anthropic_oauth" } });
+      expect(screen.queryByLabelText(t.intake_server_ai_key)).toBeNull();
+      expect(screen.getByText(t.intake_server_ai_login_none)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: t.intake_server_ai_logout })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: t.intake_server_ai_login }));
+      await waitFor(() => expect(ipc.intakeServerAiLoginStart).toHaveBeenCalledWith("anthropic_oauth"));
+      const finish = await screen.findByRole("button", { name: t.intake_server_ai_login_finish });
+      expect(finish.matches(":disabled")).toBe(true);
+      expect(screen.getByRole("link", { name: t.intake_server_ai_login_open }).getAttribute("href")).toContain("claude.ai/oauth");
+      vi.mocked(ipc.intakeServerAiStatus).mockResolvedValue({ settings: { provider: "anthropic_oauth", model: "claude-x", base_url: "" }, configured: true, login: "ok" });
+      fireEvent.change(screen.getByLabelText(t.intake_server_ai_login_paste), { target: { value: "code#state" } });
+      fireEvent.click(finish);
+      await waitFor(() => expect(ipc.intakeServerAiLoginComplete).toHaveBeenCalledWith("anthropic_oauth", "code#state"));
+      expect(await screen.findByText(t.intake_server_ai_login_ok)).toBeTruthy();
+      expect(screen.queryByLabelText(t.intake_server_ai_login_paste)).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: t.intake_server_ai_logout }));
+      await waitFor(() => expect(ipc.intakeServerAiLogout).toHaveBeenCalled());
+    });
+
+    it("says so when the server's subscription login has expired and shows why", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      vi.mocked(ipc.intakeServerAiStatus).mockResolvedValue({ settings: { provider: "anthropic_oauth", model: "claude-x", base_url: "" }, configured: true, login: "needs_login", login_error: "續期失敗（HTTP 400）" });
+      await openSettings();
+      expect((await screen.findByText(new RegExp(t.intake_server_ai_login_expired))).textContent).toContain("HTTP 400");
+      expect(screen.getByRole("button", { name: t.intake_server_ai_login })).toBeTruthy();
     });
 
     it("asks for no key when the provider is Ollama, and shows the AI card only while connected", async () => {

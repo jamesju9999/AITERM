@@ -283,7 +283,7 @@ async fn status(dir: &std::path::Path) -> anyhow::Result<()> {
     println!("收信（Email）：{}", if crate::imap::receiving(&mail, &secrets) { mail.imap_host.clone() } else { "未設定".into() });
     println!("寄信：{}", if crate::mail::configured(&mail, &secrets) { format!("{}（{}）", mail.smtp_host, mail.sender()) } else { "尚未設定".into() });
     println!("Telegram：機器人金鑰 {}", yes(secrets.get(crate::telegram::TOKEN_SECRET).is_some()));
-    println!("AI：{}", if crate::ai::configured(&ai, &secrets) { format!("{}（{}）", ai.provider, ai.model) } else { "尚未設定".into() });
+    println!("AI：{}", if crate::ai::configured(&ai, &secrets) { format!("{}（{}）{}", ai.provider, ai.model, if crate::ai::is_oauth(&ai.provider) { "，訂閱登入" } else { "" }) } else if crate::ai::is_oauth(&ai.provider) { format!("{}：尚未登入（請在 AITerm 為 server 登入）", ai.provider) } else { "尚未設定".into() });
     Ok(())
 }
 

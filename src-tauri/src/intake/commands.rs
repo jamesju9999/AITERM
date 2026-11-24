@@ -650,6 +650,47 @@ pub async fn intake_server_ai_test(rs: State<'_, Arc<RemoteState>>, provider: St
     super::remote::ai_test(&api, &settings, &api_key).await.map_err(|e| super::remote::fail(&rs, e))
 }
 
+/// 為 server 登入 Claude 訂閱：開瀏覽器走授權，之後請使用者貼回授權碼（`intake_server_ai_login_complete`）。
+/// 回傳授權網址，瀏覽器沒自動開時畫面可以讓使用者自己開。
+#[tauri::command]
+pub async fn intake_server_ai_login_start(rs: State<'_, Arc<RemoteState>>, pending: State<'_, ServerAiLogin>, provider: String) -> Result<String, String> {
+    rs.active().ok_or("尚未連到 server")?;
+    if provider != "anthropic_oauth" {
+        return Err("這個供應商不用訂閱登入".into());
+    }
+    let pkce = aiterm_ai_oauth::anthropic::Pkce::new();
+    let url = aiterm_ai_oauth::anthropic::auth_url(&pkce);
+    *pending.0.lock().await = Some(pkce);
+    crate::commands::provider::open_browser(&url);
+    Ok(url)
+}
+
+/// 完成為 server 登入：用貼回的授權碼換憑證，**只交給 server，不存進這台電腦的鑰匙圈**
+/// （這台電腦自己的登入是另一組憑證，互不影響）。
+#[tauri::command]
+pub async fn intake_server_ai_login_complete(rs: State<'_, Arc<RemoteState>>, pending: State<'_, ServerAiLogin>, provider: String, code_and_state: String) -> Result<(), String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    let (code, state) = aiterm_ai_oauth::anthropic::parse_pasted(&code_and_state)?;
+    let pkce = pending.0.lock().await.take().ok_or("沒有進行中的登入：請先按「為 server 登入」")?;
+    if pkce.state != state {
+        return Err("授權碼與這次登入不符（可能已過期或貼錯）：請重新按「為 server 登入」".into());
+    }
+    let tokens = aiterm_ai_oauth::anthropic::exchange(&Default::default(), &code, &state, &pkce.verifier).await?;
+    let refresh = tokens.refresh.ok_or("供應商沒有回傳續期憑證，無法交給 server")?;
+    super::remote::ai_login_upload(&api, &provider, &tokens.access, &refresh, tokens.expires_in).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
+/// 登出 server 的 AI 訂閱（刪除 server 上的憑證）。
+#[tauri::command]
+pub async fn intake_server_ai_logout(rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    super::remote::ai_logout(&api).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
+/// 為 server 登入進行到一半的 PKCE 資料（只存記憶體）。
+#[derive(Default)]
+pub struct ServerAiLogin(pub tokio::sync::Mutex<Option<aiterm_ai_oauth::anthropic::Pkce>>);
+
 /// 手動「我來處理」：領 server 上這一題，派進你「收集中」且閒置的分頁。
 #[tauri::command]
 pub async fn intake_remote_claim(app: AppHandle, item_id: String) -> Result<(), String> {

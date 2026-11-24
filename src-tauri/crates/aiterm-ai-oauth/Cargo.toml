@@ -1,0 +1,18 @@
+[package]
+name = "aiterm-ai-oauth"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "AITerm 訂閱登入（OAuth）共用：token 交換與續期、一次性呼叫。Server 與 AITerm 的「為 server 登入」共用。"
+
+[dependencies]
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"

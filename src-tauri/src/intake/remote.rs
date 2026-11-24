@@ -445,6 +445,11 @@ pub struct ServerAi {
     /// 最近一次實際呼叫的結果；舊版 server 沒有這個欄位。
     #[serde(default)]
     pub health: ServerAiHealth,
+    /// 訂閱登入狀態：`none`｜`ok`｜`needs_login`。
+    #[serde(default)]
+    pub login: String,
+    #[serde(default)]
+    pub login_error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -460,6 +465,15 @@ pub struct ServerAiTest {
     pub ok: bool,
     pub ms: u64,
     pub message: String,
+}
+
+/// 把為 server 登入取得的憑證交給 server（只有管理員做得到）。
+pub async fn ai_login_upload(api: &Api, provider: &str, access: &str, refresh: &str, expires_in: Option<u64>) -> Result<(), ClientError> {
+    api.request(Method::PUT, "/v1/ai/oauth", Some(json!({ "provider": provider, "access": access, "refresh": refresh, "expires_in": expires_in }))).await.map(|_| ())
+}
+
+pub async fn ai_logout(api: &Api) -> Result<(), ClientError> {
+    api.request(Method::DELETE, "/v1/ai/oauth", None).await.map(|_| ())
 }
 
 /// 還沒儲存的值也能測；`api_key` 空白＝用 server 已存的。
@@ -646,12 +660,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn uploading_a_server_login_makes_the_server_ai_usable_and_logout_removes_it() {
+        use aiterm_intake_core::host::Secrets;
+        let srv = TestServer::start().await;
+        let api = srv.paired("小華", Role::Admin).await;
+        assert_eq!(ai_status(&api).await.unwrap().login, "none");
+        ai_apply(&api, &ServerAiSettings { provider: "anthropic_oauth".into(), model: "claude-x".into(), base_url: String::new() }, "").await.unwrap();
+        ai_login_upload(&api, "anthropic_oauth", "ACCESS", "REFRESH", Some(3600)).await.unwrap();
+        let v = ai_status(&api).await.unwrap();
+        assert_eq!((v.configured, v.login.as_str(), v.settings.provider.as_str()), (true, "ok", "anthropic_oauth"));
+        assert!(!serde_json::to_string(&v).unwrap().contains("REFRESH"), "憑證不會被讀回");
+        assert_eq!(srv.state().secrets.get("ai_oauth_refresh").as_deref(), Some("REFRESH"));
+        ai_logout(&api).await.unwrap();
+        let v = ai_status(&api).await.unwrap();
+        assert_eq!((v.configured, v.login.as_str()), (false, "none"));
+        assert!(srv.state().secrets.get("ai_oauth_refresh").is_none());
+    }
+
+    #[tokio::test]
     async fn a_member_cannot_change_the_servers_ai_or_mail() {
         let srv = TestServer::start().await;
         let member = srv.paired("小明", Role::Member).await;
         assert!(ai_apply(&member, &ServerAiSettings { provider: "openai".into(), model: "m".into(), base_url: String::new() }, "k").await.is_err());
         let s = ServerMailSettings { smtp_host: "h".into(), smtp_port: 25, imap_host: String::new(), imap_port: 993, username: "u".into(), from: String::new() };
         assert!(mail_apply(&member, &s, "p").await.is_err());
+        assert!(ai_login_upload(&member, "anthropic_oauth", "A", "R", None).await.is_err());
+        assert!(ai_logout(&member).await.is_err());
     }
 
     #[test]

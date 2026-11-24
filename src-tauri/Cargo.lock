@@ -64,6 +64,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiterm-ai-oauth"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "aiterm-core"
 version = "0.1.0"
 dependencies = [
@@ -178,6 +192,7 @@ name = "aiterm-intake-server"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "aiterm-ai-oauth",
  "aiterm-core",
  "aiterm-intake-client",
  "aiterm-intake-core",
@@ -351,6 +366,7 @@ name = "app"
 version = "1.23.1"
 dependencies = [
  "aes-gcm",
+ "aiterm-ai-oauth",
  "aiterm-core",
  "aiterm-intake-client",
  "aiterm-intake-core",
