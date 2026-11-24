@@ -197,7 +197,7 @@ export function IntakeView() {
             {showSettings ? t.intake_settings_back : t.intake_settings}
           </button>
         )}
-        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showConn} onClick={() => setShowConn((v) => !v)}>
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showConn} onClick={() => { setShowSettings(false); setShowConn((v) => !v); }}>
           {showConn ? t.intake_settings_back : t.intake_conn_button}
         </button>
       </div>

@@ -1041,6 +1041,17 @@ describe("IntakeView", () => {
       expect(screen.queryByRole("button", { name: t.intake_settings_back })).toBeNull();
     });
 
+    it("shows only one back button when the connection card is opened from the settings page", async () => {
+      vi.mocked(ipc.intakeList).mockResolvedValue([]);
+      vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView());
+      wrap();
+      fireEvent.click(await screen.findByText(t.intake_settings));
+      await screen.findByText(t.intake_set_save);
+      fireEvent.click(screen.getByRole("button", { name: t.intake_conn_button }));
+      expect(screen.getAllByRole("button", { name: t.intake_settings_back })).toHaveLength(1);
+      expect(screen.getByText(t.intake_conn_title)).toBeTruthy();
+    });
+
     it("opens the connection card from the bar even when there are no projects yet", async () => {
       vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [], unassigned: 0, legacy_settings: false });
       vi.mocked(ipc.intakeList).mockResolvedValue([]);
