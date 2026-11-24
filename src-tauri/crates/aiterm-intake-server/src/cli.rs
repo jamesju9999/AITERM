@@ -69,6 +69,18 @@ pub enum Cmd {
         #[arg(long, default_value = "")]
         base_url: String,
     },
+    /// 設定寄信帳號（網頁表單寄驗證碼與回覆用）。密碼從標準輸入讀取，不要放在參數裡。
+    Mail {
+        #[arg(long)]
+        smtp_host: String,
+        #[arg(long, default_value_t = 587)]
+        smtp_port: u16,
+        #[arg(long)]
+        username: String,
+        /// 寄件地址；省略時用登入帳號。
+        #[arg(long, default_value = "")]
+        from: String,
+    },
     /// 顯示目前狀態。
     Status,
 }
@@ -103,6 +115,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Members { cmd } => members_cmd(&dir, cmd).await,
         Cmd::Project { cmd } => project_cmd(&dir, cmd).await,
         Cmd::Ai { provider, model, base_url } => ai_set(&dir, provider, model, base_url).await,
+        Cmd::Mail { smtp_host, smtp_port, username, from } => mail_set(&dir, smtp_host, smtp_port, username, from).await,
         Cmd::Status => status(&dir).await,
     }
 }
@@ -215,6 +228,22 @@ async fn ai_set(dir: &std::path::Path, provider: String, model: String, base_url
     Ok(())
 }
 
+async fn mail_set(dir: &std::path::Path, smtp_host: String, smtp_port: u16, username: String, from: String) -> anyhow::Result<()> {
+    use std::io::Read;
+    let pools = crate::db::open(dir).await?;
+    crate::mail::save(&pools.intake, &crate::mail::MailSettings { smtp_host, smtp_port, username, from }).await.map_err(|e| anyhow::anyhow!(e))?;
+    let mut pw = String::new();
+    std::io::stdin().read_to_string(&mut pw)?;
+    let pw = pw.trim();
+    if pw.is_empty() {
+        println!("已設定寄信帳號，但標準輸入沒有密碼；請用 `echo 密碼 | aiterm-intake-server mail …` 補上");
+    } else {
+        FileSecrets::open(dir)?.set(crate::mail::PASSWORD_SECRET, pw).map_err(|e| anyhow::anyhow!(e))?;
+        println!("已設定寄信帳號與密碼");
+    }
+    Ok(())
+}
+
 async fn status(dir: &std::path::Path) -> anyhow::Result<()> {
     let pools = crate::db::open(dir).await?;
     let secrets = FileSecrets::open(dir)?;
@@ -222,6 +251,8 @@ async fn status(dir: &std::path::Path) -> anyhow::Result<()> {
     println!("資料夾：{}", dir.display());
     println!("成員：{} 位有效", members::list(&pools.server).await.iter().filter(|m| m.revoked_at.is_none()).count());
     println!("LINE：Channel secret {}、access token {}", yes(secrets.get(aiterm_intake_core::line_server::LINE_SECRET_ID).is_some()), yes(secrets.get(aiterm_intake_core::line_server::LINE_TOKEN_ID).is_some()));
+    let mail = crate::mail::load(&pools.intake).await;
+    println!("寄信：{}", if crate::mail::configured(&mail, &secrets) { format!("{}（{}）", mail.smtp_host, mail.sender()) } else { "尚未設定".into() });
     println!("AI：{}", if crate::ai::configured(&ai, &secrets) { format!("{}（{}）", ai.provider, ai.model) } else { "尚未設定".into() });
     Ok(())
 }

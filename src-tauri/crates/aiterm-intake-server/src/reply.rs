@@ -1,4 +1,4 @@
-//! 寄出草稿。Server 目前支援 LINE；Email、Telegram、網頁表單的回覆等對應收訊管道在 server 上線後再補。
+//! 寄出草稿。Server 支援 LINE 與網頁表單（用信件回覆）；Email、Telegram 還沒支援。
 use crate::state::AppState;
 use aiterm_intake_core::host::{Notifier, Secrets};
 use aiterm_intake_core::{filter, line_server, line_source, line_store, line_text, store};
@@ -11,6 +11,12 @@ pub async fn send(st: &AppState, item_id: &str) -> Result<(), String> {
     let body = item.reply_draft.clone().unwrap_or_default();
     if body.trim().is_empty() {
         return Err("回覆內容是空的".into());
+    }
+    if item.source == "web" {
+        crate::mail::send_reply(st, &item.sender, &item.subject, &filter::redact(&body)).await?;
+        store::mark_sent(&st.pools.intake, item_id).await.map_err(|e| e.to_string())?;
+        st.events.changed();
+        return Ok(());
     }
     if item.source != "line" {
         return Err(format!("server 目前還不能用「{}」管道回覆", item.source));

@@ -65,6 +65,18 @@ echo "$API_KEY" | aiterm-intake-server ai --provider openai --model <模型>
 
 也可以由管理員在 AITerm 設定。不支援需要瀏覽器登入的訂閱帳號。沒設定時，LINE 群組每段安靜的訊息都會被當成新問題，建議設定。
 
+## 網頁表單與寄信帳號
+
+網頁表單讓白名單內的人用電子郵件驗證碼登入後提問，所以 server 需要自己的寄信帳號（SMTP）來寄驗證碼與回覆：
+
+```bash
+echo "$SMTP_PASSWORD" | aiterm-intake-server mail --smtp-host smtp.example.com --smtp-port 587 --username bot@example.com [--from help@example.com]
+```
+
+設定後 `status` 會顯示寄信帳號；管理員也能用 API（`GET/PUT /v1/mail`，密碼走 `PUT /v1/secrets/smtp_password`，不會被讀回）。
+
+在 AITerm 連上 server 後，到設定頁把專案的「網頁表單」設成「僅本機」或「區網」，server 就會在設定的埠（預設 8320）開出表單，網址是 `http://<server 位址>:8320/`，每個專案有自己的 `/p/<代碼>` 頁。任一專案設成區網時綁 `0.0.0.0`，否則只收本機；要放到公開網路請放在反向代理（HTTPS）後面。表單的回覆以信件寄回提問者。
+
 ## 六、systemd 範例（Linux）
 
 ```ini
@@ -85,6 +97,6 @@ WantedBy=multi-user.target
 ## 七、目前的限制
 
 - Server 自己**不會自動處理題目**。處理靠成員領取：在 AITerm 清單按「我來處理」，或讓「收集中」的終端機分頁閒置時自動領；題目在領取者自己的電腦用 Claude Code 處理，做完交回 server 變成草稿，由人看過再送出。
-- 只支援 **LINE** 收訊與回覆；Email、Telegram、網頁表單還不能在 server 上使用（設定會存起來，但不收訊）。
+- 支援 **LINE** 與**網頁表單**收訊與回覆；Email、Telegram 還不能在 server 上使用（設定會存起來，但不收訊）。網頁表單的寄信帳號目前用命令列或 API 設定，AITerm 設定頁還沒有對應畫面。
 - 看板與 Agent 協作不在 server 上。
 - 所有成員看得到所有專案。

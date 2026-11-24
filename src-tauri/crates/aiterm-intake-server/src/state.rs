@@ -56,6 +56,8 @@ pub struct AppState {
     pub version: String,
     /// LINE API 位址；測試時指向假的 server。
     pub line_api_base: parking_lot::Mutex<String>,
+    /// 測試用：設了以後寄信改丟進通道，不連 SMTP。
+    pub mail_tap: parking_lot::Mutex<Option<crate::mail::MailTap>>,
 }
 
 impl AppState {
@@ -69,6 +71,6 @@ impl AppState {
 
     pub fn new(pools: Pools, secrets: Arc<FileSecrets>, fingerprint: String, data_dir: PathBuf) -> Arc<Self> {
         let ai = Arc::new(crate::ai::ServerAi::new(pools.intake.clone(), secrets.clone()));
-        Arc::new(Self { pools, secrets, ai, channels: Default::default(), channel_bind: std::net::Ipv4Addr::LOCALHOST.into(), events: Broadcast::new(), fingerprint, data_dir, backoff: AuthBackoff::new(), version: env!("CARGO_PKG_VERSION").to_string(), line_api_base: parking_lot::Mutex::new(aiterm_intake_core::line_server::API_BASE.to_string()) })
+        Arc::new(Self { pools, secrets, ai, channels: Default::default(), channel_bind: std::net::Ipv4Addr::LOCALHOST.into(), events: Broadcast::new(), fingerprint, data_dir, backoff: AuthBackoff::new(), version: env!("CARGO_PKG_VERSION").to_string(), line_api_base: parking_lot::Mutex::new(aiterm_intake_core::line_server::API_BASE.to_string()), mail_tap: parking_lot::Mutex::new(None) })
     }
 }

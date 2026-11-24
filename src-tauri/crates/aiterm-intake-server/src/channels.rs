@@ -1,9 +1,10 @@
-//! 收訊管道的啟停：LINE webhook 與「新問題自動開題」的定時掃描。
-//! 設定或祕密變動後呼叫 `reload`。網頁表單與 Email、Telegram 需要寄信／IMAP，等 server 支援後再接上。
+//! 收訊管道的啟停：LINE webhook、網頁表單與「新問題自動開題」的定時掃描。
+//! 設定或祕密變動後呼叫 `reload`。Email、Telegram 還沒支援。
 use crate::state::AppState;
 use aiterm_intake_core::host::{Notifier, Secrets};
 use aiterm_intake_core::line_server::{self, LineState, LINE_SECRET_ID, LINE_TOKEN_ID};
 use aiterm_intake_core::telegram_source::Candidate;
+use aiterm_intake_core::web;
 use aiterm_intake_core::{config, pipeline};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +19,14 @@ pub struct Channels {
     line: Mutex<Option<tokio::task::JoinHandle<()>>>,
     line_on: AtomicBool,
     ticker: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    web: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    web_on: AtomicBool,
+    /// 網頁表單網址的短代碼要對回專案；表單路由是同步查詢，所以這裡放一份快照（重載與每次掃描時更新）。
+    web_projects: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+pub fn web_listening(st: &AppState) -> bool {
+    st.channels.web_on.load(Ordering::SeqCst)
 }
 
 pub fn line_listening(st: &AppState) -> bool {
@@ -38,8 +47,66 @@ fn secret(st: &AppState, id: &str) -> Option<String> {
     st.secrets.get(id).filter(|s| !s.trim().is_empty())
 }
 
+async fn refresh_projects(st: &AppState) {
+    let list = crate::routes_data::project_list(st).await.into_iter().map(|p| (p.id, p.name)).collect();
+    *st.channels.web_projects.lock() = list;
+}
+
+/// 依目前設定（重新）啟動網頁表單：任一專案啟用就開；任一專案設為區網就綁 0.0.0.0，否則只收本機。
+async fn reload_web(st: &Arc<AppState>) {
+    if let Some(h) = st.channels.web.lock().take() {
+        h.abort();
+    }
+    st.channels.web_on.store(false, Ordering::SeqCst);
+    refresh_projects(st).await;
+    let cands = candidates(st).await;
+    let host: std::net::IpAddr = if cands.iter().any(|c| c.cfg.web_mode == config::WebMode::Lan) {
+        std::net::Ipv4Addr::UNSPECIFIED.into()
+    } else if cands.iter().any(|c| c.cfg.web_mode == config::WebMode::Local) {
+        std::net::Ipv4Addr::LOCALHOST.into()
+    } else {
+        return;
+    };
+    let port = config::load_global(&st.pools.intake).await.web_port;
+    let addr = std::net::SocketAddr::from((host, port));
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            log::warn!("網頁表單無法綁定 {addr}：{e}");
+            return;
+        }
+    };
+    let (for_change, for_mail) = (st.clone(), st.clone());
+    let projects = st.channels.web_projects.clone();
+    let state = Arc::new(web::WebState {
+        pool: st.pools.intake.clone(),
+        otps: web::Otps::default(),
+        attach_root: st.data_dir.join("attachments"),
+        on_change: Box::new(move || for_change.events.changed()),
+        projects: Box::new(move || projects.lock().clone()),
+        send_mail: Box::new(move |_project, to, subject, body| {
+            let st = for_mail.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::mail::send_plain(&st, &to, &subject, &body).await {
+                    log::warn!("網頁表單：寄驗證碼失敗：{e}");
+                }
+            });
+        }),
+    });
+    let flag = st.clone();
+    let task = tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, web::router(state)).await {
+            log::warn!("網頁表單結束：{e}");
+        }
+        flag.channels.web_on.store(false, Ordering::SeqCst);
+    });
+    st.channels.web_on.store(true, Ordering::SeqCst);
+    *st.channels.web.lock() = Some(task);
+}
+
 /// 依目前設定（重新）啟動 LINE webhook：任一專案啟用 LINE 且已設 Channel secret 才開。
 pub async fn reload(st: &Arc<AppState>) {
+    reload_web(st).await;
     if let Some(h) = st.channels.line.lock().take() {
         h.abort();
     }
@@ -90,6 +157,7 @@ pub async fn tick_once(st: &Arc<AppState>) -> bool {
             st.events.changed();
         }
     }
+    refresh_projects(st).await;
     let cands = candidates(st).await;
     let opened = pipeline::line_triage(&st.pools.intake, &cands, st.ai.as_ref(), &st.data_dir.join("attachments")).await;
     if opened {
@@ -114,8 +182,12 @@ pub fn stop(st: &AppState) {
     if let Some(h) = st.channels.line.lock().take() {
         h.abort();
     }
+    if let Some(h) = st.channels.web.lock().take() {
+        h.abort();
+    }
     if let Some(h) = st.channels.ticker.lock().take() {
         h.abort();
     }
     st.channels.line_on.store(false, Ordering::SeqCst);
+    st.channels.web_on.store(false, Ordering::SeqCst);
 }

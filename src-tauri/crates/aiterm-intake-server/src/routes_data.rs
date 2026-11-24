@@ -84,6 +84,7 @@ async fn create_project(State(st): St, Admin(me): Admin, Json(b): Json<ProjectBo
         return internal(e);
     }
     crate::audit::record(&st.pools.server, &me.name, "project.create", &id).await;
+    crate::channels::reload(&st).await;
     st.events.changed();
     (StatusCode::CREATED, Json(ProjectRow { id, name: name.to_string(), work_dir: b.work_dir.trim().to_string() })).into_response()
 }
@@ -96,6 +97,7 @@ async fn update_project(State(st): St, Admin(me): Admin, Path(pid): Path<String>
     match sqlx::query("UPDATE projects SET name = ?, work_dir = ? WHERE id = ?").bind(name).bind(b.work_dir.trim()).bind(&pid).execute(&st.pools.server).await {
         Ok(r) if r.rows_affected() == 1 => {
             crate::audit::record(&st.pools.server, &me.name, "project.update", &pid).await;
+            crate::channels::reload(&st).await;
             st.events.changed();
             StatusCode::NO_CONTENT.into_response()
         }
@@ -108,6 +110,7 @@ async fn delete_project(State(st): St, Admin(me): Admin, Path(pid): Path<String>
     match sqlx::query("DELETE FROM projects WHERE id = ?").bind(&pid).execute(&st.pools.server).await {
         Ok(r) if r.rows_affected() == 1 => {
             crate::audit::record(&st.pools.server, &me.name, "project.delete", &pid).await;
+            crate::channels::reload(&st).await;
             st.events.changed();
             StatusCode::NO_CONTENT.into_response()
         }
@@ -441,7 +444,7 @@ async fn attachment_text(State(st): St, Path(att): Path<String>) -> Response {
 // ---- 祕密、AI、狀態、稽核 ----
 
 /// 可以經由 API 設定的祕密（白名單，避免任意寫入）。
-pub const SETTABLE_SECRETS: [&str; 3] = [aiterm_intake_core::line_server::LINE_SECRET_ID, aiterm_intake_core::line_server::LINE_TOKEN_ID, crate::ai::API_KEY_SECRET];
+pub const SETTABLE_SECRETS: [&str; 4] = [aiterm_intake_core::line_server::LINE_SECRET_ID, aiterm_intake_core::line_server::LINE_TOKEN_ID, crate::ai::API_KEY_SECRET, crate::mail::PASSWORD_SECRET];
 
 #[derive(Deserialize)]
 pub struct SecretBody {
@@ -499,11 +502,38 @@ async fn set_ai(State(st): St, Admin(me): Admin, Json(s): Json<crate::ai::AiSett
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MailView {
+    pub settings: crate::mail::MailSettings,
+    pub configured: bool,
+}
+
+async fn get_mail(State(st): St) -> Response {
+    let settings = crate::mail::load(&st.pools.intake).await;
+    let configured = crate::mail::configured(&settings, st.secrets.as_ref());
+    Json(MailView { settings, configured }).into_response()
+}
+
+async fn set_mail(State(st): St, Admin(me): Admin, Json(s): Json<crate::mail::MailSettings>) -> Response {
+    if let Err(e) = crate::mail::save(&st.pools.intake, &s).await {
+        return bad(&e);
+    }
+    crate::audit::record(&st.pools.server, &me.name, "mail.set", &s.smtp_host).await;
+    st.events.changed();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct StatusView {
     pub has_line_secret: bool,
     pub has_line_token: bool,
     pub line_listening: bool,
     pub line_port: u16,
+    #[serde(default)]
+    pub web_listening: bool,
+    #[serde(default)]
+    pub web_port: u16,
+    #[serde(default)]
+    pub mail_configured: bool,
     pub ai_configured: bool,
     pub projects: usize,
 }
@@ -515,6 +545,9 @@ async fn status(State(st): St) -> Response {
         has_line_token: st.secrets.get(aiterm_intake_core::line_server::LINE_TOKEN_ID).is_some(),
         line_listening: crate::channels::line_listening(&st),
         line_port: config::load_global(&st.pools.intake).await.line_port,
+        web_listening: crate::channels::web_listening(&st),
+        web_port: config::load_global(&st.pools.intake).await.web_port,
+        mail_configured: crate::mail::configured(&crate::mail::load(&st.pools.intake).await, st.secrets.as_ref()),
         ai_configured: crate::ai::configured(&settings, st.secrets.as_ref()),
         projects: project_list(&st).await.len(),
     })
@@ -553,6 +586,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/line/unknown/{id}", delete(forget_unknown))
         .route("/v1/secrets/{id}", put(set_secret).delete(clear_secret))
         .route("/v1/ai", get(get_ai).put(set_ai))
+        .route("/v1/mail", get(get_mail).put(set_mail))
         .route("/v1/status", get(status))
         .route("/v1/audit", get(audit_log))
 }

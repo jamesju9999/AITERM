@@ -5,6 +5,7 @@ pub mod channels;
 pub mod cli;
 pub mod db;
 pub mod events;
+pub mod mail;
 pub mod members;
 pub mod secrets;
 pub mod pairing;
