@@ -651,17 +651,21 @@ function ServerMailCard({ accounts, canEdit, onError }: { accounts: MailAccount[
       setBusy(false);
     }
   }
+  // server 只存 SMTP 設定，比對「主機＋寄件地址（或帳號）」判斷哪個帳號正在使用。
+  const isApplied = (a: MailAccount) =>
+    !!mail?.configured && mail.settings.smtp_host === a.smtp_host && (mail.settings.from || mail.settings.username).toLowerCase() === a.email.toLowerCase();
+  const chosen = accounts.find((a) => a.id === pick);
   return (
-    <fieldset className="intake__field" disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0 }}>
-      <span>{t.intake_server_mail}</span>
-      <p className="intake__meta">
+    <fieldset disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+      <strong style={{ fontSize: 13 }}>{t.intake_server_mail}</strong>
+      <p className="intake__meta" style={{ margin: 0 }}>
         {mail?.configured ? `${t.intake_server_mail_on}：${mail.settings.smtp_host}（${mail.settings.from || mail.settings.username}）` : t.intake_server_mail_off}
       </p>
-      <div className="intake__adopt">
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
         <select aria-label={t.intake_server_mail_pick} value={pick} onChange={(e) => { setPick(e.target.value); setDone(false); }}>
           <option value="">{t.intake_server_mail_pick}</option>
           {accounts.map((a) => (
-            <option key={a.id} value={a.id}>{a.email}</option>
+            <option key={a.id} value={a.id}>{isApplied(a) ? `${a.email}（${t.intake_server_mail_applied_tag}）` : a.email}</option>
           ))}
         </select>
         <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={!pick || busy} onClick={() => void apply()}>
@@ -669,7 +673,8 @@ function ServerMailCard({ accounts, canEdit, onError }: { accounts: MailAccount[
         </button>
         {done && <span role="status">{t.intake_server_mail_done}</span>}
       </div>
-      <p className="intake__meta">{t.intake_server_mail_hint}</p>
+      {chosen && <p className="intake__meta" style={{ margin: 0 }}>{isApplied(chosen) ? t.intake_server_mail_this_applied : t.intake_server_mail_this_not}</p>}
+      <p className="intake__meta" style={{ margin: 0 }}>{t.intake_server_mail_hint}</p>
     </fieldset>
   );
 }

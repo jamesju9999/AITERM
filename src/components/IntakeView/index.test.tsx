@@ -955,6 +955,22 @@ describe("IntakeView", () => {
       expect(screen.queryByText(t.intake_server_mail)).toBeNull();
     });
 
+    it("marks which AITerm mail account the server is already using", async () => {
+      vi.mocked(mailListAccounts).mockResolvedValue([
+        { id: "a1", email: "bot@example.com", smtp_host: "smtp.example.com", enabled: true },
+        { id: "a2", email: "other@example.com", smtp_host: "smtp.example.com", enabled: true },
+      ] as never);
+      vi.mocked(ipc.intakeServerMailStatus).mockResolvedValue({ settings: { smtp_host: "smtp.example.com", smtp_port: 587, username: "bot@example.com", from: "bot@example.com" }, configured: true });
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      await openSettings();
+      expect(await screen.findByRole("option", { name: `bot@example.com（${t.intake_server_mail_applied_tag}）` })).toBeTruthy();
+      expect(screen.getByRole("option", { name: "other@example.com" })).toBeTruthy();
+      fireEvent.change(screen.getByLabelText(t.intake_server_mail_pick), { target: { value: "a2" } });
+      expect(screen.getByText(t.intake_server_mail_this_not)).toBeTruthy();
+      fireEvent.change(screen.getByLabelText(t.intake_server_mail_pick), { target: { value: "a1" } });
+      expect(screen.getByText(t.intake_server_mail_this_applied)).toBeTruthy();
+    });
+
     it("does not let a member apply a mail account", async () => {
       vi.mocked(mailListAccounts).mockResolvedValue([{ id: "a1", email: "bot@example.com", enabled: true }] as never);
       vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("member"));
