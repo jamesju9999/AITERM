@@ -170,7 +170,7 @@
 /* 問題內容／驗證結果很長時，卡片內自己捲動，不把回覆卡片與操作按鈕擠到畫面外 */
 .intake__block .intake__text { max-height: 320px; overflow: auto; }
 /* 操作按鈕固定在面板底部，內容再長都按得到 */
-.intake__footer { position: sticky; bottom: 0; z-index: 2; margin-bottom: -20px; padding-bottom: 14px; background: var(--bg-secondary, #1a1a2e); }
+.intake__footer { position: sticky; bottom: -20px; z-index: 2; margin-bottom: -20px; padding-bottom: 20px; background: var(--bg-secondary, #1a1a2e); }
 
 /* 非圖片附件 */
 .intake__files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
