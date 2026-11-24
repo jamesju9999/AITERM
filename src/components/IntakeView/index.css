@@ -127,7 +127,7 @@
 .intake__block section { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .intake__md { font-size: 14px; line-height: 1.6; word-break: break-word; }
 /* 預覽與編輯框同樣大小、同樣的框，內容自己捲動 */
-.intake__md--box { box-sizing: border-box; align-self: stretch; flex: 1 1 auto; min-height: 220px; max-height: 320px; overflow: auto; padding: 10px 12px; font-size: 13px; background: var(--bg-secondary, #1a1a2e); }
+.intake__md--box { box-sizing: border-box; align-self: stretch; flex: 1 1 auto; min-height: 180px; max-height: 280px; overflow: auto; padding: 10px 12px; margin-bottom: 0 !important; font-size: 13px; background: var(--bg-secondary, #1a1a2e); }
 .intake__md > :first-child { margin-top: 0; }
 .intake__md > :last-child { margin-bottom: 0; }
 .intake__seg { display: inline-flex; border: 1px solid var(--border, #333); border-radius: 6px; overflow: hidden; }
@@ -172,7 +172,7 @@
 /* 問題內容／驗證結果很長時，卡片內自己捲動，不把回覆卡片與操作按鈕擠到畫面外 */
 .intake__block .intake__text { max-height: 320px; overflow: auto; }
 /* 操作按鈕固定在面板底部，內容再長都按得到 */
-.intake__footer { position: sticky; bottom: -20px; z-index: 2; margin-bottom: -20px; padding-bottom: 20px; background: var(--bg-secondary, #1a1a2e); }
+.intake__footer { position: sticky; bottom: -20px; z-index: 2; margin-bottom: -20px; padding-top: 10px; padding-bottom: 20px; background: var(--bg-secondary, #1a1a2e); }
 
 /* 非圖片附件 */
 .intake__files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
