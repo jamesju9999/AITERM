@@ -48,6 +48,8 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeServerMailApply: vi.fn(() => Promise.resolve()),
   intakeServerAiStatus: vi.fn(() => Promise.resolve({ settings: { provider: "", model: "", base_url: "" }, configured: false })),
   intakeServerAiApply: vi.fn(() => Promise.resolve()),
+  intakeServerAiModels: vi.fn(() => Promise.resolve([])),
+  intakeServerAiTest: vi.fn(() => Promise.resolve({ ok: true, ms: 120, message: "OK" })),
   intakeServerTelegramStatus: vi.fn(() => Promise.resolve({ settings: { owner_chat_id: "" }, has_token: false, listening: false, error: null })),
   intakeServerTelegramApply: vi.fn(() => Promise.resolve()),
   intakeRemoteDisconnect: vi.fn(() => Promise.resolve()),
@@ -993,6 +995,42 @@ describe("IntakeView", () => {
       expect(await screen.findByText(t.intake_server_ai_saved)).toBeTruthy();
       expect((screen.getByLabelText(t.intake_server_ai_key) as HTMLInputElement).value).toBe("");
       expect(await screen.findByText(t.intake_server_ai_on)).toBeTruthy();
+    });
+
+    it("loads the model list into the model field's dropdown using unsaved values", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      vi.mocked(ipc.intakeServerAiModels).mockResolvedValue(["gpt-a", "gpt-b"]);
+      await openSettings();
+      const load = await screen.findByRole("button", { name: t.intake_server_ai_load_models });
+      expect(load.matches(":disabled")).toBe(true);
+      fireEvent.change(screen.getByLabelText(t.intake_server_ai_provider), { target: { value: "openai" } });
+      fireEvent.change(screen.getByLabelText(t.intake_server_ai_key), { target: { value: "typed-key" } });
+      fireEvent.click(load);
+      await waitFor(() => expect(ipc.intakeServerAiModels).toHaveBeenCalledWith("openai", "", "typed-key"));
+      expect(await screen.findByText(t.intake_server_ai_models_loaded.replace("{n}", "2"))).toBeTruthy();
+      expect(document.querySelectorAll("#intake-ai-models option")).toHaveLength(2);
+    });
+
+    it("tests the connection and shows the result or the reason, and a later edit clears the old result", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      vi.mocked(ipc.intakeServerAiTest).mockResolvedValueOnce({ ok: false, ms: 80, message: "AI 回應 HTTP 401：Incorrect API key" });
+      await openSettings();
+      fireEvent.change(await screen.findByLabelText(t.intake_server_ai_provider), { target: { value: "openai" } });
+      fireEvent.change(screen.getByLabelText(t.intake_server_ai_model), { target: { value: "gpt-x" } });
+      fireEvent.click(screen.getByRole("button", { name: t.intake_server_ai_test }));
+      expect((await screen.findByText(new RegExp(t.intake_server_ai_test_fail))).textContent).toContain("Incorrect API key");
+      expect(ipc.intakeServerAiTest).toHaveBeenCalledWith("openai", "gpt-x", "", "");
+      fireEvent.change(screen.getByLabelText(t.intake_server_ai_key), { target: { value: "k2" } });
+      expect(screen.queryByText(new RegExp(t.intake_server_ai_test_fail))).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: t.intake_server_ai_test }));
+      expect(await screen.findByText(new RegExp(t.intake_server_ai_test_ok))).toBeTruthy();
+    });
+
+    it("shows the last real call result on a configured server AI", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      vi.mocked(ipc.intakeServerAiStatus).mockResolvedValue({ settings: { provider: "openai", model: "gpt-x", base_url: "" }, configured: true, health: { last_ok: null, last_ms: null, error: "AI 回應 HTTP 500：boom" } });
+      await openSettings();
+      expect((await screen.findByText(new RegExp(t.intake_server_ai_last_fail))).textContent).toContain("boom");
     });
 
     it("asks for no key when the provider is Ollama, and shows the AI card only while connected", async () => {

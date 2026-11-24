@@ -19,6 +19,8 @@ import {
   intakeLineSetCredentials,
   intakeLineStatus,
   intakeServerAiApply,
+  intakeServerAiModels,
+  intakeServerAiTest,
   intakeServerAiStatus,
   intakeServerTelegramApply,
   intakeServerTelegramStatus,
@@ -49,7 +51,7 @@ import {
   type Level,
 } from "../../ipc/intake";
 import { MailIcon } from "../Icons";
-import type { IntakeRemoteStatus, IntakeServerAi, IntakeServerMail, IntakeServerTelegram } from "../../ipc/intake";
+import type { IntakeRemoteStatus, IntakeServerAi, IntakeServerAiTest, IntakeServerMail, IntakeServerTelegram } from "../../ipc/intake";
 import { MarkdownText } from "../../lib/markdown";
 import { useNavigate } from "react-router-dom";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
@@ -751,8 +753,11 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [key, setKey] = useState("");
+  const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<IntakeServerAiTest | null>(null);
   const load = useCallback(() => {
     intakeServerAiStatus()
       .then((v) => {
@@ -764,6 +769,11 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
       .catch(() => {});
   }, []);
   useEffect(load, [load]);
+  const edit = (fn: () => void) => {
+    fn();
+    setDone(false);
+    setTest(null);
+  };
   async function save() {
     setBusy(true);
     setDone(false);
@@ -778,7 +788,31 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
       setBusy(false);
     }
   }
+  async function loadModels() {
+    setBusy(true);
+    try {
+      setModels(await intakeServerAiModels(provider, baseUrl.trim(), key));
+      onError(null);
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function runTest() {
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await intakeServerAiTest(provider, model.trim(), baseUrl.trim(), key));
+    } catch (e) {
+      setTest({ ok: false, ms: 0, message: errText(e) });
+    } finally {
+      setTesting(false);
+    }
+  }
   const needsKey = provider !== "" && provider !== "ollama";
+  const h = ai?.health;
+  const lastCall = h?.error ? `${t.intake_server_ai_last_fail}：${h.error}` : h?.last_ok ? `${t.intake_server_ai_last_ok}（${new Date(h.last_ok * 1000).toLocaleString()}，${h.last_ms ?? 0} ms）` : t.intake_server_ai_last_none;
   return (
     <fieldset className="intake__mailcard" disabled={!canEdit}>
       <div className="intake__mailcard-head">
@@ -786,23 +820,41 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
         <span className={`intake__tab-chip ${ai?.configured ? "intake__tab-chip--on" : ""}`}>{ai?.configured ? t.intake_server_ai_on : t.intake_server_ai_off_short}</span>
       </div>
       {ai && !ai.configured && <p className="intake__mailcard-hint">{t.intake_server_ai_off}</p>}
+      {ai?.configured && <p className={`intake__mailcard-state ${h?.error ? "" : "intake__mailcard-state--on"}`}>{t.intake_server_ai_last}：{lastCall}</p>}
       <div className="intake__mailcard-row">
-        <select aria-label={t.intake_server_ai_provider} value={provider} onChange={(e) => { setProvider(e.target.value); setDone(false); }}>
+        <select aria-label={t.intake_server_ai_provider} value={provider} onChange={(e) => edit(() => { setProvider(e.target.value); setModels([]); })}>
           <option value="">{t.intake_server_ai_provider}</option>
           {AI_PROVIDERS.map(([id, label]) => (
             <option key={id} value={id}>{label}</option>
           ))}
         </select>
-        <input aria-label={t.intake_server_ai_model} placeholder={t.intake_server_ai_model} value={model} onChange={(e) => { setModel(e.target.value); setDone(false); }} />
-        <input aria-label={t.intake_server_ai_base_url} placeholder={t.intake_server_ai_base_url} value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setDone(false); }} />
+        <input list="intake-ai-models" aria-label={t.intake_server_ai_model} placeholder={t.intake_server_ai_model} value={model} onChange={(e) => edit(() => setModel(e.target.value))} />
+        <datalist id="intake-ai-models">
+          {models.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+        <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy || provider === ""} onClick={() => void loadModels()}>
+          {t.intake_server_ai_load_models}
+        </button>
+        <input aria-label={t.intake_server_ai_base_url} placeholder={t.intake_server_ai_base_url} value={baseUrl} onChange={(e) => edit(() => setBaseUrl(e.target.value))} />
         {needsKey && (
-          <input type="password" autoComplete="off" aria-label={t.intake_server_ai_key} placeholder={`${t.intake_server_ai_key}（${t.intake_server_ai_key_keep}）`} value={key} onChange={(e) => { setKey(e.target.value); setDone(false); }} />
+          <input type="password" autoComplete="off" aria-label={t.intake_server_ai_key} placeholder={`${t.intake_server_ai_key}（${t.intake_server_ai_key_keep}）`} value={key} onChange={(e) => edit(() => setKey(e.target.value))} />
         )}
+        <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={testing || provider === "" || model.trim() === ""} onClick={() => void runTest()}>
+          {testing ? t.intake_server_ai_testing : t.intake_server_ai_test}
+        </button>
         <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy || provider === "" || model.trim() === ""} onClick={() => void save()}>
           {t.intake_server_ai_save}
         </button>
         {done && <span role="status" className="intake__mailcard-ok">{t.intake_server_ai_saved}</span>}
       </div>
+      {models.length > 0 && <p className="intake__mailcard-hint">{t.intake_server_ai_models_loaded.replace("{n}", String(models.length))}</p>}
+      {test && (
+        <p role="status" className={`intake__mailcard-state ${test.ok ? "intake__mailcard-state--on" : ""}`}>
+          {test.ok ? `${t.intake_server_ai_test_ok}（${test.ms} ms）：${test.message}` : `${t.intake_server_ai_test_fail}：${test.message}`}
+        </p>
+      )}
       <p className="intake__mailcard-hint">{t.intake_server_ai_hint}</p>
     </fieldset>
   );

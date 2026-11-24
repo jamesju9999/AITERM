@@ -484,12 +484,49 @@ async fn clear_secret(State(st): St, Admin(me): Admin, Path(id): Path<String>) -
 pub struct AiView {
     pub settings: crate::ai::AiSettings,
     pub configured: bool,
+    /// 最近一次實際呼叫的結果（重啟後清空）。
+    #[serde(default)]
+    pub health: crate::ai::Health,
 }
 
 async fn get_ai(State(st): St) -> Response {
     let settings = crate::ai::load(&st.pools.intake).await;
     let configured = crate::ai::configured(&settings, st.secrets.as_ref());
-    Json(AiView { settings, configured }).into_response()
+    Json(AiView { settings, configured, health: st.ai.health() }).into_response()
+}
+
+/// 模型清單與測試連線共用的輸入：畫面上還沒儲存的值也能先測；`api_key` 空白就用已存的。
+#[derive(Deserialize)]
+pub struct AiProbe {
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+}
+
+impl AiProbe {
+    fn resolve(self, st: &AppState) -> (crate::ai::AiSettings, String) {
+        let key = if self.api_key.trim().is_empty() { st.secrets.get(crate::ai::API_KEY_SECRET).unwrap_or_default() } else { self.api_key.trim().to_string() };
+        (crate::ai::AiSettings { provider: self.provider, model: self.model, base_url: self.base_url }, key)
+    }
+}
+
+async fn ai_models(State(st): St, Admin(_): Admin, Json(p): Json<AiProbe>) -> Response {
+    let (settings, key) = p.resolve(&st);
+    match crate::ai::list_models_with(&settings, &key).await {
+        Ok(models) => Json(models).into_response(),
+        Err(e) => bad(&e),
+    }
+}
+
+async fn ai_test(State(st): St, Admin(me): Admin, Json(p): Json<AiProbe>) -> Response {
+    let (settings, key) = p.resolve(&st);
+    let result = crate::ai::test_with(&settings, &key).await;
+    crate::audit::record(&st.pools.server, &me.name, "ai.test", if result.ok { "ok" } else { "failed" }).await;
+    Json(result).into_response()
 }
 
 async fn set_ai(State(st): St, Admin(me): Admin, Json(s): Json<crate::ai::AiSettings>) -> Response {
@@ -625,6 +662,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/line/unknown/{id}", delete(forget_unknown))
         .route("/v1/secrets/{id}", put(set_secret).delete(clear_secret))
         .route("/v1/ai", get(get_ai).put(set_ai))
+        .route("/v1/ai/models", post(ai_models))
+        .route("/v1/ai/test", post(ai_test))
         .route("/v1/mail", get(get_mail).put(set_mail))
         .route("/v1/telegram", get(get_telegram).put(set_telegram))
         .route("/v1/status", get(status))

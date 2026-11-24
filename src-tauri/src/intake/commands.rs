@@ -634,6 +634,22 @@ pub async fn intake_server_telegram_apply(rs: State<'_, Arc<RemoteState>>, owner
     super::remote::telegram_apply(&api, &owner_chat_id, &bot_token).await.map_err(|e| super::remote::fail(&rs, e))
 }
 
+/// 問 server 的供應商有哪些模型（可用畫面上還沒儲存的值）。
+#[tauri::command]
+pub async fn intake_server_ai_models(rs: State<'_, Arc<RemoteState>>, provider: String, base_url: String, api_key: String) -> Result<Vec<String>, String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    let settings = super::remote::ServerAiSettings { provider, model: String::new(), base_url };
+    super::remote::ai_models(&api, &settings, &api_key).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
+/// 測試 server 的 AI 連線（可用畫面上還沒儲存的值）。
+#[tauri::command]
+pub async fn intake_server_ai_test(rs: State<'_, Arc<RemoteState>>, provider: String, model: String, base_url: String, api_key: String) -> Result<super::remote::ServerAiTest, String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    let settings = super::remote::ServerAiSettings { provider, model, base_url };
+    super::remote::ai_test(&api, &settings, &api_key).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
 /// 手動「我來處理」：領 server 上這一題，派進你「收集中」且閒置的分頁。
 #[tauri::command]
 pub async fn intake_remote_claim(app: AppHandle, item_id: String) -> Result<(), String> {

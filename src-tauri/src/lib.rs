@@ -596,6 +596,8 @@ pub fn run() {
             intake::commands::intake_server_telegram_status,
             intake::commands::intake_server_telegram_apply,
             intake::commands::intake_server_ai_status,
+            intake::commands::intake_server_ai_models,
+            intake::commands::intake_server_ai_test,
             intake::commands::intake_server_ai_apply,
             intake::commands::intake_server_mail_status,
             intake::commands::intake_server_mail_apply,

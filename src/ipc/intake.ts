@@ -266,7 +266,19 @@ export const intakeServerMailApply = (accountId: string) => invoke<void>("intake
 export interface IntakeServerAi {
   settings: { provider: string; model: string; base_url: string };
   configured: boolean;
+  /** 最近一次實際呼叫的結果（server 重啟後清空）。 */
+  health?: { last_ok: number | null; last_ms: number | null; error: string | null };
 }
+export interface IntakeServerAiTest {
+  ok: boolean;
+  ms: number;
+  message: string;
+}
+/** 畫面上還沒儲存的值也能問；`apiKey` 空白＝用 server 已存的。 */
+export const intakeServerAiModels = (provider: string, baseUrl: string, apiKey: string) =>
+  invoke<string[]>("intake_server_ai_models", { provider, baseUrl, apiKey });
+export const intakeServerAiTest = (provider: string, model: string, baseUrl: string, apiKey: string) =>
+  invoke<IntakeServerAiTest>("intake_server_ai_test", { provider, model, baseUrl, apiKey });
 export const intakeServerAiStatus = () => invoke<IntakeServerAi>("intake_server_ai_status");
 /** `apiKey` 空字串＝不變。 */
 export const intakeServerAiApply = (provider: string, model: string, baseUrl: string, apiKey: string) =>

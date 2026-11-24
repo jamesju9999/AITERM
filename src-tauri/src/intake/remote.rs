@@ -442,6 +442,37 @@ pub struct ServerAiSettings {
 pub struct ServerAi {
     pub settings: ServerAiSettings,
     pub configured: bool,
+    /// 最近一次實際呼叫的結果；舊版 server 沒有這個欄位。
+    #[serde(default)]
+    pub health: ServerAiHealth,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct ServerAiHealth {
+    pub last_ok: Option<i64>,
+    pub last_ms: Option<u64>,
+    pub error: Option<String>,
+}
+
+/// 「測試連線」的結果。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ServerAiTest {
+    pub ok: bool,
+    pub ms: u64,
+    pub message: String,
+}
+
+/// 還沒儲存的值也能測；`api_key` 空白＝用 server 已存的。
+pub async fn ai_models(api: &Api, settings: &ServerAiSettings, api_key: &str) -> Result<Vec<String>, ClientError> {
+    api.typed(Method::POST, "/v1/ai/models", Some(ai_probe(settings, api_key))).await
+}
+
+pub async fn ai_test(api: &Api, settings: &ServerAiSettings, api_key: &str) -> Result<ServerAiTest, ClientError> {
+    api.typed(Method::POST, "/v1/ai/test", Some(ai_probe(settings, api_key))).await
+}
+
+fn ai_probe(s: &ServerAiSettings, api_key: &str) -> serde_json::Value {
+    json!({ "provider": s.provider, "model": s.model, "base_url": s.base_url, "api_key": api_key.trim() })
 }
 
 pub async fn ai_status(api: &Api) -> Result<ServerAi, ClientError> {

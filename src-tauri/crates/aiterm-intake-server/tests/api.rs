@@ -260,3 +260,31 @@ async fn a_self_signed_server_gets_its_fingerprint_pinned() {
     let fp = srv.state().fingerprint.clone();
     assert_eq!(aiterm_intake_client::api::decide_pin(&srv.addr(), &fp).await, Some(fp), "自簽憑證過不了一般驗證，所以要釘指紋");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ai_models_and_connection_test_work_on_unsaved_values_and_only_for_admins() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let up = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/v1/models")).and(header("authorization", "Bearer typed-key")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{"id":"m2"},{"id":"m1"}]}))).mount(&up).await;
+    Mock::given(method("POST")).and(path("/v1/chat/completions")).and(header("authorization", "Bearer saved-key")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"choices":[{"message":{"content":"OK"}}]}))).mount(&up).await;
+    let srv = TestServer::start().await;
+    let admin = srv.paired("小華", Role::Admin).await;
+    let member = srv.paired("小明", Role::Member).await;
+    let probe = |key: &str| serde_json::json!({"provider": "openai", "model": "m1", "base_url": up.uri(), "api_key": key});
+
+    let models: Vec<String> = admin.typed(Method::POST, "/v1/ai/models", Some(probe("typed-key"))).await.unwrap();
+    assert_eq!(models, vec!["m1", "m2"], "畫面上剛輸入、還沒儲存的金鑰也能拿來列模型");
+    assert!(admin.request(Method::POST, "/v1/ai/models", Some(probe("wrong"))).await.is_err(), "金鑰錯誤要回錯誤");
+
+    admin.request(Method::PUT, "/v1/secrets/ai_api_key", Some(serde_json::json!({"value": "saved-key"}))).await.unwrap();
+    let r: serde_json::Value = admin.typed(Method::POST, "/v1/ai/test", Some(probe(""))).await.unwrap();
+    assert_eq!((r["ok"].as_bool(), r["message"].as_str()), (Some(true), Some("OK")), "金鑰留空就用已存的");
+    let bad: serde_json::Value = admin.typed(Method::POST, "/v1/ai/test", Some(probe("nope"))).await.unwrap();
+    assert_eq!(bad["ok"], false);
+
+    assert!(member.request(Method::POST, "/v1/ai/test", Some(probe(""))).await.is_err());
+    assert!(member.request(Method::POST, "/v1/ai/models", Some(probe(""))).await.is_err());
+    let view: serde_json::Value = admin.get("/v1/ai").await.unwrap();
+    assert!(view["health"].is_object());
+}
