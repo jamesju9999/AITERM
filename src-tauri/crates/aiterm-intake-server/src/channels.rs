@@ -1,5 +1,5 @@
 //! 收訊管道的啟停：LINE webhook、網頁表單與「新問題自動開題」的定時掃描。
-//! 設定或祕密變動後呼叫 `reload`。Email 由獨立的定時輪詢收（見 `imap`）；Telegram 還沒支援。
+//! 設定或祕密變動後呼叫 `reload`。Email 與 Telegram 各有獨立的輪詢（見 `imap`、`telegram`）。
 use crate::state::AppState;
 use aiterm_intake_core::host::{Notifier, Secrets};
 use aiterm_intake_core::line_server::{self, LineState, LINE_SECRET_ID, LINE_TOKEN_ID};
@@ -22,6 +22,8 @@ pub struct Channels {
     web: Mutex<Option<tokio::task::JoinHandle<()>>>,
     email: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub email_health: Mutex<crate::imap::Health>,
+    telegram: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub telegram_health: Mutex<crate::telegram::Health>,
     web_on: AtomicBool,
     /// 網頁表單網址的短代碼要對回專案；表單路由是同步查詢，所以這裡放一份快照（重載與每次掃描時更新）。
     web_projects: Arc<Mutex<Vec<(String, String)>>>,
@@ -193,7 +195,16 @@ pub fn start_email(st: &Arc<AppState>) {
     *st.channels.email.lock() = Some(task);
 }
 
+/// Telegram 長輪詢（沒設機器人金鑰或沒有專案啟用時會閒置）。
+pub fn start_telegram(st: &Arc<AppState>) {
+    let task = tokio::spawn(crate::telegram::run(st.clone()));
+    *st.channels.telegram.lock() = Some(task);
+}
+
 pub fn stop(st: &AppState) {
+    if let Some(h) = st.channels.telegram.lock().take() {
+        h.abort();
+    }
     if let Some(h) = st.channels.email.lock().take() {
         h.abort();
     }

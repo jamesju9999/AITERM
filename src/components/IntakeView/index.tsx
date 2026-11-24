@@ -20,6 +20,8 @@ import {
   intakeLineStatus,
   intakeServerAiApply,
   intakeServerAiStatus,
+  intakeServerTelegramApply,
+  intakeServerTelegramStatus,
   intakeServerMailApply,
   intakeServerMailStatus,
   intakeList,
@@ -47,7 +49,7 @@ import {
   type Level,
 } from "../../ipc/intake";
 import { MailIcon } from "../Icons";
-import type { IntakeRemoteStatus, IntakeServerAi, IntakeServerMail } from "../../ipc/intake";
+import type { IntakeRemoteStatus, IntakeServerAi, IntakeServerMail, IntakeServerTelegram } from "../../ipc/intake";
 import { MarkdownText } from "../../lib/markdown";
 import { useNavigate } from "react-router-dom";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
@@ -682,6 +684,58 @@ function ServerMailCard({ accounts, canEdit, onError }: { accounts: MailAccount[
   );
 }
 
+/** 連到 server 時：server 的 Telegram 機器人（機器人金鑰只寫入、不會被讀回）。 */
+function ServerTelegramCard({ canEdit, onError }: { canEdit: boolean; onError: (m: string | null) => void }) {
+  const { t } = useLocale();
+  const [tg, setTg] = useState<IntakeServerTelegram | null>(null);
+  const [owner, setOwner] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const load = useCallback(() => {
+    intakeServerTelegramStatus()
+      .then((v) => {
+        setTg(v);
+        setOwner(v.settings.owner_chat_id);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(load, [load]);
+  async function save() {
+    setBusy(true);
+    setDone(false);
+    try {
+      await intakeServerTelegramApply(owner.trim(), token);
+      setToken("");
+      setDone(true);
+      load();
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const state = !tg ? "" : !tg.has_token ? t.intake_server_tg_no_token : tg.listening ? t.intake_server_tg_listening : t.intake_server_tg_waiting;
+  return (
+    <fieldset className="intake__mailcard" disabled={!canEdit}>
+      <div className="intake__mailcard-head">
+        <strong>{t.intake_server_tg}</strong>
+        {state && <span className={`intake__tab-chip ${tg?.listening ? "intake__tab-chip--on" : ""}`}>{state}</span>}
+      </div>
+      {tg?.error && <div className="intake__error" role="alert">{tg.error}</div>}
+      <div className="intake__mailcard-row">
+        <input type="password" autoComplete="off" aria-label={t.intake_server_tg_token} placeholder={`${t.intake_server_tg_token}（${t.intake_server_ai_key_keep}）`} value={token} onChange={(e) => { setToken(e.target.value); setDone(false); }} />
+        <input aria-label={t.intake_server_tg_owner} placeholder={t.intake_server_tg_owner} value={owner} onChange={(e) => { setOwner(e.target.value); setDone(false); }} />
+        <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy || (token.trim() === "" && owner.trim() === (tg?.settings.owner_chat_id ?? ""))} onClick={() => void save()}>
+          {t.intake_server_tg_save}
+        </button>
+        {done && <span role="status" className="intake__mailcard-ok">{t.intake_server_tg_saved}</span>}
+      </div>
+      <p className="intake__mailcard-hint">{t.intake_server_tg_hint}</p>
+    </fieldset>
+  );
+}
+
 const AI_PROVIDERS: [string, string][] = [
   ["openai", "OpenAI"],
   ["anthropic", "Anthropic"],
@@ -1115,6 +1169,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, remote, onError
         )}
         {chanTab === "telegram" && (
           <>
+      {remote.connected && <ServerTelegramCard canEdit={!readOnly} onError={onError} />}
       <label className="intake__field">
         <input type="checkbox" checked={cfg.telegram_enabled} onChange={(e) => set("telegram_enabled", e.target.checked)} />
         {t.intake_set_telegram}

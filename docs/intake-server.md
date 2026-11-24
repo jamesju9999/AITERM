@@ -88,6 +88,16 @@ Server 可以用 IMAP 收信、用 SMTP 回覆，規則與桌面版相同（別�
 - 只支援隱含 TLS 的 IMAP（通常是 993），不支援 143 的 STARTTLS。`status` 會顯示是否收信、最近成功時間與錯誤。
 - 已用真實信箱驗證過一輪（寄出標有 `[AITerm]` 的信，約一分鐘內收進清單）。
 
+## Telegram
+
+Server 可以用 Telegram 機器人收訊息並回覆，規則與桌面版相同：主人的聊天室用 `/ask 問題` 直接提問（可在 `/ask` 後面接專案名稱），其他聊天室要先把 `tg:<聊天室 id>` 加進專案白名單。
+
+- 設定：連上 server 後，設定頁的「Telegram」分頁最上方有「Server Telegram 機器人」卡片，填機器人金鑰（與主人聊天室 id，選填）按「儲存機器人設定」，只有管理員做得到；金鑰只寫入、不會被讀回，留空＝不變。也可用命令列：`echo "$機器人金鑰" | aiterm-intake-server telegram --owner-chat-id 123456`。
+- 用長輪詢（getUpdates）收，不需要公開網址。設定好、且至少一個專案啟用 Telegram 就會開始收；卡片會顯示「收訊中」或錯誤。
+- **同一個機器人同一時間只能有一個程式在輪詢**（否則 Telegram 回 409，卡片會顯示這個錯誤）。給 server 用的機器人，不要同時設在任何一台桌面版 AITerm 的 Telegram 設定裡；建議另外開一個機器人給 server。
+- 回覆用同一個機器人，以「回覆原訊息」的方式送回該聊天室，過長會切成多則。
+- 目前只有自動測試涵蓋（假的 Telegram 伺服器：收訊、白名單、主人指令、回覆、409 衝突），還沒用真實機器人驗收。
+
 ## 六、systemd 範例（Linux）
 
 ```ini
@@ -165,7 +175,7 @@ New-NetFirewallRule -DisplayName 'AITerm Intake Server' -Direction Inbound -Prot
 ## 七、目前的限制
 
 - Server 自己**不會自動處理題目**。處理靠成員領取：在 AITerm 清單按「我來處理」，或讓「收集中」的終端機分頁閒置時自動領；題目在領取者自己的電腦用 Claude Code 處理，做完交回 server 變成草稿，由人看過再送出。
-- 支援 **LINE**、**網頁表單**與 **Email** 收訊與回覆；Telegram 還不能在 server 上使用（設定會存起來，但不收訊）。
+- 支援 **LINE**、**網頁表單**、**Email** 與 **Telegram** 收訊與回覆。
 - 看板與 Agent 協作不在 server 上。
 - 所有成員看得到所有專案。
 

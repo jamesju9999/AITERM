@@ -1,4 +1,4 @@
-//! 寄出草稿。Server 支援 LINE、網頁表單與 Email（用信件回覆）；Telegram 還沒支援。
+//! 寄出草稿。Server 支援 LINE、網頁表單、Email（用信件回覆）與 Telegram。
 use crate::state::AppState;
 use aiterm_intake_core::host::{Notifier, Secrets};
 use aiterm_intake_core::{filter, line_server, line_source, line_store, line_text, store};
@@ -14,6 +14,15 @@ pub async fn send(st: &AppState, item_id: &str) -> Result<(), String> {
     }
     if item.source == "web" {
         crate::mail::send_reply(st, &item.sender, &item.subject, &filter::redact(&body)).await?;
+        store::mark_sent(&st.pools.intake, item_id).await.map_err(|e| e.to_string())?;
+        st.events.changed();
+        return Ok(());
+    }
+    if item.source == "telegram" {
+        let (chat, reply_to) = aiterm_intake_core::telegram_source::reply_target(&item.sender, &item.message_id).ok_or("無法判斷要回覆的 Telegram 聊天室")?;
+        let token = st.secrets.get(crate::telegram::TOKEN_SECRET).filter(|t| !t.trim().is_empty()).ok_or("尚未設定 Telegram 機器人")?;
+        let base = st.telegram_api_base.lock().clone();
+        crate::telegram::send_to_chat(&base, &token, chat, &filter::redact(&body), reply_to).await?;
         store::mark_sent(&st.pools.intake, item_id).await.map_err(|e| e.to_string())?;
         st.events.changed();
         return Ok(());

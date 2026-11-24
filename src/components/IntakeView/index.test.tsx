@@ -48,6 +48,8 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeServerMailApply: vi.fn(() => Promise.resolve()),
   intakeServerAiStatus: vi.fn(() => Promise.resolve({ settings: { provider: "", model: "", base_url: "" }, configured: false })),
   intakeServerAiApply: vi.fn(() => Promise.resolve()),
+  intakeServerTelegramStatus: vi.fn(() => Promise.resolve({ settings: { owner_chat_id: "" }, has_token: false, listening: false, error: null })),
+  intakeServerTelegramApply: vi.fn(() => Promise.resolve()),
   intakeRemoteDisconnect: vi.fn(() => Promise.resolve()),
 }));
 import * as ipc from "../../ipc/intake";
@@ -95,6 +97,7 @@ beforeEach(() => {
   // 同理：上一個測試設成「已連線」的狀態不能漏進來。
   vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: false, online: false, addr: "", name: "", role: null, error: null });
   vi.mocked(ipc.intakeServerAiStatus).mockResolvedValue({ settings: { provider: "", model: "", base_url: "" }, configured: false });
+  vi.mocked(ipc.intakeServerTelegramStatus).mockResolvedValue({ settings: { owner_chat_id: "" }, has_token: false, listening: false, error: null });
   vi.mocked(ipc.intakeServerMailStatus).mockResolvedValue({ settings: { smtp_host: "", smtp_port: 587, imap_host: "", imap_port: 993, username: "", from: "" }, configured: false });
 });
 
@@ -1001,6 +1004,23 @@ describe("IntakeView", () => {
       vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: false, online: false, addr: "", name: "", role: null, error: null });
       await openSettings();
       expect(screen.queryByText(t.intake_server_ai)).toBeNull();
+    });
+
+    it("shows the server's Telegram state and saves the bot token and owner chat", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      vi.mocked(ipc.intakeServerTelegramStatus).mockResolvedValue({ settings: { owner_chat_id: "111" }, has_token: true, listening: false, error: "另一個程式正在輪詢同一個機器人（HTTP 409）" });
+      await openSettings();
+      fireEvent.click(screen.getByRole("tab", { name: new RegExp(t.intake_sec_telegram) }));
+      expect(await screen.findByText(t.intake_server_tg_waiting)).toBeTruthy();
+      expect(screen.getByText(/HTTP 409/)).toBeTruthy();
+      const save = screen.getByRole("button", { name: t.intake_server_tg_save });
+      expect(save.matches(":disabled")).toBe(true);
+      fireEvent.change(screen.getByLabelText(t.intake_server_tg_token), { target: { value: " 123:ABC " } });
+      fireEvent.change(screen.getByLabelText(t.intake_server_tg_owner), { target: { value: "222" } });
+      fireEvent.click(save);
+      await waitFor(() => expect(ipc.intakeServerTelegramApply).toHaveBeenCalledWith("222", " 123:ABC "));
+      expect(await screen.findByText(t.intake_server_tg_saved)).toBeTruthy();
+      expect((screen.getByLabelText(t.intake_server_tg_token) as HTMLInputElement).value).toBe("");
     });
 
     it("does not let a member apply a mail account", async () => {

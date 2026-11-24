@@ -444,7 +444,7 @@ async fn attachment_text(State(st): St, Path(att): Path<String>) -> Response {
 // ---- 祕密、AI、狀態、稽核 ----
 
 /// 可以經由 API 設定的祕密（白名單，避免任意寫入）。
-pub const SETTABLE_SECRETS: [&str; 4] = [aiterm_intake_core::line_server::LINE_SECRET_ID, aiterm_intake_core::line_server::LINE_TOKEN_ID, crate::ai::API_KEY_SECRET, crate::mail::PASSWORD_SECRET];
+pub const SETTABLE_SECRETS: [&str; 5] = [aiterm_intake_core::line_server::LINE_SECRET_ID, aiterm_intake_core::line_server::LINE_TOKEN_ID, crate::ai::API_KEY_SECRET, crate::mail::PASSWORD_SECRET, crate::telegram::TOKEN_SECRET];
 
 #[derive(Deserialize)]
 pub struct SecretBody {
@@ -497,6 +497,34 @@ async fn set_ai(State(st): St, Admin(me): Admin, Json(s): Json<crate::ai::AiSett
         return bad(&e);
     }
     crate::audit::record(&st.pools.server, &me.name, "ai.set", &s.provider).await;
+    st.events.changed();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TelegramView {
+    pub settings: crate::telegram::TelegramSettings,
+    /// 已設定機器人金鑰。
+    pub has_token: bool,
+    pub listening: bool,
+    pub error: Option<String>,
+}
+
+async fn telegram_view(st: &AppState) -> TelegramView {
+    let health = st.channels.telegram_health.lock().clone();
+    let has_token = st.secrets.get(crate::telegram::TOKEN_SECRET).is_some();
+    TelegramView { settings: crate::telegram::load(&st.pools.intake).await, has_token, listening: has_token && health.last_ok.is_some() && health.error.is_none(), error: health.error }
+}
+
+async fn get_telegram(State(st): St) -> Response {
+    Json(telegram_view(&st).await).into_response()
+}
+
+async fn set_telegram(State(st): St, Admin(me): Admin, Json(s): Json<crate::telegram::TelegramSettings>) -> Response {
+    if let Err(e) = crate::telegram::save(&st.pools.intake, &s).await {
+        return bad(&e);
+    }
+    crate::audit::record(&st.pools.server, &me.name, "telegram.set", "").await;
     st.events.changed();
     StatusCode::NO_CONTENT.into_response()
 }
@@ -598,6 +626,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/secrets/{id}", put(set_secret).delete(clear_secret))
         .route("/v1/ai", get(get_ai).put(set_ai))
         .route("/v1/mail", get(get_mail).put(set_mail))
+        .route("/v1/telegram", get(get_telegram).put(set_telegram))
         .route("/v1/status", get(status))
         .route("/v1/audit", get(audit_log))
 }

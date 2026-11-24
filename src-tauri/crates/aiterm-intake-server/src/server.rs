@@ -32,6 +32,7 @@ pub async fn start(bind: SocketAddr, state: Arc<AppState>, identity: Identity) -
     crate::channels::reload(&state).await;
     crate::channels::start_ticker(&state);
     crate::channels::start_email(&state);
+    crate::channels::start_telegram(&state);
     let (tx, rx) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(crate::tls::serve(listener, app, identity, rx));
     Ok(Running { addr, state, shutdown: Some(tx), task })

@@ -86,6 +86,12 @@ pub enum Cmd {
         #[arg(long, default_value = "")]
         from: String,
     },
+    /// 設定 Telegram 機器人（收訊與回覆）。機器人金鑰從標準輸入讀取，不要放在參數裡。
+    Telegram {
+        /// 主人的聊天室 id（可用 `/ask 問題` 直接提問）；省略＝沒有主人，只有白名單內的聊天室能提問。
+        #[arg(long, default_value = "")]
+        owner_chat_id: String,
+    },
     /// 顯示目前狀態。
     Status,
 }
@@ -121,6 +127,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Project { cmd } => project_cmd(&dir, cmd).await,
         Cmd::Ai { provider, model, base_url } => ai_set(&dir, provider, model, base_url).await,
         Cmd::Mail { smtp_host, smtp_port, imap_host, imap_port, username, from } => mail_set(&dir, smtp_host, smtp_port, imap_host, imap_port, username, from).await,
+        Cmd::Telegram { owner_chat_id } => telegram_set(&dir, owner_chat_id).await,
         Cmd::Status => status(&dir).await,
     }
 }
@@ -249,6 +256,22 @@ async fn mail_set(dir: &std::path::Path, smtp_host: String, smtp_port: u16, imap
     Ok(())
 }
 
+async fn telegram_set(dir: &std::path::Path, owner_chat_id: String) -> anyhow::Result<()> {
+    use std::io::Read;
+    let pools = crate::db::open(dir).await?;
+    crate::telegram::save(&pools.intake, &crate::telegram::TelegramSettings { owner_chat_id }).await.map_err(|e| anyhow::anyhow!(e))?;
+    let mut token = String::new();
+    std::io::stdin().read_to_string(&mut token)?;
+    let token = token.trim();
+    if token.is_empty() {
+        println!("已設定主人聊天室，但標準輸入沒有機器人金鑰；請用 `echo 金鑰 | aiterm-intake-server telegram …` 補上");
+    } else {
+        FileSecrets::open(dir)?.set(crate::telegram::TOKEN_SECRET, token).map_err(|e| anyhow::anyhow!(e))?;
+        println!("已設定 Telegram 機器人金鑰");
+    }
+    Ok(())
+}
+
 async fn status(dir: &std::path::Path) -> anyhow::Result<()> {
     let pools = crate::db::open(dir).await?;
     let secrets = FileSecrets::open(dir)?;
@@ -259,6 +282,7 @@ async fn status(dir: &std::path::Path) -> anyhow::Result<()> {
     let mail = crate::mail::load(&pools.intake).await;
     println!("收信（Email）：{}", if crate::imap::receiving(&mail, &secrets) { mail.imap_host.clone() } else { "未設定".into() });
     println!("寄信：{}", if crate::mail::configured(&mail, &secrets) { format!("{}（{}）", mail.smtp_host, mail.sender()) } else { "尚未設定".into() });
+    println!("Telegram：機器人金鑰 {}", yes(secrets.get(crate::telegram::TOKEN_SECRET).is_some()));
     println!("AI：{}", if crate::ai::configured(&ai, &secrets) { format!("{}（{}）", ai.provider, ai.model) } else { "尚未設定".into() });
     Ok(())
 }

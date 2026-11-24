@@ -271,3 +271,15 @@ export const intakeServerAiStatus = () => invoke<IntakeServerAi>("intake_server_
 /** `apiKey` 空字串＝不變。 */
 export const intakeServerAiApply = (provider: string, model: string, baseUrl: string, apiKey: string) =>
   invoke<void>("intake_server_ai_apply", { provider, model, baseUrl, apiKey });
+
+/** server 的 Telegram 狀態與設定；機器人金鑰不會回傳。 */
+export interface IntakeServerTelegram {
+  settings: { owner_chat_id: string };
+  has_token: boolean;
+  listening: boolean;
+  error: string | null;
+}
+export const intakeServerTelegramStatus = () => invoke<IntakeServerTelegram>("intake_server_telegram_status");
+/** `botToken` 空字串＝不變。 */
+export const intakeServerTelegramApply = (ownerChatId: string, botToken: string) =>
+  invoke<void>("intake_server_telegram_apply", { ownerChatId, botToken });

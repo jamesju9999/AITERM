@@ -457,6 +457,34 @@ pub async fn ai_apply(api: &Api, settings: &ServerAiSettings, api_key: &str) -> 
     Ok(())
 }
 
+/// server 的 Telegram 狀態與設定；機器人金鑰不會回傳。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ServerTelegram {
+    pub settings: ServerTelegramSettings,
+    pub has_token: bool,
+    pub listening: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct ServerTelegramSettings {
+    #[serde(default)]
+    pub owner_chat_id: String,
+}
+
+pub async fn telegram_status(api: &Api) -> Result<ServerTelegram, ClientError> {
+    api.get("/v1/telegram").await
+}
+
+/// 寫入主人聊天室與（有給才更新的）機器人金鑰；金鑰空字串＝不變。
+pub async fn telegram_apply(api: &Api, owner_chat_id: &str, bot_token: &str) -> Result<(), ClientError> {
+    api.request(Method::PUT, "/v1/telegram", Some(json!({ "owner_chat_id": owner_chat_id }))).await?;
+    if !bot_token.trim().is_empty() {
+        set_secret(api, "telegram_bot_token", bot_token.trim()).await?;
+    }
+    Ok(())
+}
+
 pub async fn clear_secret(api: &Api, id: &str) -> Result<(), ClientError> {
     api.request(Method::DELETE, &format!("/v1/secrets/{}", enc(id)), None).await.map(|_| ())
 }
@@ -566,6 +594,24 @@ mod tests {
         let v = mail_status(&api).await.unwrap();
         assert_eq!((v.settings, v.configured), (s, true));
         assert_eq!(srv.state().secrets.get("smtp_password").as_deref(), Some("pw-123"));
+    }
+
+    #[tokio::test]
+    async fn server_telegram_round_trips_and_the_token_is_written_only_when_given() {
+        use aiterm_intake_core::host::Secrets;
+        let srv = TestServer::start().await;
+        let api = srv.paired("小華", Role::Admin).await;
+        let v = telegram_status(&api).await.unwrap();
+        assert_eq!((v.has_token, v.settings.owner_chat_id.as_str()), (false, ""));
+        telegram_apply(&api, "111", "  123:ABC  ").await.unwrap();
+        let v = telegram_status(&api).await.unwrap();
+        assert_eq!((v.has_token, v.settings.owner_chat_id.as_str()), (true, "111"));
+        assert_eq!(srv.state().secrets.get("telegram_bot_token").as_deref(), Some("123:ABC"));
+        assert!(!serde_json::to_string(&v).unwrap().contains("123:ABC"), "金鑰不會被讀回");
+        telegram_apply(&api, "222", "").await.unwrap();
+        assert_eq!(srv.state().secrets.get("telegram_bot_token").as_deref(), Some("123:ABC"), "空金鑰＝不變");
+        assert_eq!(telegram_status(&api).await.unwrap().settings.owner_chat_id, "222");
+        assert!(telegram_apply(&api, "不是數字", "").await.is_err());
     }
 
     #[tokio::test]

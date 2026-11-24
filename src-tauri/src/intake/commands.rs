@@ -620,6 +620,20 @@ pub async fn intake_server_ai_apply(rs: State<'_, Arc<RemoteState>>, provider: S
     super::remote::ai_apply(&api, &settings, &api_key).await.map_err(|e| super::remote::fail(&rs, e))
 }
 
+/// server 的 Telegram 狀態（要先連到 server）。
+#[tauri::command]
+pub async fn intake_server_telegram_status(rs: State<'_, Arc<RemoteState>>) -> Result<super::remote::ServerTelegram, String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    super::remote::telegram_status(&api).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
+/// 設定 server 的 Telegram 機器人（管理員）。金鑰空字串＝不變。
+#[tauri::command]
+pub async fn intake_server_telegram_apply(rs: State<'_, Arc<RemoteState>>, owner_chat_id: String, bot_token: String) -> Result<(), String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    super::remote::telegram_apply(&api, &owner_chat_id, &bot_token).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
 /// 手動「我來處理」：領 server 上這一題，派進你「收集中」且閒置的分頁。
 #[tauri::command]
 pub async fn intake_remote_claim(app: AppHandle, item_id: String) -> Result<(), String> {

@@ -12,6 +12,7 @@ pub mod secrets;
 pub mod pairing;
 pub mod reply;
 pub mod state;
+pub mod telegram;
 pub mod tls;
 pub mod routes;
 pub mod routes_data;
