@@ -91,8 +91,9 @@ async fn reload_web(st: &Arc<AppState>) {
         send_mail: Box::new(move |_project, to, subject, body| {
             let st = for_mail.clone();
             tokio::spawn(async move {
-                if let Err(e) = crate::mail::send_plain(&st, &to, &subject, &body).await {
-                    log::warn!("網頁表單：寄驗證碼失敗：{e}");
+                match crate::mail::send_plain(&st, &to, &subject, &body).await {
+                    Ok(()) => log::info!("網頁表單：已寄出驗證碼"),
+                    Err(e) => log::warn!("網頁表單：寄驗證碼失敗：{e}"),
                 }
             });
         }),
