@@ -58,6 +58,10 @@ export interface IntakeItem {
   board_task_id: string | null;
   /** 走看板／桌布時卡片的種類。 */
   route_kind: "board" | "canvas_bug" | "canvas_ask" | null;
+  /** 連到 server 時，領取（處理）這題的成員名稱；沒人領為 null。 */
+  claimed_by?: string | null;
+  claimed_at?: number | null;
+  claim_expires_at?: number | null;
 }
 
 export interface IntakeConfig {
@@ -245,3 +249,6 @@ export const intakeRemoteDisconnect = () => invoke<void>("intake_remote_disconne
 export function onIntakeRemote(cb: (s: IntakeRemoteStatus) => void): Promise<UnlistenFn> {
   return listen<IntakeRemoteStatus>(INTAKE_REMOTE_EVENT, (e) => cb(e.payload));
 }
+
+/** 手動「我來處理」：領 server 上這一題，派進你「收集中」且閒置的分頁。 */
+export const intakeRemoteClaim = (itemId: string) => invoke<void>("intake_remote_claim", { itemId });

@@ -17,6 +17,7 @@ pub use aiterm_intake_core::mail_source;
 pub use aiterm_intake_core::queue;
 pub use aiterm_intake_core::refs;
 pub mod remote;
+pub mod remote_work;
 #[cfg(test)]
 mod rehearsal;
 pub use aiterm_intake_core::rules;

@@ -290,7 +290,8 @@ pub async fn intake_send_reply(app: AppHandle, db: State<'_, IntakeDb>, id: Stri
 /// 這個分頁開始接收問題。
 #[tauri::command]
 pub async fn intake_tab_start(app: AppHandle, rt: State<'_, Arc<IntakeRuntime>>, tab_id: String, project_id: String, rs: State<'_, Arc<RemoteState>>) -> Result<(), String> {
-    local_only(&rs)?;
+    // 連到 server 時也能登錄：這個分頁成為該 server 專案的接收端，閒置時自動向 server 領題目。
+    let _ = &rs;
     rt.registry.register(&tab_id, &project_id);
     changed(&app);
     runtime::tick(&app).await;
@@ -301,7 +302,10 @@ pub async fn intake_tab_start(app: AppHandle, rt: State<'_, Arc<IntakeRuntime>>,
 #[tauri::command]
 pub async fn intake_tab_stop(app: AppHandle, db: State<'_, IntakeDb>, rt: State<'_, Arc<IntakeRuntime>>, tab_id: String) -> Result<(), String> {
     if let Some(id) = rt.registry.unregister(&tab_id) {
-        store::fail(&db.pool, &id, "已停止問題收集").await.map_err(e)?;
+        // 從 server 領來的題目放回待派送讓別人可以領；本機的題目照舊退回。
+        if !super::remote_work::abandon(&app, &id, "", true).await {
+            store::fail(&db.pool, &id, "已停止問題收集").await.map_err(e)?;
+        }
     }
     changed(&app);
     Ok(())
@@ -585,4 +589,10 @@ pub async fn intake_remote_pair(app: AppHandle, addr: String, code: String) -> R
 #[tauri::command]
 pub async fn intake_remote_disconnect(app: AppHandle) -> Result<(), String> {
     super::remote::disconnect(&app).await
+}
+
+/// 手動「我來處理」：領 server 上這一題，派進你「收集中」且閒置的分頁。
+#[tauri::command]
+pub async fn intake_remote_claim(app: AppHandle, item_id: String) -> Result<(), String> {
+    super::remote_work::claim_manual(&app, &item_id).await
 }

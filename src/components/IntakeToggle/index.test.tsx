@@ -123,14 +123,17 @@ describe("IntakeToggle", () => {
     expect(screen.getByRole("button")).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("is disabled with an explanation while connected to a server", async () => {
+  it("stays usable while connected to a server and explains that items come from the server", async () => {
     vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: true, online: true, addr: "h:1", name: "小華", role: "admin", error: null });
+    vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: ONE, unassigned: 0, legacy_settings: false });
+    vi.mocked(ipc.intakeTabs).mockResolvedValueOnce([]).mockResolvedValue([{ tab_id: "pty-1", project_id: "p1", claude_ready: true }]);
     wrap();
-    const btn = (await screen.findByText(t.intake_toggle_remote)).closest("button") as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
-    expect(btn.title).toBe(t.intake_toggle_remote_hint);
+    const label = await screen.findByText(t.intake_toggle_off);
+    const btn = label.closest("button") as HTMLButtonElement;
+    await waitFor(() => expect(btn.title).toBe(t.intake_toggle_remote_tooltip));
+    expect(btn.disabled).toBe(false);
     fireEvent.click(btn);
-    expect(ipc.intakeTabStart).not.toHaveBeenCalled();
+    await waitFor(() => expect(ipc.intakeTabStart).toHaveBeenCalledWith("pty-1", "p1"));
   });
 
   it("shows the reason when starting fails instead of doing nothing", async () => {

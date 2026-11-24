@@ -21,6 +21,7 @@ import {
   intakeList,
   intakeProjects,
   intakeRefresh,
+  intakeRemoteClaim,
   intakeReject,
   intakeSendReply,
   intakeSenders,
@@ -266,7 +267,7 @@ export function IntakeView() {
             </ul>
             </div>
             <div className="intake__detail">
-              {selected ? <Detail key={selected.id} item={selected} run={run} projects={projects} /> : <p className="intake__empty">{t.intake_pick}</p>}
+              {selected ? <Detail key={selected.id} item={selected} run={run} projects={projects} remote={remote} /> : <p className="intake__empty">{t.intake_pick}</p>}
             </div>
           </div>
         </>
@@ -492,7 +493,7 @@ function FlowBar({ item }: { item: IntakeItem }) {
   );
 }
 
-function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void>; projects: IntakeProject[] }) {
+function Detail({ item, run, projects, remote }: { item: IntakeItem; run: (fn: () => Promise<unknown>) => Promise<void>; projects: IntakeProject[]; remote: IntakeRemoteStatus }) {
   const { t } = useLocale();
   const [draft, setDraft] = useState(item.reply_draft ?? "");
   const [preview, setPreview] = useState(false);
@@ -519,6 +520,11 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
           </span>
           <span className="intake__chip" title={t.intake_channel}>{channelName(item.source, t)}</span>
           {item.kind && <span className="intake__chip">{item.kind === "code_change" ? t.intake_kind_code_change : t.intake_kind_question}</span>}
+          {item.claimed_by && (item.status === "running" || item.status === "draft" || item.status === "done") && (
+            <span className="intake__chip intake__chip--claim" title={t.intake_claim_who_tip}>
+              {item.status === "running" ? t.intake_claim_running.replace("{name}", item.claimed_by) : t.intake_claim_handled.replace("{name}", item.claimed_by)}
+            </span>
+          )}
           <span className="intake__meta">{new Date(item.created_at * 1000).toLocaleString()}</span>
         </div>
       </header>
@@ -584,6 +590,11 @@ function Detail({ item, run, projects }: { item: IntakeItem; run: (fn: () => Pro
               {t.intake_action_reject}
             </button>
           </>
+        )}
+        {item.status === "queued" && remote.connected && (
+          <button className="aiterm-btn aiterm-btn--primary" title={t.intake_claim_tip} onClick={() => void run(() => intakeRemoteClaim(item.id))}>
+            {t.intake_claim}
+          </button>
         )}
         {item.status === "queued" && (
           <button className="aiterm-btn aiterm-btn--secondary" onClick={() => void run(() => intakeReject(item.id))}>

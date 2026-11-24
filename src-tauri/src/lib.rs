@@ -592,6 +592,7 @@ pub fn run() {
             intake::commands::intake_remote_status,
             intake::commands::intake_remote_pair,
             intake::commands::intake_remote_disconnect,
+            intake::commands::intake_remote_claim,
             intake::commands::intake_get_config,
             intake::commands::intake_set_config,
             intake::commands::intake_line_status,

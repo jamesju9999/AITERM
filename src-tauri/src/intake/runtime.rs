@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 pub struct IntakeRuntime {
     pub registry: dispatcher::Registry,
     /// 派送迴圈與「開始接收」指令都會呼叫 `tick`；不序列化的話兩邊可能同時看到同一個閒置分頁。
-    tick_lock: tokio::sync::Mutex<()>,
+    pub(super) tick_lock: tokio::sync::Mutex<()>,
 }
 
 fn changed<R: Runtime>(app: &AppHandle<R>) {
@@ -37,8 +37,11 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, activity: &Arc<ClaudeActivity>) {
             if let Some(item_id) = r.registry.unregister_active(sid) {
                 let h = h.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Some(db) = h.try_state::<IntakeDb>() {
-                        store::fail(&db.pool, &item_id, "Claude Code 已結束，這題沒有完成").await.ok();
+                    // 從 server 領來的題目回報給 server；本機的題目退回本機的佇列。
+                    if !super::remote_work::abandon(&h, &item_id, "Claude Code 已結束，這題沒有完成", false).await {
+                        if let Some(db) = h.try_state::<IntakeDb>() {
+                            store::fail(&db.pool, &item_id, "Claude Code 已結束，這題沒有完成").await.ok();
+                        }
                     }
                     changed(&h);
                 });
@@ -109,11 +112,12 @@ pub async fn tick<R: Runtime>(app: &AppHandle<R>) {
     ) else {
         return;
     };
-    // 連到 server 時，題目由 server 收與處理，本機不派送。
+    let _guard = rt.tick_lock.lock().await;
+    // 連到 server 時，本機不收也不派送本機的題目；改成向 server 領取（續約、自動領取、收掉出事的分頁）。
     if super::remote::is_remote(app) {
+        super::remote_work::tick(app, &rt, &pty).await;
         return;
     }
-    let _guard = rt.tick_lock.lock().await;
     let mut touched = false;
     for tab in rt.registry.tabs() {
         if pty.size(&tab).is_none() {
@@ -396,6 +400,10 @@ pub async fn complete<R: Runtime>(app: &AppHandle<R>, tab: &str, item_id: &str, 
 }
 
 async fn finish_item<R: Runtime>(app: &AppHandle<R>, tab: &str, item_id: &str, answer: Option<String>) {
+    // 從 server 領來的題目：結果交回 server（變成草稿，由人看過再寄出）。
+    if super::remote_work::complete(app, item_id, answer.clone()).await {
+        return;
+    }
     let Some(db) = app.try_state::<IntakeDb>() else { return };
     let Some(answer) = answer else {
         store::fail(&db.pool, item_id, "無法取得 Agent 的回答").await.ok();

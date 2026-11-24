@@ -51,9 +51,16 @@ struct Inner {
     watcher: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
+/// 本機正在處理的、從 server 領來的題目（題目 id → 在哪個分頁、上次續約時間）。
+pub struct Claim {
+    pub tab: String,
+    pub last_beat: std::time::Instant,
+}
+
 #[derive(Default)]
 pub struct RemoteState {
     inner: Mutex<Inner>,
+    claims: Mutex<std::collections::HashMap<String, Claim>>,
 }
 
 impl RemoteState {
@@ -68,6 +75,32 @@ impl RemoteState {
             Some(s) => RemoteStatus { connected: true, online: g.online, addr: s.addr.clone(), name: s.name.clone(), role: Some(s.role), error: g.error.clone() },
             None => RemoteStatus::default(),
         }
+    }
+
+    /// 記下這題是從 server 領來、正在某個分頁處理。
+    pub fn track_claim(&self, item_id: &str, tab: &str) {
+        self.claims.lock().insert(item_id.to_string(), Claim { tab: tab.to_string(), last_beat: std::time::Instant::now() });
+    }
+
+    /// 不再處理這題；回傳它原本在哪個分頁。不是領來的題目回 `None`。
+    pub fn untrack_claim(&self, item_id: &str) -> Option<String> {
+        self.claims.lock().remove(item_id).map(|c| c.tab)
+    }
+
+    pub fn is_claimed(&self, item_id: &str) -> bool {
+        self.claims.lock().contains_key(item_id)
+    }
+
+    /// 該續約的題目（距上次續約超過 `every`），並把它們的計時重設。
+    pub fn due_for_heartbeat(&self, every: Duration) -> Vec<String> {
+        let mut g = self.claims.lock();
+        g.iter_mut()
+            .filter(|(_, c)| c.last_beat.elapsed() >= every)
+            .map(|(id, c)| {
+                c.last_beat = std::time::Instant::now();
+                id.clone()
+            })
+            .collect()
     }
 
     /// 管理員才能改設定、白名單與祕密（server 端也會擋，這裡讓畫面能事先隱藏）。
@@ -253,6 +286,7 @@ pub async fn set_config(api: &Api, pid: &str, config: &Config, telegram_default:
 struct ServerProject {
     id: String,
     name: String,
+    #[allow(dead_code)]
     work_dir: String,
     open_count: i64,
     total: i64,
@@ -260,10 +294,11 @@ struct ServerProject {
 }
 
 /// server 的專案清單轉成畫面用的形狀；server 沒有「未歸屬」的舊資料。
+/// `repo_dir` 一律空：server 上的工作資料夾對這台電腦沒有意義，不能拿來判斷分頁在不在專案目錄裡。
 pub async fn projects(api: &Api) -> Result<ProjectsView, ClientError> {
     let list: Vec<ServerProject> = api.get("/v1/projects").await?;
     Ok(ProjectsView {
-        projects: list.into_iter().map(|p| ProjectSummary { id: p.id, name: p.name, repo_dir: Some(p.work_dir).filter(|d| !d.is_empty()), open_count: p.open_count, total: p.total, enabled: p.enabled }).collect(),
+        projects: list.into_iter().map(|p| ProjectSummary { id: p.id, name: p.name, repo_dir: None, open_count: p.open_count, total: p.total, enabled: p.enabled }).collect(),
         unassigned: 0,
         legacy_settings: false,
     })
@@ -349,6 +384,54 @@ pub async fn set_secret(api: &Api, id: &str, value: &str) -> Result<(), ClientEr
 
 pub async fn clear_secret(api: &Api, id: &str) -> Result<(), ClientError> {
     api.request(Method::DELETE, &format!("/v1/secrets/{}", enc(id)), None).await.map(|_| ())
+}
+
+// ───────── 領取處理 ─────────
+
+pub async fn get_item(api: &Api, id: &str) -> Result<IntakeItem, ClientError> {
+    api.get(&format!("/v1/items/{}", enc(id))).await
+}
+
+pub async fn claim_item(api: &Api, id: &str) -> Result<IntakeItem, ClientError> {
+    api.typed(Method::POST, &format!("/v1/items/{}/claim", enc(id)), None).await
+}
+
+pub async fn claim_next(api: &Api, pid: &str) -> Result<Option<IntakeItem>, ClientError> {
+    api.typed(Method::POST, &format!("/v1/projects/{}/claim-next", enc(pid)), None).await
+}
+
+pub async fn heartbeat(api: &Api, id: &str) -> Result<bool, ClientError> {
+    api.typed(Method::POST, &format!("/v1/items/{}/heartbeat", enc(id)), None).await
+}
+
+pub async fn release(api: &Api, id: &str) -> Result<bool, ClientError> {
+    api.typed(Method::POST, &format!("/v1/items/{}/release", enc(id)), None).await
+}
+
+pub async fn submit_reply(api: &Api, id: &str, reply: &str) -> Result<bool, ClientError> {
+    api.typed(Method::POST, &format!("/v1/items/{}/result", enc(id)), Some(json!({ "reply": reply }))).await
+}
+
+pub async fn submit_error(api: &Api, id: &str, error: &str) -> Result<bool, ClientError> {
+    api.typed(Method::POST, &format!("/v1/items/{}/result", enc(id)), Some(json!({ "error": error }))).await
+}
+
+/// 把題目的附件下載到本機（Claude Code 讀得到的路徑），回傳路徑已換成本機的附件清單。
+pub async fn download_attachments(api: &Api, item_id: &str, root: &std::path::Path) -> Vec<AttachmentRow> {
+    let Ok(rows) = attachments(api, item_id).await else { return Vec::new() };
+    let dir = root.join(item_id);
+    let mut out = Vec::new();
+    for mut row in rows {
+        // 檔名只取最後一段，避免伺服器給的名稱把檔案寫到目錄外。
+        let name = std::path::Path::new(&row.filename).file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+        let Ok(bytes) = api.download(&format!("/v1/attachments/{}/file", enc(&row.id))).await else { continue };
+        if std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(&name), &bytes)).is_err() {
+            continue;
+        }
+        row.path = dir.join(&name).to_string_lossy().into_owned();
+        out.push(row);
+    }
+    out
 }
 
 /// Remote 模式下「重新整理」：server 自己收信、有變動就推播，不需要手動收；回報「沒去收信」即可。

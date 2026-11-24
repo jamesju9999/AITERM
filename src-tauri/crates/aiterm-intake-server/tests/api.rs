@@ -105,18 +105,6 @@ async fn items_are_listed_actioned_and_scoped_to_their_project() {
 }
 
 #[tokio::test]
-async fn the_claim_endpoints_are_reserved_and_answer_501() {
-    let srv = TestServer::start().await;
-    let pid = srv.project("甲").await;
-    let m = srv.paired("小明", Role::Member).await;
-    let item = add_item(&srv, &pid, "line", "line:u0123456789abcdef0123456789abcdef", "x", store::PENDING).await;
-    for action in ["claim", "release", "result"] {
-        let r = m.request(Method::POST, &format!("/v1/items/{}/{action}", item.id), None).await;
-        assert_eq!(r.unwrap_err(), ClientError::Server("not implemented".into()), "{action}");
-    }
-}
-
-#[tokio::test]
 async fn replying_to_a_line_item_pushes_plain_text_and_marks_it_sent() {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

@@ -22,7 +22,7 @@ export function IntakeToggle({ sessionId }: Props) {
   const [busy, setBusy] = useState(false);
   const [cdError, setCdError] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
-  // 連到 server 時題目由 server 收與處理，本機分頁不接收（後端也會拒絕），按鈕直接停用並說明。
+  // 連到 server 時，這個分頁從 server 領題目（提示文字不同）；其餘操作與本機相同。
   const remote = useIntakeRemote();
   const [picking, setPicking] = useState<{ projects: IntakeProject[]; choice: string; cwd: string | null } | null>(null);
 
@@ -107,9 +107,9 @@ export function IntakeToggle({ sessionId }: Props) {
     <div className="aiterm-intake-toggle">
       <button
         className={`aiterm-btn aiterm-btn--secondary aiterm-btn--sm ${on ? "aiterm-intake-toggle--on" : ""} ${on && !ready ? "aiterm-intake-toggle--waiting" : ""}`}
-        title={remote.connected ? t.intake_toggle_remote_hint : on && !ready ? t.intake_toggle_waiting_hint : t.intake_toggle_tooltip}
+        title={on && !ready ? t.intake_toggle_waiting_hint : remote.connected ? t.intake_toggle_remote_tooltip : t.intake_toggle_tooltip}
         aria-pressed={on}
-        disabled={busy || remote.connected}
+        disabled={busy}
         onClick={(e) => {
           e.stopPropagation();
           void onClick();
@@ -117,7 +117,7 @@ export function IntakeToggle({ sessionId }: Props) {
         style={{ display: "flex", alignItems: "center", gap: "6px" }}
       >
         <MailIcon size={14} />
-        <span>{remote.connected ? t.intake_toggle_remote : on ? `${t.intake_toggle_on}${names[projectId] ? `：${names[projectId]}` : ""}${ready ? "" : `（${t.intake_toggle_waiting}）`}` : t.intake_toggle_off}</span>
+        <span>{on ? `${t.intake_toggle_on}${names[projectId] ? `：${names[projectId]}` : ""}${ready ? "" : `（${t.intake_toggle_waiting}）`}` : t.intake_toggle_off}</span>
       </button>
       {startError && <p className="aiterm-intake-toggle__err" role="alert">{startError}</p>}
       {picking && (

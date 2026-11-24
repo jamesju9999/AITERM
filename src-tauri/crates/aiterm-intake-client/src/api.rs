@@ -67,6 +67,18 @@ impl Api {
         serde_json::from_str(&text).map_err(|e| ClientError::Server(format!("回應不是預期的格式：{e}")))
     }
 
+    /// 下載原始位元組（附件）。
+    pub async fn download(&self, path: &str) -> Result<Vec<u8>, ClientError> {
+        let res = self.http.get(format!("{}{}", self.base, path)).bearer_auth(&self.token).send().await.map_err(map_send_error)?;
+        match res.status().as_u16() {
+            401 => return Err(ClientError::Revoked),
+            403 => return Err(ClientError::Forbidden),
+            s if !(200..300).contains(&s) => return Err(ClientError::Server(format!("HTTP {s}"))),
+            _ => {}
+        }
+        res.bytes().await.map(|b| b.to_vec()).map_err(|e| ClientError::Offline(e.to_string()))
+    }
+
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
         self.typed(reqwest::Method::GET, path, None).await
     }

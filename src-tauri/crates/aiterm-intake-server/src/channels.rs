@@ -84,6 +84,12 @@ pub async fn reload(st: &Arc<AppState>) {
 
 /// 掃一次：LINE 群組的訊息安靜夠久、我方沒回、AI 判斷是新問題，就開成題目。回傳有沒有開出新題。
 pub async fn tick_once(st: &Arc<AppState>) -> bool {
+    // 租約逾期（領取者關機、當機、斷線）的題目放回待派送，讓別人可以領。
+    if let Ok(n) = aiterm_intake_core::store::expire_claims(&st.pools.intake, crate::db::now()).await {
+        if n > 0 {
+            st.events.changed();
+        }
+    }
     let cands = candidates(st).await;
     let opened = pipeline::line_triage(&st.pools.intake, &cands, st.ai.as_ref(), &st.data_dir.join("attachments")).await;
     if opened {

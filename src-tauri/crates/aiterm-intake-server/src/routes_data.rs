@@ -307,9 +307,103 @@ async fn reply(State(st): St, Extension(me): Extension<Me>, Path(id): Path<Strin
     }
 }
 
-/// 預留給「領取處理」（子專案 ④）：先回 501，介面與欄位先固定。
-async fn not_implemented() -> Response {
-    api_error(StatusCode::NOT_IMPLEMENTED, "not implemented")
+// ---- 領取處理（成員用自己的電腦處理題目）----
+
+fn conflict(msg: &str) -> Response {
+    api_error(StatusCode::CONFLICT, msg)
+}
+
+/// 領這一題：只有「待派送」的題目領得到；已被領走、還沒核准都回 409。
+async fn claim(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>) -> Response {
+    if item_of(&st, &id).await.is_none() {
+        return not_found();
+    }
+    match store::claim_item(&st.pools.intake, &id, &me.name, crate::db::now()).await {
+        Ok(true) => {
+            crate::audit::record(&st.pools.server, &me.name, "item.claim", &id).await;
+            st.events.changed();
+            match item_of(&st, &id).await {
+                Some(i) => Json(i).into_response(),
+                None => not_found(),
+            }
+        }
+        Ok(false) => conflict("這題已被領取，或還不能領取（要先核准、排進待派送）"),
+        Err(e) => internal(e),
+    }
+}
+
+/// 領這個專案最舊的待派送題目；沒有就回 `null`。
+async fn claim_next(State(st): St, Extension(me): Extension<Me>, Path(pid): Path<String>) -> Response {
+    match store::claim_next_for(&st.pools.intake, &pid, &me.name, crate::db::now()).await {
+        Ok(Some(i)) => {
+            crate::audit::record(&st.pools.server, &me.name, "item.claim", &i.id).await;
+            st.events.changed();
+            Json(Some(i)).into_response()
+        }
+        Ok(None) => Json(Option::<store::IntakeItem>::None).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+async fn heartbeat(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>) -> Response {
+    match store::renew_claim(&st.pools.intake, &id, &me.name, crate::db::now()).await {
+        Ok(ok) => Json(ok).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+/// 放回待派送：領取者本人，或管理員。
+async fn release(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>) -> Response {
+    let only_by = if me.role == crate::members::Role::Admin { None } else { Some(me.name.as_str()) };
+    match store::release_claim(&st.pools.intake, &id, only_by, crate::db::now()).await {
+        Ok(ok) => {
+            if ok {
+                crate::audit::record(&st.pools.server, &me.name, "item.release", &id).await;
+                st.events.changed();
+            }
+            Json(ok).into_response()
+        }
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ResultBody {
+    pub reply: Option<String>,
+    pub error: Option<String>,
+}
+
+/// 領取者交結果：`reply` → 草稿（先去敏）；`error` → 回待核准並記原因。
+async fn claim_result(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>, Json(b): Json<ResultBody>) -> Response {
+    let now = crate::db::now();
+    let (done, action) = match (b.reply, b.error) {
+        (Some(reply), _) if !reply.trim().is_empty() => (store::finish_claim(&st.pools.intake, &id, &me.name, &aiterm_intake_core::filter::redact(&reply), now).await, "item.result"),
+        (_, Some(error)) => (store::fail_claim(&st.pools.intake, &id, &me.name, &error, now).await, "item.fail"),
+        _ => return bad("要帶 reply 或 error"),
+    };
+    match done {
+        Ok(true) => {
+            crate::audit::record(&st.pools.server, &me.name, action, &id).await;
+            st.events.changed();
+            Json(true).into_response()
+        }
+        Ok(false) => conflict("這題已不是你領取的（可能租約逾期被收回）"),
+        Err(e) => internal(e),
+    }
+}
+
+/// 附件原始內容：領取者要下載到自己的電腦。只讀 server 的附件目錄底下的檔案。
+async fn attachment_file(State(st): St, Path(att): Path<String>) -> Response {
+    let Some(row) = attachment_row(&st, &att).await else { return not_found() };
+    let root = st.data_dir.join("attachments");
+    let (Ok(root), Ok(path)) = (root.canonicalize(), std::path::Path::new(&row.path).canonicalize()) else { return not_found() };
+    if !path.starts_with(&root) {
+        return bad("附件路徑不在允許的目錄內");
+    }
+    match std::fs::read(&path) {
+        Ok(bytes) => ([(axum::http::header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
+        Err(_) => not_found(),
+    }
 }
 
 // ---- 附件 ----
@@ -446,12 +540,15 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/items/{id}/reject", post(reject))
         .route("/v1/items/{id}/draft", put(update_draft))
         .route("/v1/items/{id}/reply", post(reply))
-        .route("/v1/items/{id}/claim", post(not_implemented))
-        .route("/v1/items/{id}/release", post(not_implemented))
-        .route("/v1/items/{id}/result", post(not_implemented))
+        .route("/v1/items/{id}/claim", post(claim))
+        .route("/v1/items/{id}/release", post(release))
+        .route("/v1/items/{id}/heartbeat", post(heartbeat))
+        .route("/v1/items/{id}/result", post(claim_result))
+        .route("/v1/projects/{pid}/claim-next", post(claim_next))
         .route("/v1/items/{id}/attachments", get(attachments))
         .route("/v1/attachments/{att}/data", get(attachment_data))
         .route("/v1/attachments/{att}/text", get(attachment_text))
+        .route("/v1/attachments/{att}/file", get(attachment_file))
         .route("/v1/line/unknown", get(line_unknown))
         .route("/v1/line/unknown/{id}", delete(forget_unknown))
         .route("/v1/secrets/{id}", put(set_secret).delete(clear_secret))
