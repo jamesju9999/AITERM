@@ -568,7 +568,7 @@ pub async fn test_connection(
     let mut session = connect_and_login(host, port, username, password).await?;
     let result = with_timeout(async {
         session
-            .select("INBOX")
+            .examine("INBOX")
             .await
             .map(|_| ())
             .map_err(|e| MailClientError::Command(e.to_string()))
@@ -669,9 +669,13 @@ async fn fetch_selected(
     reconcile: bool,
     should_stop: impl Fn() -> bool,
 ) -> Result<PollOutcome, MailClientError> {
+    // EXAMINE, not SELECT: polling only ever reads (`BODY.PEEK`), so open the
+    // mailbox read-only. Some older servers treat a read-write session as
+    // taking over the mailbox state, which made other clients (e.g. Spark)
+    // briefly lose messages while this poller was connected.
     let mailbox = with_timeout(async {
         session
-            .select("INBOX")
+            .examine("INBOX")
             .await
             .map_err(|e| MailClientError::Command(e.to_string()))
     })
