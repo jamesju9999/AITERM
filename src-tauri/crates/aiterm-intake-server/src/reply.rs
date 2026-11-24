@@ -1,4 +1,4 @@
-//! 寄出草稿。Server 支援 LINE 與網頁表單（用信件回覆）；Email、Telegram 還沒支援。
+//! 寄出草稿。Server 支援 LINE、網頁表單與 Email（用信件回覆）；Telegram 還沒支援。
 use crate::state::AppState;
 use aiterm_intake_core::host::{Notifier, Secrets};
 use aiterm_intake_core::{filter, line_server, line_source, line_store, line_text, store};
@@ -14,6 +14,18 @@ pub async fn send(st: &AppState, item_id: &str) -> Result<(), String> {
     }
     if item.source == "web" {
         crate::mail::send_reply(st, &item.sender, &item.subject, &filter::redact(&body)).await?;
+        store::mark_sent(&st.pools.intake, item_id).await.map_err(|e| e.to_string())?;
+        st.events.changed();
+        return Ok(());
+    }
+    if item.source == "email" {
+        let settings = crate::mail::load(&st.pools.intake).await;
+        let cfg = aiterm_intake_core::config::load(&st.pools.intake, &item.project_id).await;
+        // 回覆全部時要去掉我們自己（收信帳號與別名），否則會寄給自己。
+        let (also_to, cc) = aiterm_intake_core::smtp::reply_all(&item.sender, item.to_addrs.as_deref().unwrap_or(""), item.cc_addrs.as_deref().unwrap_or(""), &[settings.sender(), cfg.alias.as_str()]);
+        // 沒有 Message-ID 的信（用內容雜湊代替）沒有可串的對話。
+        let orig_id = if item.message_id.starts_with("nomid:") { "" } else { item.message_id.as_str() };
+        crate::mail::send_thread_reply(st, &item.sender, &item.subject, orig_id, &also_to, &cc, &filter::redact(&body)).await?;
         store::mark_sent(&st.pools.intake, item_id).await.map_err(|e| e.to_string())?;
         st.events.changed();
         return Ok(());

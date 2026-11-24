@@ -255,7 +255,7 @@ export const intakeRemoteClaim = (itemId: string) => invoke<void>("intake_remote
 
 /** server 的寄信帳號（網頁表單寄驗證碼與回覆用）；密碼不會回傳。 */
 export interface IntakeServerMail {
-  settings: { smtp_host: string; smtp_port: number; username: string; from: string };
+  settings: { smtp_host: string; smtp_port: number; imap_host: string; imap_port: number; username: string; from: string };
   configured: boolean;
 }
 export const intakeServerMailStatus = () => invoke<IntakeServerMail>("intake_server_mail_status");

@@ -182,6 +182,7 @@ dependencies = [
  "aiterm-intake-client",
  "aiterm-intake-core",
  "anyhow",
+ "async-imap",
  "async-trait",
  "axum",
  "base64 0.22.1",
@@ -211,6 +212,7 @@ dependencies = [
  "tower",
  "tower-service",
  "uuid",
+ "webpki-roots 0.26.11",
  "wiremock",
 ]
 

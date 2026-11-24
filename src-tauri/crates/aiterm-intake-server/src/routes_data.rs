@@ -534,11 +534,19 @@ pub struct StatusView {
     pub web_port: u16,
     #[serde(default)]
     pub mail_configured: bool,
+    /// 有設定 IMAP 且會收信。
+    #[serde(default)]
+    pub email_receiving: bool,
+    #[serde(default)]
+    pub email_last_ok: Option<i64>,
+    #[serde(default)]
+    pub email_error: Option<String>,
     pub ai_configured: bool,
     pub projects: usize,
 }
 
 async fn status(State(st): St) -> Response {
+    let health = st.channels.email_health.lock().clone();
     let settings = crate::ai::load(&st.pools.intake).await;
     Json(StatusView {
         has_line_secret: st.secrets.get(aiterm_intake_core::line_server::LINE_SECRET_ID).is_some(),
@@ -548,6 +556,9 @@ async fn status(State(st): St) -> Response {
         web_listening: crate::channels::web_listening(&st),
         web_port: config::load_global(&st.pools.intake).await.web_port,
         mail_configured: crate::mail::configured(&crate::mail::load(&st.pools.intake).await, st.secrets.as_ref()),
+        email_receiving: crate::imap::receiving(&crate::mail::load(&st.pools.intake).await, st.secrets.as_ref()),
+        email_last_ok: health.last_ok,
+        email_error: health.error,
         ai_configured: crate::ai::configured(&settings, st.secrets.as_ref()),
         projects: project_list(&st).await.len(),
     })

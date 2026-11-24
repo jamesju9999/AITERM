@@ -44,7 +44,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeRemoteStatus: vi.fn(() => Promise.resolve({ connected: false, online: false, addr: "", name: "", role: null, error: null })),
   intakeRemotePair: vi.fn(),
   intakeRemoteClaim: vi.fn(() => Promise.resolve()),
-  intakeServerMailStatus: vi.fn(() => Promise.resolve({ settings: { smtp_host: "", smtp_port: 587, username: "", from: "" }, configured: false })),
+  intakeServerMailStatus: vi.fn(() => Promise.resolve({ settings: { smtp_host: "", smtp_port: 587, imap_host: "", imap_port: 993, username: "", from: "" }, configured: false })),
   intakeServerMailApply: vi.fn(() => Promise.resolve()),
   intakeRemoteDisconnect: vi.fn(() => Promise.resolve()),
 }));
@@ -960,7 +960,7 @@ describe("IntakeView", () => {
         { id: "a1", email: "bot@example.com", smtp_host: "smtp.example.com", enabled: true },
         { id: "a2", email: "other@example.com", smtp_host: "smtp.example.com", enabled: true },
       ] as never);
-      vi.mocked(ipc.intakeServerMailStatus).mockResolvedValue({ settings: { smtp_host: "smtp.example.com", smtp_port: 587, username: "bot@example.com", from: "bot@example.com" }, configured: true });
+      vi.mocked(ipc.intakeServerMailStatus).mockResolvedValue({ settings: { smtp_host: "smtp.example.com", smtp_port: 587, imap_host: "imap.example.com", imap_port: 993, username: "bot@example.com", from: "bot@example.com" }, configured: true });
       vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
       await openSettings();
       expect(await screen.findByRole("option", { name: `bot@example.com（${t.intake_server_mail_applied_tag}）` })).toBeTruthy();

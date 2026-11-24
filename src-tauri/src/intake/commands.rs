@@ -601,7 +601,7 @@ pub async fn intake_server_mail_status(rs: State<'_, Arc<RemoteState>>) -> Resul
 pub async fn intake_server_mail_apply(app: AppHandle, rs: State<'_, Arc<RemoteState>>, account_id: String) -> Result<(), String> {
     let api = rs.active().ok_or("尚未連到 server")?;
     let (account, password) = super::runtime::mail_creds(&app, &account_id)?;
-    let settings = super::remote::ServerMailSettings { smtp_host: account.smtp_host.clone(), smtp_port: account.smtp_port, username: account.username.clone(), from: account.email.clone() };
+    let settings = super::remote::ServerMailSettings { smtp_host: account.smtp_host.clone(), smtp_port: account.smtp_port, imap_host: account.imap_host.clone(), imap_port: account.imap_port, username: account.username.clone(), from: account.email.clone() };
     super::remote::mail_apply(&api, &settings, &password).await.map_err(|e| super::remote::fail(&rs, e))
 }
 

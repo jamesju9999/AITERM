@@ -1,5 +1,5 @@
 //! 收訊管道的啟停：LINE webhook、網頁表單與「新問題自動開題」的定時掃描。
-//! 設定或祕密變動後呼叫 `reload`。Email、Telegram 還沒支援。
+//! 設定或祕密變動後呼叫 `reload`。Email 由獨立的定時輪詢收（見 `imap`）；Telegram 還沒支援。
 use crate::state::AppState;
 use aiterm_intake_core::host::{Notifier, Secrets};
 use aiterm_intake_core::line_server::{self, LineState, LINE_SECRET_ID, LINE_TOKEN_ID};
@@ -20,6 +20,8 @@ pub struct Channels {
     line_on: AtomicBool,
     ticker: Mutex<Option<tokio::task::JoinHandle<()>>>,
     web: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    email: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub email_health: Mutex<crate::imap::Health>,
     web_on: AtomicBool,
     /// 網頁表單網址的短代碼要對回專案；表單路由是同步查詢，所以這裡放一份快照（重載與每次掃描時更新）。
     web_projects: Arc<Mutex<Vec<(String, String)>>>,
@@ -178,7 +180,23 @@ pub fn start_ticker(st: &Arc<AppState>) {
     *st.channels.ticker.lock() = Some(task);
 }
 
+/// 定時收 Email（IMAP）。獨立一條，慢的信箱不會拖住群組掃描。
+pub fn start_email(st: &Arc<AppState>) {
+    let me = st.clone();
+    let task = tokio::spawn(async move {
+        let mut every = tokio::time::interval(crate::imap::POLL_EVERY);
+        loop {
+            every.tick().await;
+            crate::imap::tick(&me).await;
+        }
+    });
+    *st.channels.email.lock() = Some(task);
+}
+
 pub fn stop(st: &AppState) {
+    if let Some(h) = st.channels.email.lock().take() {
+        h.abort();
+    }
     if let Some(h) = st.channels.line.lock().take() {
         h.abort();
     }

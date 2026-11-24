@@ -14,6 +14,9 @@ pub const PASSWORD_SECRET: &str = "smtp_password";
 pub struct MailSettings {
     pub smtp_host: String,
     pub smtp_port: u16,
+    /// 收信（IMAP，隱含 TLS，通常 993）。`imap_host` 留空＝不收信。
+    pub imap_host: String,
+    pub imap_port: u16,
     pub username: String,
     /// 寄件地址（From）。空字串時用登入帳號。
     pub from: String,
@@ -21,7 +24,7 @@ pub struct MailSettings {
 
 impl Default for MailSettings {
     fn default() -> Self {
-        Self { smtp_host: String::new(), smtp_port: 587, username: String::new(), from: String::new() }
+        Self { smtp_host: String::new(), smtp_port: 587, imap_host: String::new(), imap_port: 993, username: String::new(), from: String::new() }
     }
 }
 
@@ -36,7 +39,7 @@ pub async fn load(pool: &SqlitePool) -> MailSettings {
 }
 
 pub async fn save(pool: &SqlitePool, s: &MailSettings) -> Result<(), String> {
-    if s.smtp_port == 0 {
+    if s.smtp_port == 0 || s.imap_port == 0 {
         return Err("埠號不能是 0".into());
     }
     aiterm_intake_core::store::set_setting(pool, SETTING_KEY, &serde_json::to_string(s).map_err(|e| e.to_string())?).await.map_err(|e| e.to_string())
@@ -81,10 +84,15 @@ pub async fn send_plain(st: &AppState, to: &str, subject: &str, body: &str) -> R
 
 /// 回覆網頁表單的題目（沒有可串信的 Message-ID，也沒有其他收件人）。
 pub async fn send_reply(st: &AppState, to: &str, orig_subject: &str, body: &str) -> Result<(), String> {
+    send_thread_reply(st, to, orig_subject, "", &[], &[], body).await
+}
+
+/// 回覆信件：串在原信的對話裡，並回覆全部（原信其他收件人放 `also_to`、副本放 `cc`）。
+pub async fn send_thread_reply(st: &AppState, to: &str, orig_subject: &str, orig_message_id: &str, also_to: &[String], cc: &[String], body: &str) -> Result<(), String> {
     if tapped(st, to, &smtp::reply_subject(orig_subject), body) {
         return Ok(());
     }
     let (s, password) = settings_and_password(st).await?;
-    let msg = smtp::build_reply(&smtp::Outgoing { from: s.sender(), to, orig_subject, orig_message_id: "", also_to: &[], cc: &[], body })?;
+    let msg = smtp::build_reply(&smtp::Outgoing { from: s.sender(), to, orig_subject, orig_message_id, also_to, cc, body })?;
     smtp::send(&s.smtp_host, s.smtp_port, s.username.trim(), &password, msg).await
 }

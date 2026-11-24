@@ -393,11 +393,20 @@ pub async fn set_secret(api: &Api, id: &str, value: &str) -> Result<(), ClientEr
     api.request(Method::PUT, &format!("/v1/secrets/{}", enc(id)), Some(json!({ "value": value }))).await.map(|_| ())
 }
 
+fn default_imap_port() -> u16 {
+    993
+}
+
 /// server 的寄信帳號（網頁表單寄驗證碼與回覆用）；密碼不會回傳。
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ServerMailSettings {
     pub smtp_host: String,
     pub smtp_port: u16,
+    /// 收信（IMAP）；舊版 server 沒有這兩個欄位。
+    #[serde(default)]
+    pub imap_host: String,
+    #[serde(default = "default_imap_port")]
+    pub imap_port: u16,
     pub username: String,
     pub from: String,
 }

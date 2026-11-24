@@ -661,7 +661,7 @@ function ServerMailCard({ accounts, canEdit, onError }: { accounts: MailAccount[
         <strong>{t.intake_server_mail}</strong>
         <span className={`intake__tab-chip ${mail?.configured ? "intake__tab-chip--on" : ""}`}>{mail?.configured ? t.intake_server_mail_on : t.intake_server_mail_off_short}</span>
       </div>
-      {mail?.configured && <p className="intake__mailcard-now">{mail.settings.smtp_host}（{mail.settings.from || mail.settings.username}）</p>}
+      {mail?.configured && <p className="intake__mailcard-now">{mail.settings.smtp_host}（{mail.settings.from || mail.settings.username}）{mail.settings.imap_host ? ` · ${t.intake_server_mail_receive}：${mail.settings.imap_host}` : ""}</p>}
       <div className="intake__mailcard-row">
         <select aria-label={t.intake_server_mail_pick} value={pick} onChange={(e) => { setPick(e.target.value); setDone(false); }}>
           <option value="">{t.intake_server_mail_pick}</option>
