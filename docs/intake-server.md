@@ -100,3 +100,21 @@ WantedBy=multi-user.target
 - 支援 **LINE** 與**網頁表單**收訊與回覆；Email、Telegram 還不能在 server 上使用（設定會存起來，但不收訊）。
 - 看板與 Agent 協作不在 server 上。
 - 所有成員看得到所有專案。
+
+## 八、發佈（給維護者）
+
+Server 版用 `intake-server-v<版本>` 這種 tag 發佈（例如 `intake-server-v0.1.0`），發佈 workflow 只會建立**草稿** release，檔案齊全後由人公開。
+
+**公開時一定要用指令，不要在 GitHub 網頁按 Publish：**
+
+```bash
+gh release edit intake-server-v<版本> --draft=false --latest=false
+```
+
+網頁的 Publish 會自動把這則 release 標成整個 repo 的「Latest」。桌面版的自動更新讀的是 `releases/latest/download/latest.json`，Latest 一旦被 Server 版搶走，桌面版使用者的更新檢查就會 404（v0.1.0 公開時發生過，改回 `gh release edit v<桌面版> --latest` 後恢復，但 GitHub 的快取會讓原網址暫時還是 404）。
+
+公開後確認桌面版沒被影響：
+
+```bash
+gh release list --limit 3 --json tagName,isLatest   # 桌面版 v1.x 必須是 isLatest=true
+```
