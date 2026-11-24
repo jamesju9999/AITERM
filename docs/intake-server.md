@@ -94,6 +94,63 @@ Environment=RUST_LOG=info
 WantedBy=multi-user.target
 ```
 
+## 六之二、macOS 常駐（launchd）
+
+把下面存成 `~/Library/LaunchAgents/com.aiterm.intake-server.plist`（路徑換成你的），登入後自動啟動、被結束會自動重啟：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.aiterm.intake-server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/aiterm-intake-server</string>
+    <string>--data-dir</string><string>/Users/你/.aiterm-intake</string>
+    <string>run</string>
+    <string>--bind</string><string>0.0.0.0:8443</string>
+  </array>
+  <key>EnvironmentVariables</key><dict><key>RUST_LOG</key><string>info</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/你/.aiterm-intake/server.log</string>
+  <key>StandardErrorPath</key><string>/Users/你/.aiterm-intake/server.log</string>
+</dict>
+</plist>
+```
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aiterm.intake-server.plist   # 啟動並載入
+launchctl bootout   gui/$(id -u)/com.aiterm.intake-server                                 # 停止並卸載
+```
+
+- 這是**登入後**才會跑的 LaunchAgent；沒有人登入時 server 不會啟動。要開機就跑（不需登入）得改用 `/Library/LaunchDaemons` 並用 root 載入，這一種沒有測過。
+- 已在 Apple Silicon 的 macOS 上用發佈版實測：載入後能回應 `/v1/hello`；結束行程後約 10 秒內由 launchd 自動重啟並恢復服務；卸載後行程確實停止。
+- 第一次執行下載來的檔案若被 Gatekeeper 擋下，用 `xattr -d com.apple.quarantine <檔案>` 解除（用 `gh` 或 `curl` 下載的檔案通常不會被標記）。
+- 要讓區網的其他人連進來，系統設定的防火牆需要允許這個程式接收連入連線。
+
+## 六之三、Windows 常駐（工作排程器）
+
+`aiterm-intake-server.exe` 不是 Windows 服務程式，不能直接用 `sc create`。建議用工作排程器在開機時啟動，失敗自動重試（以系統管理員的 PowerShell 執行）：
+
+```powershell
+$a = New-ScheduledTaskAction -Execute 'C:\aiterm-intake\aiterm-intake-server.exe' `
+     -Argument '--data-dir C:\ProgramData\aiterm-intake run --bind 0.0.0.0:8443'
+$t = New-ScheduledTaskTrigger -AtStartup
+$s = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+     -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable
+Register-ScheduledTask -TaskName 'AITerm Intake Server' -Action $a -Trigger $t -Settings $s -User 'SYSTEM' -RunLevel Highest
+Start-ScheduledTask -TaskName 'AITerm Intake Server'
+
+# 讓區網連得進來
+New-NetFirewallRule -DisplayName 'AITerm Intake Server' -Direction Inbound -Protocol TCP -LocalPort 8443 -Action Allow
+```
+
+- `init`、`project add`、`pair` 要用**同一個資料夾**（`--data-dir C:\ProgramData\aiterm-intake`）事先執行好，再啟動排程。
+- 停止與移除：`Stop-ScheduledTask` 與 `Unregister-ScheduledTask -TaskName 'AITerm Intake Server' -Confirm:$false`。
+- **這一段沒有在 Windows 上實測過**（只確認了發佈的 Windows 版有建置成功並在建置時執行過一次），第一次使用請先手動執行 `run` 確認程式能啟動。
+
 ## 七、目前的限制
 
 - Server 自己**不會自動處理題目**。處理靠成員領取：在 AITerm 清單按「我來處理」，或讓「收集中」的終端機分頁閒置時自動領；題目在領取者自己的電腦用 Claude Code 處理，做完交回 server 變成草稿，由人看過再送出。
