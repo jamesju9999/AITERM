@@ -252,3 +252,12 @@ export function onIntakeRemote(cb: (s: IntakeRemoteStatus) => void): Promise<Unl
 
 /** 手動「我來處理」：領 server 上這一題，派進你「收集中」且閒置的分頁。 */
 export const intakeRemoteClaim = (itemId: string) => invoke<void>("intake_remote_claim", { itemId });
+
+/** server 的寄信帳號（網頁表單寄驗證碼與回覆用）；密碼不會回傳。 */
+export interface IntakeServerMail {
+  settings: { smtp_host: string; smtp_port: number; username: string; from: string };
+  configured: boolean;
+}
+export const intakeServerMailStatus = () => invoke<IntakeServerMail>("intake_server_mail_status");
+/** 把 AITerm 某個郵件帳號的 SMTP 設定與密碼套用到 server（管理員）。 */
+export const intakeServerMailApply = (accountId: string) => invoke<void>("intake_server_mail_apply", { accountId });

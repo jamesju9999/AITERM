@@ -393,6 +393,31 @@ pub async fn set_secret(api: &Api, id: &str, value: &str) -> Result<(), ClientEr
     api.request(Method::PUT, &format!("/v1/secrets/{}", enc(id)), Some(json!({ "value": value }))).await.map(|_| ())
 }
 
+/// server 的寄信帳號（網頁表單寄驗證碼與回覆用）；密碼不會回傳。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ServerMailSettings {
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub username: String,
+    pub from: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ServerMail {
+    pub settings: ServerMailSettings,
+    pub configured: bool,
+}
+
+pub async fn mail_status(api: &Api) -> Result<ServerMail, ClientError> {
+    api.get("/v1/mail").await
+}
+
+/// 把設定與密碼寫到 server（只有管理員做得到；密碼只寫入）。
+pub async fn mail_apply(api: &Api, settings: &ServerMailSettings, password: &str) -> Result<(), ClientError> {
+    api.request(Method::PUT, "/v1/mail", Some(serde_json::to_value(settings).map_err(|e| ClientError::Server(e.to_string()))?)).await?;
+    set_secret(api, "smtp_password", password).await
+}
+
 pub async fn clear_secret(api: &Api, id: &str) -> Result<(), ClientError> {
     api.request(Method::DELETE, &format!("/v1/secrets/{}", enc(id)), None).await.map(|_| ())
 }

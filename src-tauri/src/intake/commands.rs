@@ -589,6 +589,22 @@ pub async fn intake_remote_disconnect(app: AppHandle) -> Result<(), String> {
     super::remote::disconnect(&app).await
 }
 
+/// server 目前的寄信帳號（要先連到 server）。
+#[tauri::command]
+pub async fn intake_server_mail_status(rs: State<'_, Arc<RemoteState>>) -> Result<super::remote::ServerMail, String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    super::remote::mail_status(&api).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
+/// 把 AITerm 裡某個郵件帳號的 SMTP 設定與密碼套用到 server（管理員）。
+#[tauri::command]
+pub async fn intake_server_mail_apply(app: AppHandle, rs: State<'_, Arc<RemoteState>>, account_id: String) -> Result<(), String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    let (account, password) = super::runtime::mail_creds(&app, &account_id)?;
+    let settings = super::remote::ServerMailSettings { smtp_host: account.smtp_host.clone(), smtp_port: account.smtp_port, username: account.username.clone(), from: account.email.clone() };
+    super::remote::mail_apply(&api, &settings, &password).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
 /// 手動「我來處理」：領 server 上這一題，派進你「收集中」且閒置的分頁。
 #[tauri::command]
 pub async fn intake_remote_claim(app: AppHandle, item_id: String) -> Result<(), String> {

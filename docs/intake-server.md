@@ -73,7 +73,7 @@ echo "$API_KEY" | aiterm-intake-server ai --provider openai --model <模型>
 echo "$SMTP_PASSWORD" | aiterm-intake-server mail --smtp-host smtp.example.com --smtp-port 587 --username bot@example.com [--from help@example.com]
 ```
 
-設定後 `status` 會顯示寄信帳號；管理員也能用 API（`GET/PUT /v1/mail`，密碼走 `PUT /v1/secrets/smtp_password`，不會被讀回）。
+在 AITerm 連上 server 後，也可以不用命令列：到問題收集的設定頁、「郵件」分頁，選一個 AITerm 已有的郵件帳號按「套用到 server」，就會把它的 SMTP 設定與密碼（從鑰匙圈讀出）寫到 server，只寫入、不會被讀回，且只有管理員做得到。設定後 `status` 會顯示寄信帳號；也能用 API（`GET/PUT /v1/mail`，密碼走 `PUT /v1/secrets/smtp_password`，不會被讀回）。
 
 在 AITerm 連上 server 後，到設定頁把專案的「網頁表單」設成「僅本機」或「區網」，server 就會在設定的埠（預設 8320）開出表單，網址是 `http://<server 位址>:8320/`，每個專案有自己的 `/p/<代碼>` 頁。任一專案設成區網時綁 `0.0.0.0`，否則只收本機；要放到公開網路請放在反向代理（HTTPS）後面。表單的回覆以信件寄回提問者。
 
@@ -97,6 +97,6 @@ WantedBy=multi-user.target
 ## 七、目前的限制
 
 - Server 自己**不會自動處理題目**。處理靠成員領取：在 AITerm 清單按「我來處理」，或讓「收集中」的終端機分頁閒置時自動領；題目在領取者自己的電腦用 Claude Code 處理，做完交回 server 變成草稿，由人看過再送出。
-- 支援 **LINE** 與**網頁表單**收訊與回覆；Email、Telegram 還不能在 server 上使用（設定會存起來，但不收訊）。網頁表單的寄信帳號目前用命令列或 API 設定，AITerm 設定頁還沒有對應畫面。
+- 支援 **LINE** 與**網頁表單**收訊與回覆；Email、Telegram 還不能在 server 上使用（設定會存起來，但不收訊）。
 - 看板與 Agent 協作不在 server 上。
 - 所有成員看得到所有專案。

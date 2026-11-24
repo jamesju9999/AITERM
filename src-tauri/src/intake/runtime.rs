@@ -440,7 +440,7 @@ async fn finish_item<R: Runtime>(app: &AppHandle<R>, tab: &str, item_id: &str, a
 }
 
 /// 收集用郵件帳號與它的密碼。
-fn mail_creds<R: Runtime>(app: &AppHandle<R>, account_id: &str) -> Result<(crate::config::types::MailAccountConfig, String), String> {
+pub(super) fn mail_creds<R: Runtime>(app: &AppHandle<R>, account_id: &str) -> Result<(crate::config::types::MailAccountConfig, String), String> {
     let account = app
         .try_state::<Arc<ConfigStore>>()
         .ok_or("設定尚未就緒")?

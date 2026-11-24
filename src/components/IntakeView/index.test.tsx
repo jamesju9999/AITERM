@@ -44,6 +44,8 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeRemoteStatus: vi.fn(() => Promise.resolve({ connected: false, online: false, addr: "", name: "", role: null, error: null })),
   intakeRemotePair: vi.fn(),
   intakeRemoteClaim: vi.fn(() => Promise.resolve()),
+  intakeServerMailStatus: vi.fn(() => Promise.resolve({ settings: { smtp_host: "", smtp_port: 587, username: "", from: "" }, configured: false })),
+  intakeServerMailApply: vi.fn(() => Promise.resolve()),
   intakeRemoteDisconnect: vi.fn(() => Promise.resolve()),
 }));
 import * as ipc from "../../ipc/intake";
@@ -934,6 +936,32 @@ describe("IntakeView", () => {
       expect(screen.queryByText(t.intake_conn_readonly)).toBeNull();
       expect(screen.queryByText(t.intake_conn_channels_note)).toBeNull();
       expect(screen.getAllByRole("button", { name: new RegExp(t.intake_refs_pick) }).length).toBeGreaterThan(0);
+    });
+
+    it("applies one of the AITerm mail accounts to the server, and shows it only while connected", async () => {
+      vi.mocked(mailListAccounts).mockResolvedValue([{ id: "a1", email: "bot@example.com", enabled: true }] as never);
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      await openSettings();
+      expect(await screen.findByText(t.intake_server_mail_off)).toBeTruthy();
+      const apply = screen.getByRole("button", { name: t.intake_server_mail_apply });
+      expect(apply.matches(":disabled")).toBe(true);
+      fireEvent.change(screen.getByLabelText(t.intake_server_mail_pick), { target: { value: "a1" } });
+      fireEvent.click(apply);
+      await waitFor(() => expect(ipc.intakeServerMailApply).toHaveBeenCalledWith("a1"));
+      expect(await screen.findByText(t.intake_server_mail_done)).toBeTruthy();
+      cleanup();
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: false, online: false, addr: "", name: "", role: null, error: null });
+      await openSettings();
+      expect(screen.queryByText(t.intake_server_mail)).toBeNull();
+    });
+
+    it("does not let a member apply a mail account", async () => {
+      vi.mocked(mailListAccounts).mockResolvedValue([{ id: "a1", email: "bot@example.com", enabled: true }] as never);
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("member"));
+      await openSettings();
+      await screen.findByText(t.intake_server_mail);
+      expect(screen.getByLabelText(t.intake_server_mail_pick).matches(":disabled")).toBe(true);
+      expect(screen.getByRole("button", { name: t.intake_server_mail_apply }).matches(":disabled")).toBe(true);
     });
 
     const connectedAs = (role: "admin" | "member" = "member") =>

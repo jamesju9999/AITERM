@@ -18,6 +18,8 @@ import {
   intakeLineUnknown,
   intakeLineSetCredentials,
   intakeLineStatus,
+  intakeServerMailApply,
+  intakeServerMailStatus,
   intakeList,
   intakeProjects,
   intakeRefresh,
@@ -43,7 +45,7 @@ import {
   type Level,
 } from "../../ipc/intake";
 import { MailIcon } from "../Icons";
-import type { IntakeRemoteStatus } from "../../ipc/intake";
+import type { IntakeRemoteStatus, IntakeServerMail } from "../../ipc/intake";
 import { MarkdownText } from "../../lib/markdown";
 import { useNavigate } from "react-router-dom";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
@@ -625,6 +627,53 @@ function Detail({ item, run, projects, remote }: { item: IntakeItem; run: (fn: (
   );
 }
 
+/** 連到 server 時：server 自己的寄信帳號（網頁表單寄驗證碼與回覆）；從 AITerm 的郵件帳號套用。 */
+function ServerMailCard({ accounts, canEdit, onError }: { accounts: MailAccount[]; canEdit: boolean; onError: (m: string | null) => void }) {
+  const { t } = useLocale();
+  const [mail, setMail] = useState<IntakeServerMail | null>(null);
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const load = useCallback(() => {
+    intakeServerMailStatus().then(setMail).catch(() => {});
+  }, []);
+  useEffect(load, [load]);
+  async function apply() {
+    setBusy(true);
+    setDone(false);
+    try {
+      await intakeServerMailApply(pick);
+      setDone(true);
+      load();
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <fieldset className="intake__field" disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0 }}>
+      <span>{t.intake_server_mail}</span>
+      <p className="intake__meta">
+        {mail?.configured ? `${t.intake_server_mail_on}：${mail.settings.smtp_host}（${mail.settings.from || mail.settings.username}）` : t.intake_server_mail_off}
+      </p>
+      <div className="intake__adopt">
+        <select aria-label={t.intake_server_mail_pick} value={pick} onChange={(e) => { setPick(e.target.value); setDone(false); }}>
+          <option value="">{t.intake_server_mail_pick}</option>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>{a.email}</option>
+          ))}
+        </select>
+        <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={!pick || busy} onClick={() => void apply()}>
+          {t.intake_server_mail_apply}
+        </button>
+        {done && <span role="status">{t.intake_server_mail_done}</span>}
+      </div>
+      <p className="intake__meta">{t.intake_server_mail_hint}</p>
+    </fieldset>
+  );
+}
+
 function SettingsPanel({ projectId, projectName, legacySettings, remote, onError }: { projectId: string; projectName: string; legacySettings: boolean; remote: IntakeRemoteStatus; onError: (m: string | null) => void }) {
   const { t } = useLocale();
   const navigate = useNavigate();
@@ -935,6 +984,8 @@ function SettingsPanel({ projectId, projectName, legacySettings, remote, onError
         <div className="intake__tabpanel" role="tabpanel">
         {chanTab === "mail" && (
           <>
+      {remote.connected && <ServerMailCard accounts={accounts} canEdit={!readOnly} onError={onError} />}
+      {!remote.connected && (
       <label className="intake__field">
         {t.intake_set_account}
         <select value={cfg.account_id} onChange={(e) => set("account_id", e.target.value)}>
@@ -944,7 +995,8 @@ function SettingsPanel({ projectId, projectName, legacySettings, remote, onError
           ))}
         </select>
       </label>
-      {accounts.some((a) => a.id === cfg.account_id && a.enabled === false) && (
+      )}
+      {!remote.connected && accounts.some((a) => a.id === cfg.account_id && a.enabled === false) && (
         <div className="intake__meta" role="alert" style={{ color: "#f59e0b", fontSize: 12, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
           <span>{t.intake_account_disabled_warn}</span>
           <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => navigate("/settings", { state: { tab: "mail" } })}>
