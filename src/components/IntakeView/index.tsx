@@ -673,8 +673,8 @@ function ServerMailCard({ accounts, canEdit, onError }: { accounts: MailAccount[
           {t.intake_server_mail_apply}
         </button>
         {done && <span role="status" className="intake__mailcard-ok">{t.intake_server_mail_done}</span>}
-        {!done && chosen && <span className="intake__meta">{isApplied(chosen) ? t.intake_server_mail_this_applied : t.intake_server_mail_this_not}</span>}
       </div>
+      {chosen && <p className={`intake__mailcard-state ${isApplied(chosen) ? "intake__mailcard-state--on" : ""}`}>{isApplied(chosen) ? t.intake_server_mail_this_applied : t.intake_server_mail_this_not}</p>}
       <p className="intake__mailcard-hint">{mail?.configured ? t.intake_server_mail_hint : `${t.intake_server_mail_off} ${t.intake_server_mail_hint}`}</p>
     </fieldset>
   );

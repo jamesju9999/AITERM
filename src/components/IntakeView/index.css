@@ -298,3 +298,5 @@
 .intake__mailcard-row select { padding: 6px 10px; background: var(--bg-primary, #0a0b14); color: inherit; border: 1px solid var(--border, #333); border-radius: 6px; }
 .intake__mailcard-ok { font-size: 12px; color: #4ade80; }
 .intake__mailcard-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary, #888); }
+.intake__mailcard-state { margin: 0; font-size: 12px; color: #f59e0b; }
+.intake__mailcard-state--on { color: #4ade80; }
