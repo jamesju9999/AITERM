@@ -77,6 +77,17 @@ echo "$SMTP_PASSWORD" | aiterm-intake-server mail --smtp-host smtp.example.com -
 
 在 AITerm 連上 server 後，到設定頁把專案的「網頁表單」設成「僅本機」或「區網」，server 就會在設定的埠（預設 8320）開出表單，網址是 `http://<server 位址>:8320/`，每個專案有自己的 `/p/<代碼>` 頁。任一專案設成區網時綁 `0.0.0.0`，否則只收本機；要放到公開網路請放在反向代理（HTTPS）後面。表單的回覆以信件寄回提問者。
 
+## Email
+
+Server 可以用 IMAP 收信、用 SMTP 回覆，規則與桌面版相同（別名或主旨標籤、白名單、內部／外部）。
+
+- 設定：在 AITerm 連上 server 後，設定頁「郵件」分頁選一個已有的郵件帳號按「套用到 server」，會把 IMAP 與 SMTP 設定與密碼一起寫到 server；或用命令列：`echo "$密碼" | aiterm-intake-server mail --smtp-host … --imap-host … --username …`。
+- 每 60 秒讀一次信箱，**唯讀**（只讀取，不改已讀、不搬、不刪）。有任一專案啟用問題收集就會收；信屬於哪個專案，依各專案的別名或主旨標籤決定，整個 server 共用這一個信箱。
+- **第一次只記下目前信箱的位置，不收既有的舊信**；之後只收新進來的。信箱換了身分（UIDVALIDITY 改變）時同樣重新記位置，不補收。一次輪詢最多收 100 封，剩下的下一輪接著收。
+- 回覆用信件寄出，串在原信的對話裡並回覆全部收件人（去掉收信帳號與別名自己）。
+- 只支援隱含 TLS 的 IMAP（通常是 993），不支援 143 的 STARTTLS。`status` 會顯示是否收信、最近成功時間與錯誤。
+- 已用真實信箱驗證過一輪（寄出標有 `[AITerm]` 的信，約一分鐘內收進清單）。
+
 ## 六、systemd 範例（Linux）
 
 ```ini
@@ -154,7 +165,7 @@ New-NetFirewallRule -DisplayName 'AITerm Intake Server' -Direction Inbound -Prot
 ## 七、目前的限制
 
 - Server 自己**不會自動處理題目**。處理靠成員領取：在 AITerm 清單按「我來處理」，或讓「收集中」的終端機分頁閒置時自動領；題目在領取者自己的電腦用 Claude Code 處理，做完交回 server 變成草稿，由人看過再送出。
-- 支援 **LINE** 與**網頁表單**收訊與回覆；Email、Telegram 還不能在 server 上使用（設定會存起來，但不收訊）。
+- 支援 **LINE**、**網頁表單**與 **Email** 收訊與回覆；Telegram 還不能在 server 上使用（設定會存起來，但不收訊）。
 - 看板與 Agent 協作不在 server 上。
 - 所有成員看得到所有專案。
 
