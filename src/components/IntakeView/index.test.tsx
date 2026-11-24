@@ -1030,6 +1030,17 @@ describe("IntakeView", () => {
       expect((await screen.findByRole("alert")).textContent).toContain("沒有可用的分頁");
     });
 
+    it("turns the connection button into a back button while the card is open", async () => {
+      vi.mocked(ipc.intakeList).mockResolvedValue([]);
+      wrap();
+      fireEvent.click(await screen.findByRole("button", { name: t.intake_conn_button }));
+      const back = screen.getByRole("button", { name: t.intake_settings_back });
+      expect(screen.getByText(t.intake_conn_title)).toBeTruthy();
+      fireEvent.click(back);
+      await waitFor(() => expect(screen.queryByText(t.intake_conn_title)).toBeNull());
+      expect(screen.queryByRole("button", { name: t.intake_settings_back })).toBeNull();
+    });
+
     it("opens the connection card from the bar even when there are no projects yet", async () => {
       vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [], unassigned: 0, legacy_settings: false });
       vi.mocked(ipc.intakeList).mockResolvedValue([]);
