@@ -261,3 +261,13 @@ export interface IntakeServerMail {
 export const intakeServerMailStatus = () => invoke<IntakeServerMail>("intake_server_mail_status");
 /** 把 AITerm 某個郵件帳號的 SMTP 設定與密碼套用到 server（管理員）。 */
 export const intakeServerMailApply = (accountId: string) => invoke<void>("intake_server_mail_apply", { accountId });
+
+/** server 的 AI 設定（題目分類與群組「是不是新問題」用）；金鑰不會回傳。 */
+export interface IntakeServerAi {
+  settings: { provider: string; model: string; base_url: string };
+  configured: boolean;
+}
+export const intakeServerAiStatus = () => invoke<IntakeServerAi>("intake_server_ai_status");
+/** `apiKey` 空字串＝不變。 */
+export const intakeServerAiApply = (provider: string, model: string, baseUrl: string, apiKey: string) =>
+  invoke<void>("intake_server_ai_apply", { provider, model, baseUrl, apiKey });

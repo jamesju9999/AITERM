@@ -309,3 +309,5 @@
 .intake__conn .intake__field input::placeholder { color: var(--text-secondary, #888); opacity: 0.6; }
 .intake__conn .intake__actions { margin-top: 16px; }
 .intake__conn .aiterm-btn--primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.intake__mailcard-row input { padding: 6px 10px; font: inherit; font-size: 13px; color: inherit; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; min-width: 140px; }
+.intake__mailcard-row input:focus { outline: none; border-color: var(--accent, #a855f7); }

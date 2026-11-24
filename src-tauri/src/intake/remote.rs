@@ -427,6 +427,36 @@ pub async fn mail_apply(api: &Api, settings: &ServerMailSettings, password: &str
     set_secret(api, "smtp_password", password).await
 }
 
+/// server 的 AI 設定（題目分類與群組「是不是新問題」用）；金鑰不會回傳。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct ServerAiSettings {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub base_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ServerAi {
+    pub settings: ServerAiSettings,
+    pub configured: bool,
+}
+
+pub async fn ai_status(api: &Api) -> Result<ServerAi, ClientError> {
+    api.get("/v1/ai").await
+}
+
+/// 寫入 AI 設定；`api_key` 非空才一併更新金鑰（空＝不變，畫面不會回填已存的金鑰）。
+pub async fn ai_apply(api: &Api, settings: &ServerAiSettings, api_key: &str) -> Result<(), ClientError> {
+    api.request(Method::PUT, "/v1/ai", Some(serde_json::to_value(settings).map_err(|e| ClientError::Server(e.to_string()))?)).await?;
+    if !api_key.trim().is_empty() {
+        set_secret(api, "ai_api_key", api_key.trim()).await?;
+    }
+    Ok(())
+}
+
 pub async fn clear_secret(api: &Api, id: &str) -> Result<(), ClientError> {
     api.request(Method::DELETE, &format!("/v1/secrets/{}", enc(id)), None).await.map(|_| ())
 }
@@ -506,6 +536,45 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn server_ai_settings_round_trip_and_the_key_is_written_only_when_given() {
+        use aiterm_intake_core::host::Secrets;
+        let srv = TestServer::start().await;
+        let api = srv.paired("小華", Role::Admin).await;
+        assert!(!ai_status(&api).await.unwrap().configured);
+        let settings = ServerAiSettings { provider: "openai".into(), model: "gpt-x".into(), base_url: String::new() };
+        ai_apply(&api, &settings, "  sk-secret  ").await.unwrap();
+        let v = ai_status(&api).await.unwrap();
+        assert_eq!((v.settings.clone(), v.configured), (settings.clone(), true));
+        assert_eq!(srv.state().secrets.get("ai_api_key").as_deref(), Some("sk-secret"), "金鑰會去掉前後空白");
+        assert!(!serde_json::to_string(&v).unwrap().contains("sk-secret"), "金鑰不會被讀回");
+        // 空金鑰＝不變：只改模型，已存的金鑰還在。
+        ai_apply(&api, &ServerAiSettings { model: "gpt-y".into(), ..settings }, "").await.unwrap();
+        assert_eq!(srv.state().secrets.get("ai_api_key").as_deref(), Some("sk-secret"));
+        assert_eq!(ai_status(&api).await.unwrap().settings.model, "gpt-y");
+    }
+
+    #[tokio::test]
+    async fn applying_a_mail_account_writes_both_directions_and_the_password() {
+        use aiterm_intake_core::host::Secrets;
+        let srv = TestServer::start().await;
+        let api = srv.paired("小華", Role::Admin).await;
+        let s = ServerMailSettings { smtp_host: "smtp.example.com".into(), smtp_port: 587, imap_host: "imap.example.com".into(), imap_port: 993, username: "bot@example.com".into(), from: "bot@example.com".into() };
+        mail_apply(&api, &s, "pw-123").await.unwrap();
+        let v = mail_status(&api).await.unwrap();
+        assert_eq!((v.settings, v.configured), (s, true));
+        assert_eq!(srv.state().secrets.get("smtp_password").as_deref(), Some("pw-123"));
+    }
+
+    #[tokio::test]
+    async fn a_member_cannot_change_the_servers_ai_or_mail() {
+        let srv = TestServer::start().await;
+        let member = srv.paired("小明", Role::Member).await;
+        assert!(ai_apply(&member, &ServerAiSettings { provider: "openai".into(), model: "m".into(), base_url: String::new() }, "k").await.is_err());
+        let s = ServerMailSettings { smtp_host: "h".into(), smtp_port: 25, imap_host: String::new(), imap_port: 993, username: "u".into(), from: String::new() };
+        assert!(mail_apply(&member, &s, "p").await.is_err());
     }
 
     #[test]

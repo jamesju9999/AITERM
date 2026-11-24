@@ -18,6 +18,8 @@ import {
   intakeLineUnknown,
   intakeLineSetCredentials,
   intakeLineStatus,
+  intakeServerAiApply,
+  intakeServerAiStatus,
   intakeServerMailApply,
   intakeServerMailStatus,
   intakeList,
@@ -45,7 +47,7 @@ import {
   type Level,
 } from "../../ipc/intake";
 import { MailIcon } from "../Icons";
-import type { IntakeRemoteStatus, IntakeServerMail } from "../../ipc/intake";
+import type { IntakeRemoteStatus, IntakeServerAi, IntakeServerMail } from "../../ipc/intake";
 import { MarkdownText } from "../../lib/markdown";
 import { useNavigate } from "react-router-dom";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
@@ -680,6 +682,78 @@ function ServerMailCard({ accounts, canEdit, onError }: { accounts: MailAccount[
   );
 }
 
+const AI_PROVIDERS: [string, string][] = [
+  ["openai", "OpenAI"],
+  ["anthropic", "Anthropic"],
+  ["openai_compat", "OpenAI 相容"],
+  ["ollama", "Ollama"],
+];
+
+/** 連到 server 時：server 自己的 AI（題目分類與群組「是不是新問題」）。金鑰只寫入、不會被讀回。 */
+function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: string | null) => void }) {
+  const { t } = useLocale();
+  const [ai, setAi] = useState<IntakeServerAi | null>(null);
+  const [provider, setProvider] = useState("");
+  const [model, setModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const load = useCallback(() => {
+    intakeServerAiStatus()
+      .then((v) => {
+        setAi(v);
+        setProvider(v.settings.provider);
+        setModel(v.settings.model);
+        setBaseUrl(v.settings.base_url);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(load, [load]);
+  async function save() {
+    setBusy(true);
+    setDone(false);
+    try {
+      await intakeServerAiApply(provider, model.trim(), baseUrl.trim(), key);
+      setKey("");
+      setDone(true);
+      load();
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const needsKey = provider !== "" && provider !== "ollama";
+  return (
+    <fieldset className="intake__mailcard" disabled={!canEdit}>
+      <div className="intake__mailcard-head">
+        <strong>{t.intake_server_ai}</strong>
+        <span className={`intake__tab-chip ${ai?.configured ? "intake__tab-chip--on" : ""}`}>{ai?.configured ? t.intake_server_ai_on : t.intake_server_ai_off_short}</span>
+      </div>
+      {ai && !ai.configured && <p className="intake__mailcard-hint">{t.intake_server_ai_off}</p>}
+      <div className="intake__mailcard-row">
+        <select aria-label={t.intake_server_ai_provider} value={provider} onChange={(e) => { setProvider(e.target.value); setDone(false); }}>
+          <option value="">{t.intake_server_ai_provider}</option>
+          {AI_PROVIDERS.map(([id, label]) => (
+            <option key={id} value={id}>{label}</option>
+          ))}
+        </select>
+        <input aria-label={t.intake_server_ai_model} placeholder={t.intake_server_ai_model} value={model} onChange={(e) => { setModel(e.target.value); setDone(false); }} />
+        <input aria-label={t.intake_server_ai_base_url} placeholder={t.intake_server_ai_base_url} value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setDone(false); }} />
+        {needsKey && (
+          <input type="password" autoComplete="off" aria-label={t.intake_server_ai_key} placeholder={`${t.intake_server_ai_key}（${t.intake_server_ai_key_keep}）`} value={key} onChange={(e) => { setKey(e.target.value); setDone(false); }} />
+        )}
+        <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy || provider === "" || model.trim() === ""} onClick={() => void save()}>
+          {t.intake_server_ai_save}
+        </button>
+        {done && <span role="status" className="intake__mailcard-ok">{t.intake_server_ai_saved}</span>}
+      </div>
+      <p className="intake__mailcard-hint">{t.intake_server_ai_hint}</p>
+    </fieldset>
+  );
+}
+
 function SettingsPanel({ projectId, projectName, legacySettings, remote, onError }: { projectId: string; projectName: string; legacySettings: boolean; remote: IntakeRemoteStatus; onError: (m: string | null) => void }) {
   const { t } = useLocale();
   const navigate = useNavigate();
@@ -937,6 +1011,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, remote, onError
       <div className="intake__editing">{t.intake_editing_project.replace("{name}", projectName)}</div>
       {readOnly && <div className="intake__meta intake__readonly" role="status">{t.intake_conn_readonly}</div>}
       {remote.connected && <div className="intake__meta intake__hint">{t.intake_conn_channels_note}</div>}
+      {remote.connected && <ServerAiCard canEdit={!readOnly} onError={onError} />}
       <fieldset className="intake__fieldset" disabled={readOnly}>
       {!hasOwn && legacySettings && (
         <div className="intake__banner intake__adopt">

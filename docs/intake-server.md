@@ -63,7 +63,7 @@ echo "$API_KEY" | aiterm-intake-server ai --provider openai --model <模型>
 # provider：openai、anthropic、openai_compat（再加 --base-url）、ollama（不需要金鑰）
 ```
 
-也可以由管理員在 AITerm 設定。不支援需要瀏覽器登入的訂閱帳號。沒設定時，LINE 群組每段安靜的訊息都會被當成新問題，建議設定。
+也可以由管理員在 AITerm 設定：連上 server 後，到問題收集的設定頁最上方的「Server AI」卡片，選供應商、填模型（與位址、金鑰）按「儲存到 server」；金鑰只寫入、不會被讀回，留空代表不變。不支援需要瀏覽器登入的訂閱帳號。沒設定時，LINE 群組每段安靜的訊息都會被當成新問題，建議設定。
 
 ## 網頁表單與寄信帳號
 

@@ -605,6 +605,21 @@ pub async fn intake_server_mail_apply(app: AppHandle, rs: State<'_, Arc<RemoteSt
     super::remote::mail_apply(&api, &settings, &password).await.map_err(|e| super::remote::fail(&rs, e))
 }
 
+/// server 目前的 AI 設定（要先連到 server）。
+#[tauri::command]
+pub async fn intake_server_ai_status(rs: State<'_, Arc<RemoteState>>) -> Result<super::remote::ServerAi, String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    super::remote::ai_status(&api).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
+/// 設定 server 的 AI 供應商、模型與金鑰（管理員）。金鑰空字串＝不變。
+#[tauri::command]
+pub async fn intake_server_ai_apply(rs: State<'_, Arc<RemoteState>>, provider: String, model: String, base_url: String, api_key: String) -> Result<(), String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    let settings = super::remote::ServerAiSettings { provider, model, base_url };
+    super::remote::ai_apply(&api, &settings, &api_key).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
 /// 手動「我來處理」：領 server 上這一題，派進你「收集中」且閒置的分頁。
 #[tauri::command]
 pub async fn intake_remote_claim(app: AppHandle, item_id: String) -> Result<(), String> {

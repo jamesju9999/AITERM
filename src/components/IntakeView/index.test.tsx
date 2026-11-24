@@ -46,6 +46,8 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeRemoteClaim: vi.fn(() => Promise.resolve()),
   intakeServerMailStatus: vi.fn(() => Promise.resolve({ settings: { smtp_host: "", smtp_port: 587, imap_host: "", imap_port: 993, username: "", from: "" }, configured: false })),
   intakeServerMailApply: vi.fn(() => Promise.resolve()),
+  intakeServerAiStatus: vi.fn(() => Promise.resolve({ settings: { provider: "", model: "", base_url: "" }, configured: false })),
+  intakeServerAiApply: vi.fn(() => Promise.resolve()),
   intakeRemoteDisconnect: vi.fn(() => Promise.resolve()),
 }));
 import * as ipc from "../../ipc/intake";
@@ -92,6 +94,8 @@ beforeEach(() => {
   vi.mocked(ipc.intakeAttachments).mockResolvedValue([]);
   // 同理：上一個測試設成「已連線」的狀態不能漏進來。
   vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: false, online: false, addr: "", name: "", role: null, error: null });
+  vi.mocked(ipc.intakeServerAiStatus).mockResolvedValue({ settings: { provider: "", model: "", base_url: "" }, configured: false });
+  vi.mocked(ipc.intakeServerMailStatus).mockResolvedValue({ settings: { smtp_host: "", smtp_port: 587, imap_host: "", imap_port: 993, username: "", from: "" }, configured: false });
 });
 
 describe("IntakeView", () => {
@@ -969,6 +973,34 @@ describe("IntakeView", () => {
       expect(screen.getByText(t.intake_server_mail_this_not)).toBeTruthy();
       fireEvent.change(screen.getByLabelText(t.intake_server_mail_pick), { target: { value: "a1" } });
       expect(screen.getByText(t.intake_server_mail_this_applied)).toBeTruthy();
+    });
+
+    it("saves the server AI settings with the key, then clears the key box", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      await openSettings();
+      expect(await screen.findByText(t.intake_server_ai_off)).toBeTruthy();
+      const save = screen.getByRole("button", { name: t.intake_server_ai_save });
+      expect(save.matches(":disabled")).toBe(true);
+      fireEvent.change(screen.getByLabelText(t.intake_server_ai_provider), { target: { value: "openai" } });
+      fireEvent.change(screen.getByLabelText(t.intake_server_ai_model), { target: { value: " gpt-x " } });
+      fireEvent.change(screen.getByLabelText(t.intake_server_ai_key), { target: { value: "sk-secret" } });
+      vi.mocked(ipc.intakeServerAiStatus).mockResolvedValue({ settings: { provider: "openai", model: "gpt-x", base_url: "" }, configured: true });
+      fireEvent.click(save);
+      await waitFor(() => expect(ipc.intakeServerAiApply).toHaveBeenCalledWith("openai", "gpt-x", "", "sk-secret"));
+      expect(await screen.findByText(t.intake_server_ai_saved)).toBeTruthy();
+      expect((screen.getByLabelText(t.intake_server_ai_key) as HTMLInputElement).value).toBe("");
+      expect(await screen.findByText(t.intake_server_ai_on)).toBeTruthy();
+    });
+
+    it("asks for no key when the provider is Ollama, and shows the AI card only while connected", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      await openSettings();
+      fireEvent.change(await screen.findByLabelText(t.intake_server_ai_provider), { target: { value: "ollama" } });
+      expect(screen.queryByLabelText(t.intake_server_ai_key)).toBeNull();
+      cleanup();
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: false, online: false, addr: "", name: "", role: null, error: null });
+      await openSettings();
+      expect(screen.queryByText(t.intake_server_ai)).toBeNull();
     });
 
     it("does not let a member apply a mail account", async () => {
