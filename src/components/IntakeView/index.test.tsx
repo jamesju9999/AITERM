@@ -837,6 +837,18 @@ describe("IntakeView", () => {
     );
   });
 
+  it("does not blame the port while the settings are still unsaved", async () => {
+    vi.mocked(ipc.intakeList).mockResolvedValue([]);
+    vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ line_enabled: false }));
+    vi.mocked(ipc.intakeLineStatus).mockResolvedValue({ has_secret: true, has_token: true, port: 8321, listening: false });
+    wrap();
+    fireEvent.click(await screen.findByText(t.intake_settings));
+    fireEvent.click(await screen.findByRole("tab", { name: new RegExp(t.intake_sec_line) }));
+    fireEvent.click(await screen.findByLabelText(t.intake_set_line));
+    expect(await screen.findByText(t.intake_line_unsaved_hint)).toBeInTheDocument();
+    expect(screen.queryByText(t.intake_line_not_listening)).toBeNull();
+  });
+
   it("warns when LINE is on with a secret but the webhook server is not listening", async () => {
     vi.mocked(ipc.intakeList).mockResolvedValue([]);
     vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView({ line_enabled: true }));

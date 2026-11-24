@@ -1024,7 +1024,9 @@ function SettingsPanel({ projectId, projectName, legacySettings, remote, onError
       </label>
       <p className="intake__meta">{t.intake_line_webhook}：http://127.0.0.1:{cfg.line_port}/line/webhook</p>
       {cfg.line_enabled && lineStatus && !lineStatus.has_secret && <p className="intake__error">{t.intake_line_need_secret}</p>}
-      {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.listening && <p className="intake__error">{t.intake_line_not_listening}</p>}
+      {/* 設定還沒儲存時 server／本機根本還沒開始聽，這時說「埠號被占用」是誤報；存了還沒在聽才是真的問題。 */}
+      {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.listening && dirty && <p className="intake__meta intake__warn">{t.intake_line_unsaved_hint}</p>}
+      {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.listening && !dirty && <p className="intake__error">{t.intake_line_not_listening}</p>}
       {cfg.line_enabled && lineStatus?.has_secret && !lineStatus.has_token && <p className="intake__error">{t.intake_line_need_token}</p>}
         </>
       ))}
