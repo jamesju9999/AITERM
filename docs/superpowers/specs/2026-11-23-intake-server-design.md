@@ -328,7 +328,7 @@ Server 管理多個專案，與本機一致：每個專案有 `project_id`、名
 | 全域設定 | `/v1/global-config` | `GET/PUT /v1/ai`、`PUT/DELETE /v1/secrets/{id}`（只接受白名單內的祕密 id）、`/v1/status` | 埠號與保留天數在每個專案設定裡，由 `ops::set_config` 同步到全域，不需要另一個端點 |
 | AI | 抽出 `ai/` 供 server 重用 | **不搬 `ai/`**（依賴 pty、chatgpt_web、usage 等），core 定義 `AiComplete`，server 內建最小的一次性補全 client（openai、anthropic、openai_compat、ollama） | 搬動規模遠超過收益；功能（server 自己設供應商與金鑰）不變 |
 | 收訊管道 | LINE、網頁表單先做，Email、Telegram 隨後 | **只有 LINE**；Email、Telegram、網頁表單在 server 上尚未支援（設定會存，但不收訊也不能回覆） | 這三個管道需要 server 端的 SMTP／IMAP／Telegram 與網頁表單寄驗證碼，是獨立工作；文件、CHANGELOG 與畫面都明說 |
-| 預留 | `claim／release／result` 回 501 | 已做；`items` 的 `claimed_by` 等欄位**尚未加到資料表**（501 端點只是預留介面） | ④ 開工時再加欄位與遷移，避免現在動 schema |
+| 預留 | `claim／release／result` 回 501 | ①② 時是 501；**④ 已實作**（見 `2026-11-24-intake-claim-design.md`），`claimed_by／claimed_at／claim_expires_at` 已加到資料表並有舊資料庫升級測試 | ④ 開工 |
 | 發佈 | `intake-server-v*` tag，Linux x86_64＋macOS arm64 | tag 如預期；平台改為 Linux x86_64／aarch64（musl）、macOS arm64、Windows x64；只建 **draft** release，不自動公開 | 比照 `host-v*` 的做法與平台；公開由人確認 |
 | Client 的「重新整理」 | — | 連線時不去收信，只重新載入（server 有變動會推播） | server 自己收訊 |
 | 本機專屬功能 | — | 連線時停用：舊資料歸屬／複製（legacy）、終端機分頁接收；資料夾選擇器改成手動輸入 server 路徑 | 這些只對本機有意義 |

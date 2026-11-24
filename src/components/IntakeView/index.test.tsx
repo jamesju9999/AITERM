@@ -43,6 +43,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeAttachmentText: vi.fn(),
   intakeRemoteStatus: vi.fn(() => Promise.resolve({ connected: false, online: false, addr: "", name: "", role: null, error: null })),
   intakeRemotePair: vi.fn(),
+  intakeRemoteClaim: vi.fn(() => Promise.resolve()),
   intakeRemoteDisconnect: vi.fn(() => Promise.resolve()),
 }));
 import * as ipc from "../../ipc/intake";
@@ -933,6 +934,56 @@ describe("IntakeView", () => {
       expect(screen.queryByText(t.intake_conn_readonly)).toBeNull();
       expect(screen.queryByText(t.intake_conn_channels_note)).toBeNull();
       expect(screen.getAllByRole("button", { name: new RegExp(t.intake_refs_pick) }).length).toBeGreaterThan(0);
+    });
+
+    const connectedAs = (role: "admin" | "member" = "member") =>
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: true, online: true, addr: "h:1", name: "小華", role, error: null });
+
+    it("offers 'handle this' on a queued item only while connected, and claims that item", async () => {
+      connectedAs();
+      vi.mocked(ipc.intakeList).mockResolvedValue([item({ id: "q1", status: "queued" })]);
+      wrap();
+      fireEvent.click(await screen.findByText("壞掉了"));
+      fireEvent.click(await screen.findByRole("button", { name: t.intake_claim }));
+      await waitFor(() => expect(ipc.intakeRemoteClaim).toHaveBeenCalledWith("q1"));
+    });
+
+    it("does not offer 'handle this' in local mode or on items that are not queued", async () => {
+      vi.mocked(ipc.intakeList).mockResolvedValue([item({ id: "q1", status: "queued" })]);
+      wrap();
+      fireEvent.click(await screen.findByText("壞掉了"));
+      await screen.findByText(t.intake_action_reject);
+      expect(screen.queryByRole("button", { name: t.intake_claim })).toBeNull();
+      cleanup();
+      connectedAs();
+      vi.mocked(ipc.intakeList).mockResolvedValue([item({ id: "p1", status: "pending" })]);
+      wrap();
+      fireEvent.click(await screen.findByText("壞掉了"));
+      await screen.findByText(t.intake_action_approve);
+      expect(screen.queryByRole("button", { name: t.intake_claim })).toBeNull();
+    });
+
+    it("shows who is handling a running item and who handled a drafted one", async () => {
+      connectedAs();
+      vi.mocked(ipc.intakeList).mockResolvedValue([item({ id: "r1", status: "running", claimed_by: "小明" })]);
+      wrap();
+      fireEvent.click(await screen.findByText("壞掉了"));
+      expect(await screen.findByText(t.intake_claim_running.replace("{name}", "小明"))).toBeTruthy();
+      cleanup();
+      vi.mocked(ipc.intakeList).mockResolvedValue([item({ id: "d1", status: "draft", claimed_by: "小明", reply_draft: "回覆" })]);
+      wrap();
+      fireEvent.click(await screen.findByText("壞掉了"));
+      expect(await screen.findByText(t.intake_claim_handled.replace("{name}", "小明"))).toBeTruthy();
+    });
+
+    it("shows the reason when claiming fails", async () => {
+      connectedAs();
+      vi.mocked(ipc.intakeRemoteClaim).mockRejectedValueOnce("沒有可用的分頁：請先在終端機分頁啟動 Claude Code");
+      vi.mocked(ipc.intakeList).mockResolvedValue([item({ id: "q1", status: "queued" })]);
+      wrap();
+      fireEvent.click(await screen.findByText("壞掉了"));
+      fireEvent.click(await screen.findByRole("button", { name: t.intake_claim }));
+      expect((await screen.findByRole("alert")).textContent).toContain("沒有可用的分頁");
     });
 
     it("opens the connection card from the bar even when there are no projects yet", async () => {

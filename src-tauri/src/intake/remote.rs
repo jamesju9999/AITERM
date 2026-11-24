@@ -61,6 +61,8 @@ pub struct Claim {
 pub struct RemoteState {
     inner: Mutex<Inner>,
     claims: Mutex<std::collections::HashMap<String, Claim>>,
+    /// 領來的題目的附件下載到哪（測試用暫存資料夾；預設是 AITERM 的資料夾底下）。
+    attach_root: Mutex<Option<std::path::PathBuf>>,
 }
 
 impl RemoteState {
@@ -75,6 +77,15 @@ impl RemoteState {
             Some(s) => RemoteStatus { connected: true, online: g.online, addr: s.addr.clone(), name: s.name.clone(), role: Some(s.role), error: g.error.clone() },
             None => RemoteStatus::default(),
         }
+    }
+
+    pub fn attach_root(&self) -> std::path::PathBuf {
+        self.attach_root.lock().clone().unwrap_or_else(|| dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join("AITERM").join("intake-remote"))
+    }
+
+    #[cfg(test)]
+    pub fn set_attach_root(&self, p: std::path::PathBuf) {
+        *self.attach_root.lock() = Some(p);
     }
 
     /// 記下這題是從 server 領來、正在某個分頁處理。
@@ -168,7 +179,7 @@ pub async fn connect<R: Runtime>(app: &AppHandle<R>, addr: &str, code: &str) -> 
     Ok(app.state::<Arc<RemoteState>>().status())
 }
 
-async fn install<R: Runtime>(app: &AppHandle<R>, saved: Saved, api: Api) {
+pub(crate) async fn install<R: Runtime>(app: &AppHandle<R>, saved: Saved, api: Api) {
     let Some(rs) = app.try_state::<Arc<RemoteState>>().map(|s| s.inner().clone()) else { return };
     {
         let mut g = rs.inner.lock();
