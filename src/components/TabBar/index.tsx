@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { isImeComposing } from "../../lib/imeComposing";
 import { useLocale } from "../../contexts/LocaleContext";
+import { useIntakeRemote } from "../../hooks/useIntakeRemote";
 import type { AttentionKind } from "../../lib/terminalAttention";
 import type { Translations } from "../../lib/i18n";
 import appIcon from "../../assets/icon.png";
@@ -207,6 +208,13 @@ export function TabBar({
 }: TabBarProps) {
   const navigate = useNavigate();
   const { t } = useLocale();
+  const remote = useIntakeRemote();
+  const serverTone = !remote.connected ? "off" : remote.error || !remote.online ? "bad" : "on";
+  const serverTip = !remote.connected
+    ? t.sidebar_server_off
+    : remote.error
+      ? t.sidebar_server_error
+      : (remote.online ? t.sidebar_server_on : t.sidebar_server_offline).replace("{name}", remote.addr);
   const [editingId, setEditingId] = useState<string | null>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
@@ -487,6 +495,20 @@ export function TabBar({
 
       {/* Footer Area with Settings */}
       <div className="aiterm-tabbar-footer">
+        <div
+          className="aiterm-tab"
+          data-testid="tabbar-server"
+          onClick={() => navigate("/settings", { state: { tab: "sharedServer" } })}
+          title={serverTip}
+        >
+          <span className="aiterm-tab-icon">☁️</span>
+          {isSidebarOpen && <span className="aiterm-tab-title">{t.sidebar_server_label}</span>}
+          <span
+            className={`server-dot server-dot--${serverTone} ${isSidebarOpen ? "update-badge--tile" : ""}`}
+            data-tone={serverTone}
+            aria-hidden
+          />
+        </div>
         <div
           className="aiterm-tab"
           onClick={() => navigate("/settings", hasUpdate ? { state: { tab: "about" } } : undefined)}

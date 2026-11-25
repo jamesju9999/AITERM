@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { ProvidersPage } from "./ProvidersPage";
 import { GeneralPage } from "./GeneralPage";
 import { DatabaseConnectionsPage } from "./DatabaseConnectionsPage";
+import { SharedServerPage } from "./SharedServerPage";
 import { VcsConnectionsPage } from "./VcsConnectionsPage";
 import { MailAccountsPage } from "./MailAccountsPage";
 import { EnterprisePage } from "./EnterprisePage";
@@ -32,7 +33,7 @@ import {
 import type { Translations } from "../../lib/i18n";
 import "./SettingsView.css";
 
-type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp" | "mail" | "bridge" | "usage" | "mcpToolServer" | "openaiServer" | "computerUse" | "taskBoard";
+type SettingsTab = "general" | "providers" | "databases" | "vcs" | "enterprise" | "about" | "mcp" | "mail" | "bridge" | "usage" | "mcpToolServer" | "openaiServer" | "computerUse" | "taskBoard" | "sharedServer";
 
 type SidebarEntry =
   | { heading: string }
@@ -48,6 +49,7 @@ function SIDEBAR_ITEMS(t: Translations): SidebarEntry[] {
     item("openaiServer", <LinkIcon size={16} />, t.openai_server_title),
     item("usage", <ZapIcon size={16} />, t.usage_quota_title),
     { heading: t.settings_group_connections },
+    item("sharedServer", <LinkIcon size={16} />, t.settings_tab_sharedServer),
     item("databases", <DatabaseIcon size={16} />, t.db_connections),
     item("vcs", <BranchIcon size={16} />, t.vcs_connections),
     item("mail", <MailIcon size={16} />, t.mail_accounts_settings_title),
@@ -128,6 +130,7 @@ export function SettingsView() {
       <main className="settings-content">
         {tab === "general" && <GeneralPage />}
         {tab === "providers" && <ProvidersPage />}
+        {tab === "sharedServer" && <SharedServerPage />}
         {tab === "databases" && <DatabaseConnectionsPage />}
         {tab === "vcs" && <VcsConnectionsPage />}
         {tab === "mail" && <MailAccountsPage />}

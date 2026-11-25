@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { KindIcon } from "./KindIcon";
 import { ServerMergeBanner } from "./ServerMergeBanner";
 import { ServerRunBar } from "./ServerRunBar";
+import { OpenSettingsButton } from "../OpenSettingsButton";
+import { useIntakeRemote } from "../../hooks/useIntakeRemote";
 import { autoLayout } from "./autoLayout";
 import { createPortal } from "react-dom";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -267,6 +269,7 @@ export function AgentCanvasView({
 }) {
   const { t } = useLocale();
   const [projects, setProjects] = useState<ProjectInfo[] | null>(null);
+  const serverRemote = useIntakeRemote();
   const [projectId, setProjectId] = useState<string | null>(null);
   // 只在第一次載入專案清單時用；放 ref 是因為那個 effect 只跑一次。
   const initialProjectRef = useRef(initialProjectId);
@@ -1516,13 +1519,30 @@ export function AgentCanvasView({
               setMerge({});
             }}
           >
-            {(projects ?? []).map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
+            {(() => {
+              const list = projects ?? [];
+              const opt = (p: ProjectInfo) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              );
+              const shared = list.filter((p) => p.id.startsWith("remote:"));
+              // 沒有共用專案就不分組，維持原本單純的清單。
+              if (shared.length === 0) return list.map(opt);
+              return (
+                <>
+                  <optgroup label={t.ac_group_local}>{list.filter((p) => !p.id.startsWith("remote:")).map(opt)}</optgroup>
+                  <optgroup label={t.ac_group_server}>{shared.map(opt)}</optgroup>
+                </>
+              );
+            })()}
           </select>
         </label>
+        {!serverRemote.connected && (
+          <span title={t.ac_no_server_hint} data-testid="ac-no-server">
+            <OpenSettingsButton tab="sharedServer" label={`☁ ${t.settings_tab_sharedServer}`} />
+          </span>
+        )}
         {projectButtons}
         {sumLine && (
           <span className={`ac-summary ac-summary--${sumLine.tone}`} data-testid="ac-summary">

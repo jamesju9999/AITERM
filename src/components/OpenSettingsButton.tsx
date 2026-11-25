@@ -3,7 +3,7 @@ import { useLocale } from "../contexts/LocaleContext";
 import type { Translations } from "../lib/i18n";
 
 /** 設定頁的分頁 id（與 SettingsView 的 SettingsTab 對應）。 */
-export type SettingsTarget = "providers" | "mail" | "mcp" | "bridge" | "databases" | "vcs";
+export type SettingsTarget = "providers" | "mail" | "mcp" | "bridge" | "databases" | "vcs" | "sharedServer";
 
 const LABEL_KEY = {
   providers: "open_settings_providers",
@@ -12,6 +12,7 @@ const LABEL_KEY = {
   bridge: "open_settings_bridge",
   databases: "open_settings_databases",
   vcs: "open_settings_vcs",
+  sharedServer: "open_settings_server",
 } as const satisfies Record<SettingsTarget, keyof Translations>;
 
 /**

@@ -7,6 +7,11 @@ vi.mock("react-router-dom", async () => {
   return { ...actual, useNavigate: () => navigateMock };
 });
 
+// 側欄底部的共用 server 狀態點會訂閱連線事件；單元測試不在 Tauri 裡，不能真的 listen。
+vi.mock("../../hooks/useIntakeRemote", () => ({
+  useIntakeRemote: () => ({ connected: false, online: false, addr: "", name: "", role: null, error: null }),
+}));
+
 import { LocaleProvider } from "../../contexts/LocaleContext";
 import { TabBar, type Tab, type TabBarProps } from "./index";
 import { reorderTabs } from "./reorderTabs";

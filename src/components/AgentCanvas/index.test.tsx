@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { LocaleProvider } from "../../contexts/LocaleContext";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -151,6 +152,10 @@ vi.mock("../../ipc/bridge", () => ({
   bridgeStatus: vi.fn().mockResolvedValue({ running: false, port: null, token: null, error: null }),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
+const serverConn = vi.hoisted(() => ({ connected: false }));
+vi.mock("../../hooks/useIntakeRemote", () => ({
+  useIntakeRemote: () => ({ connected: serverConn.connected, online: serverConn.connected, addr: "srv:8443", name: "我", role: "admin", error: null }),
+}));
 
 import {
   acceptVerification,
@@ -1399,6 +1404,59 @@ describe("AgentCanvasView", () => {
     expect(await screen.findByTestId("ac-server-run")).toHaveAttribute("aria-pressed", "true");
     expect(await screen.findAllByTestId("ac-merge-approve")).toHaveLength(1);
     expect(getOrchestration).toHaveBeenCalledWith("remote:srv");
+  });
+
+  it("專案下拉選單：有共用專案時分成「本機」「共用」兩組；沒有時維持單純清單", async () => {
+    const proj = (id: string, name: string) => ({
+      id, name, description: "", path: `/${id}`, status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null,
+    });
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listProjects).mockResolvedValue([proj("p1", "HTBKTW")]);
+    const first = render(
+      <LocaleProvider>
+        <AgentCanvasView isActive />
+      </LocaleProvider>,
+    );
+    const plain = (await screen.findByDisplayValue("HTBKTW")) as HTMLSelectElement;
+    expect(plain.querySelectorAll("optgroup")).toHaveLength(0);
+    first.unmount();
+
+    vi.mocked(listProjects).mockResolvedValue([proj("p1", "HTBKTW"), proj("remote:srv", "🌐 範例科技")]);
+    render(
+      <LocaleProvider>
+        <AgentCanvasView isActive />
+      </LocaleProvider>,
+    );
+    const grouped = (await screen.findByDisplayValue("HTBKTW")) as HTMLSelectElement;
+    const groups = Array.from(grouped.querySelectorAll("optgroup"));
+    expect(groups.map((g) => g.label)).toEqual(["本機專案", "共用專案（server）"]);
+    expect(Array.from(groups[0].querySelectorAll("option")).map((o) => o.value)).toEqual(["p1"]);
+    expect(Array.from(groups[1].querySelectorAll("option")).map((o) => o.value)).toEqual(["remote:srv"]);
+  });
+
+  it("沒連 server 時頂列有「共用 server」入口；連上後消失", async () => {
+    vi.mocked(listProjects).mockResolvedValue([
+      { id: "p1", name: "HTBKTW", description: "", path: "/p1", status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null },
+    ]);
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    const ui = () => (
+      <MemoryRouter>
+        <LocaleProvider>
+          <AgentCanvasView isActive />
+        </LocaleProvider>
+      </MemoryRouter>
+    );
+    serverConn.connected = false;
+    const first = render(ui());
+    expect(await screen.findByTestId("ac-no-server")).toHaveTextContent("共用 server");
+    first.unmount();
+    serverConn.connected = true;
+    render(ui());
+    await screen.findByDisplayValue("HTBKTW");
+    expect(screen.queryByTestId("ac-no-server")).toBeNull();
+    serverConn.connected = false;
   });
 
   it("新分頁沒有記住的專案：用上次選的，並記到這個分頁上", async () => {
