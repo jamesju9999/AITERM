@@ -826,7 +826,7 @@ function ServerRunnerCard({ canEdit, onError }: { canEdit: boolean; onError: (m:
         {view && <span className={`intake__tab-chip ${ok ? "intake__tab-chip--on" : ""}`}>{ok ? t.intake_runner_ok : t.intake_runner_bad}</span>}
       </div>
       {view?.availability.error && !ok && <div className="intake__error" role="alert">{view.availability.error}</div>}
-      {ok && view?.availability.version && <p className="intake__mailcard-state intake__mailcard-state--on">{view.availability.version}{view.running > 0 ? `　${t.intake_runner_running.replace("{n}", String(view.running))}` : ""}</p>}
+      {ok && view?.availability.version && <p className="intake__mailcard-state intake__mailcard-state--on">{view.availability.version}{view.running > 0 ? ` · ${t.intake_runner_running.replace("{n}", String(view.running))}` : ""}</p>}
       <div className="intake__mailcard-row">
         <input aria-label={t.intake_runner_path} placeholder={t.intake_runner_path} value={path} onChange={(e) => edit(() => setPath(e.target.value))} />
         <label className="intake__inline">
