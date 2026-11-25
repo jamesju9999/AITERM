@@ -210,11 +210,19 @@ async fn order_between(pool: &SqlitePool, project_id: &str, status: &str, after_
 /// 移動卡片：手動只能在計畫中與待派送之間移（進入執行中與完成走領取與交結果）。
 /// 排序用「放在誰之後、誰之前」表達，多人同時拖曳時不會互相踩到。
 pub async fn move_card(pool: &SqlitePool, id: &str, version: i64, to_status: &str, after_id: Option<&str>, before_id: Option<&str>) -> Result<Change, sqlx::Error> {
+    move_card_at(pool, id, version, to_status, after_id, before_id, None).await
+}
+
+/// 同 `move_card`；`sort_order` 有值時直接用它（AITerm 依畫面上看到的鄰居算好的值），否則依鄰居算。
+pub async fn move_card_at(pool: &SqlitePool, id: &str, version: i64, to_status: &str, after_id: Option<&str>, before_id: Option<&str>, sort_order: Option<f64>) -> Result<Change, sqlx::Error> {
     let Some(cur) = get_card(pool, id).await? else { return Ok(Change::NotFound) };
     if !transition_ok(&cur.status, to_status) {
         return Ok(Change::Refused(format!("不能從 {} 移到 {}", cur.status, to_status)));
     }
-    let order = order_between(pool, &cur.project_id, to_status, after_id, before_id, id).await?;
+    let order = match sort_order {
+        Some(o) if o.is_finite() => o,
+        _ => order_between(pool, &cur.project_id, to_status, after_id, before_id, id).await?,
+    };
     let r = sqlx::query("UPDATE board_cards SET status = ?, sort_order = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?")
         .bind(to_status).bind(order).bind(now()).bind(id).bind(version).execute(pool).await?;
     if r.rows_affected() == 0 {
@@ -400,6 +408,16 @@ mod tests {
         assert!(matches!(move_card(&p, &c.id, 99, PLANNING, None, None).await.unwrap(), Change::Conflict));
         assert!(matches!(move_card(&p, &c.id, c.version, DONE, None, None).await.unwrap(), Change::Refused(_)), "不能手動移到完成");
         assert!(matches!(move_card(&p, &c.id, c.version, RUNNING, None, None).await.unwrap(), Change::Refused(_)), "不能手動移到執行中");
+    }
+
+    #[tokio::test]
+    async fn an_explicit_sort_order_is_used_as_given() {
+        let p = pool().await;
+        let c = card(&p, "x").await;
+        let Change::Ok(m) = move_card_at(&p, &c.id, 1, QUEUED, None, None, Some(7.5)).await.unwrap() else { panic!() };
+        assert_eq!((m.status.as_str(), m.sort_order), (QUEUED, 7.5));
+        let Change::Ok(n) = move_card_at(&p, &c.id, m.version, QUEUED, None, None, Some(f64::NAN)).await.unwrap() else { panic!() };
+        assert!(n.sort_order.is_finite(), "不合法的排序值退回用鄰居算");
     }
 
     #[tokio::test]

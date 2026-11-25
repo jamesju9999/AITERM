@@ -70,6 +70,14 @@ fn yes() -> bool {
     true
 }
 
+async fn get_one(State(st): St, Path(id): Path<String>) -> Response {
+    match bs::get_card(&st.pools.intake, &id).await {
+        Ok(Some(c)) => Json(c).into_response(),
+        Ok(None) => not_found(),
+        Err(e) => internal(e),
+    }
+}
+
 async fn create(State(st): St, Extension(me): Extension<Me>, Path(pid): Path<String>, Json(b): Json<CardBody>) -> Response {
     if !project_exists(&st, &pid).await {
         return not_found();
@@ -115,10 +123,13 @@ struct MoveBody {
     after_id: Option<String>,
     #[serde(default)]
     before_id: Option<String>,
+    /// AITerm 依畫面上的鄰居算好的排序值；有就直接用。
+    #[serde(default)]
+    sort_order: Option<f64>,
 }
 
 async fn move_card(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>, Json(b): Json<MoveBody>) -> Response {
-    match bs::move_card(&st.pools.intake, &id, b.version, &b.to_status, b.after_id.as_deref(), b.before_id.as_deref()).await {
+    match bs::move_card_at(&st.pools.intake, &id, b.version, &b.to_status, b.after_id.as_deref(), b.before_id.as_deref(), b.sort_order).await {
         Ok(c) => {
             if matches!(c, Change::Ok(_)) {
                 crate::audit::record(&st.pools.server, &me.name, "board.move", &format!("{id} → {}", b.to_status)).await;
@@ -352,7 +363,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v1/board/projects/{pid}/cards", get(list).post(create))
         .route("/v1/board/projects/{pid}/archive-done", post(archive_done))
-        .route("/v1/board/cards/{id}", put(update).delete(remove))
+        .route("/v1/board/cards/{id}", get(get_one).put(update).delete(remove))
         .route("/v1/board/cards/{id}/move", post(move_card))
         .route("/v1/board/cards/{id}/archive", post(archive))
         .route("/v1/board/cards/{id}/attachments", post(upload))

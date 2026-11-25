@@ -55,6 +55,9 @@ pub async fn tasks_token_usage(
     project_id: String,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<std::collections::HashMap<String, crate::tasks::usage::TokenUsage>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Default::default());
+    }
     let p = project(&reg, &project_id)?;
     let tasks = store::list_tasks(&p.pool).await.map_err(|e| e.to_string())?;
     let path = p.path.clone();
@@ -75,6 +78,9 @@ pub async fn tasks_token_usage(
 /// 專案的 token 上限（`None` = 沒設）。
 #[tauri::command]
 pub async fn tasks_get_token_budget(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Option<u64>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(None);
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::budget::get_budget(&p.pool).await.map_err(|e| e.to_string())
 }
@@ -96,6 +102,9 @@ pub async fn tasks_set_token_budget(
 /// 專案簡介（`None` = 沒寫）。每張 Agent 卡派工時放在提示前面。
 #[tauri::command]
 pub async fn tasks_get_project_brief(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Option<String>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(None);
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::context::get_brief(&p.pool).await.map_err(|e| e.to_string())
 }
@@ -110,6 +119,9 @@ pub async fn tasks_set_project_brief(project_id: String, brief: Option<String>, 
 /// 專案記事本：各張卡用 `remember` 留下、之後每張卡都會帶的共用筆記。
 #[tauri::command]
 pub async fn tasks_list_notes(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Vec<crate::tasks::notes::NoteRow>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Vec::new());
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::notes::list_notes(&p.pool).await.map_err(|e| e.to_string())
 }
@@ -133,6 +145,9 @@ pub async fn tasks_list_fix_choices(
     project_id: String,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<Vec<crate::tasks::fix_choice::FixChoiceItem>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Vec::new());
+    }
     let p = project(&reg, &project_id)?;
     let root = crate::tasks::session_log::claude_projects_root();
     crate::tasks::fix_choice::list_pending(&p.pool, root.as_deref()).await
@@ -183,8 +198,13 @@ async fn with_attachments(
 #[tauri::command]
 pub async fn tasks_list(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<Vec<TaskWithAttachments>, String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        return crate::intake::board_remote::list(&api, &rs, pid, false).await.map_err(|e| crate::intake::board_remote::fail(&rs, e));
+    }
     let p = project(&reg, &project_id)?;
     let tasks = store::list_tasks(&p.pool).await.map_err(|e| e.to_string())?;
     with_attachments(&p.pool, tasks).await
@@ -212,10 +232,18 @@ pub struct CreateArgs {
 #[tauri::command]
 pub async fn tasks_create(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     args: CreateArgs,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<String, String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let f = crate::intake::board_remote::CardFields { title: &args.title, body: &args.body, parallel_ok: args.parallel_ok, interactive: args.interactive, label: args.label.as_deref() };
+        let id = crate::intake::board_remote::create(&api, &rs, pid, f).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(id);
+    }
     let p = project(&reg, &project_id)?;
     let id = store::create_task(
         &p.pool,
@@ -265,10 +293,18 @@ pub struct UpdateArgs {
 #[tauri::command]
 pub async fn tasks_update(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     args: UpdateArgs,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let f = crate::intake::board_remote::CardFields { title: &args.title, body: &args.body, parallel_ok: args.parallel_ok, interactive: args.interactive, label: args.label.as_deref() };
+        crate::intake::board_remote::update(&api, &rs, &args.id, f).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     let row = store::get_task(&p.pool, &args.id)
         .await
@@ -315,11 +351,18 @@ pub struct MoveArgs {
 #[tauri::command]
 pub async fn tasks_move(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     args: MoveArgs,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
     scheduler: State<'_, SchedulerHandle>,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        crate::intake::board_remote::move_card(&api, &rs, &args.id, &args.to_status, args.sort_order).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     store::move_task(&p.pool, &args.id, &args.to_status, args.sort_order)
         .await
@@ -366,6 +409,9 @@ pub async fn tasks_nudge(
 /// 最近的補充一句與 Agent 之間的傳訊（活動記錄用）。
 #[tauri::command]
 pub async fn tasks_list_messages(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Vec<crate::tasks::messages::MessageRow>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Vec::new());
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::messages::recent(&p.pool, 60).await.map_err(|e| e.to_string())
 }
@@ -682,12 +728,19 @@ pub struct DeleteArgs {
 #[tauri::command]
 pub async fn tasks_delete(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     args: DeleteArgs,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
     scheduler: State<'_, SchedulerHandle>,
     pty: State<'_, Arc<crate::pty::PtyManager>>,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        crate::intake::board_remote::delete(&api, &args.id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     if let Some(row) = store::get_task(&p.pool, &args.id)
         .await
@@ -718,10 +771,17 @@ pub struct AddAttachmentArgs {
 #[tauri::command]
 pub async fn tasks_add_attachment(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     args: AddAttachmentArgs,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<AttachmentRow, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let row = crate::intake::board_remote::add_attachment(&api, &rs, &args.id, &args.filename, &args.bytes).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(row);
+    }
     let p = project(&reg, &project_id)?;
     let row = store::get_task(&p.pool, &args.id)
         .await
@@ -753,10 +813,17 @@ pub async fn tasks_add_attachment(
 #[tauri::command]
 pub async fn tasks_remove_attachment(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     attachment_id: String,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        crate::intake::board_remote::remove_attachment(&api, &attachment_id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     if let Some(att) = store::get_attachment(&p.pool, &attachment_id)
         .await
@@ -977,11 +1044,18 @@ pub async fn tasks_used_labels(
 #[tauri::command]
 pub async fn tasks_set_label(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     task_id: String,
     label: Option<String>,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        crate::intake::board_remote::set_label(&api, &rs, &task_id, label.as_deref()).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     store::set_label(&p.pool, &task_id, label.as_deref()).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
@@ -1006,10 +1080,17 @@ pub async fn tasks_set_summary(
 #[tauri::command]
 pub async fn tasks_archive(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     task_id: String,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        crate::intake::board_remote::archive(&api, &task_id, true).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     store::archive_task(&p.pool, &task_id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
@@ -1020,10 +1101,17 @@ pub async fn tasks_archive(
 #[tauri::command]
 pub async fn tasks_unarchive(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     task_id: String,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        crate::intake::board_remote::archive(&api, &task_id, false).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     store::unarchive_task(&p.pool, &task_id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
@@ -1034,9 +1122,16 @@ pub async fn tasks_unarchive(
 #[tauri::command]
 pub async fn tasks_archive_done(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<u64, String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let n = crate::intake::board_remote::archive_done(&api, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(n);
+    }
     let p = project(&reg, &project_id)?;
     let n = store::archive_all_done(&p.pool).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
@@ -1058,11 +1153,22 @@ pub struct ArchivePage {
 #[tauri::command]
 pub async fn tasks_list_archived(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     query: String,
     limit: i64,
     offset: i64,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<ArchivePage, String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let all = crate::intake::board_remote::list(&api, &rs, pid, true).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        let q = query.trim().to_lowercase();
+        let mut hit: Vec<TaskRow> = all.into_iter().map(|t| t.task).filter(|t| q.is_empty() || t.title.to_lowercase().contains(&q) || t.body.to_lowercase().contains(&q)).collect();
+        let total = hit.len() as i64;
+        let from = (offset.max(0) as usize).min(hit.len());
+        hit = hit.into_iter().skip(from).take(limit.max(0) as usize).collect();
+        return Ok(ArchivePage { rows: hit, total });
+    }
     let p = project(&reg, &project_id)?;
     let rows = store::search_archived(&p.pool, &query, limit, offset)
         .await

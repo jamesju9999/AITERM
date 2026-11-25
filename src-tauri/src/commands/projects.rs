@@ -63,6 +63,7 @@ fn set_paths(config: &ConfigStore, next: Vec<String>) -> Result<(), String> {
 #[tauri::command]
 pub async fn projects_list(
     reg: State<'_, ProjectRegistry>,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     config: State<'_, Arc<ConfigStore>>,
 ) -> Result<Vec<ProjectInfo>, String> {
     let mut out = Vec::new();
@@ -117,6 +118,20 @@ pub async fn projects_list(
                     error: Some(e.to_string()),
                 });
             }
+        }
+    }
+    // 連到 server 時，server 的看板專案也列進來（id 是 `remote:<專案 id>`；卡片數從 server 算）。
+    if let Some(api) = rs.active() {
+        for (id, name, c) in crate::intake::board_remote::project_infos(&api).await {
+            out.push(ProjectInfo {
+                id: crate::intake::board_remote::project_id(&id),
+                name: format!("🌐 {name}"),
+                description: "Server 上共用的看板".to_string(),
+                path: String::new(),
+                status: "ok".to_string(),
+                counts: ProjectCounts { planning: c[0], queued: c[1], running: c[2], done: c[3] },
+                error: None,
+            });
         }
     }
     Ok(out)

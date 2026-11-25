@@ -73,9 +73,24 @@ pub struct RemoteState {
     claims: Mutex<std::collections::HashMap<String, Claim>>,
     /// 領來的題目的附件下載到哪（測試用暫存資料夾；預設是 AITERM 的資料夾底下）。
     attach_root: Mutex<Option<std::path::PathBuf>>,
+    /// 看板卡片最近一次看到的版本（卡片 id → 版本）；編輯與移動帶上它，別人先改過 server 會擋下。
+    board_versions: Mutex<std::collections::HashMap<String, i64>>,
 }
 
 impl RemoteState {
+    pub fn set_board_version(&self, card_id: &str, version: i64) {
+        self.board_versions.lock().insert(card_id.to_string(), version);
+    }
+
+    pub fn board_version(&self, card_id: &str) -> Option<i64> {
+        self.board_versions.lock().get(card_id).copied()
+    }
+
+    /// 這位成員自己電腦上、某個 server 專案對應的專案資料夾（沒設定就空）。第 3 步才會有設定介面。
+    pub fn local_dir_of(&self, _server_project_id: &str) -> String {
+        String::new()
+    }
+
     /// 連線中就回傳可呼叫 API 的 Client；本機模式回 `None`。
     pub fn active(&self) -> Option<Api> {
         self.inner.lock().api.clone()
@@ -223,6 +238,8 @@ pub(crate) async fn install<R: Runtime>(app: &AppHandle<R>, saved: Saved, api: A
     rs.inner.lock().watcher = Some(handle);
     status_changed(app);
     let _ = app.emit(CHANGED_EVENT, ());
+    let _ = app.emit("tasks-updated", ());
+    let _ = app.emit("tasks-updated", ()); // 共用看板也要重新載入（專案清單多了／少了 server 的專案）
 }
 
 fn stop_local<R: Runtime>(app: &AppHandle<R>) {
@@ -281,6 +298,7 @@ async fn watch<R: Runtime>(app: AppHandle<R>, rs: Arc<RemoteState>, api: Api) {
                 // 連上先收到目前 seq：斷線期間錯過的變動靠它觸發重抓。
                 while stream.next().await.is_some() {
                     let _ = app.emit(CHANGED_EVENT, ());
+                    let _ = app.emit("tasks-updated", ()); // server 上的看板有變動
                 }
                 rs.set_online(false, None);
                 status_changed(&app);

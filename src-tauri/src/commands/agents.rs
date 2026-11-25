@@ -23,6 +23,10 @@ pub async fn agents_list(
     project_id: String,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<Vec<AgentRow>, String> {
+    // 連到 server 的共用看板（M1）沒有 Agent 協作。
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Vec::new());
+    }
     let p = project(&reg, &project_id)?;
     agents::list_agents(&p.pool).await.map_err(|e| e.to_string())
 }

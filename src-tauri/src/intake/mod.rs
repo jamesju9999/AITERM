@@ -5,6 +5,7 @@ pub mod board;
 pub use aiterm_intake_core::classify;
 pub mod ai_adapter;
 pub mod ai_login;
+pub mod board_remote;
 pub use aiterm_intake_core::pipeline;
 pub mod commands;
 pub use aiterm_intake_core::config;
