@@ -53,6 +53,10 @@ pub struct IntakeItem {
     pub claimed_at: Option<i64>,
     /// 領取的租約到期時間；過了還沒續約，server 就把題目放回 `queued`。
     pub claim_expires_at: Option<i64>,
+    /// server 自動處理「可改檔案」的題目時，改動所在的分支（server 的隔離 worktree 上）；沒有就是 `None`。
+    pub branch: Option<String>,
+    /// 分支的合併狀態：`pending`（等人核准）｜`merging`｜`merged`｜`rejected`；沒有分支就是 `None`。
+    pub merge_state: Option<String>,
 }
 
 pub struct NewItem<'a> {
@@ -140,7 +144,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     }
     // 第 2 期新增的欄位。CREATE 是 IF NOT EXISTS，舊資料庫不會自動長出來，逐欄補。
     let have: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('intake_items')").fetch_all(pool).await?;
-    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT"), ("to_addrs", "TEXT"), ("cc_addrs", "TEXT"), ("board_task_id", "TEXT"), ("route_kind", "TEXT"), ("claimed_by", "TEXT"), ("claimed_at", "INTEGER"), ("claim_expires_at", "INTEGER")] {
+    for (col, ty) in [("kind", "TEXT"), ("snapshot_head", "TEXT"), ("verification", "TEXT"), ("verified", "INTEGER"), ("sender_name", "TEXT"), ("to_addrs", "TEXT"), ("cc_addrs", "TEXT"), ("board_task_id", "TEXT"), ("route_kind", "TEXT"), ("claimed_by", "TEXT"), ("claimed_at", "INTEGER"), ("claim_expires_at", "INTEGER"), ("branch", "TEXT"), ("merge_state", "TEXT")] {
         if !have.iter().any(|c| c == col) {
             sqlx::query(&format!("ALTER TABLE intake_items ADD COLUMN {col} {ty}")).execute(pool).await?;
         }
@@ -361,6 +365,25 @@ pub async fn claim_next_for(pool: &SqlitePool, project_id: &str, who: &str, now:
         }
     }
     Ok(None)
+}
+
+/// 交回結果時同時記下改動所在的分支，狀態是等人核准合併。
+pub async fn set_branch_pending(pool: &SqlitePool, id: &str, branch: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE intake_items SET branch = ?, merge_state = 'pending', updated_at = ? WHERE id = ?").bind(branch).bind(now()).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+/// 原子地把 `pending` 的合併改成 `to`（`merging`／`rejected`）：兩個人同時按只有一個成功。
+pub async fn begin_merge_step(pool: &SqlitePool, id: &str, to: &str) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET merge_state = ?, updated_at = ? WHERE id = ? AND merge_state = 'pending'").bind(to).bind(now()).bind(id).execute(pool).await?;
+    Ok(r.rows_affected() == 1)
+}
+
+/// 合併結束：`merged`，或失敗時退回 `pending`（可以修好後再核准）並記原因。
+pub async fn finish_merge(pool: &SqlitePool, id: &str, merged: bool, error: Option<&str>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE intake_items SET merge_state = ?, error = ?, updated_at = ? WHERE id = ? AND merge_state = 'merging'")
+        .bind(if merged { "merged" } else { "pending" }).bind(error).bind(now()).bind(id).execute(pool).await?;
+    Ok(())
 }
 
 /// 續約：只有領取者、而且題目還在處理中。

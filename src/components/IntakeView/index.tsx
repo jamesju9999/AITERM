@@ -21,6 +21,9 @@ import {
   intakeServerAiApply,
   intakeServerAiLoginComplete,
   intakeServerAiLoginStart,
+  intakeServerRunnerStatus,
+  intakeServerRunnerApply,
+  intakeRemoteMerge,
   intakeRemoteRefsGet,
   intakeRemoteRefsSet,
   intakeServerAiLoginBrowser,
@@ -57,7 +60,7 @@ import {
   type Level,
 } from "../../ipc/intake";
 import { MailIcon } from "../Icons";
-import type { IntakeRemoteStatus, IntakeServerAi, IntakeServerAiTest, IntakeServerMail, IntakeServerTelegram } from "../../ipc/intake";
+import type { IntakeRemoteStatus, IntakeServerAi, IntakeServerAiTest, IntakeServerMail, IntakeServerRunner, IntakeServerTelegram } from "../../ipc/intake";
 import { MarkdownText } from "../../lib/markdown";
 import { useNavigate } from "react-router-dom";
 import { mailListAccounts, type MailAccount } from "../../ipc/mail";
@@ -561,6 +564,29 @@ function Detail({ item, run, projects, remote }: { item: IntakeItem; run: (fn: (
         </section>
       )}
 
+      {item.branch && item.merge_state && (
+        <section className="intake__block" aria-label={t.intake_merge_title}>
+          <h4 className="intake__block-title">{t.intake_merge_title}</h4>
+          {item.merge_state === "pending" || item.merge_state === "merging" ? (
+            <>
+              <p className="intake__meta">{t.intake_merge_pending.replace("{branch}", item.branch)}</p>
+              {remote.connected && remote.role === "admin" && (
+                <div className="intake__actions">
+                  <button type="button" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={item.merge_state === "merging"} onClick={() => void run(() => intakeRemoteMerge(item.id, true))}>
+                    {item.merge_state === "merging" ? t.intake_merge_merging : t.intake_merge_approve}
+                  </button>
+                  <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={item.merge_state === "merging"} onClick={() => void run(() => intakeRemoteMerge(item.id, false))}>
+                    {t.intake_merge_reject}
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="intake__meta">{item.merge_state === "merged" ? t.intake_merge_merged : t.intake_merge_rejected}</p>
+          )}
+        </section>
+      )}
+
       {hasReply && (
         <section className="intake__block intake__block--grow">
           <div className="intake__block-head">
@@ -754,6 +780,76 @@ const AI_PROVIDERS: [string, string][] = [
   ["codex_oauth", "ChatGPT 訂閱"],
   ["antigravity_oauth", "Gemini 訂閱"],
 ];
+
+/** 連到 server 時：server 自動處理題目用的 Claude Code 執行器設定，以及它在 server 上能不能用。 */
+function ServerRunnerCard({ canEdit, onError }: { canEdit: boolean; onError: (m: string | null) => void }) {
+  const { t } = useLocale();
+  const [view, setView] = useState<IntakeServerRunner | null>(null);
+  const [path, setPath] = useState("claude");
+  const [concurrent, setConcurrent] = useState(1);
+  const [timeout, setTimeoutSecs] = useState(600);
+  const [turns, setTurns] = useState(20);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const apply = (v: IntakeServerRunner) => {
+    setView(v);
+    setPath(v.settings.claude_path);
+    setConcurrent(v.settings.max_concurrent);
+    setTimeoutSecs(v.settings.timeout_secs);
+    setTurns(v.settings.max_turns);
+  };
+  useEffect(() => {
+    intakeServerRunnerStatus().then(apply).catch(() => {});
+  }, []);
+  async function save() {
+    setBusy(true);
+    setDone(false);
+    try {
+      apply(await intakeServerRunnerApply(path.trim(), concurrent, timeout, turns));
+      setDone(true);
+      onError(null);
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const ok = view?.availability.available;
+  const edit = (fn: () => void) => {
+    fn();
+    setDone(false);
+  };
+  return (
+    <fieldset className="intake__mailcard" disabled={!canEdit}>
+      <div className="intake__mailcard-head">
+        <strong>{t.intake_runner}</strong>
+        {view && <span className={`intake__tab-chip ${ok ? "intake__tab-chip--on" : ""}`}>{ok ? t.intake_runner_ok : t.intake_runner_bad}</span>}
+      </div>
+      {view?.availability.error && !ok && <div className="intake__error" role="alert">{view.availability.error}</div>}
+      {ok && view?.availability.version && <p className="intake__mailcard-state intake__mailcard-state--on">{view.availability.version}{view.running > 0 ? `　${t.intake_runner_running.replace("{n}", String(view.running))}` : ""}</p>}
+      <div className="intake__mailcard-row">
+        <input aria-label={t.intake_runner_path} placeholder={t.intake_runner_path} value={path} onChange={(e) => edit(() => setPath(e.target.value))} />
+        <label className="intake__inline">
+          {t.intake_runner_concurrent}
+          <input type="number" min={1} max={8} aria-label={t.intake_runner_concurrent} value={concurrent} onChange={(e) => edit(() => setConcurrent(Number(e.target.value) || 1))} />
+        </label>
+        <label className="intake__inline">
+          {t.intake_runner_timeout}
+          <input type="number" min={30} max={800} aria-label={t.intake_runner_timeout} value={timeout} onChange={(e) => edit(() => setTimeoutSecs(Number(e.target.value) || 30))} />
+        </label>
+        <label className="intake__inline">
+          {t.intake_runner_turns}
+          <input type="number" min={1} max={100} aria-label={t.intake_runner_turns} value={turns} onChange={(e) => edit(() => setTurns(Number(e.target.value) || 1))} />
+        </label>
+        <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy || path.trim() === ""} onClick={() => void save()}>
+          {t.intake_runner_save}
+        </button>
+        {done && <span role="status" className="intake__mailcard-ok">{t.intake_runner_saved}</span>}
+      </div>
+      <p className="intake__mailcard-hint">{t.intake_runner_hint}</p>
+    </fieldset>
+  );
+}
 
 /** 連到 server 時：這台電腦上的參考資料夾。領取處理時帶給自己的 Claude Code；只存在本機，任何成員都能設。 */
 function LocalRefsCard({ projectId, onError }: { projectId: string; onError: (m: string | null) => void }) {
@@ -1296,6 +1392,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, remote, onError
       {readOnly && <div className="intake__meta intake__readonly" role="status">{t.intake_conn_readonly}</div>}
       {remote.connected && <div className="intake__meta intake__hint">{t.intake_conn_channels_note}</div>}
       {remote.connected && <ServerAiCard canEdit={!readOnly} onError={onError} />}
+      {remote.connected && <ServerRunnerCard canEdit={!readOnly} onError={onError} />}
       {remote.connected && <LocalRefsCard projectId={projectId} onError={onError} />}
       <fieldset className="intake__fieldset" disabled={readOnly}>
       {!hasOwn && legacySettings && (
@@ -1593,6 +1690,15 @@ function SettingsPanel({ projectId, projectName, legacySettings, remote, onError
           onChange={(e) => set("verify_command", e.target.value)}
         />
       </label>
+      {remote.connected && (
+        <>
+          <label className="intake__check">
+            <input type="checkbox" checked={cfg.auto_process ?? false} onChange={(e) => set("auto_process", e.target.checked)} />
+            {t.intake_auto_process}
+          </label>
+          {hint(t.intake_auto_process_hint)}
+        </>
+      )}
       <label className="intake__field">
         {t.intake_set_verify_timeout}
         <input

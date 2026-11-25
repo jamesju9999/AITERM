@@ -517,6 +517,47 @@ fn ai_probe(s: &ServerAiSettings, api_key: &str) -> serde_json::Value {
     json!({ "provider": s.provider, "model": s.model, "base_url": s.base_url, "api_key": api_key.trim() })
 }
 
+/// server 自動處理題目的執行器設定與狀態。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ServerRunner {
+    pub settings: ServerRunnerSettings,
+    pub availability: ServerRunnerAvailability,
+    pub running: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ServerRunnerSettings {
+    pub claude_path: String,
+    pub max_concurrent: usize,
+    pub timeout_secs: u64,
+    pub max_turns: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct ServerRunnerAvailability {
+    #[serde(default)]
+    pub checked: bool,
+    #[serde(default)]
+    pub available: bool,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+pub async fn runner_status(api: &Api) -> Result<ServerRunner, ClientError> {
+    api.get("/v1/runner").await
+}
+
+pub async fn runner_apply(api: &Api, s: &ServerRunnerSettings) -> Result<ServerRunner, ClientError> {
+    api.typed(Method::PUT, "/v1/runner", Some(serde_json::to_value(s).map_err(|e| ClientError::Server(e.to_string()))?)).await
+}
+
+/// 管理員核准（合併）或駁回 server 自動處理的改動。
+pub async fn merge_item(api: &Api, id: &str, approve: bool) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/items/{}/merge", enc(id)), Some(json!({ "approve": approve }))).await.map(|_| ())
+}
+
 pub async fn ai_status(api: &Api) -> Result<ServerAi, ClientError> {
     api.get("/v1/ai").await
 }
@@ -712,6 +753,23 @@ mod tests {
         let v = ai_status(&api).await.unwrap();
         assert_eq!((v.configured, v.login.as_str()), (false, "none"));
         assert!(srv.state().secrets.get("ai_oauth_refresh").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_runner_settings_round_trip_report_availability_and_only_admins_change_them_or_merge() {
+        let srv = TestServer::start().await;
+        let admin = srv.paired("小華", Role::Admin).await;
+        let member = srv.paired("小明", Role::Member).await;
+        let s = ServerRunnerSettings { claude_path: "/不存在/claude".into(), max_concurrent: 2, timeout_secs: 120, max_turns: 9 };
+        let v = runner_apply(&admin, &s).await.unwrap();
+        assert_eq!(v.settings, s);
+        assert!(!v.availability.available && v.availability.error.as_deref().unwrap_or("").contains("/不存在/claude"), "{v:?}");
+        assert_eq!(runner_status(&member).await.unwrap().settings, s, "成員看得到目前的設定");
+        assert!(runner_apply(&member, &s).await.is_err(), "成員不能改");
+        assert!(runner_apply(&admin, &ServerRunnerSettings { timeout_secs: 5, ..s.clone() }).await.is_err(), "不合理的值會被拒絕");
+        // 沒有等待核准的改動，核准會被拒絕（成員更不行）。
+        assert!(merge_item(&admin, "不存在的題目", true).await.is_err());
+        assert!(merge_item(&member, "不存在的題目", false).await.is_err());
     }
 
     #[tokio::test]

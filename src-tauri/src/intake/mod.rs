@@ -27,7 +27,7 @@ pub use aiterm_intake_core::smtp;
 pub use aiterm_intake_core::telegram_source;
 pub use aiterm_intake_core::store;
 pub mod tabcd;
-pub mod verify;
+pub use aiterm_intake_core::verify;
 pub mod web;
 
 use sqlx::sqlite::SqliteConnectOptions;

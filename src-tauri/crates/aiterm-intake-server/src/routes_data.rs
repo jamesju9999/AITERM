@@ -600,6 +600,71 @@ async fn set_ai(State(st): St, Admin(me): Admin, Json(s): Json<crate::ai::AiSett
     StatusCode::NO_CONTENT.into_response()
 }
 
+// ---- 自動處理（server 用 Claude Code 處理題目）----
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct RunnerView {
+    pub settings: crate::runner::RunnerSettings,
+    pub availability: crate::runner::Availability,
+    /// 目前正在處理的題數。
+    pub running: usize,
+}
+
+async fn get_runner(State(st): St) -> Response {
+    Json(RunnerView { settings: crate::runner::load(&st.pools.intake).await, availability: crate::runner::availability(&st, false).await, running: st.runner.running() }).into_response()
+}
+
+async fn set_runner(State(st): St, Admin(me): Admin, Json(s): Json<crate::runner::RunnerSettings>) -> Response {
+    if let Err(e) = crate::runner::save(&st.pools.intake, &s).await {
+        return bad(&e);
+    }
+    crate::audit::record(&st.pools.server, &me.name, "runner.set", &s.claude_path).await;
+    // 換了執行檔路徑，馬上重新確認能不能用，讓畫面立刻看到結果。
+    let availability = crate::runner::availability(&st, true).await;
+    st.events.changed();
+    Json(RunnerView { settings: s, availability, running: st.runner.running() }).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct MergeBody {
+    pub approve: bool,
+}
+
+/// 管理員核准或駁回 server 自動處理的改動：核准＝合併進專案目前的分支（衝突就還原並回報），駁回＝丟掉分支。
+async fn merge_item(State(st): St, Admin(me): Admin, Path(id): Path<String>, Json(b): Json<MergeBody>) -> Response {
+    let Some(item) = item_of(&st, &id).await else { return not_found() };
+    let (Some(branch), Some("pending")) = (item.branch.clone(), item.merge_state.as_deref()) else { return conflict("這題沒有等待核准的改動") };
+    let work_dir: String = sqlx::query_scalar("SELECT work_dir FROM projects WHERE id = ?").bind(&item.project_id).fetch_optional(&st.pools.server).await.ok().flatten().unwrap_or_default();
+    let work_dir = std::path::PathBuf::from(work_dir.trim());
+    if !work_dir.is_dir() {
+        return bad("專案的工作資料夾不存在");
+    }
+    if b.approve {
+        if !matches!(store::begin_merge_step(&st.pools.intake, &id, "merging").await, Ok(true)) {
+            return conflict("這題已經有人在處理合併");
+        }
+        match crate::runner::merge(&st, &work_dir, &id, &branch, &item.subject).await {
+            Ok(()) => {
+                store::finish_merge(&st.pools.intake, &id, true, None).await.ok();
+                crate::audit::record(&st.pools.server, &me.name, "item.merge", &id).await;
+            }
+            Err(e) => {
+                store::finish_merge(&st.pools.intake, &id, false, Some(&e)).await.ok();
+                st.events.changed();
+                return conflict(&e);
+            }
+        }
+    } else {
+        if !matches!(store::begin_merge_step(&st.pools.intake, &id, "rejected").await, Ok(true)) {
+            return conflict("這題已經有人在處理合併");
+        }
+        crate::runner::discard(&st, &work_dir, &id, &branch).await;
+        crate::audit::record(&st.pools.server, &me.name, "item.merge_reject", &id).await;
+    }
+    st.events.changed();
+    StatusCode::NO_CONTENT.into_response()
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TelegramView {
     pub settings: crate::telegram::TelegramSettings,
@@ -729,6 +794,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/secrets/{id}", put(set_secret).delete(clear_secret))
         .route("/v1/ai", get(get_ai).put(set_ai))
         .route("/v1/ai/oauth", put(put_oauth).delete(delete_oauth))
+        .route("/v1/runner", get(get_runner).put(set_runner))
+        .route("/v1/items/{id}/merge", post(merge_item))
         .route("/v1/ai/models", post(ai_models))
         .route("/v1/ai/test", post(ai_test))
         .route("/v1/mail", get(get_mail).put(set_mail))

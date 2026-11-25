@@ -62,6 +62,10 @@ export interface IntakeItem {
   claimed_by?: string | null;
   claimed_at?: number | null;
   claim_expires_at?: number | null;
+  /** server 自動處理「可改檔案」的題目時，改動所在的分支。 */
+  branch?: string | null;
+  /** 分支的合併狀態：`pending`（等管理員核准）｜`merging`｜`merged`｜`rejected`。 */
+  merge_state?: string | null;
 }
 
 export interface IntakeConfig {
@@ -79,6 +83,8 @@ export interface IntakeConfig {
   rate_limit_per_hour: number;
   verify_command: string;
   verify_timeout_secs: number;
+  /** 連到 server 時：由 server 自己用 Claude Code 處理這個專案的題目（預設關）。 */
+  auto_process?: boolean;
   telegram_enabled: boolean;
   line_enabled: boolean;
   /** LINE webhook 的本機埠號（所有專案共用）。 */
@@ -306,6 +312,18 @@ export const intakeRemoteRefsGet = (projectId: string) => invoke<IntakeRefFolder
 /** 存下並回傳整理過的內容；路徑不是絕對路徑或在這台電腦上找不到會丟錯。 */
 export const intakeRemoteRefsSet = (projectId: string, shared: string[], internal: string[]) =>
   invoke<IntakeRefFolders>("intake_remote_refs_set", { projectId, shared, internal });
+
+/** server 自動處理題目的執行器設定，以及 server 上 claude 能不能用。 */
+export interface IntakeServerRunner {
+  settings: { claude_path: string; max_concurrent: number; timeout_secs: number; max_turns: number };
+  availability: { checked: boolean; available: boolean; version?: string | null; error?: string | null };
+  running: number;
+}
+export const intakeServerRunnerStatus = () => invoke<IntakeServerRunner>("intake_server_runner_status");
+export const intakeServerRunnerApply = (claudePath: string, maxConcurrent: number, timeoutSecs: number, maxTurns: number) =>
+  invoke<IntakeServerRunner>("intake_server_runner_apply", { claudePath, maxConcurrent, timeoutSecs, maxTurns });
+/** 核准（合併進專案）或駁回 server 自動處理的改動（管理員）。 */
+export const intakeRemoteMerge = (itemId: string, approve: boolean) => invoke<void>("intake_remote_merge", { itemId, approve });
 
 /** 為 server 登入訂閱：開瀏覽器走授權，回傳授權網址（瀏覽器沒開時讓使用者自己開）。 */
 export const intakeServerAiLoginStart = (provider: string) => invoke<string>("intake_server_ai_login_start", { provider });

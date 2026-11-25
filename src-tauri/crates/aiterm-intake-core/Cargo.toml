@@ -8,7 +8,7 @@ rust-version = "1.88"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "uuid", "macros", "derive"] }
-tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "net"] }
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "net", "process", "io-util"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 log = "0.4"

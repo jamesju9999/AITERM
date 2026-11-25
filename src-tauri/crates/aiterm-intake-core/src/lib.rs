@@ -21,3 +21,4 @@ pub mod line_server;
 pub mod ops;
 pub mod api;
 pub mod pipeline;
+pub mod verify;

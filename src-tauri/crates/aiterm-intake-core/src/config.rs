@@ -111,6 +111,8 @@ pub struct Config {
     pub verify_command: String,
     /// 測試指令的逾時秒數。
     pub verify_timeout_secs: u64,
+    /// 連到 server 時：由 server 自己用 Claude Code 處理這個專案的題目（預設關）。桌面版本機派送不用這個。
+    pub auto_process: bool,
     /// 是否接收 Telegram 來的問題（需先在設定裡設好機器人）。
     pub telegram_enabled: bool,
     /// 是否接收 LINE 來的問題（需先設好官方帳號的憑證，並讓 LINE 連得到本機 webhook）。
@@ -152,6 +154,7 @@ impl Default for Config {
             rate_limit_per_hour: 10,
             verify_command: String::new(),
             verify_timeout_secs: 600,
+            auto_process: false,
             telegram_enabled: false,
             line_enabled: false,
             line_port: 8321,

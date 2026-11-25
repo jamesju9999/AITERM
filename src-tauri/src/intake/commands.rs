@@ -620,6 +620,28 @@ pub async fn intake_server_ai_apply(rs: State<'_, Arc<RemoteState>>, provider: S
     super::remote::ai_apply(&api, &settings, &api_key).await.map_err(|e| super::remote::fail(&rs, e))
 }
 
+/// server 自動處理題目的執行器設定與 claude 可用狀態（要先連到 server）。
+#[tauri::command]
+pub async fn intake_server_runner_status(rs: State<'_, Arc<RemoteState>>) -> Result<super::remote::ServerRunner, String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    super::remote::runner_status(&api).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
+/// 設定 server 的執行器（管理員）；回傳存好後的設定與重新檢查的 claude 狀態。
+#[tauri::command]
+pub async fn intake_server_runner_apply(rs: State<'_, Arc<RemoteState>>, claude_path: String, max_concurrent: usize, timeout_secs: u64, max_turns: u32) -> Result<super::remote::ServerRunner, String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    let s = super::remote::ServerRunnerSettings { claude_path, max_concurrent, timeout_secs, max_turns };
+    super::remote::runner_apply(&api, &s).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
+/// 核准（合併進專案）或駁回 server 自動處理的改動（管理員）。
+#[tauri::command]
+pub async fn intake_remote_merge(rs: State<'_, Arc<RemoteState>>, item_id: String, approve: bool) -> Result<(), String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    super::remote::merge_item(&api, &item_id, approve).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
 /// server 的 Telegram 狀態（要先連到 server）。
 #[tauri::command]
 pub async fn intake_server_telegram_status(rs: State<'_, Arc<RemoteState>>) -> Result<super::remote::ServerTelegram, String> {

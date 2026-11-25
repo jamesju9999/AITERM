@@ -44,6 +44,9 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeRemoteStatus: vi.fn(() => Promise.resolve({ connected: false, online: false, addr: "", name: "", role: null, error: null })),
   intakeRemotePair: vi.fn(),
   intakeRemoteClaim: vi.fn(() => Promise.resolve()),
+  intakeServerRunnerStatus: vi.fn(() => Promise.resolve({ settings: { claude_path: "claude", max_concurrent: 1, timeout_secs: 600, max_turns: 20 }, availability: { checked: true, available: true, version: "2.1.330 (Claude Code)", error: null }, running: 0 })),
+  intakeServerRunnerApply: vi.fn((claudePath: string, maxConcurrent: number, timeoutSecs: number, maxTurns: number) => Promise.resolve({ settings: { claude_path: claudePath, max_concurrent: maxConcurrent, timeout_secs: timeoutSecs, max_turns: maxTurns }, availability: { checked: true, available: true, version: "2.1.330 (Claude Code)", error: null }, running: 0 })),
+  intakeRemoteMerge: vi.fn(() => Promise.resolve()),
   intakeRemoteRefsGet: vi.fn(() => Promise.resolve({ shared: [], internal: [] })),
   intakeRemoteRefsSet: vi.fn((_p: string, shared: string[], internal: string[]) => Promise.resolve({ shared, internal })),
   intakeServerMailStatus: vi.fn(() => Promise.resolve({ settings: { smtp_host: "", smtp_port: 587, imap_host: "", imap_port: 993, username: "", from: "" }, configured: false })),
@@ -1158,6 +1161,41 @@ describe("IntakeView", () => {
       expect((input as HTMLInputElement).value).toBe("/nope");
     });
 
+    it("shows whether Claude Code works on the server and saves the runner settings (admin)", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      vi.mocked(ipc.intakeServerRunnerStatus).mockResolvedValueOnce({ settings: { claude_path: "claude", max_concurrent: 1, timeout_secs: 600, max_turns: 20 }, availability: { checked: true, available: false, version: null, error: "找不到或無法執行 claude" }, running: 0 });
+      await openSettings();
+      expect(await screen.findByText(t.intake_runner_bad)).toBeTruthy();
+      expect(screen.getByText(/找不到或無法執行 claude/)).toBeTruthy();
+      fireEvent.change(screen.getByLabelText(t.intake_runner_path), { target: { value: "/usr/local/bin/claude" } });
+      fireEvent.change(screen.getByLabelText(t.intake_runner_concurrent), { target: { value: "2" } });
+      fireEvent.click(screen.getByRole("button", { name: t.intake_runner_save }));
+      await waitFor(() => expect(ipc.intakeServerRunnerApply).toHaveBeenCalledWith("/usr/local/bin/claude", 2, 600, 20));
+      expect(await screen.findByText(t.intake_runner_ok)).toBeTruthy();
+      expect(screen.getByText(/2\.1\.330/)).toBeTruthy();
+    });
+
+    it("lets a member see the runner but not change it", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("member"));
+      await openSettings();
+      await screen.findByText(t.intake_runner_ok);
+      expect(screen.getByRole("button", { name: t.intake_runner_save }).matches(":disabled")).toBe(true);
+    });
+
+    it("offers the auto-process switch only while connected and saves it with the project config", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      await openSettings();
+      const box = (await screen.findByLabelText(t.intake_auto_process)) as HTMLInputElement;
+      expect(box.checked).toBe(false);
+      fireEvent.click(box);
+      fireEvent.click(screen.getByRole("button", { name: t.intake_set_save }));
+      await waitFor(() => expect(vi.mocked(ipc.intakeSetConfig).mock.calls.some((c) => (c[1] as { auto_process?: boolean }).auto_process === true)).toBe(true));
+      cleanup();
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: false, online: false, addr: "", name: "", role: null, error: null });
+      await openSettings();
+      expect(screen.queryByLabelText(t.intake_auto_process)).toBeNull();
+    });
+
     it("says Telegram is not active, with the reason, when the token is set but no project turned it on", async () => {
       vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
       vi.mocked(ipc.intakeServerTelegramStatus).mockResolvedValue({ settings: { owner_chat_id: "" }, has_token: true, listening: false, idle: true, error: null });
@@ -1204,6 +1242,33 @@ describe("IntakeView", () => {
       fireEvent.click(await screen.findByText("壞掉了"));
       fireEvent.click(await screen.findByRole("button", { name: t.intake_claim }));
       await waitFor(() => expect(ipc.intakeRemoteClaim).toHaveBeenCalledWith("q1"));
+    });
+
+    it("shows server-made changes waiting for approval: only an admin can approve or reject", async () => {
+      const pending = item({ id: "m1", status: "draft", reply_draft: "已修好", branch: "intake/abc123", merge_state: "pending" });
+      vi.mocked(ipc.intakeList).mockResolvedValue([pending]);
+      connectedAs("member");
+      wrap();
+      fireEvent.click(await screen.findByText("壞掉了"));
+      expect(await screen.findByText(t.intake_merge_pending.replace("{branch}", "intake/abc123"))).toBeTruthy();
+      expect(screen.queryByRole("button", { name: t.intake_merge_approve })).toBeNull();
+      cleanup();
+      connectedAs("admin");
+      wrap();
+      fireEvent.click(await screen.findByText("壞掉了"));
+      fireEvent.click(await screen.findByRole("button", { name: t.intake_merge_approve }));
+      await waitFor(() => expect(ipc.intakeRemoteMerge).toHaveBeenCalledWith("m1", true));
+      fireEvent.click(screen.getByRole("button", { name: t.intake_merge_reject }));
+      await waitFor(() => expect(ipc.intakeRemoteMerge).toHaveBeenCalledWith("m1", false));
+    });
+
+    it("says an item's changes were merged or rejected, with no buttons left", async () => {
+      vi.mocked(ipc.intakeList).mockResolvedValue([item({ id: "m2", status: "draft", reply_draft: "好", branch: "intake/x", merge_state: "merged" })]);
+      connectedAs("admin");
+      wrap();
+      fireEvent.click(await screen.findByText("壞掉了"));
+      expect(await screen.findByText(t.intake_merge_merged)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: t.intake_merge_approve })).toBeNull();
     });
 
     it("does not offer 'handle this' in local mode or on items that are not queued", async () => {
