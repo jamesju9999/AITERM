@@ -75,11 +75,45 @@ pub struct RemoteState {
     attach_root: Mutex<Option<std::path::PathBuf>>,
     /// 看板卡片最近一次看到的版本（卡片 id → 版本）；編輯與移動帶上它，別人先改過 server 會擋下。
     board_versions: Mutex<std::collections::HashMap<String, i64>>,
+    /// 我領取、正在本機處理的看板卡片（server 卡片 id → 本機的影子卡片）。
+    board_claims: Mutex<std::collections::HashMap<String, BoardClaim>>,
+}
+
+/// 領取的看板卡片在本機的對應：影子卡片放在哪個本機看板專案、id 是什麼。
+#[derive(Debug, Clone)]
+pub struct BoardClaim {
+    pub local_project_id: String,
+    pub local_task_id: String,
+    pub last_beat: std::time::Instant,
 }
 
 impl RemoteState {
     pub fn set_board_version(&self, card_id: &str, version: i64) {
         self.board_versions.lock().insert(card_id.to_string(), version);
+    }
+
+    pub fn track_board_claim(&self, card_id: &str, local_project_id: &str, local_task_id: &str) {
+        self.board_claims.lock().insert(card_id.to_string(), BoardClaim { local_project_id: local_project_id.to_string(), local_task_id: local_task_id.to_string(), last_beat: std::time::Instant::now() });
+    }
+
+    pub fn untrack_board_claim(&self, card_id: &str) -> Option<BoardClaim> {
+        self.board_claims.lock().remove(card_id)
+    }
+
+    pub fn board_claims(&self) -> Vec<(String, BoardClaim)> {
+        self.board_claims.lock().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+
+    /// 該續約的看板卡片（距上次續約超過 `every`），並把它們的計時重設。
+    pub fn board_due_for_heartbeat(&self, every: Duration) -> Vec<String> {
+        let mut g = self.board_claims.lock();
+        g.iter_mut()
+            .filter(|(_, c)| c.last_beat.elapsed() >= every)
+            .map(|(id, c)| {
+                c.last_beat = std::time::Instant::now();
+                id.clone()
+            })
+            .collect()
     }
 
     pub fn board_version(&self, card_id: &str) -> Option<i64> {

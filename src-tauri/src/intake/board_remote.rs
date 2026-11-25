@@ -197,6 +197,26 @@ pub async fn remove_attachment(api: &Api, attachment_id: &str) -> Result<(), Cli
     api.request(Method::DELETE, &format!("/v1/board/attachments/{}", enc(attachment_id)), None).await.map(|_| ())
 }
 
+/// 領取：成功回傳領到的卡片；已被領走或還不是待派送回 409（原因在錯誤訊息裡）。
+pub async fn claim(api: &Api, rs: &RemoteState, id: &str) -> Result<BoardCard, ClientError> {
+    let c: BoardCard = api.typed(Method::POST, &format!("/v1/board/cards/{}/claim", enc(id)), None).await?;
+    rs.set_board_version(&c.id, c.version);
+    Ok(c)
+}
+
+pub async fn heartbeat(api: &Api, id: &str) -> Result<bool, ClientError> {
+    api.typed(Method::POST, &format!("/v1/board/cards/{}/heartbeat", enc(id)), None).await
+}
+
+pub async fn release(api: &Api, id: &str) -> Result<bool, ClientError> {
+    api.typed(Method::POST, &format!("/v1/board/cards/{}/release", enc(id)), None).await
+}
+
+/// 交結果：`outcome` 是 `success` 或 `failed`。
+pub async fn result(api: &Api, id: &str, outcome: &str, summary: Option<&str>, error: Option<&str>) -> Result<bool, ClientError> {
+    api.typed(Method::POST, &format!("/v1/board/cards/{}/result", enc(id)), Some(json!({"outcome": outcome, "summary": summary, "error": error}))).await
+}
+
 /// 專案清單用：每個 server 專案一筆，卡片數從 server 算。
 pub async fn project_infos(api: &Api) -> Vec<(String, String, [i64; 4])> {
     let projects: Vec<serde_json::Value> = api.get("/v1/projects").await.unwrap_or_default();

@@ -156,6 +156,8 @@ pub async fn tick_with<R: Runtime>(app: &AppHandle<R>, rt: &IntakeRuntime, pty: 
     if touched {
         changed(app);
     }
+    // 看板卡片：續約、結果回寫。
+    super::board_work::tick(app, heartbeat_every).await;
 }
 
 /// 這題不再是我的了（租約被收回）：放掉分頁，之後 Claude Code 就算做完也不會交結果。
