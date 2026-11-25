@@ -14,6 +14,7 @@ use aiterm_intake_core::config;
 use aiterm_intake_core::host::Notifier;
 use aiterm_intake_core::orchestration::{self as orch, ModuleState};
 use aiterm_intake_core::store;
+use aiterm_intake_core::verify;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -142,6 +143,10 @@ pub async fn tick_once(st: &Arc<AppState>) -> usize {
             if agent.paused_card_id.is_some() || bs::agent_busy(&st.pools.intake, &agent.id).await.unwrap_or(true) {
                 continue;
             }
+            // 上次因為額度用完被放回來的卡：重置時間沒到就先不派。
+            if bs::card_waiting(&st.pools.intake, &card.id, crate::db::now()).await.unwrap_or(false) {
+                continue;
+            }
             // 前置（依賴）在別位工程師手上、還沒通過審查：先不開工，等它過了才有可以接的程式碼。
             if !deps_ready(card, &cards, &agents) {
                 continue;
@@ -177,11 +182,27 @@ async fn run_card(st: Arc<AppState>, card_id: String) {
     match result {
         Ok(summary) => {
             bs::finish_claim(pool, &card_id, WHO, "success", Some(&summary), None, now).await.ok();
+            bs::clear_card_wait(pool, &card_id).await.ok();
             crate::audit::record(&st.pools.server, WHO, "board.orchestrate", &card_id).await;
         }
         Err(e) => {
-            bs::finish_claim(pool, &card_id, WHO, "failed", None, Some(&e), now).await.ok();
-            crate::audit::record(&st.pools.server, WHO, "board.orchestrate_fail", &card_id).await;
+            // 額度或速率限制不是這張卡的錯：放回待派送，等重置後自動續跑（有次數上限，超過才算失敗）。
+            let waited = match runner::quota_wait(&e, now) {
+                Some(until) => match bs::set_card_wait(pool, &card_id, until, &e.chars().take(200).collect::<String>()).await {
+                    Ok(n) if n <= bs::QUOTA_MAX_ATTEMPTS => {
+                        let note = format!("Claude Code 額度或速率限制，約 {} 後自動續跑（第 {n} 次等待）", chrono::DateTime::from_timestamp(until, 0).map(|d| d.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default());
+                        bs::requeue_with_note(pool, &card_id, WHO, &note, now).await.unwrap_or(false)
+                    }
+                    _ => false,
+                },
+                None => false,
+            };
+            if waited {
+                crate::audit::record(&st.pools.server, WHO, "board.orchestrate_wait", &card_id).await;
+            } else {
+                bs::finish_claim(pool, &card_id, WHO, "failed", None, Some(&e), now).await.ok();
+                crate::audit::record(&st.pools.server, WHO, "board.orchestrate_fail", &card_id).await;
+            }
         }
     }
     st.runner.running.fetch_sub(1, Ordering::SeqCst);
@@ -220,7 +241,13 @@ async fn run_inner(st: &Arc<AppState>, card_id: &str) -> Result<String, String> 
     let start = runner::git(&wt, &["rev-parse", "HEAD"]).await?.trim().to_string();
     let mode = Mode::Edit { verify_command: cfg.verify_command.clone() };
     let prompt = orch::work_prompt(&agent, &card);
+    let before = verify::snapshot(&wt).await;
     let text = runner::exec_claude_as(&settings, &wt, &mode, &[], &prompt, agent.model.as_deref()).await?;
+    // 專案設了驗證指令：Coder 做完由 server 在 worktree 裡實際跑一次（Coder 自己多半沒權限跑），結果交給審查。
+    if !cfg.verify_command.trim().is_empty() {
+        let report = verify::verify(&wt, before.as_deref(), &cfg.verify_command, Duration::from_secs(cfg.verify_timeout_secs.clamp(1, 600))).await;
+        bs::set_verification(pool, card_id, &aiterm_intake_core::filter::redact(&report.text()), report.passed()).await.map_err(|e| e.to_string())?;
+    }
     if !runner::git(&wt, &["status", "--porcelain"]).await?.trim().is_empty() {
         runner::git(&wt, &["add", "-A"]).await?;
         runner::git(&wt, &["commit", "-q", "-m", &format!("{}：{}", agent.name, card.title.chars().take(60).collect::<String>())]).await?;
@@ -257,7 +284,8 @@ async fn run_review(st: &Arc<AppState>, settings: &runner::RunnerSettings, work_
     let diff: String = runner::git(work_dir, &["diff", &format!("{start}..{end}")]).await?.chars().take(MAX_DIFF_CHARS).collect();
     // 上一輪的理由：被審的是修正卡時，它指向上一張審查卡。
     let previous = if reviewed.card_kind == "fix" { bs::get_card(pool, reviewed.review_of.as_deref().unwrap_or("")).await.ok().flatten().map(|r| reasons_of(&r)).unwrap_or_default() } else { vec![] };
-    let prompt = orch::review_prompt(agent, &module, &reviewed, &diff, &previous);
+    let verification = bs::get_verification(pool, &reviewed.id).await.ok().flatten();
+    let prompt = orch::review_prompt(agent, &module, &reviewed, &diff, &previous, verification.as_ref().map(|(r, p)| (r.as_str(), *p)));
     // 在被審那版的一次性 worktree 裡唯讀審查。
     let wt = review_worktree(st, &card.id);
     std::fs::create_dir_all(wt.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;

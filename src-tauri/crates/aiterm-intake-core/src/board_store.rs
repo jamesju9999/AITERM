@@ -219,6 +219,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             canvas_x REAL, canvas_y REAL, last_fired_at INTEGER NOT NULL DEFAULT 0, last_card_id TEXT, fail_streak INTEGER NOT NULL DEFAULT 0,
             skip_streak INTEGER NOT NULL DEFAULT 0, disabled_reason TEXT, created_by TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
         "CREATE INDEX IF NOT EXISTS board_schedules_project ON board_schedules(project_id)",
+        "CREATE TABLE IF NOT EXISTS board_card_wait (card_id TEXT PRIMARY KEY NOT NULL, until INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 1, reason TEXT NOT NULL DEFAULT '')",
+        "CREATE TABLE IF NOT EXISTS board_card_verification (card_id TEXT PRIMARY KEY NOT NULL, report TEXT NOT NULL, passed INTEGER NOT NULL, created_at INTEGER NOT NULL)",
         "CREATE TABLE IF NOT EXISTS board_schedule_runs (schedule_id TEXT NOT NULL, fired_at INTEGER NOT NULL, card_id TEXT, result TEXT NOT NULL)",
         "CREATE INDEX IF NOT EXISTS board_schedule_runs_idx ON board_schedule_runs(schedule_id, fired_at)",
     ] {
@@ -616,6 +618,51 @@ pub async fn clear_schedule_round(pool: &SqlitePool, id: &str) -> Result<(), sql
 /// 成功的一輪把已完成的卡（模組本身加整條鏈）歸檔：看板上不堆積定時產生的卡；進行中的不碰。
 pub async fn archive_round(pool: &SqlitePool, module_id: &str, at: i64) -> Result<u64, sqlx::Error> {
     Ok(sqlx::query("UPDATE board_cards SET archived_at = ?1 WHERE (id = ?2 OR module_id = ?2) AND status = 'done' AND archived_at IS NULL").bind(at).bind(module_id).execute(pool).await?.rows_affected())
+}
+
+// ---- server 對 Coder 產出的驗證 ----
+
+/// 記下 server 在 Coder 完成後實際跑的驗證（變更了哪些檔案、專案設定的測試指令有沒有過）。審查會看到它。
+pub async fn set_verification(pool: &SqlitePool, card_id: &str, report: &str, passed: bool) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT OR REPLACE INTO board_card_verification (card_id, report, passed, created_at) VALUES (?,?,?,?)").bind(card_id).bind(report).bind(passed).bind(now()).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn get_verification(pool: &SqlitePool, card_id: &str) -> Result<Option<(String, bool)>, sqlx::Error> {
+    sqlx::query_as::<_, (String, bool)>("SELECT report, passed FROM board_card_verification WHERE card_id = ?").bind(card_id).fetch_optional(pool).await
+}
+
+// ---- 額度用完等待續跑 ----
+
+/// 額度／速率限制最多自動等幾次；超過就當失敗，交給人處理。
+pub const QUOTA_MAX_ATTEMPTS: i64 = 12;
+
+/// 這張卡要等到 `until`（unix 秒）才能再派；累計等了幾次。回傳目前的累計次數。
+pub async fn set_card_wait(pool: &SqlitePool, card_id: &str, until: i64, reason: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query("INSERT INTO board_card_wait (card_id, until, attempts, reason) VALUES (?,?,1,?) ON CONFLICT(card_id) DO UPDATE SET until = excluded.until, attempts = attempts + 1, reason = excluded.reason")
+        .bind(card_id).bind(until).bind(reason).execute(pool).await?;
+    sqlx::query_scalar::<_, i64>("SELECT attempts FROM board_card_wait WHERE card_id = ?").bind(card_id).fetch_one(pool).await
+}
+
+/// 這張卡現在是不是還在等（`until` 還沒到）。
+pub async fn card_waiting(pool: &SqlitePool, card_id: &str, now: i64) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM board_card_wait WHERE card_id = ? AND until > ?").bind(card_id).bind(now).fetch_one(pool).await? > 0)
+}
+
+pub async fn card_wait_attempts(pool: &SqlitePool, card_id: &str) -> Result<i64, sqlx::Error> {
+    Ok(sqlx::query_scalar::<_, i64>("SELECT attempts FROM board_card_wait WHERE card_id = ?").bind(card_id).fetch_optional(pool).await?.unwrap_or(0))
+}
+
+pub async fn clear_card_wait(pool: &SqlitePool, card_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM board_card_wait WHERE card_id = ?").bind(card_id).execute(pool).await?;
+    Ok(())
+}
+
+/// 放回待派送並留下原因（給人看：為什麼這張卡又排隊了）。只有處理中的才放。
+pub async fn requeue_with_note(pool: &SqlitePool, id: &str, who: &str, note: &str, now: i64) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE board_cards SET status = ?, claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL, error_message = ?, updated_at = ?, version = version + 1 WHERE id = ? AND status = ? AND claimed_by = ?")
+        .bind(QUEUED).bind(note).bind(now).bind(id).bind(RUNNING).bind(who).execute(pool).await?;
+    Ok(r.rows_affected() == 1)
 }
 
 // ---- 領取 ----

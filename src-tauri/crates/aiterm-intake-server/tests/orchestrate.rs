@@ -41,6 +41,10 @@ ALLOWED=''; prev=''; for a in "$@"; do if [ "$prev" = "--allowedTools" ]; then A
 cat > "$D/last_prompt.txt"
 case "$ALLOWED" in
   *Edit*)
+    if [ -s "$D/quota" ]; then
+      rm "$D/quota"; echo "quota-hit" >> "$D/log.txt"
+      printf '{"type":"result","is_error":true,"result":"Claude AI usage limit reached|%s"}' "$(( $(date +%s) + 2 ))"; exit 1
+    fi
     n=$(cat "$D/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$D/n"
     echo "coder $n start $(pwd)" >> "$D/log.txt"
     cp "$D/last_prompt.txt" "$D/coder_prompt_$n.txt"
@@ -79,6 +83,10 @@ esac
     }
     fn read(&self, f: &str) -> String {
         std::fs::read_to_string(self.dir.path().join(f)).unwrap_or_default()
+    }
+    /// 讓下一次 Coder 呼叫回「額度用完」（重置時間 2 秒後）。
+    fn hit_quota_once(&self) {
+        std::fs::write(self.dir.path().join("quota"), "1").unwrap();
     }
     fn set_plan(&self, json: &str) {
         std::fs::write(self.dir.path().join("plan.json"), json).unwrap();
@@ -501,6 +509,100 @@ async fn a_scheduled_round_is_built_and_reviewed_by_the_server_then_settled_as_a
     let runs: Vec<String> = bs::list_schedule_runs(r.pool(), &sch.id).await.unwrap().into_iter().map(|x| x.result).collect();
     assert_eq!(runs, vec!["success".to_string()]);
     assert!(r.cards().await.iter().all(|c| c.title != "定時：每日健檢"), "完成的一輪已歸檔");
+}
+
+async fn set_verify_command(r: &Rig, cmd: &str) {
+    let cfg = aiterm_intake_core::config::Config { enabled: true, verify_command: cmd.into(), ..aiterm_intake_core::config::Config::default() };
+    r.admin.request(Method::PUT, &format!("/v1/projects/{}/config", r.pid), Some(json!({"config": cfg, "telegram_default": false}))).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn when_the_project_has_a_verify_command_the_server_runs_it_after_the_coder_and_the_reviewer_sees_the_result() {
+    // 通過：指令在 Coder 的 worktree 裡檢查它剛寫的檔案。
+    let fake = Fake::new(&["pass"], "0");
+    let r = rig(&fake).await;
+    set_verify_command(&r, "grep -q change work-1.txt").await;
+    r.enable().await;
+    let m = r.module("登入頁", "做一個登入頁").await;
+    r.pump("審查完成", |c| c.iter().any(|k| k.card_kind == "review" && k.status == "done")).await;
+    let (report, passed) = bs::get_verification(r.pool(), &m.id).await.unwrap().expect("有驗證紀錄");
+    assert!(passed && report.contains("測試通過") && report.contains("work-1.txt"), "{report}");
+    let rp = fake.read("review_prompt_1.txt");
+    assert!(rp.contains("驗證結果") && rp.contains("測試通過：grep -q change work-1.txt") && !rp.contains("驗證沒有通過"), "{rp}");
+
+    // 沒過：審查被明確告知，除非確定是環境因素否則要判不通過。
+    let fake2 = Fake::new(&["fail", "pass"], "0");
+    let r2 = rig(&fake2).await;
+    set_verify_command(&r2, "false").await;
+    r2.enable().await;
+    let m2 = r2.module("登入頁", "做一個登入頁").await;
+    r2.pump("審查完成", |c| c.iter().any(|k| k.card_kind == "review" && k.status == "done")).await;
+    let (report2, passed2) = bs::get_verification(r2.pool(), &m2.id).await.unwrap().unwrap();
+    assert!(!passed2 && report2.contains("測試未通過"), "{report2}");
+    let rp2 = fake2.read("review_prompt_1.txt");
+    assert!(rp2.contains("測試未通過：false") && rp2.contains("驗證沒有通過") && rp2.contains("判不通過"), "{rp2}");
+
+    // 專案沒設驗證指令：不跑、不留紀錄、審查提示詞裡也沒有這一段。
+    let fake3 = Fake::new(&["pass"], "0");
+    let r3 = rig(&fake3).await;
+    r3.enable().await;
+    let m3 = r3.module("登入頁", "做一個登入頁").await;
+    r3.pump("審查完成", |c| c.iter().any(|k| k.card_kind == "review" && k.status == "done")).await;
+    assert!(bs::get_verification(r3.pool(), &m3.id).await.unwrap().is_none());
+    assert!(!fake3.read("review_prompt_1.txt").contains("驗證結果"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_quota_limit_puts_the_card_back_to_wait_and_it_resumes_by_itself_after_the_reset() {
+    let fake = Fake::new(&["pass"], "0");
+    fake.hit_quota_once();
+    let r = rig(&fake).await;
+    r.enable().await;
+    let m = r.module("登入頁", "做一個登入頁").await;
+    // 第一次：額度用完。卡片不是失敗，而是放回待派送並寫明原因。
+    for _ in 0..200 {
+        orchestrator::tick_once(r.srv.state()).await;
+        if fake.log().iter().any(|l| l == "quota-hit") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    for _ in 0..100 {
+        let c = bs::get_card(r.pool(), &m.id).await.unwrap().unwrap();
+        if c.status == "queued" && c.error_message.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let c = bs::get_card(r.pool(), &m.id).await.unwrap().unwrap();
+    assert_eq!((c.status.as_str(), c.outcome.as_deref(), c.claimed_by.as_deref()), ("queued", None, None), "不算失敗，放回待派送");
+    assert!(c.error_message.unwrap().contains("額度或速率限制"), "寫明為什麼又排隊了");
+    assert_eq!(bs::card_wait_attempts(r.pool(), &m.id).await.unwrap(), 1);
+    // 重置時間（2 秒）沒到：掃再多次也不會再派。
+    for _ in 0..3 {
+        assert_eq!(orchestrator::tick_once(r.srv.state()).await, 0);
+    }
+    assert_eq!(fake.read("n").trim(), "", "還沒有任何一次真正的實作");
+    // 重置之後自己續跑，做完、審查、有合併卡；等待紀錄清掉。
+    tokio::time::sleep(Duration::from_millis(2600)).await;
+    r.pump("續跑後合併待核准", |c| c.iter().any(|k| k.card_kind == "merge")).await;
+    assert_eq!(bs::get_card(r.pool(), &m.id).await.unwrap().unwrap().outcome.as_deref(), Some("success"));
+    assert_eq!(bs::card_wait_attempts(r.pool(), &m.id).await.unwrap(), 0, "成功後等待紀錄清掉");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn waiting_for_quota_gives_up_after_the_attempt_limit_and_other_errors_still_fail_at_once() {
+    let fake = Fake::new(&["pass"], "0");
+    let r = rig(&fake).await;
+    r.enable().await;
+    let m = r.module("登入頁", "做一個登入頁").await;
+    // 已經等滿次數：再碰到額度錯誤就當失敗，不會無限等。
+    for _ in 0..bs::QUOTA_MAX_ATTEMPTS {
+        bs::set_card_wait(r.pool(), &m.id, 1, "x").await.unwrap();
+    }
+    fake.hit_quota_once();
+    r.pump("失敗", |c| c.iter().any(|k| k.id == m.id && k.outcome.as_deref() == Some("failed"))).await;
+    assert!(bs::get_card(r.pool(), &m.id).await.unwrap().unwrap().error_message.unwrap().contains("usage limit"));
 }
 
 /// 真實 Claude Code 的端到端演練（會用掉一點額度）：

@@ -208,6 +208,23 @@ pub async fn exec_claude_as(s: &RunnerSettings, cwd: &Path, mode: &Mode, extra_d
     parsed
 }
 
+/// Claude Code 的錯誤是不是「額度或速率限制」（不是這張卡本身的問題，等一等就會好）。
+/// 回傳該等到什麼時候（unix 秒）：錯誤裡帶了重置時間（`…limit reached|<unix 秒>`）就用它，否則等 20 分鐘。
+pub fn quota_wait(err: &str, now: i64) -> Option<i64> {
+    let low = err.to_lowercase();
+    let hit = ["usage limit", "limit reached", "rate limit", "rate_limit", "too many requests", "quota", "overloaded", "429"].iter().any(|k| low.contains(k));
+    if !hit {
+        return None;
+    }
+    // 形如「Claude AI usage limit reached|1760000000」。
+    let stamp = err.split('|').skip(1).filter_map(|p| p.trim().chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<i64>().ok()).find(|t| (1_000_000_000..10_000_000_000).contains(t));
+    Some(match stamp {
+        Some(t) if t > now => t.min(now + 12 * 3600) + 5, // 重置後多等幾秒；最多等 12 小時
+        Some(_) => now + 60,                               // 時間已過：很快再試
+        None => now + 20 * 60,
+    })
+}
+
 /// 解析 `--output-format json` 的輸出：取 `result`；`is_error` 當錯誤。
 pub fn parse_output(stdout: &str) -> Result<String, String> {
     let t = stdout.trim();

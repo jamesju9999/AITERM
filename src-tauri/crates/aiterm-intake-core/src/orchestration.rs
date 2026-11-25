@@ -311,7 +311,7 @@ pub fn work_prompt(agent: &BoardAgent, card: &BoardCard) -> String {
 }
 
 /// 審查卡給 Reviewer 的提示詞；`diff` 是被審那版相對於派工前的差異。
-pub fn review_prompt(agent: &BoardAgent, module: &BoardCard, reviewed: &BoardCard, diff: &str, previous_reasons: &[String]) -> String {
+pub fn review_prompt(agent: &BoardAgent, module: &BoardCard, reviewed: &BoardCard, diff: &str, previous_reasons: &[String], verification: Option<(&str, bool)>) -> String {
     let mut s = String::new();
     if !agent.prompt_prefix.trim().is_empty() {
         s.push_str(agent.prompt_prefix.trim());
@@ -325,6 +325,14 @@ pub fn review_prompt(agent: &BoardAgent, module: &BoardCard, reviewed: &BoardCar
         s.push_str("\n## 上一次審查提出的問題（確認是否已改好）\n");
         for r in previous_reasons {
             s.push_str(&format!("- {r}\n"));
+        }
+    }
+    if let Some((report, passed)) = verification {
+        s.push_str("\n## 驗證結果（server 在專案環境實際執行的，不是 Coder 自己說的）\n");
+        s.push_str(report.trim());
+        s.push('\n');
+        if !passed {
+            s.push_str("驗證沒有通過：除非你確定是環境因素而不是這次改動造成的，否則請判不通過，並在理由裡寫出失敗的原因。\n");
         }
     }
     s.push_str("\n## 這次的改動（git diff）\n```diff\n");
@@ -450,9 +458,14 @@ mod tests {
         let mut m = module();
         m.title = "登入".into();
         m.body = "做登入頁".into();
-        let p = review_prompt(&agent, &m, &m, "+fn login() {}", &["缺測試".into()]);
+        let p = review_prompt(&agent, &m, &m, "+fn login() {}", &["缺測試".into()], None);
         assert!(p.starts_with("嚴格審查") && p.contains("做登入頁") && p.contains("+fn login() {}") && p.contains("缺測試") && p.contains("\"verdict\""));
-        assert!(review_prompt(&agent, &m, &m, "  ", &[]).contains("沒有任何改動"));
+        assert!(review_prompt(&agent, &m, &m, "  ", &[], None).contains("沒有任何改動"));
+        assert!(!p.contains("驗證結果"), "沒有驗證就不放這一段");
+        let v = review_prompt(&agent, &m, &m, "+x", &[], Some(("【驗證】\n測試通過：cargo test", true)));
+        assert!(v.contains("驗證結果") && v.contains("測試通過：cargo test") && !v.contains("驗證沒有通過"));
+        let bad = review_prompt(&agent, &m, &m, "+x", &[], Some(("【驗證】\n測試未通過：cargo test", false)));
+        assert!(bad.contains("測試未通過") && bad.contains("驗證沒有通過") && bad.contains("判不通過"));
         let fix = fix_body(&m, &["缺測試".into(), "命名不一致".into()], 2);
         assert!(fix.contains("第 2 次修正") && fix.contains("- 缺測試") && fix.contains("- 命名不一致") && fix.contains("做登入頁"));
         let w = work_prompt(&agent, &m);

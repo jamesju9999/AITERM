@@ -393,3 +393,22 @@ fn only_safe_model_names_reach_the_claude_command_line() {
         assert!(!runner::valid_model(bad), "{bad}");
     }
 }
+
+#[test]
+fn quota_and_rate_limit_errors_are_told_apart_from_a_card_that_really_failed_and_the_wait_follows_the_reset_time() {
+    let now = 1_800_000_000;
+    // 帶重置時間：等到那時候（多 5 秒）。
+    assert_eq!(runner::quota_wait("Claude AI usage limit reached|1800003600", now), Some(1_800_003_605));
+    // 重置時間太遠：最多等 12 小時。
+    assert_eq!(runner::quota_wait("Claude AI usage limit reached|2000000000", now), Some(now + 12 * 3600 + 5));
+    // 重置時間已過：很快再試。
+    assert_eq!(runner::quota_wait("Claude AI usage limit reached|1700000000", now), Some(now + 60));
+    // 沒有時間：等 20 分鐘。
+    for e in ["5-hour limit reached", "API Error: 429 rate_limit_error", "Too Many Requests", "You have exceeded your quota", "Overloaded"] {
+        assert_eq!(runner::quota_wait(e, now), Some(now + 20 * 60), "{e}");
+    }
+    // 這張卡自己的失敗：不是額度。
+    for e in ["處理逾時（超過 600 秒），已終止", "Claude Code 失敗（exit status: 1）：找不到檔案", "git merge 失敗", ""] {
+        assert_eq!(runner::quota_wait(e, now), None, "{e}");
+    }
+}
