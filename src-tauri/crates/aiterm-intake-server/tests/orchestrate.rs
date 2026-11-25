@@ -479,6 +479,30 @@ async fn without_an_implementer_the_plan_fails_with_a_clear_reason_and_without_a
     assert!(y.r.kind("plan").await.is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scheduled_round_is_built_and_reviewed_by_the_server_then_settled_as_a_success_and_archived() {
+    let fake = Fake::new(&["pass"], "0");
+    let r = rig(&fake).await;
+    r.enable().await;
+    let input = aiterm_intake_core::board_store::ScheduleInput {
+        name: "每日健檢".into(), agent_id: r.coder.id.clone(), instruction: "做一次健檢".into(), schedule_kind: "interval".into(),
+        spec: aiterm_intake_core::schedule::Spec { every_minutes: 5, ..Default::default() }, failures_count_as_failed: false, canvas_x: None, canvas_y: None,
+    };
+    let sch = bs::create_schedule(r.pool(), &r.pid, &input, "小華", aiterm_intake_server::db::now()).await.unwrap();
+    let base = chrono::Local::now().naive_local();
+    // 到點：server 的定時器建出一張待派送卡，專案由 server 執行，所以編排自己接手做完、審查通過。
+    assert_eq!(aiterm_intake_server::scheduler::tick_at(r.srv.state(), base + chrono::Duration::minutes(6)).await, 1);
+    r.pump("定時的那張卡審查通過", |c| c.iter().any(|k| k.card_kind == "review" && k.status == "done" && k.verdict.as_deref() == Some("pass"))).await;
+    assert!(fake.read("coder_prompt_1.txt").contains("做一次健檢") && fake.read("coder_prompt_1.txt").contains("定時觸發"));
+    // 結算：成功、清掉進行中的卡、卡片歸檔。
+    aiterm_intake_server::scheduler::tick_at(r.srv.state(), base + chrono::Duration::minutes(7)).await;
+    let s = bs::get_schedule(r.pool(), &sch.id).await.unwrap().unwrap();
+    assert_eq!((s.last_card_id, s.fail_streak), (None, 0));
+    let runs: Vec<String> = bs::list_schedule_runs(r.pool(), &sch.id).await.unwrap().into_iter().map(|x| x.result).collect();
+    assert_eq!(runs, vec!["success".to_string()]);
+    assert!(r.cards().await.iter().all(|c| c.title != "定時：每日健檢"), "完成的一輪已歸檔");
+}
+
 /// 真實 Claude Code 的端到端演練（會用掉一點額度）：
 /// `cargo test -p aiterm-intake-server --test orchestrate -- --ignored --nocapture`
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

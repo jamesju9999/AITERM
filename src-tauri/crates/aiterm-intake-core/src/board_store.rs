@@ -213,6 +213,14 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "CREATE INDEX IF NOT EXISTS board_agents_project ON board_agents(project_id)",
         "CREATE TABLE IF NOT EXISTS board_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, created_at INTEGER NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS board_schedules (
+            id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, name TEXT NOT NULL, agent_id TEXT NOT NULL, instruction TEXT NOT NULL,
+            schedule_kind TEXT NOT NULL, schedule_json TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, failures_count_as_failed INTEGER NOT NULL DEFAULT 0,
+            canvas_x REAL, canvas_y REAL, last_fired_at INTEGER NOT NULL DEFAULT 0, last_card_id TEXT, fail_streak INTEGER NOT NULL DEFAULT 0,
+            skip_streak INTEGER NOT NULL DEFAULT 0, disabled_reason TEXT, created_by TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS board_schedules_project ON board_schedules(project_id)",
+        "CREATE TABLE IF NOT EXISTS board_schedule_runs (schedule_id TEXT NOT NULL, fired_at INTEGER NOT NULL, card_id TEXT, result TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS board_schedule_runs_idx ON board_schedule_runs(schedule_id, fired_at)",
     ] {
         sqlx::query(sql).execute(pool).await?;
     }
@@ -421,6 +429,193 @@ pub async fn complete_card(pool: &SqlitePool, id: &str, outcome: &str, summary: 
     let r = sqlx::query("UPDATE board_cards SET status = ?, outcome = ?, ai_summary = ?, finished_at = ?, claim_expires_at = NULL, updated_at = ?, version = version + 1 WHERE id = ? AND status != ?")
         .bind(DONE).bind(outcome).bind(summary).bind(t).bind(t).bind(id).bind(DONE).execute(pool).await?;
     Ok(r.rows_affected() == 1)
+}
+
+// ---- 定時器（server 觸發）----
+
+/// 連續失敗幾輪就自動停用。
+pub const SCHEDULE_MAX_FAIL_STREAK: i64 = 3;
+/// 每個定時器保留最近幾輪的紀錄。
+pub const SCHEDULE_RUNS_KEPT: i64 = 5;
+/// `disabled_reason` 的值；前端 `scheduleStatus.ts` 要跟這些字串一致。
+pub const REASON_FAILURES: &str = "連續失敗";
+pub const REASON_AGENT_GONE: &str = "角色已不存在";
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct BoardSchedule {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub agent_id: String,
+    pub instruction: String,
+    pub schedule_kind: String,
+    pub schedule_json: String,
+    pub enabled: bool,
+    pub failures_count_as_failed: bool,
+    pub canvas_x: Option<f64>,
+    pub canvas_y: Option<f64>,
+    /// 上次觸發（或建立、啟用）的 unix 秒；到點判斷以它為基準。
+    pub last_fired_at: i64,
+    /// 進行中那一輪的卡片；結算後清掉。
+    pub last_card_id: Option<String>,
+    pub fail_streak: i64,
+    pub skip_streak: i64,
+    pub disabled_reason: Option<String>,
+    pub created_by: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl BoardSchedule {
+    pub fn spec(&self) -> Result<crate::schedule::Spec, String> {
+        serde_json::from_str(&self.schedule_json).map_err(|e| e.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq, Eq)]
+pub struct BoardScheduleRun {
+    pub schedule_id: String,
+    pub fired_at: i64,
+    pub card_id: Option<String>,
+    /// `success`｜`failed`｜`skipped`
+    pub result: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScheduleInput {
+    pub name: String,
+    pub agent_id: String,
+    pub instruction: String,
+    pub schedule_kind: String,
+    pub spec: crate::schedule::Spec,
+    #[serde(default)]
+    pub failures_count_as_failed: bool,
+    #[serde(default)]
+    pub canvas_x: Option<f64>,
+    #[serde(default)]
+    pub canvas_y: Option<f64>,
+}
+
+/// 檢查輸入：週期規則合法、名稱與指令不空、目標是同專案的工程師（server 只能叫起工程師）。
+async fn check_schedule(pool: &SqlitePool, project_id: &str, i: &ScheduleInput) -> Result<(String, String), String> {
+    crate::schedule::validate(&i.schedule_kind, &i.spec)?;
+    let (name, instruction) = (i.name.trim().to_string(), i.instruction.trim().to_string());
+    if name.is_empty() {
+        return Err("名稱不能是空的".into());
+    }
+    if instruction.is_empty() {
+        return Err("指令不能是空的".into());
+    }
+    match get_agent(pool, &i.agent_id).await.map_err(|e| e.to_string())? {
+        None => Err("找不到這個角色".into()),
+        Some(a) if a.project_id != project_id => Err("角色與定時器不在同一個專案".into()),
+        Some(a) if a.kind != "coder" => Err("定時器只能叫起工程師".into()),
+        Some(_) => Ok((name, instruction)),
+    }
+}
+
+/// 建立。`now` 當作 `last_fired_at` 的基準（避免一建立就因為「今天的時間點已經過了」而立刻觸發）。
+pub async fn create_schedule(pool: &SqlitePool, project_id: &str, i: &ScheduleInput, by: &str, now: i64) -> Result<BoardSchedule, String> {
+    let (name, instruction) = check_schedule(pool, project_id, i).await?;
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO board_schedules (id, project_id, name, agent_id, instruction, schedule_kind, schedule_json, failures_count_as_failed, canvas_x, canvas_y, last_fired_at, created_by, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind(&id).bind(project_id).bind(name).bind(&i.agent_id).bind(instruction).bind(&i.schedule_kind).bind(serde_json::to_string(&i.spec).map_err(|e| e.to_string())?)
+    .bind(i.failures_count_as_failed).bind(i.canvas_x).bind(i.canvas_y).bind(now).bind(by).bind(now).bind(now)
+    .execute(pool).await.map_err(|e| e.to_string())?;
+    get_schedule(pool, &id).await.map_err(|e| e.to_string())?.ok_or_else(|| "剛建立的定時器不見了".into())
+}
+
+/// 更新設定；不動執行狀態（`last_*`、streak）。
+pub async fn update_schedule(pool: &SqlitePool, id: &str, i: &ScheduleInput) -> Result<BoardSchedule, String> {
+    let cur = get_schedule(pool, id).await.map_err(|e| e.to_string())?.ok_or_else(|| "找不到這個定時器".to_string())?;
+    let (name, instruction) = check_schedule(pool, &cur.project_id, i).await?;
+    sqlx::query("UPDATE board_schedules SET name = ?, agent_id = ?, instruction = ?, schedule_kind = ?, schedule_json = ?, failures_count_as_failed = ?, canvas_x = ?, canvas_y = ?, updated_at = ? WHERE id = ?")
+        .bind(name).bind(&i.agent_id).bind(instruction).bind(&i.schedule_kind).bind(serde_json::to_string(&i.spec).map_err(|e| e.to_string())?)
+        .bind(i.failures_count_as_failed).bind(i.canvas_x).bind(i.canvas_y).bind(now()).bind(id)
+        .execute(pool).await.map_err(|e| e.to_string())?;
+    get_schedule(pool, id).await.map_err(|e| e.to_string())?.ok_or_else(|| "找不到這個定時器".into())
+}
+
+pub async fn list_schedules(pool: &SqlitePool, project_id: &str) -> Result<Vec<BoardSchedule>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_schedules WHERE project_id = ? ORDER BY created_at, id").bind(project_id).fetch_all(pool).await
+}
+
+/// 所有專案的定時器（掃描用）。
+pub async fn all_schedules(pool: &SqlitePool) -> Result<Vec<BoardSchedule>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_schedules ORDER BY created_at, id").fetch_all(pool).await
+}
+
+pub async fn get_schedule(pool: &SqlitePool, id: &str) -> Result<Option<BoardSchedule>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_schedules WHERE id = ?").bind(id).fetch_optional(pool).await
+}
+
+pub async fn delete_schedule(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query("DELETE FROM board_schedule_runs WHERE schedule_id = ?").bind(id).execute(pool).await?;
+    Ok(sqlx::query("DELETE FROM board_schedules WHERE id = ?").bind(id).execute(pool).await?.rows_affected() == 1)
+}
+
+/// 啟用時清掉連續失敗／跳過與停用原因，並把基準時間設成現在（停用期間錯過的時間點不補，也避免一啟用就立刻觸發）。
+pub async fn set_schedule_enabled(pool: &SqlitePool, id: &str, enabled: bool, now: i64) -> Result<bool, sqlx::Error> {
+    let r = if enabled {
+        sqlx::query("UPDATE board_schedules SET enabled = 1, fail_streak = 0, skip_streak = 0, disabled_reason = NULL, last_fired_at = ?, updated_at = ? WHERE id = ?").bind(now).bind(now).bind(id).execute(pool).await?
+    } else {
+        sqlx::query("UPDATE board_schedules SET enabled = 0, disabled_reason = NULL, updated_at = ? WHERE id = ?").bind(now).bind(id).execute(pool).await?
+    };
+    Ok(r.rows_affected() == 1)
+}
+
+/// 停用並記下原因（`set_schedule_enabled(.., true, ..)` 會清掉）。
+pub async fn disable_schedule(pool: &SqlitePool, id: &str, reason: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE board_schedules SET enabled = 0, disabled_reason = ? WHERE id = ?").bind(reason).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn record_schedule_run(pool: &SqlitePool, id: &str, fired_at: i64, card_id: Option<&str>, result: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO board_schedule_runs (schedule_id, fired_at, card_id, result) VALUES (?,?,?,?)").bind(id).bind(fired_at).bind(card_id).bind(result).execute(pool).await?;
+    sqlx::query("DELETE FROM board_schedule_runs WHERE schedule_id = ?1 AND rowid NOT IN (SELECT rowid FROM board_schedule_runs WHERE schedule_id = ?1 ORDER BY fired_at DESC, rowid DESC LIMIT ?2)")
+        .bind(id).bind(SCHEDULE_RUNS_KEPT).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn list_schedule_runs(pool: &SqlitePool, id: &str) -> Result<Vec<BoardScheduleRun>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_schedule_runs WHERE schedule_id = ? ORDER BY fired_at DESC, rowid DESC").bind(id).fetch_all(pool).await
+}
+
+/// 觸發成功：記下這一輪的卡、推進基準時間、清掉跳過計數。
+pub async fn mark_schedule_fired(pool: &SqlitePool, id: &str, fired_at: i64, card_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE board_schedules SET last_fired_at = ?, last_card_id = ?, skip_streak = 0 WHERE id = ?").bind(fired_at).bind(card_id).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+/// 上一輪還沒結案而跳過：記一筆 skipped、跳過計數加一，照樣推進基準時間（不然每個 tick 都會再試）。
+pub async fn mark_schedule_skipped(pool: &SqlitePool, id: &str, at: i64, card_id: Option<&str>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE board_schedules SET skip_streak = skip_streak + 1, last_fired_at = ? WHERE id = ?").bind(at).bind(id).execute(pool).await?;
+    record_schedule_run(pool, id, at, card_id, "skipped").await
+}
+
+/// 一輪結案：清掉進行中的卡；成功歸零連續失敗，失敗加一。回傳新的連續失敗次數。
+pub async fn settle_schedule_round(pool: &SqlitePool, id: &str, success: bool) -> Result<i64, sqlx::Error> {
+    if success {
+        sqlx::query("UPDATE board_schedules SET fail_streak = 0, last_card_id = NULL WHERE id = ?").bind(id).execute(pool).await?;
+        Ok(0)
+    } else {
+        sqlx::query("UPDATE board_schedules SET fail_streak = fail_streak + 1, last_card_id = NULL WHERE id = ?").bind(id).execute(pool).await?;
+        Ok(sqlx::query_scalar::<_, i64>("SELECT fail_streak FROM board_schedules WHERE id = ?").bind(id).fetch_one(pool).await?)
+    }
+}
+
+/// 沒有進行中的輪了（那張卡被刪、或人工清掉）。
+pub async fn clear_schedule_round(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE board_schedules SET last_card_id = NULL WHERE id = ?").bind(id).execute(pool).await?;
+    Ok(())
+}
+
+/// 成功的一輪把已完成的卡（模組本身加整條鏈）歸檔：看板上不堆積定時產生的卡；進行中的不碰。
+pub async fn archive_round(pool: &SqlitePool, module_id: &str, at: i64) -> Result<u64, sqlx::Error> {
+    Ok(sqlx::query("UPDATE board_cards SET archived_at = ?1 WHERE (id = ?2 OR module_id = ?2) AND status = 'done' AND archived_at IS NULL").bind(at).bind(module_id).execute(pool).await?.rows_affected())
 }
 
 // ---- 領取 ----

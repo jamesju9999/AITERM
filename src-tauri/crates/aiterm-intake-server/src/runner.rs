@@ -312,11 +312,9 @@ async fn process(st: Arc<AppState>, item: IntakeItem) {
     match outcome {
         Ok(done) => {
             let v = done.verification.as_ref().map(|(t, ok)| (t.as_str(), *ok));
-            match store::finish_claim(pool, &item.id, WHO, &done.reply, v, now).await {
+            // 分支與「待合併」要跟著變成草稿一起寫入（同一個 UPDATE），不然別人會看到「已完成卻沒有分支」。
+            match store::finish_claim_with_branch(pool, &item.id, WHO, &done.reply, v, done.branch.as_deref(), now).await {
                 Ok(true) => {
-                    if let Some(branch) = &done.branch {
-                        store::set_branch_pending(pool, &item.id, branch).await.ok();
-                    }
                     crate::audit::record(&st.pools.server, WHO, "item.auto", &item.id).await;
                 }
                 _ => {

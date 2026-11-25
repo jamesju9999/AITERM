@@ -346,6 +346,64 @@ pub async fn approve_merge(api: &Api, card_id: &str) -> Result<String, ClientErr
     api.request(Method::POST, &format!("/v1/board/cards/{}/merge", enc(card_id)), None).await.map(|v| v.as_str().unwrap_or_default().to_string())
 }
 
+/// server 的定時器（連同最近幾輪紀錄）。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RemoteSchedule {
+    #[serde(flatten)]
+    pub schedule: aiterm_intake_core::board_store::BoardSchedule,
+    #[serde(default)]
+    pub runs: Vec<aiterm_intake_core::board_store::BoardScheduleRun>,
+}
+
+pub async fn schedules(api: &Api, server_pid: &str) -> Result<Vec<RemoteSchedule>, ClientError> {
+    api.get(&format!("/v1/board/projects/{}/schedules", enc(server_pid))).await
+}
+
+fn schedule_body(a: &crate::tasks::schedules::NewSchedule) -> serde_json::Value {
+    json!({
+        "name": a.name, "agent_id": a.agent_id, "instruction": a.instruction, "schedule_kind": a.schedule_kind,
+        "spec": a.spec, "failures_count_as_failed": a.failures_count_as_failed, "canvas_x": a.canvas_x, "canvas_y": a.canvas_y,
+    })
+}
+
+/// 建立或更新（`id` 有值就是更新）。回傳定時器 id；server 只准管理員，被拒會回原因。
+pub async fn save_schedule(api: &Api, server_pid: &str, id: Option<&str>, a: &crate::tasks::schedules::NewSchedule) -> Result<String, ClientError> {
+    let v = match id {
+        Some(id) => api.request(Method::PUT, &format!("/v1/board/schedules/{}", enc(id)), Some(schedule_body(a))).await?,
+        None => api.request(Method::POST, &format!("/v1/board/projects/{}/schedules", enc(server_pid)), Some(schedule_body(a))).await?,
+    };
+    Ok(v["id"].as_str().unwrap_or_default().to_string())
+}
+
+pub async fn delete_schedule(api: &Api, id: &str) -> Result<(), ClientError> {
+    api.request(Method::DELETE, &format!("/v1/board/schedules/{}", enc(id)), None).await.map(|_| ())
+}
+
+pub async fn set_schedule_enabled(api: &Api, id: &str, enabled: bool) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/board/schedules/{}/enabled", enc(id)), Some(json!({"enabled": enabled}))).await.map(|_| ())
+}
+
+/// 立即執行一次；回傳新卡 id，上一輪還沒結案被擋下時是 `None`。
+pub async fn run_schedule(api: &Api, id: &str) -> Result<Option<String>, ClientError> {
+    let v = api.request(Method::POST, &format!("/v1/board/schedules/{}/run", enc(id)), None).await?;
+    Ok(v.as_str().map(str::to_string))
+}
+
+/// 轉成畫布用的檢視（桌面版的 `ScheduleView`）：進行中那輪的卡 id 放在 `last_module_id`。
+pub fn to_schedule_view(r: &RemoteSchedule) -> crate::commands::schedules::ScheduleView {
+    use crate::tasks::schedules::{RunRow, ScheduleRow};
+    let s = &r.schedule;
+    crate::commands::schedules::ScheduleView {
+        row: ScheduleRow {
+            id: s.id.clone(), name: s.name.clone(), agent_id: s.agent_id.clone(), instruction: s.instruction.clone(),
+            schedule_kind: s.schedule_kind.clone(), schedule_json: s.schedule_json.clone(), enabled: s.enabled,
+            failures_count_as_failed: s.failures_count_as_failed, canvas_x: s.canvas_x, canvas_y: s.canvas_y, last_fired_at: s.last_fired_at,
+            last_module_id: s.last_card_id.clone(), fail_streak: s.fail_streak, skip_streak: s.skip_streak, disabled_reason: s.disabled_reason.clone(),
+        },
+        runs: r.runs.iter().map(|x| RunRow { schedule_id: x.schedule_id.clone(), fired_at: x.fired_at, module_id: x.card_id.clone(), result: x.result.clone() }).collect(),
+    }
+}
+
 /// 專案清單用：每個 server 專案一筆，卡片數從 server 算。
 pub async fn project_infos(api: &Api) -> Vec<(String, String, [i64; 4])> {
     let projects: Vec<serde_json::Value> = api.get("/v1/projects").await.unwrap_or_default();
@@ -576,5 +634,39 @@ mod tests {
         assert!(approve_merge(&admin, &card).await.is_err());
         set_orchestration(&admin, &r.pid, false).await.unwrap();
         assert!(!orchestration(&r.other, &r.pid).await.unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn schedules_roundtrip_through_the_server_and_show_up_as_canvas_views() {
+        let r = rig().await;
+        let admin = r.srv.paired("管理員", Role::Admin).await;
+        let coder = create_agent(&admin, &r.rs, &r.pid, agent_fields("Coder A")).await.unwrap();
+        let new = |name: &str, minutes: u32| crate::tasks::schedules::NewSchedule {
+            name: name.into(), agent_id: coder.clone(), instruction: "跑測試".into(), schedule_kind: "interval".into(),
+            spec: aiterm_intake_core::schedule::Spec { every_minutes: minutes, ..Default::default() }, failures_count_as_failed: true, canvas_x: Some(120.0), canvas_y: Some(80.0),
+        };
+        let id = save_schedule(&admin, &r.pid, None, &new("每日健檢", 30)).await.unwrap();
+        assert!(!id.is_empty());
+        let views: Vec<_> = schedules(&r.other, &r.pid).await.unwrap().iter().map(to_schedule_view).collect();
+        assert_eq!(views.len(), 1, "另一位成員也看得到同一個定時器");
+        let v = &views[0];
+        assert_eq!((v.row.name.as_str(), v.row.schedule_kind.as_str(), v.row.agent_id.as_str(), v.row.enabled, v.row.canvas_x, v.row.failures_count_as_failed), ("每日健檢", "interval", coder.as_str(), true, Some(120.0), true));
+        assert_eq!(v.row.spec().unwrap().every_minutes, 30);
+        // 更新、停用、立即執行、刪除。
+        save_schedule(&admin, &r.pid, Some(&id), &new("改名了", 45)).await.unwrap();
+        set_schedule_enabled(&admin, &id, false).await.unwrap();
+        let v = to_schedule_view(&schedules(&admin, &r.pid).await.unwrap()[0]);
+        assert_eq!((v.row.name.as_str(), v.row.enabled, v.row.spec().unwrap().every_minutes), ("改名了", false, 45));
+        let card = run_schedule(&admin, &id).await.unwrap().expect("立即執行建出一張卡");
+        assert!(list(&admin, &RemoteState::default(), &r.pid, false).await.unwrap().iter().any(|c| c.task.id == card));
+        let v = to_schedule_view(&schedules(&admin, &r.pid).await.unwrap()[0]);
+        assert_eq!(v.row.last_module_id.as_deref(), Some(card.as_str()), "進行中那輪的卡放在 last_module_id，畫布才認得");
+        assert_eq!(run_schedule(&admin, &id).await.unwrap(), None, "上一輪沒結案被擋下");
+        assert_eq!(to_schedule_view(&schedules(&admin, &r.pid).await.unwrap()[0]).runs[0].result, "skipped");
+        // 非管理員：server 拒絕並說明原因。
+        let e = save_schedule(&r.other, &r.pid, None, &new("成員想建", 30)).await.unwrap_err();
+        assert!(e.to_string().contains("沒有權限"), "server 的拒絕原因要原樣回來：{e}");
+        delete_schedule(&admin, &id).await.unwrap();
+        assert!(schedules(&admin, &r.pid).await.unwrap().is_empty());
     }
 }

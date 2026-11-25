@@ -596,6 +596,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/board/projects/{pid}/brief", get(get_brief).put(set_brief))
         .route("/v1/board/projects/{pid}/orchestration", get(get_orchestration).put(set_orchestration))
         .route("/v1/board/cards/{id}/merge", post(merge_card))
+        .route("/v1/board/projects/{pid}/schedules", get(list_schedules).post(create_schedule))
+        .route("/v1/board/schedules/{id}", put(update_schedule).delete(delete_schedule))
+        .route("/v1/board/schedules/{id}/enabled", post(set_schedule_enabled))
+        .route("/v1/board/schedules/{id}/run", post(run_schedule))
 }
 
 #[derive(serde::Serialize, Deserialize)]
@@ -638,5 +642,108 @@ async fn merge_card(State(st): St, Admin(me): Admin, Path(id): Path<String>) -> 
             Json(summary).into_response()
         }
         Err(e) => conflict(&e),
+    }
+}
+
+// ---- 定時器 ----
+
+#[derive(serde::Serialize)]
+struct ScheduleView {
+    #[serde(flatten)]
+    schedule: bs::BoardSchedule,
+    runs: Vec<bs::BoardScheduleRun>,
+}
+
+async fn schedule_view(st: &AppState, s: bs::BoardSchedule) -> Result<ScheduleView, sqlx::Error> {
+    let runs = bs::list_schedule_runs(&st.pools.intake, &s.id).await?;
+    Ok(ScheduleView { schedule: s, runs })
+}
+
+async fn list_schedules(State(st): St, Path(pid): Path<String>) -> Response {
+    let rows = match bs::list_schedules(&st.pools.intake, &pid).await {
+        Ok(r) => r,
+        Err(e) => return internal(e),
+    };
+    let mut out = Vec::new();
+    for s in rows {
+        match schedule_view(&st, s).await {
+            Ok(v) => out.push(v),
+            Err(e) => return internal(e),
+        }
+    }
+    Json(out).into_response()
+}
+
+/// 建立：管理員（定時器會讓 server 自己開工，會用到執行額度與主機資源）。
+async fn create_schedule(State(st): St, Admin(me): Admin, Path(pid): Path<String>, Json(b): Json<bs::ScheduleInput>) -> Response {
+    if !project_exists(&st, &pid).await {
+        return not_found();
+    }
+    match bs::create_schedule(&st.pools.intake, &pid, &b, &me.name, crate::db::now()).await {
+        Ok(s) => {
+            crate::audit::record(&st.pools.server, &me.name, "board.schedule_create", &s.id).await;
+            st.events.changed();
+            match schedule_view(&st, s).await {
+                Ok(v) => Json(v).into_response(),
+                Err(e) => internal(e),
+            }
+        }
+        Err(why) => bad(&why),
+    }
+}
+
+async fn update_schedule(State(st): St, Admin(me): Admin, Path(id): Path<String>, Json(b): Json<bs::ScheduleInput>) -> Response {
+    match bs::update_schedule(&st.pools.intake, &id, &b).await {
+        Ok(s) => {
+            crate::audit::record(&st.pools.server, &me.name, "board.schedule_update", &id).await;
+            st.events.changed();
+            match schedule_view(&st, s).await {
+                Ok(v) => Json(v).into_response(),
+                Err(e) => internal(e),
+            }
+        }
+        Err(why) if why.contains("找不到這個定時器") => not_found(),
+        Err(why) => bad(&why),
+    }
+}
+
+async fn delete_schedule(State(st): St, Admin(me): Admin, Path(id): Path<String>) -> Response {
+    match bs::delete_schedule(&st.pools.intake, &id).await {
+        Ok(true) => {
+            crate::audit::record(&st.pools.server, &me.name, "board.schedule_delete", &id).await;
+            st.events.changed();
+            Json(true).into_response()
+        }
+        Ok(false) => not_found(),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct EnabledBody {
+    enabled: bool,
+}
+
+async fn set_schedule_enabled(State(st): St, Admin(me): Admin, Path(id): Path<String>, Json(b): Json<EnabledBody>) -> Response {
+    match bs::set_schedule_enabled(&st.pools.intake, &id, b.enabled, crate::db::now()).await {
+        Ok(true) => {
+            crate::audit::record(&st.pools.server, &me.name, if b.enabled { "board.schedule_on" } else { "board.schedule_off" }, &id).await;
+            st.events.changed();
+            Json(b.enabled).into_response()
+        }
+        Ok(false) => not_found(),
+        Err(e) => internal(e),
+    }
+}
+
+/// 立即執行一次：回傳新卡 id；上一輪還沒結案被擋下時回傳 null。
+async fn run_schedule(State(st): St, Admin(me): Admin, Path(id): Path<String>) -> Response {
+    match crate::scheduler::run_now(&st, &id).await {
+        Ok(card) => {
+            crate::audit::record(&st.pools.server, &me.name, "board.schedule_run", &id).await;
+            Json(card).into_response()
+        }
+        Err(why) if why.contains("找不到這個定時器") => not_found(),
+        Err(why) => bad(&why),
     }
 }

@@ -410,8 +410,14 @@ pub async fn release_claim(pool: &SqlitePool, id: &str, only_by: Option<&str>, n
 /// 領取者交結果：存成草稿（保留 `claimed_by` 當作「誰處理的」）。
 /// `verification` 是領取者做完後跑驗證的結果（報告文字、是否通過）；沒驗證（例如只是提問）傳 `None`。
 pub async fn finish_claim(pool: &SqlitePool, id: &str, who: &str, reply: &str, verification: Option<(&str, bool)>, now: i64) -> Result<bool, sqlx::Error> {
-    let r = sqlx::query("UPDATE intake_items SET status = ?, reply_draft = ?, verification = ?, verified = ?, claim_expires_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND status = ? AND claimed_by = ?")
-        .bind(DRAFT).bind(reply).bind(verification.map(|v| v.0)).bind(verification.map(|v| v.1)).bind(now).bind(id).bind(RUNNING).bind(who)
+    finish_claim_with_branch(pool, id, who, reply, verification, None, now).await
+}
+
+/// 同 `finish_claim`，並在**同一個 UPDATE** 裡記下待核准合併的分支：題目一變成草稿，分支與「待合併」狀態就已經在了。
+/// 分開兩步寫的話，中間那一刻別人（畫面、其他請求）會看到「已完成卻沒有分支」。
+pub async fn finish_claim_with_branch(pool: &SqlitePool, id: &str, who: &str, reply: &str, verification: Option<(&str, bool)>, branch: Option<&str>, now: i64) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET status = ?, reply_draft = ?, verification = ?, verified = ?, branch = COALESCE(?, branch), merge_state = CASE WHEN ? IS NULL THEN merge_state ELSE 'pending' END, claim_expires_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND status = ? AND claimed_by = ?")
+        .bind(DRAFT).bind(reply).bind(verification.map(|v| v.0)).bind(verification.map(|v| v.1)).bind(branch).bind(branch).bind(now).bind(id).bind(RUNNING).bind(who)
         .execute(pool).await?;
     Ok(r.rows_affected() == 1)
 }
@@ -693,6 +699,29 @@ mod tests {
         assert_eq!((done.status.as_str(), done.reply_draft.as_deref(), done.claimed_by.as_deref()), (DRAFT, Some("回覆內容"), Some("小明")));
         assert_eq!((done.verification.as_deref(), done.verified), (Some("驗證報告"), Some(false)), "領取者交回的驗證結果跟著草稿存下來");
         assert!(!finish_claim(&p, &it.id, "小明", "again", None, 5).await.unwrap(), "交過之後不能再交");
+    }
+
+    #[tokio::test]
+    async fn finishing_with_a_branch_makes_the_item_a_draft_and_pending_merge_in_one_step() {
+        let p = pool().await;
+        let it = insert_item(&p, new("m", QUEUED)).await.unwrap().unwrap();
+        claim_item(&p, &it.id, "server", 1).await.unwrap();
+        // 別人（畫面、其他請求）在任何時刻讀到草稿，就一定已經有分支與待合併狀態。
+        assert!(finish_claim_with_branch(&p, &it.id, "server", "改好了", None, Some("intake/abc"), 2).await.unwrap());
+        let g = get_item(&p, &it.id).await.unwrap().unwrap();
+        assert_eq!((g.status.as_str(), g.branch.as_deref(), g.merge_state.as_deref()), (DRAFT, Some("intake/abc"), Some("pending")));
+        // 沒有分支（唯讀處理）：不動合併相關欄位。
+        let it2 = insert_item(&p, new("m2", QUEUED)).await.unwrap().unwrap();
+        claim_item(&p, &it2.id, "server", 1).await.unwrap();
+        assert!(finish_claim_with_branch(&p, &it2.id, "server", "答案", None, None, 2).await.unwrap());
+        let g2 = get_item(&p, &it2.id).await.unwrap().unwrap();
+        assert_eq!((g2.status.as_str(), g2.branch, g2.merge_state), (DRAFT, None, None));
+        // 租約已被收回：兩個欄位都不寫。
+        let it3 = insert_item(&p, new("m3", QUEUED)).await.unwrap().unwrap();
+        claim_item(&p, &it3.id, "server", 1).await.unwrap();
+        release_claim(&p, &it3.id, None, 2).await.unwrap();
+        assert!(!finish_claim_with_branch(&p, &it3.id, "server", "晚了", None, Some("intake/x"), 3).await.unwrap());
+        assert_eq!(get_item(&p, &it3.id).await.unwrap().unwrap().branch, None);
     }
 
     #[tokio::test]

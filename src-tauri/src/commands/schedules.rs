@@ -1,6 +1,8 @@
 //! 定時器的 Tauri 指令：薄薄一層委派給 `tasks::schedules`。
 //! 見 `docs/superpowers/specs/2026-11-16-agent-canvas-scheduler-design.md`。
 
+use std::sync::Arc;
+
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
@@ -22,9 +24,11 @@ fn now_secs() -> i64 {
 }
 
 #[tauri::command]
-pub async fn schedules_list(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Vec<ScheduleView>, String> {
-    if crate::intake::board_remote::parse(&project_id).is_some() {
-        return Ok(Vec::new());
+pub async fn schedules_list(project_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>, reg: State<'_, ProjectRegistry>) -> Result<Vec<ScheduleView>, String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let list = crate::intake::board_remote::schedules(&api, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        return Ok(list.iter().map(crate::intake::board_remote::to_schedule_view).collect());
     }
     let p = project(&reg, &project_id)?;
     let mut out = Vec::new();
@@ -40,9 +44,14 @@ pub async fn schedules_save(
     project_id: String,
     id: Option<String>,
     args: NewSchedule,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<String, String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        return crate::intake::board_remote::save_schedule(&api, pid, id.as_deref(), &args).await.map_err(|e| crate::intake::board_remote::fail(&rs, e));
+    }
     let p = project(&reg, &project_id)?;
     let agent = crate::tasks::agents::get_agent(&p.pool, &args.agent_id)
         .await
@@ -63,7 +72,11 @@ pub async fn schedules_save(
 }
 
 #[tauri::command]
-pub async fn schedules_delete(project_id: String, id: String, reg: State<'_, ProjectRegistry>, app: AppHandle) -> Result<(), String> {
+pub async fn schedules_delete(project_id: String, id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>, reg: State<'_, ProjectRegistry>, app: AppHandle) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        return crate::intake::board_remote::delete_schedule(&api, &id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e));
+    }
     let p = project(&reg, &project_id)?;
     schedules::delete(&p.pool, &id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
@@ -75,9 +88,14 @@ pub async fn schedules_set_enabled(
     project_id: String,
     id: String,
     enabled: bool,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        return crate::intake::board_remote::set_schedule_enabled(&api, &id, enabled).await.map_err(|e| crate::intake::board_remote::fail(&rs, e));
+    }
     let p = project(&reg, &project_id)?;
     schedules::set_enabled(&p.pool, &id, enabled, now_secs()).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
@@ -90,10 +108,16 @@ pub async fn schedules_set_enabled(
 pub async fn schedules_run_now(
     project_id: String,
     id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     reg: State<'_, ProjectRegistry>,
     scheduler: State<'_, SchedulerHandle>,
     app: AppHandle,
 ) -> Result<String, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let card = crate::intake::board_remote::run_schedule(&api, &id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        return Ok(card.unwrap_or_default());
+    }
     let p = project(&reg, &project_id)?;
     let row = schedules::get(&p.pool, &id).await.map_err(|e| e.to_string())?.ok_or_else(|| "找不到這個定時器".to_string())?;
     let agent = crate::tasks::agents::get_agent(&p.pool, &row.agent_id)

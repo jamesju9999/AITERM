@@ -64,6 +64,8 @@ pub struct AppState {
     pub runner: crate::runner::Runner,
     /// 共用看板的無頭編排迴圈。
     pub orchestrator_task: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// 共用看板的定時器掃描迴圈。
+    pub scheduler_task: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl AppState {
@@ -77,6 +79,6 @@ impl AppState {
 
     pub fn new(pools: Pools, secrets: Arc<FileSecrets>, fingerprint: String, data_dir: PathBuf) -> Arc<Self> {
         let ai = Arc::new(crate::ai::ServerAi::new(pools.intake.clone(), secrets.clone()));
-        Arc::new(Self { pools, secrets, ai, channels: Default::default(), channel_bind: std::net::Ipv4Addr::LOCALHOST.into(), events: Broadcast::new(), fingerprint, data_dir, backoff: AuthBackoff::new(), version: env!("CARGO_PKG_VERSION").to_string(), line_api_base: parking_lot::Mutex::new(aiterm_intake_core::line_server::API_BASE.to_string()), telegram_api_base: parking_lot::Mutex::new(crate::telegram::API_BASE.to_string()), mail_tap: parking_lot::Mutex::new(None), runner: Default::default(), orchestrator_task: parking_lot::Mutex::new(None) })
+        Arc::new(Self { pools, secrets, ai, channels: Default::default(), channel_bind: std::net::Ipv4Addr::LOCALHOST.into(), events: Broadcast::new(), fingerprint, data_dir, backoff: AuthBackoff::new(), version: env!("CARGO_PKG_VERSION").to_string(), line_api_base: parking_lot::Mutex::new(aiterm_intake_core::line_server::API_BASE.to_string()), telegram_api_base: parking_lot::Mutex::new(crate::telegram::API_BASE.to_string()), mail_tap: parking_lot::Mutex::new(None), runner: Default::default(), orchestrator_task: parking_lot::Mutex::new(None), scheduler_task: parking_lot::Mutex::new(None) })
     }
 }

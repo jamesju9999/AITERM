@@ -14,6 +14,7 @@ pub mod smtp;
 pub mod store;
 pub mod board_store;
 pub mod orchestration;
+pub mod schedule;
 pub mod line_source;
 pub mod telegram_source;
 pub mod mail_source;

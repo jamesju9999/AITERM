@@ -13,6 +13,7 @@ pub mod pairing;
 pub mod reply;
 pub mod runner;
 pub mod orchestrator;
+pub mod scheduler;
 pub mod state;
 pub mod telegram;
 pub mod tls;

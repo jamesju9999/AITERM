@@ -16,6 +16,7 @@ impl Running {
         crate::channels::stop(&self.state);
         crate::runner::stop(&self.state);
         crate::orchestrator::stop(&self.state);
+        crate::scheduler::stop(&self.state);
         if let Some(tx) = self.shutdown.take() {
             let _ = tx.send(());
         }
@@ -37,6 +38,7 @@ pub async fn start(bind: SocketAddr, state: Arc<AppState>, identity: Identity) -
     crate::channels::start_telegram(&state);
     crate::runner::start(&state);
     crate::orchestrator::start(&state);
+    crate::scheduler::start(&state);
     let (tx, rx) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(crate::tls::serve(listener, app, identity, rx));
     Ok(Running { addr, state, shutdown: Some(tx), task })
