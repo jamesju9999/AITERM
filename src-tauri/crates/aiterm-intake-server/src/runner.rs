@@ -87,7 +87,7 @@ pub struct Availability {
 
 #[derive(Default)]
 pub struct Runner {
-    running: AtomicUsize,
+    pub(crate) running: AtomicUsize,
     avail: parking_lot::Mutex<Option<(std::time::Instant, String, Availability)>>,
     task: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -208,7 +208,7 @@ pub fn parse_output(stdout: &str) -> Result<String, String> {
     Ok(text)
 }
 
-async fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) async fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let o = Command::new("git")
         .args(["-c", "user.name=AITerm Server", "-c", "user.email=aiterm-server@localhost"])
         .args(args)

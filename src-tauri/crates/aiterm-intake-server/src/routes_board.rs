@@ -277,6 +277,12 @@ async fn add_comment(State(st): St, Extension(me): Extension<Me>, Path(id): Path
 
 /// 領這張卡片：只有「待派送」的領得到；已被領走回 409。
 async fn claim(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>) -> Response {
+    // 這個專案開了「由 server 執行」：有指派 Agent 的卡由 server 的編排處理，成員不能搶。
+    if let Ok(Some(c)) = bs::get_card(&st.pools.intake, &id).await {
+        if c.agent_id.is_some() && crate::orchestrator::enabled(&st.pools.intake, &c.project_id).await {
+            return conflict("這張卡由 server 的編排執行，不能手動領取");
+        }
+    }
     match bs::claim_card(&st.pools.intake, &id, &me.name, crate::db::now()).await {
         Ok(true) => {
             crate::audit::record(&st.pools.server, &me.name, "board.claim", &id).await;
@@ -588,4 +594,49 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/board/projects/{pid}/notes", get(notes).post(add_note))
         .route("/v1/board/notes/{id}", delete(delete_note))
         .route("/v1/board/projects/{pid}/brief", get(get_brief).put(set_brief))
+        .route("/v1/board/projects/{pid}/orchestration", get(get_orchestration).put(set_orchestration))
+        .route("/v1/board/cards/{id}/merge", post(merge_card))
+}
+
+#[derive(serde::Serialize, Deserialize)]
+struct OrchestrationBody {
+    enabled: bool,
+}
+
+async fn get_orchestration(State(st): St, Path(pid): Path<String>) -> Response {
+    Json(OrchestrationBody { enabled: crate::orchestrator::enabled(&st.pools.intake, &pid).await }).into_response()
+}
+
+/// 開關「由 server 執行」：管理員才能改。開之前要有專案資料夾，否則 server 不知道在哪裡做。
+async fn set_orchestration(State(st): St, Admin(me): Admin, Path(pid): Path<String>, Json(b): Json<OrchestrationBody>) -> Response {
+    if !project_exists(&st, &pid).await {
+        return not_found();
+    }
+    if b.enabled {
+        let wd: String = sqlx::query_scalar("SELECT work_dir FROM projects WHERE id = ?").bind(&pid).fetch_optional(&st.pools.server).await.ok().flatten().unwrap_or_default();
+        if wd.trim().is_empty() {
+            return bad("這個專案還沒設定工作資料夾（work_dir），無法由 server 執行");
+        }
+    }
+    match crate::orchestrator::set_enabled(&st.pools.intake, &pid, b.enabled).await {
+        Ok(()) => {
+            crate::audit::record(&st.pools.server, &me.name, if b.enabled { "board.orchestrate_on" } else { "board.orchestrate_off" }, &pid).await;
+            st.events.changed();
+            Json(b).into_response()
+        }
+        Err(e) => internal(e),
+    }
+}
+
+/// 管理員核准合併：把各 Coder 的分支合併進專案資料夾。
+async fn merge_card(State(st): St, Admin(me): Admin, Path(id): Path<String>) -> Response {
+    let Ok(Some(card)) = bs::get_card(&st.pools.intake, &id).await else { return not_found() };
+    match crate::orchestrator::merge_approved(&st, &card).await {
+        Ok(summary) => {
+            crate::audit::record(&st.pools.server, &me.name, "board.merge", &id).await;
+            st.events.changed();
+            Json(summary).into_response()
+        }
+        Err(e) => conflict(&e),
+    }
 }

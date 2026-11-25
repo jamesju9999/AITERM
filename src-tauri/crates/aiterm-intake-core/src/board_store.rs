@@ -360,6 +360,66 @@ pub async fn delete_card(pool: &SqlitePool, id: &str) -> Result<Option<Vec<Strin
     Ok(Some(paths))
 }
 
+// ---- 編排（server 執行）用 ----
+
+/// 編排產生的卡片（審查、修正、合併）。
+pub struct NewWorkflowCard<'a> {
+    pub project_id: &'a str,
+    pub title: &'a str,
+    pub body: &'a str,
+    /// `review`｜`fix`｜`merge`。
+    pub kind: &'a str,
+    pub agent_id: Option<&'a str>,
+    pub module_id: Option<&'a str>,
+    pub review_of: Option<&'a str>,
+    /// 審查與修正直接排進待派送；合併卡放規劃中等管理員核准。
+    pub status: &'a str,
+}
+
+pub async fn create_workflow_card(pool: &SqlitePool, c: NewWorkflowCard<'_>) -> Result<BoardCard, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let t = now();
+    let order = next_order(pool, c.project_id, c.status).await?;
+    sqlx::query(
+        "INSERT INTO board_cards (id, project_id, title, body, status, sort_order, created_by, created_at, updated_at, version, agent_id, card_kind, module_id, review_of)
+         VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?)",
+    )
+    .bind(&id).bind(c.project_id).bind(c.title).bind(c.body).bind(c.status).bind(order).bind("server").bind(t).bind(t).bind(c.agent_id).bind(c.kind).bind(c.module_id).bind(c.review_of)
+    .execute(pool).await?;
+    Ok(get_card(pool, &id).await?.expect("剛建立的卡片"))
+}
+
+/// 專案裡所有沒封存的卡片（沒有附件資訊，編排用）。
+pub async fn project_cards(pool: &SqlitePool, project_id: &str) -> Result<Vec<BoardCard>, sqlx::Error> {
+    sqlx::query_as::<_, BoardCard>("SELECT * FROM board_cards WHERE project_id = ? AND archived_at IS NULL ORDER BY sort_order, created_at").bind(project_id).fetch_all(pool).await
+}
+
+/// 這個 Agent 現在有沒有處理中的卡片（一個 Agent 一次只做一張）。
+pub async fn agent_busy(pool: &SqlitePool, agent_id: &str) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM board_cards WHERE agent_id = ? AND status = ?").bind(agent_id).bind(RUNNING).fetch_one(pool).await? > 0)
+}
+
+/// 記下這張卡做之前與做完之後的 git 版本（審查用 `start..end` 取差異）。
+pub async fn set_shas(pool: &SqlitePool, id: &str, start: Option<&str>, end: Option<&str>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE board_cards SET start_sha = ?, end_sha = ?, updated_at = ?, version = version + 1 WHERE id = ?").bind(start).bind(end).bind(now()).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+/// 審查卡寫入結論（`pass`｜`fail`）與理由。
+pub async fn set_verdict(pool: &SqlitePool, id: &str, verdict: &str, reasons: &[String]) -> Result<(), sqlx::Error> {
+    let json = serde_json::to_string(reasons).unwrap_or_else(|_| "[]".into());
+    sqlx::query("UPDATE board_cards SET verdict = ?, review_reasons = ?, updated_at = ?, version = version + 1 WHERE id = ?").bind(verdict).bind(json).bind(now()).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+/// 不經領取直接結案（合併卡經管理員核准後用）。
+pub async fn complete_card(pool: &SqlitePool, id: &str, outcome: &str, summary: &str) -> Result<bool, sqlx::Error> {
+    let t = now();
+    let r = sqlx::query("UPDATE board_cards SET status = ?, outcome = ?, ai_summary = ?, finished_at = ?, claim_expires_at = NULL, updated_at = ?, version = version + 1 WHERE id = ? AND status != ?")
+        .bind(DONE).bind(outcome).bind(summary).bind(t).bind(t).bind(id).bind(DONE).execute(pool).await?;
+    Ok(r.rows_affected() == 1)
+}
+
 // ---- 領取 ----
 
 /// 原子領取：只有 `queued`（沒封存）領得到，同一張只有一個人成功。

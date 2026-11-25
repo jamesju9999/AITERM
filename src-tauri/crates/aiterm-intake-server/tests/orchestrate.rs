@@ -1,0 +1,383 @@
+#![cfg(unix)] // 假的 claude 是 shell 腳本，Windows 無法當成程式執行。
+//! Server 無頭編排：用假的 `claude` 驅動「Coder 做 → Reviewer 審 → 退回修正 → 通過 → 待核准合併」整條路，
+//! 驗證每個 Coder 的隔離 worktree、審查的唯讀模式與 diff、修正輪數上限、永不自動合併、成員不能搶 server 的卡。
+use aiterm_intake_client::api::Api;
+use aiterm_intake_core::api::Role;
+use aiterm_intake_core::board_store::{self as bs, BoardCard, Change, NewAgent, NewCard};
+use aiterm_intake_server::orchestrator;
+use aiterm_intake_server::testkit::TestServer;
+use reqwest::Method;
+use serde_json::json;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+fn sh(dir: &Path, cmd: &str) -> String {
+    let o = Command::new("sh").arg("-c").arg(cmd).current_dir(dir).output().unwrap();
+    assert!(o.status.success(), "{cmd}: {}", String::from_utf8_lossy(&o.stderr));
+    String::from_utf8_lossy(&o.stdout).to_string()
+}
+
+fn repo() -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    sh(d.path(), "git init -q -b main && git config user.email a@b.c && git config user.name t && echo v1 > app.txt && git add -A && git commit -qm init");
+    d
+}
+
+/// 假 claude：看 `--allowedTools` 有沒有 Edit 判斷是 Coder 還是 Reviewer。
+/// Coder 會在工作資料夾寫一個檔案；Reviewer 從 `verdicts` 檔依序取結論。
+struct Fake {
+    dir: tempfile::TempDir,
+}
+
+impl Fake {
+    fn new(verdicts: &[&str], coder_secs: &str) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("verdicts"), verdicts.iter().map(|v| format!("{v}\n")).collect::<String>()).unwrap();
+        let script = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo '9.9.9 (Fake Claude)'; exit 0; fi
+D='@D@'
+ALLOWED=''; prev=''; for a in "$@"; do if [ "$prev" = "--allowedTools" ]; then ALLOWED="$a"; fi; prev="$a"; done
+cat > "$D/last_prompt.txt"
+case "$ALLOWED" in
+  *Edit*)
+    n=$(cat "$D/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$D/n"
+    echo "coder $n start $(pwd)" >> "$D/log.txt"
+    cp "$D/last_prompt.txt" "$D/coder_prompt_$n.txt"
+    sleep @SECS@
+    echo "change $n" >> "work-$n.txt"
+    echo "coder $n end" >> "$D/log.txt"
+    printf '{"type":"result","is_error":false,"result":"做完了"}'
+    ;;
+  *)
+    m=$(cat "$D/m" 2>/dev/null || echo 0); m=$((m+1)); echo $m > "$D/m"
+    echo "reviewer $m $(pwd) $ALLOWED" >> "$D/log.txt"
+    cp "$D/last_prompt.txt" "$D/review_prompt_$m.txt"
+    v=$(head -1 "$D/verdicts"); sed -i.bak 1d "$D/verdicts"
+    printf '{"type":"result","is_error":false,"result":"{\\"verdict\\":\\"%s\\",\\"reasons\\":[\\"缺測試\\"]}"}' "$v"
+    ;;
+esac
+"#
+        .replace("@D@", &dir.path().display().to_string())
+        .replace("@SECS@", coder_secs);
+        std::fs::write(dir.path().join("claude"), script).unwrap();
+        sh(dir.path(), "chmod +x claude");
+        Self { dir }
+    }
+    fn path(&self) -> String {
+        self.dir.path().join("claude").to_string_lossy().to_string()
+    }
+    fn read(&self, f: &str) -> String {
+        std::fs::read_to_string(self.dir.path().join(f)).unwrap_or_default()
+    }
+    fn log(&self) -> Vec<String> {
+        self.read("log.txt").lines().map(str::to_string).collect()
+    }
+}
+
+struct Rig {
+    srv: TestServer,
+    admin: Api,
+    pid: String,
+    work: tempfile::TempDir,
+    coder: bs::BoardAgent,
+    reviewer: bs::BoardAgent,
+}
+
+async fn agent(srv: &TestServer, pid: &str, kind: &str, name: &str, prefix: &str) -> bs::BoardAgent {
+    bs::create_agent(&srv.state().pools.intake, NewAgent { project_id: pid, kind, name, role: "", prompt_prefix: prefix, canvas_x: 0.0, canvas_y: 0.0, produces_spec: false, model: None, cli: "claude", created_by: "t" })
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+async fn rig(fake: &Fake) -> Rig {
+    let srv = TestServer::start().await;
+    let admin = srv.paired("小華", Role::Admin).await;
+    let pid = srv.project("範例科技").await;
+    let work = repo();
+    sqlx::query("UPDATE projects SET work_dir = ? WHERE id = ?").bind(work.path().to_string_lossy().to_string()).bind(&pid).execute(&srv.state().pools.server).await.unwrap();
+    admin.request(Method::PUT, "/v1/runner", Some(json!({"claude_path": fake.path(), "max_concurrent": 2, "timeout_secs": 60, "max_turns": 7}))).await.unwrap();
+    let coder = agent(&srv, &pid, "coder", "工程師1", "你是資深工程師").await;
+    let reviewer = agent(&srv, &pid, "reviewer", "審核者", "嚴格審查").await;
+    Rig { srv, admin, pid, work, coder, reviewer }
+}
+
+impl Rig {
+    fn pool(&self) -> &sqlx::SqlitePool {
+        &self.srv.state().pools.intake
+    }
+    async fn enable(&self) {
+        self.admin.request(Method::PUT, &format!("/v1/board/projects/{}/orchestration", self.pid), Some(json!({"enabled": true}))).await.unwrap();
+    }
+    /// 建一張指派給 Coder 的模組卡並排進待派送。
+    async fn module(&self, title: &str, body: &str) -> BoardCard {
+        let c = bs::create_card(self.pool(), NewCard { project_id: &self.pid, title, body, parallel_ok: true, interactive: false, label: None, created_by: "小華" }).await.unwrap();
+        let Change::Ok(c) = bs::assign_card(self.pool(), &c.id, c.version, Some(&self.coder.id)).await.unwrap() else { panic!("指派失敗") };
+        let Change::Ok(c) = bs::move_card(self.pool(), &c.id, c.version, "queued", None, None).await.unwrap() else { panic!("排入失敗") };
+        *c
+    }
+    async fn cards(&self) -> Vec<BoardCard> {
+        bs::project_cards(self.pool(), &self.pid).await.unwrap()
+    }
+    async fn kind(&self, kind: &str) -> Vec<BoardCard> {
+        self.cards().await.into_iter().filter(|c| c.card_kind == kind).collect()
+    }
+    /// 反覆觸發編排，直到條件成立。
+    async fn pump(&self, what: &str, until: impl Fn(&[BoardCard]) -> bool) {
+        for _ in 0..600 {
+            orchestrator::tick_once(self.srv.state()).await;
+            if until(&self.cards().await) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("等不到「{what}」：{:#?}", self.cards().await.iter().map(|c| (&c.card_kind, &c.status, &c.outcome, &c.verdict, &c.error_message)).collect::<Vec<_>>());
+    }
+    fn branch(&self) -> String {
+        orchestrator::agent_branch(&self.coder.id)
+    }
+    fn work_path(&self) -> PathBuf {
+        self.work.path().to_path_buf()
+    }
+}
+
+fn done(cards: &[BoardCard], kind: &str, n: usize) -> bool {
+    cards.iter().filter(|c| c.card_kind == kind && c.status == "done").count() >= n
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_module_is_built_in_the_coders_own_worktree_reviewed_read_only_and_waits_for_approval_before_merging() {
+    let fake = Fake::new(&["pass"], "0");
+    let r = rig(&fake).await;
+    r.enable().await;
+    let m = r.module("登入頁", "做一個登入頁").await;
+    r.pump("合併待核准的卡出現", |c| c.iter().any(|x| x.card_kind == "merge")).await;
+
+    // Coder：在自己專屬的 worktree 裡做（不是專案資料夾），提示詞有角色前綴與卡片內容。
+    let log = fake.log();
+    assert!(log[0].starts_with("coder 1 start ") && log[0].contains(&format!("worktrees/agent-{}", r.coder.id)), "{log:?}");
+    assert!(!log[0].ends_with(&r.work_path().display().to_string()));
+    let prompt = fake.read("coder_prompt_1.txt");
+    assert!(prompt.starts_with("你是資深工程師") && prompt.contains("# 登入頁") && prompt.contains("做一個登入頁"));
+    let module = bs::get_card(r.pool(), &m.id).await.unwrap().unwrap();
+    assert_eq!((module.status.as_str(), module.outcome.as_deref()), ("done", Some("success")));
+    assert!(module.start_sha.is_some() && module.end_sha.is_some() && module.start_sha != module.end_sha, "有記下做之前與之後的版本：{:?}", (&module.start_sha, &module.end_sha));
+    assert_eq!(sh(&r.work_path(), &format!("git log --format=%s {}", r.branch())).lines().next().unwrap(), "工程師1：登入頁");
+
+    // Reviewer：唯讀工具、看到 diff、在一次性 worktree（不是專案資料夾也不是 Coder 的）。
+    let review = r.kind("review").await.remove(0);
+    assert_eq!((review.verdict.as_deref(), review.review_of.as_deref(), review.module_id.as_deref()), (Some("pass"), Some(m.id.as_str()), Some(m.id.as_str())));
+    let rv = log.iter().find(|l| l.starts_with("reviewer 1 ")).unwrap();
+    assert!(rv.ends_with("Read,Grep,Glob") && !rv.contains("Edit"), "審查只給讀檔工具：{rv}");
+    assert!(rv.contains("worktrees/review-") && !rv.contains("agent-"), "{rv}");
+    let rp = fake.read("review_prompt_1.txt");
+    assert!(rp.starts_with("嚴格審查") && rp.contains("做一個登入頁") && rp.contains("+change 1"), "{rp}");
+    assert!(!r.srv.state().data_dir.join("worktrees").join(format!("review-{}", review.id)).exists(), "審查完一次性 worktree 要清掉");
+
+    // 通過之後：只建合併待核准的卡，專案資料夾一個字都沒動。
+    let merge = r.kind("merge").await.remove(0);
+    assert_eq!((merge.status.as_str(), merge.agent_id.as_deref()), ("planning", None));
+    assert!(merge.body.contains("工程師1") && merge.body.contains(&r.branch()));
+    assert!(!r.work_path().join("work-1.txt").exists());
+    assert_eq!(sh(&r.work_path(), "git log --format=%s").trim(), "init", "沒有自動合併");
+
+    // 管理員核准 → 才合併進專案，並清掉 worktree 與分支。
+    r.admin.request(Method::POST, &format!("/v1/board/cards/{}/merge", merge.id), None).await.unwrap();
+    assert!(r.work_path().join("work-1.txt").exists());
+    assert!(sh(&r.work_path(), "git log --format=%s").contains("合併 Agent「工程師1」的成果"));
+    let after = bs::get_card(r.pool(), &merge.id).await.unwrap().unwrap();
+    assert_eq!((after.status.as_str(), after.outcome.as_deref()), ("done", Some("success")));
+    assert!(!r.srv.state().data_dir.join("worktrees").join(format!("agent-{}", r.coder.id)).exists());
+    assert!(sh(&r.work_path(), "git branch --list 'agent/*'").trim().is_empty());
+    // 核准過的卡不能再核准一次。
+    assert!(r.admin.request(Method::POST, &format!("/v1/board/cards/{}/merge", merge.id), None).await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_review_sends_the_reasons_back_to_the_coder_and_the_second_review_checks_the_fix() {
+    let fake = Fake::new(&["fail", "pass"], "0");
+    let r = rig(&fake).await;
+    r.enable().await;
+    let m = r.module("登入頁", "做一個登入頁").await;
+    r.pump("合併待核准", |c| c.iter().any(|x| x.card_kind == "merge")).await;
+
+    let fix = r.kind("fix").await.remove(0);
+    let first_review = r.kind("review").await.into_iter().find(|c| c.review_of.as_deref() == Some(m.id.as_str())).unwrap();
+    assert_eq!((first_review.verdict.as_deref(), first_review.review_reasons.as_deref()), (Some("fail"), Some("[\"缺測試\"]")));
+    assert_eq!((fix.review_of.as_deref(), fix.module_id.as_deref(), fix.agent_id.as_deref()), (Some(first_review.id.as_str()), Some(m.id.as_str()), Some(r.coder.id.as_str())));
+    assert!(fix.title.contains("第 1 次") && fix.body.contains("第 1 次修正") && fix.body.contains("缺測試") && fix.body.contains("做一個登入頁"));
+    assert!(fake.read("coder_prompt_2.txt").contains("缺測試"), "Coder 第二次拿到的是審查的理由");
+
+    // 第二次審查審的是修正那版，而且被提醒上一次的問題。
+    let second = r.kind("review").await.into_iter().find(|c| c.review_of.as_deref() == Some(fix.id.as_str())).unwrap();
+    assert_eq!(second.verdict.as_deref(), Some("pass"));
+    let rp = fake.read("review_prompt_2.txt");
+    assert!(rp.contains("上一次審查提出的問題") && rp.contains("缺測試") && rp.contains("+change 2") && !rp.contains("+change 1"), "{rp}");
+    // 兩次修改累積在同一條分支上。
+    assert_eq!(sh(&r.work_path(), &format!("git rev-list --count main..{}", r.branch())).trim(), "2");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn after_two_fix_rounds_it_stops_and_waits_for_a_person_instead_of_looping_or_merging() {
+    let fake = Fake::new(&["fail", "fail", "fail", "fail"], "0");
+    let r = rig(&fake).await;
+    r.enable().await;
+    r.module("登入頁", "做一個登入頁").await;
+    r.pump("第三次審查完成", |c| done(c, "review", 3)).await;
+    for _ in 0..8 {
+        orchestrator::tick_once(r.srv.state()).await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    assert_eq!((r.kind("fix").await.len(), r.kind("review").await.len()), (2, 3), "修正 2 輪、審查 3 次就停");
+    assert!(r.kind("merge").await.is_empty(), "沒通過就不建合併卡");
+    assert_eq!(fake.read("n").trim(), "3", "Coder 只做了 1 次實作＋2 次修正");
+    assert!(!r.work_path().join("work-1.txt").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_coder_works_one_card_at_a_time_and_modules_pile_up_on_the_same_branch() {
+    let fake = Fake::new(&["pass", "pass"], "1");
+    let r = rig(&fake).await;
+    r.enable().await;
+    r.module("模組甲", "做甲").await;
+    r.module("模組乙", "做乙").await;
+    r.pump("合併待核准", |c| c.iter().any(|x| x.card_kind == "merge")).await;
+    // 兩次實作不重疊：每個 start 後面緊接著它自己的 end。
+    let coder: Vec<String> = fake.log().into_iter().filter(|l| l.starts_with("coder")).collect();
+    assert_eq!(coder.len(), 4);
+    assert!(coder[0].contains("1 start") && coder[1] == "coder 1 end" && coder[2].contains("2 start") && coder[3] == "coder 2 end", "{coder:?}");
+    assert_eq!(sh(&r.work_path(), &format!("git rev-list --count main..{}", r.branch())).trim(), "2");
+    assert_eq!(r.kind("merge").await.len(), 1, "兩個模組都過才建一張合併卡");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn members_cannot_grab_a_card_the_server_runs_but_can_when_orchestration_is_off() {
+    let fake = Fake::new(&["pass"], "0");
+    let r = rig(&fake).await;
+    let member = r.srv.paired("小明", Role::Member).await;
+    let m = r.module("登入頁", "做一個登入頁").await;
+    r.enable().await;
+    let err = member.request(Method::POST, &format!("/v1/board/cards/{}/claim", m.id), None).await.unwrap_err();
+    assert!(err.to_string().contains("server 的編排"), "{err}");
+    // 一般卡片（沒指派 Agent）照舊可以領。
+    let plain = bs::create_card(r.pool(), NewCard { project_id: &r.pid, title: "一般", body: "", parallel_ok: true, interactive: false, label: None, created_by: "小華" }).await.unwrap();
+    let Change::Ok(plain) = bs::move_card(r.pool(), &plain.id, plain.version, "queued", None, None).await.unwrap() else { panic!() };
+    member.request(Method::POST, &format!("/v1/board/cards/{}/claim", plain.id), None).await.unwrap();
+    // 關掉之後，指派過 Agent 的卡也回到成員可領。
+    r.admin.request(Method::PUT, &format!("/v1/board/projects/{}/orchestration", r.pid), Some(json!({"enabled": false}))).await.unwrap();
+    member.request(Method::POST, &format!("/v1/board/cards/{}/claim", m.id), None).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_admins_can_turn_it_on_and_it_needs_a_project_folder_and_a_working_claude() {
+    let fake = Fake::new(&["pass"], "0");
+    let r = rig(&fake).await;
+    let member = r.srv.paired("小明", Role::Member).await;
+    let url = format!("/v1/board/projects/{}/orchestration", r.pid);
+    assert!(member.request(Method::PUT, &url, Some(json!({"enabled": true}))).await.is_err(), "成員不能開");
+    // 沒設工作資料夾不能開。
+    sqlx::query("UPDATE projects SET work_dir = '' WHERE id = ?").bind(&r.pid).execute(&r.srv.state().pools.server).await.unwrap();
+    assert!(r.admin.request(Method::PUT, &url, Some(json!({"enabled": true}))).await.is_err());
+    sqlx::query("UPDATE projects SET work_dir = ? WHERE id = ?").bind(r.work_path().to_string_lossy().to_string()).bind(&r.pid).execute(&r.srv.state().pools.server).await.unwrap();
+    r.enable().await;
+    let on = r.admin.request(Method::GET, &url, None).await.unwrap();
+    assert_eq!(on["enabled"], true);
+    // claude 不能用：卡片原封不動留在待派送，不會被領走。
+    r.admin.request(Method::PUT, "/v1/runner", Some(json!({"claude_path": "/不存在/claude", "max_concurrent": 1, "timeout_secs": 60, "max_turns": 7}))).await.unwrap();
+    let m = r.module("登入頁", "做一個登入頁").await;
+    for _ in 0..3 {
+        assert_eq!(orchestrator::tick_once(r.srv.state()).await, 0);
+    }
+    let card = bs::get_card(r.pool(), &m.id).await.unwrap().unwrap();
+    assert_eq!((card.status.as_str(), card.claimed_by), ("queued", None));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn with_no_reviewer_a_finished_module_counts_as_passed_and_other_projects_are_left_alone() {
+    let fake = Fake::new(&[], "0");
+    let r = rig(&fake).await;
+    bs::delete_agent(r.pool(), &r.reviewer.id).await.unwrap().unwrap();
+    r.enable().await;
+    // 另一個沒開編排的專案：卡片不會被碰。
+    let other = r.srv.project("別的專案").await;
+    let oc = bs::create_card(r.pool(), NewCard { project_id: &other, title: "別人的", body: "", parallel_ok: true, interactive: false, label: None, created_by: "x" }).await.unwrap();
+    bs::move_card(r.pool(), &oc.id, oc.version, "queued", None, None).await.unwrap();
+    r.module("登入頁", "做一個登入頁").await;
+    r.pump("合併待核准", |c| c.iter().any(|x| x.card_kind == "merge")).await;
+    assert!(r.kind("review").await.is_empty());
+    assert_eq!(bs::get_card(r.pool(), &oc.id).await.unwrap().unwrap().status, "queued");
+}
+
+/// 真實 Claude Code 的端到端演練（會用掉一點額度）：
+/// `cargo test -p aiterm-intake-server --test orchestrate -- --ignored --nocapture`
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "需要真實的 Claude Code（已登入）"]
+async fn real_claude_code_builds_a_module_a_real_reviewer_judges_it_and_the_merge_waits_for_approval() {
+    let fake = Fake::new(&[], "0"); // 只借它的資料夾結構；實際用真的 claude
+    let r = rig(&fake).await;
+    r.admin.request(Method::PUT, "/v1/runner", Some(json!({"claude_path": "claude", "max_concurrent": 2, "timeout_secs": 300, "max_turns": 12}))).await.unwrap();
+    let view: serde_json::Value = r.admin.get("/v1/runner").await.unwrap();
+    assert_eq!(view["availability"]["available"], true, "{view}");
+    r.enable().await;
+    r.module("加法函式", "在專案根目錄建立 add.py，裡面有 def add(a, b): 回傳 a + b。只做這件事，不要建其他檔案。").await;
+    r.pump("審查結論出來", |c| done(c, "review", 1)).await;
+    for _ in 0..600 {
+        orchestrator::tick_once(r.srv.state()).await;
+        let cards = r.cards().await;
+        if cards.iter().any(|c| c.card_kind == "merge") || cards.iter().any(|c| c.outcome.as_deref() == Some("failed")) || done(&cards, "fix", 2) && done(&cards, "review", 3) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    for c in r.cards().await {
+        println!("[{}] {} status={} outcome={:?} verdict={:?} reasons={:?} err={:?}\n   摘要：{:?}", c.card_kind, c.title, c.status, c.outcome, c.verdict, c.review_reasons, c.error_message, c.ai_summary);
+    }
+    let module = r.cards().await.into_iter().find(|c| c.card_kind == "work").unwrap();
+    assert_eq!(module.outcome.as_deref(), Some("success"), "{:?}", module.error_message);
+    let diff = sh(&r.work_path(), &format!("git diff main..{}", r.branch()));
+    println!("分支的改動：\n{diff}");
+    assert!(diff.contains("add.py") && diff.contains("def add"), "Coder 真的在自己的分支裡寫了檔案");
+    assert!(!r.work_path().join("add.py").exists(), "專案資料夾沒被動到");
+    let reviews = r.kind("review").await;
+    assert!(reviews.iter().all(|c| matches!(c.verdict.as_deref(), Some("pass") | Some("fail"))), "真實 Reviewer 回的結論要能被解析：{reviews:#?}");
+    if let Some(merge) = r.kind("merge").await.first() {
+        r.admin.request(Method::POST, &format!("/v1/board/cards/{}/merge", merge.id), None).await.unwrap();
+        assert!(r.work_path().join("add.py").exists(), "核准後才合併進專案");
+    }
+}
+
+/// 真實的「退回修正」：Reviewer 被要求「沒有 test_add.py 就不通過」，Coder 第一次不會做，審查退回後要補上。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "需要真實的 Claude Code（已登入）"]
+async fn real_claude_code_reviewer_sends_it_back_and_the_coder_fixes_it() {
+    let fake = Fake::new(&[], "0");
+    let r = rig(&fake).await;
+    sqlx::query("UPDATE board_agents SET prompt_prefix = ? WHERE id = ?")
+        .bind("審查規則：專案根目錄一定要有 test_add.py（測 add 函式）。沒有這個檔案就一律 fail，並在 reasons 寫明缺什麼；有而且內容合理才 pass。")
+        .bind(&r.reviewer.id)
+        .execute(r.pool())
+        .await
+        .unwrap();
+    r.admin.request(Method::PUT, "/v1/runner", Some(json!({"claude_path": "claude", "max_concurrent": 2, "timeout_secs": 300, "max_turns": 12}))).await.unwrap();
+    r.enable().await;
+    r.module("加法函式", "在專案根目錄建立 add.py，裡面有 def add(a, b): 回傳 a + b。只做這件事，不要建其他檔案。").await;
+    for _ in 0..1200 {
+        orchestrator::tick_once(r.srv.state()).await;
+        let cards = r.cards().await;
+        if cards.iter().any(|c| c.card_kind == "merge") || cards.iter().any(|c| c.outcome.as_deref() == Some("failed")) || done(&cards, "review", 3) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    for c in r.cards().await {
+        println!("[{}] {} status={} outcome={:?} verdict={:?} reasons={:?} err={:?}", c.card_kind, c.title, c.status, c.outcome, c.verdict, c.review_reasons, c.error_message);
+    }
+    let reviews = r.kind("review").await;
+    assert!(reviews.iter().any(|c| c.verdict.as_deref() == Some("fail")), "第一次審查應該因為缺測試檔而退回");
+    assert!(!r.kind("fix").await.is_empty(), "退回之後要有修正卡");
+    let files = sh(&r.work_path(), &format!("git ls-tree -r --name-only {}", r.branch()));
+    println!("分支上的檔案：\n{files}");
+    assert!(files.contains("test_add.py"), "修正之後 Coder 補上了測試檔");
+    assert!(r.kind("merge").await.len() == 1, "最後通過、建出待核准的合併卡");
+}
