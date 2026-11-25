@@ -185,4 +185,10 @@ describe("ProjectList", () => {
     await userEvent.click(screen.getByTestId("project-report-p1"));
     expect(onOpen).not.toHaveBeenCalled();
   });
+
+  it("server 上的共用看板專案沒有「移除」（它不在這台電腦上），本機專案仍有", () => {
+    mount([project(), project({ id: "remote:srv-1", name: "🌐 範例科技", path: "" })]);
+    expect(screen.getByTestId("project-remove-p1")).toBeTruthy();
+    expect(screen.queryByTestId("project-remove-remote:srv-1")).toBeNull();
+  });
 });

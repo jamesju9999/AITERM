@@ -142,13 +142,16 @@ export function ProjectList({
                   </button>
                   {/* 破壞性動作刻意低調：平常是灰的，滑鼠移上去才轉紅。
                       跟「報告」一樣顯眼的話，最該小心的那個反而最搶眼。 */}
-                  <button
-                    className="project-card-remove"
-                    data-testid={`project-remove-${p.id}`}
-                    onClick={() => void remove(p)}
-                  >
-                    {t.proj_remove}
-                  </button>
+                  {/* server 上的共用看板專案不在這台電腦上，不能從這裡移除。 */}
+                  {!p.id.startsWith("remote:") && (
+                    <button
+                      className="project-card-remove"
+                      data-testid={`project-remove-${p.id}`}
+                      onClick={() => void remove(p)}
+                    >
+                      {t.proj_remove}
+                    </button>
+                  )}
                 </div>
               </div>
             );

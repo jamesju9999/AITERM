@@ -54,6 +54,8 @@ export function TaskEditorDialog({
   const [parallelOk, setParallelOk] = useState(card?.parallel_ok ?? true);
   const [interactive, setInteractive] = useState(card?.interactive ?? false);
   // AI 工具：互動卡片要人接手，只走 Claude Code；Codex 一定要指定模型。
+  // 共用看板（專案 id 是 remote:…）：執行在領取者的電腦，所以本機執行相關的欄位不顯示。
+  const remote = projectId.startsWith("remote:");
   const [cli, setCli] = useState<"claude" | "codex">(card?.cli === "codex" ? "codex" : "claude");
   const [model, setModel] = useState(card?.model ?? "");
   const useCodex = cli === "codex" && !interactive;
@@ -396,6 +398,9 @@ export function TaskEditorDialog({
 
         </div>
 
+        {/* 共用看板的卡片在領取者自己的電腦執行，資料夾由領取者設定，這裡不用填。 */}
+        {!remote && (
+          <>
         <div className="task-dialog-group">
         <label className="task-field">
           <span className="task-field-label">{t.board_card_folder}</span>
@@ -431,6 +436,8 @@ export function TaskEditorDialog({
         </label>
 
         </div>
+          </>
+        )}
 
         <div className="task-dialog-group">
         <label className="task-field">
@@ -472,7 +479,7 @@ export function TaskEditorDialog({
         </label>
         <p className="task-field-hint">{t.board_card_interactive_hint}</p>
 
-        {!interactive && (
+        {!interactive && !remote && (
           <>
             <label className="task-field">
               <span className="task-field-label">{t.ac_cli}</span>
@@ -528,6 +535,7 @@ export function TaskEditorDialog({
           </>
         )}
 
+        {!remote && (
         <label className="task-field">
           <span className="task-field-label">{t.board_card_isolate}</span>
           <select
@@ -540,6 +548,7 @@ export function TaskEditorDialog({
             <option value="off">{t.board_card_isolate_off}</option>
           </select>
         </label>
+        )}
 
         </div>
 
