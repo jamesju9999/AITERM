@@ -16,15 +16,15 @@ use std::sync::Arc;
 
 type St = State<Arc<AppState>>;
 
-fn internal(e: impl ToString) -> Response {
+pub(crate) fn internal(e: impl ToString) -> Response {
     api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
 }
 
-fn bad(msg: &str) -> Response {
+pub(crate) fn bad(msg: &str) -> Response {
     api_error(StatusCode::BAD_REQUEST, msg)
 }
 
-fn not_found() -> Response {
+pub(crate) fn not_found() -> Response {
     api_error(StatusCode::NOT_FOUND, "not found")
 }
 
@@ -312,7 +312,7 @@ async fn reply(State(st): St, Extension(me): Extension<Me>, Path(id): Path<Strin
 
 // ---- 領取處理（成員用自己的電腦處理題目）----
 
-fn conflict(msg: &str) -> Response {
+pub(crate) fn conflict(msg: &str) -> Response {
     api_error(StatusCode::CONFLICT, msg)
 }
 

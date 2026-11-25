@@ -12,6 +12,7 @@ pub mod line_store;
 pub mod dispatcher;
 pub mod smtp;
 pub mod store;
+pub mod board_store;
 pub mod line_source;
 pub mod telegram_source;
 pub mod mail_source;

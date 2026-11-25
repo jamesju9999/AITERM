@@ -18,6 +18,7 @@ pub async fn open(dir: &Path) -> Result<Pools, sqlx::Error> {
     std::fs::create_dir_all(dir).map_err(sqlx::Error::Io)?;
     let intake = open_file(&dir.join("intake.db")).await?;
     aiterm_intake_core::store::init_schema(&intake).await?;
+    aiterm_intake_core::board_store::init_schema(&intake).await?;
     let server = open_file(&dir.join("server.db")).await?;
     init_server_schema(&server).await?;
     Ok(Pools { intake, server })
@@ -28,6 +29,7 @@ pub async fn open_memory() -> Result<Pools, sqlx::Error> {
     let mk = || async { SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await };
     let intake = mk().await?;
     aiterm_intake_core::store::init_schema(&intake).await?;
+    aiterm_intake_core::board_store::init_schema(&intake).await?;
     let server = mk().await?;
     init_server_schema(&server).await?;
     Ok(Pools { intake, server })

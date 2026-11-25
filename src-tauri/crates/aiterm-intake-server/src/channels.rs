@@ -161,6 +161,12 @@ pub async fn tick_once(st: &Arc<AppState>) -> bool {
             st.events.changed();
         }
     }
+    // 看板卡片也一樣：領取者失聯，卡片放回待派送。
+    if let Ok(n) = aiterm_intake_core::board_store::expire_claims(&st.pools.intake, crate::db::now()).await {
+        if n > 0 {
+            st.events.changed();
+        }
+    }
     refresh_projects(st).await;
     let cands = candidates(st).await;
     let opened = pipeline::line_triage(&st.pools.intake, &cands, st.ai.as_ref(), &st.data_dir.join("attachments")).await;

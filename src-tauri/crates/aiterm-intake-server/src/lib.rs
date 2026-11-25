@@ -17,6 +17,7 @@ pub mod telegram;
 pub mod tls;
 pub mod routes;
 pub mod routes_data;
+pub mod routes_board;
 pub mod server;
 #[doc(hidden)]
 pub mod testkit;
