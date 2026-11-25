@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { KindIcon } from "./KindIcon";
+import { ServerMergeBanner } from "./ServerMergeBanner";
+import { ServerRunBar } from "./ServerRunBar";
 import { autoLayout } from "./autoLayout";
 import { createPortal } from "react-dom";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -638,6 +640,8 @@ export function AgentCanvasView({
     return () => window.removeEventListener("focus", onFocus);
   }, [isActive]);
   const missing = tools ? missingTools(tools, agents) : [];
+  // server 編排跑完、等管理員核准的合併卡（只有共用專案會有）。
+  const mergeCards = useMemo(() => tasks.filter((c) => c.card_kind === "merge" && c.status === "planning").map((c) => ({ id: c.id, title: c.title })), [tasks]);
 
   // 技能標籤要顯示連線名稱；設定框關掉後再讀一次（可能剛在資料庫頁改過名稱）。
   useEffect(() => {
@@ -1493,7 +1497,7 @@ export function AgentCanvasView({
     <div
       className="task-board agent-canvas"
       style={{
-        gridTemplateRows: `auto ${missing.length ? "auto " : ""}${movedDirs.length ? "auto " : ""}${fixChoices.length ? "auto " : ""}auto minmax(0, 1fr) ${layout.logCollapsed ? "auto" : `${layout.logHeight}px`}`,
+        gridTemplateRows: `auto ${mergeCards.length ? "auto " : ""}${missing.length ? "auto " : ""}${movedDirs.length ? "auto " : ""}${fixChoices.length ? "auto " : ""}auto minmax(0, 1fr) ${layout.logCollapsed ? "auto" : `${layout.logHeight}px`}`,
       }}
     >
       <div className="ac-top">
@@ -1592,6 +1596,7 @@ export function AgentCanvasView({
             </button>
           </>
         )}
+        {projectId && <ServerRunBar projectId={projectId} onError={(e) => setToast(errText(e))} />}
         {projectId && agents.length > 0 && (manualPause.all || !allFinished) && (
           <>
             <span className="ac-top-sep" aria-hidden />
@@ -1621,6 +1626,12 @@ export function AgentCanvasView({
           <TopMoreMenu cap={cap} onHelp={() => setHelpOpen(true)} onAddSchedule={projectId ? () => setSchedDialog({ initial: null }) : undefined} />
         </span>
       </div>
+
+      <ServerMergeBanner
+        mergeCards={mergeCards}
+        onError={(e) => setToast(errText(e))}
+        onNotice={(m) => setToast(m)}
+      />
 
       {tools && missing.length > 0 && (
         <ToolsBanner check={tools} missing={missing} busy={toolsBusy} onRecheck={() => void recheckTools()} />

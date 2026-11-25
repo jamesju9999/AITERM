@@ -44,6 +44,7 @@ case "$ALLOWED" in
     n=$(cat "$D/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$D/n"
     echo "coder $n start $(pwd)" >> "$D/log.txt"
     cp "$D/last_prompt.txt" "$D/coder_prompt_$n.txt"
+    printf '%s\n' "$@" > "$D/coder_args_$n.txt"
     sleep @SECS@
     echo "change $n" >> "work-$n.txt"
     echo "coder $n end" >> "$D/log.txt"
@@ -53,6 +54,7 @@ case "$ALLOWED" in
     m=$(cat "$D/m" 2>/dev/null || echo 0); m=$((m+1)); echo $m > "$D/m"
     echo "reviewer $m $(pwd) $ALLOWED" >> "$D/log.txt"
     cp "$D/last_prompt.txt" "$D/review_prompt_$m.txt"
+    printf '%s\n' "$@" > "$D/review_args_$m.txt"
     v=$(head -1 "$D/verdicts"); sed -i.bak 1d "$D/verdicts"
     printf '{"type":"result","is_error":false,"result":"{\\"verdict\\":\\"%s\\",\\"reasons\\":[\\"缺測試\\"]}"}' "$v"
     ;;
@@ -99,7 +101,9 @@ async fn rig(fake: &Fake) -> Rig {
     sqlx::query("UPDATE projects SET work_dir = ? WHERE id = ?").bind(work.path().to_string_lossy().to_string()).bind(&pid).execute(&srv.state().pools.server).await.unwrap();
     admin.request(Method::PUT, "/v1/runner", Some(json!({"claude_path": fake.path(), "max_concurrent": 2, "timeout_secs": 60, "max_turns": 7}))).await.unwrap();
     let coder = agent(&srv, &pid, "coder", "工程師1", "你是資深工程師").await;
-    let reviewer = agent(&srv, &pid, "reviewer", "審核者", "嚴格審查").await;
+    let mut reviewer = agent(&srv, &pid, "reviewer", "審核者", "嚴格審查").await;
+    sqlx::query("UPDATE board_agents SET model = 'sonnet' WHERE id = ?").bind(&reviewer.id).execute(&srv.state().pools.intake).await.unwrap();
+    reviewer.model = Some("sonnet".into());
     Rig { srv, admin, pid, work, coder, reviewer }
 }
 
@@ -169,6 +173,9 @@ async fn a_module_is_built_in_the_coders_own_worktree_reviewed_read_only_and_wai
     let review = r.kind("review").await.remove(0);
     assert_eq!((review.verdict.as_deref(), review.review_of.as_deref(), review.module_id.as_deref()), (Some("pass"), Some(m.id.as_str()), Some(m.id.as_str())));
     let rv = log.iter().find(|l| l.starts_with("reviewer 1 ")).unwrap();
+    // 模型設定要真的傳給 claude：Coder 沒設就不帶 --model，Reviewer 設了 sonnet 就帶。
+    assert!(!fake.read("coder_args_1.txt").contains("--model"), "沒設模型就沿用預設");
+    assert!(fake.read("review_args_1.txt").lines().collect::<Vec<_>>().windows(2).any(|w| w == ["--model", "sonnet"]), "{}", fake.read("review_args_1.txt"));
     assert!(rv.ends_with("Read,Grep,Glob") && !rv.contains("Edit"), "審查只給讀檔工具：{rv}");
     assert!(rv.contains("worktrees/review-") && !rv.contains("agent-"), "{rv}");
     let rp = fake.read("review_prompt_1.txt");
@@ -380,4 +387,58 @@ async fn real_claude_code_reviewer_sends_it_back_and_the_coder_fixes_it() {
     println!("分支上的檔案：\n{files}");
     assert!(files.contains("test_add.py"), "修正之後 Coder 補上了測試檔");
     assert!(r.kind("merge").await.len() == 1, "最後通過、建出待核准的合併卡");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_module_finished_after_an_approved_merge_gets_its_own_merge_card_and_approval_waits_while_work_is_unfinished() {
+    let fake = Fake::new(&["pass", "pass"], "0");
+    let r = rig(&fake).await;
+    r.enable().await;
+    r.module("模組甲", "做甲").await;
+    r.pump("第一張合併卡", |c| c.iter().any(|x| x.card_kind == "merge")).await;
+    let first = r.kind("merge").await.remove(0);
+    r.admin.request(Method::POST, &format!("/v1/board/cards/{}/merge", first.id), None).await.unwrap();
+    // 合併完、沒有新成果：不會憑空再冒出一張合併卡。
+    for _ in 0..6 {
+        orchestrator::tick_once(r.srv.state()).await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    assert_eq!(r.kind("merge").await.len(), 1);
+    // 隔一秒再做第二個模組（時間戳是秒），審查通過後要有第二張待核准的合併卡。
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    r.module("模組乙", "做乙").await;
+    r.pump("第二張合併卡", |c| c.iter().filter(|x| x.card_kind == "merge").count() == 2).await;
+    let merges = r.kind("merge").await;
+    let second = merges.iter().find(|c| c.id != first.id).unwrap();
+    assert_eq!((second.status.as_str(), first.id.as_str() != second.id.as_str()), ("planning", true));
+    r.admin.request(Method::POST, &format!("/v1/board/cards/{}/merge", second.id), None).await.unwrap();
+    assert!(r.work_path().join("work-1.txt").exists() && r.work_path().join("work-2.txt").exists(), "兩個模組的成果都合併進專案了");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approving_a_merge_while_another_module_is_still_being_worked_on_is_refused_and_destroys_nothing() {
+    let fake = Fake::new(&["pass", "pass"], "2");
+    let r = rig(&fake).await;
+    r.enable().await;
+    r.module("模組甲", "做甲").await;
+    r.pump("第一張合併卡", |c| c.iter().any(|x| x.card_kind == "merge")).await;
+    let merge = r.kind("merge").await.remove(0);
+    // 第二個模組開始做（假 claude 要 2 秒），這時核准要被擋下。
+    r.module("模組乙", "做乙").await;
+    for _ in 0..200 {
+        orchestrator::tick_once(r.srv.state()).await;
+        if r.cards().await.iter().any(|c| c.title == "模組乙" && c.status == "running") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let err = r.admin.request(Method::POST, &format!("/v1/board/cards/{}/merge", merge.id), None).await.unwrap_err();
+    assert!(err.to_string().contains("還沒審查通過") || err.to_string().contains("正在處理"), "{err}");
+    assert!(r.srv.state().data_dir.join("worktrees").join(format!("agent-{}", r.coder.id)).exists(), "Coder 的 worktree 還在");
+    assert_eq!(bs::get_card(r.pool(), &merge.id).await.unwrap().unwrap().status, "planning", "合併卡還在等");
+    assert!(!r.work_path().join("work-1.txt").exists(), "什麼都沒合併");
+    // 等第二個模組做完、審查通過後，核准就可以了。
+    r.pump("模組乙通過", |c| c.iter().filter(|x| x.card_kind == "review" && x.status == "done").count() == 2).await;
+    r.admin.request(Method::POST, &format!("/v1/board/cards/{}/merge", merge.id), None).await.unwrap();
+    assert!(r.work_path().join("work-1.txt").exists() && r.work_path().join("work-2.txt").exists());
 }

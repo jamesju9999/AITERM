@@ -954,6 +954,15 @@ button.ac-log-title:hover { color: var(--text-primary); }
 @media (max-width: 1280px) {
   .ac-top-label { display: none; }
 }
+/* server 編排跑完後的「核准合併」橫幅：頂列下面一條，不擠頂列。 */
+.ac-merge-banner { display: flex; align-items: center; gap: 12px; padding: 6px 14px; background: color-mix(in srgb, var(--accent-color, #3b82f6) 12%, var(--bg-secondary)); border-bottom: 1px solid var(--border-color); font-size: 12.5px; }
+.ac-merge-banner-text { flex: 1; min-width: 0; color: var(--text-secondary); }
+/* 「由 server 執行」開關：寬視窗完整文字，窄視窗只留狀態字。 */
+.ac-sr-short { display: none; }
+@media (max-width: 1700px) {
+  .ac-sr-long { display: none; }
+  .ac-sr-short { display: inline; }
+}
 /* 視窗窄時頂列與角色列的文字不換行（標題、標籤被擠成兩行很難看）；放不下的由狀態列自己縮短。 */
 .ac-top, .ac-pool { flex-wrap: nowrap; }
 .ac-top > *, .ac-pool > .ac-pool-label, .ac-pool > .ac-pool-item { flex: none; white-space: nowrap; }

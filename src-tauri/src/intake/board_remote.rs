@@ -330,6 +330,22 @@ pub async fn set_brief(api: &Api, server_pid: &str, brief: Option<&str>) -> Resu
     api.request(Method::PUT, &format!("/v1/board/projects/{}/brief", enc(server_pid)), Some(json!({"brief": brief}))).await.map(|_| ())
 }
 
+/// 這個專案現在是不是「由 server 執行」（server 自己跑 Coder → Reviewer → 待核准合併）。
+pub async fn orchestration(api: &Api, server_pid: &str) -> Result<bool, ClientError> {
+    let v: serde_json::Value = api.get(&format!("/v1/board/projects/{}/orchestration", enc(server_pid))).await?;
+    Ok(v["enabled"].as_bool().unwrap_or(false))
+}
+
+/// 開關「由 server 執行」（server 只准管理員，其他人會被拒絕並回原因）。
+pub async fn set_orchestration(api: &Api, server_pid: &str, enabled: bool) -> Result<(), ClientError> {
+    api.request(Method::PUT, &format!("/v1/board/projects/{}/orchestration", enc(server_pid)), Some(json!({"enabled": enabled}))).await.map(|_| ())
+}
+
+/// 核准合併：server 把各 Coder 的分支合併進專案資料夾，回傳結果說明（管理員限定）。
+pub async fn approve_merge(api: &Api, card_id: &str) -> Result<String, ClientError> {
+    api.request(Method::POST, &format!("/v1/board/cards/{}/merge", enc(card_id)), None).await.map(|v| v.as_str().unwrap_or_default().to_string())
+}
+
 /// 專案清單用：每個 server 專案一筆，卡片數從 server 算。
 pub async fn project_infos(api: &Api) -> Vec<(String, String, [i64; 4])> {
     let projects: Vec<serde_json::Value> = api.get("/v1/projects").await.unwrap_or_default();
@@ -538,5 +554,27 @@ mod tests {
 
         delete_agent(&r.api, &agent).await.unwrap();
         assert!(agents(&r.api, &r.rs, &r.pid).await.unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn orchestration_toggle_and_merge_approval_are_admin_only_and_errors_carry_the_servers_reason() {
+        let r = rig().await;
+        let admin = r.srv.paired("管理員", Role::Admin).await;
+        assert!(!orchestration(&admin, &r.pid).await.unwrap(), "預設是關的");
+        // 專案沒設工作資料夾：server 拒絕，原因要原樣回來。
+        let e = set_orchestration(&admin, &r.pid, true).await.unwrap_err();
+        assert!(e.to_string().contains("工作資料夾"), "{e}");
+        sqlx::query("UPDATE projects SET work_dir = ? WHERE id = ?").bind(std::env::temp_dir().to_string_lossy().to_string()).bind(&r.pid).execute(&r.srv.state().pools.server).await.unwrap();
+        set_orchestration(&admin, &r.pid, true).await.unwrap();
+        assert!(orchestration(&r.other, &r.pid).await.unwrap(), "另一位成員也看得到");
+        let card0 = create(&admin, &r.rs, &r.pid, fields("先建一張")).await.unwrap();
+        assert!(set_orchestration(&r.other, &r.pid, false).await.is_err(), "成員不能關");
+        assert!(approve_merge(&r.other, &card0).await.is_err(), "成員不能核准");
+        assert!(orchestration(&admin, &r.pid).await.unwrap());
+        // 不是合併卡：不能核准。
+        let card = create(&r.api, &r.rs, &r.pid, fields("一般卡片")).await.unwrap();
+        assert!(approve_merge(&admin, &card).await.is_err());
+        set_orchestration(&admin, &r.pid, false).await.unwrap();
+        assert!(!orchestration(&r.other, &r.pid).await.unwrap());
     }
 }

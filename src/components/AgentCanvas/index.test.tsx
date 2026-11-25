@@ -22,6 +22,10 @@ vi.mock("../../ipc/tasks", () => ({
   getProjectBrief: vi.fn().mockResolvedValue(null),
   setProjectBrief: vi.fn().mockResolvedValue(undefined),
   getTaskBoardConfig: vi.fn().mockResolvedValue({ max_concurrent: 3 }),
+  // 本機專案沒有「由 server 執行」：回 null，頂列不畫那顆按鈕。
+  getOrchestration: vi.fn().mockResolvedValue(null),
+  setOrchestration: vi.fn().mockResolvedValue(undefined),
+  approveMerge: vi.fn().mockResolvedValue(""),
   onTasksUpdated: vi.fn((cb: () => void) => {
     tasksUpdatedCbs.push(cb);
     tasksUpdated = () => tasksUpdatedCbs.forEach((c) => c());
@@ -182,7 +186,7 @@ import {
   verifyReport,
   type AgentRow,
 } from "../../ipc/agents";
-import { chooseFix, codexInfo, continueChat, createTask, listCardMessages, listFixChoices, nudgeTask, deleteTask, getProjectBrief, listTasks, listTokenUsage, markTaskDone, readTranscript, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
+import { chooseFix, codexInfo, continueChat, createTask, listCardMessages, listFixChoices, nudgeTask, deleteTask, getOrchestration, getProjectBrief, listTasks, listTokenUsage, markTaskDone, readTranscript, setProjectBrief, stopTask, type TaskWithAttachments } from "../../ipc/tasks";
 import { answerQuestion, listQuestions, type QuestionView } from "../../ipc/questions";
 import { writeTextFile } from "../../ipc/fs";
 import { createProject, listProjects, openProject } from "../../ipc/projects";
@@ -1373,6 +1377,28 @@ describe("AgentCanvasView", () => {
     fireEvent.change(screen.getByDisplayValue("HTBKTW"), { target: { value: "remote:srv" } });
     await waitFor(() => expect(screen.queryByText("工程師甲")).toBeNull());
     expect(await screen.findByText(/連不上 server/)).toBeTruthy();
+  });
+
+  it("共用專案頂列有「由 server 執行」開關；只有規劃中的合併卡才出現「核准合併」", async () => {
+    const proj = (id: string, name: string) => ({
+      id, name, description: "", path: `/${id}`, status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null,
+    });
+    vi.mocked(listProjects).mockResolvedValue([proj("remote:srv", "🌐 範例科技")]);
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(getOrchestration).mockResolvedValue(true);
+    vi.mocked(listTasks).mockResolvedValue([
+      card({ id: "mg1", title: "合併待核准", card_kind: "merge", status: "planning" }),
+      card({ id: "mg0", title: "合併待核准", card_kind: "merge", status: "done" }), // 核准過的不再出現
+      card({ id: "w1", title: "一般卡", card_kind: "work", status: "planning" }),
+    ]);
+    render(
+      <LocaleProvider>
+        <AgentCanvasView isActive initialProjectId="remote:srv" />
+      </LocaleProvider>,
+    );
+    expect(await screen.findByTestId("ac-server-run")).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findAllByTestId("ac-merge-approve")).toHaveLength(1);
+    expect(getOrchestration).toHaveBeenCalledWith("remote:srv");
   });
 
   it("新分頁沒有記住的專案：用上次選的，並記到這個分頁上", async () => {

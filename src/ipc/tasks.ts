@@ -149,6 +149,15 @@ export const setTokenBudget = (projectId: string, budget: number | null): Promis
 /** 專案簡介（null = 沒寫）。每張 Agent 卡派工時放在提示前面，連同自動產生的團隊分工。 */
 export const getProjectBrief = (projectId: string): Promise<string | null> => invoke("tasks_get_project_brief", { projectId });
 
+/** 共用看板專案是不是「由 server 執行」；本機專案回 null（沒有這個概念）。 */
+export const getOrchestration = (projectId: string): Promise<boolean | null> => invoke("tasks_get_orchestration", { projectId });
+
+/** 開關「由 server 執行」（管理員限定，由 server 判斷，被拒會丟出原因）。 */
+export const setOrchestration = (projectId: string, enabled: boolean): Promise<void> => invoke("tasks_set_orchestration", { projectId, enabled });
+
+/** 核准 server 編排產生的「合併待核准」卡；回傳合併結果說明（管理員限定）。 */
+export const approveMerge = (cardId: string): Promise<string> => invoke("tasks_approve_merge", { cardId });
+
 /** 設定專案簡介；空白或 null 刪除。 */
 export const setProjectBrief = (projectId: string, brief: string | null): Promise<void> =>
   invoke("tasks_set_project_brief", { projectId, brief });

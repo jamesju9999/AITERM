@@ -167,8 +167,22 @@ pub fn claude_args(s: &RunnerSettings, mode: &Mode, extra_dirs: &[String]) -> Ve
 
 /// 執行一次 `claude -p`，回傳最終回答的文字。逾時會終止子行程。
 pub async fn exec_claude(s: &RunnerSettings, cwd: &Path, mode: &Mode, extra_dirs: &[String], prompt: &str) -> Result<String, String> {
+    exec_claude_as(s, cwd, mode, extra_dirs, prompt, None).await
+}
+
+/// `--model` 的值要能安全放進參數：只收英數與 `. _ - [ ] :`，而且不能以 `-` 開頭（會被當成另一個旗標）。
+pub fn valid_model(m: &str) -> bool {
+    !m.is_empty() && m.len() <= 80 && !m.starts_with('-') && m.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']' | ':'))
+}
+
+/// 同 `exec_claude`，可指定這次用的模型（Agent 設定的 `model`；空白或不合法就沿用預設）。
+pub async fn exec_claude_as(s: &RunnerSettings, cwd: &Path, mode: &Mode, extra_dirs: &[String], prompt: &str, model: Option<&str>) -> Result<String, String> {
+    let mut args = claude_args(s, mode, extra_dirs);
+    if let Some(m) = model.map(str::trim).filter(|m| valid_model(m)) {
+        args.extend(["--model".to_string(), m.to_string()]);
+    }
     let mut cmd = Command::new(&s.claude_path);
-    cmd.args(claude_args(s, mode, extra_dirs)).current_dir(cwd).env_clear().envs(minimal_env()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.args(args).current_dir(cwd).env_clear().envs(minimal_env()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let mut child = cmd.spawn().map_err(|e| format!("無法啟動 {}：{e}", s.claude_path))?;
     let mut stdin = child.stdin.take().ok_or("無法開啟標準輸入")?;
     let prompt = prompt.to_string();

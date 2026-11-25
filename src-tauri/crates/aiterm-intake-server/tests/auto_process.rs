@@ -383,3 +383,13 @@ async fn real_claude_code_answers_read_only_and_edits_in_a_worktree_then_waits_f
     r.admin.request(Method::POST, &format!("/v1/items/{}/merge", e.id), Some(json!({"approve": true}))).await.unwrap();
     assert_eq!(sh(&r.work_path(), "cat app.txt").trim(), "v2", "核准後合併進專案");
 }
+
+#[test]
+fn only_safe_model_names_reach_the_claude_command_line() {
+    for ok in ["sonnet", "opus", "claude-sonnet-5-5", "claude-opus-4-1[1m]", "a.b_c:d"] {
+        assert!(runner::valid_model(ok), "{ok}");
+    }
+    for bad in ["", "-p", "--dangerously-skip-permissions", "a b", "a;b", "$(x)", "模型", &"x".repeat(81)] {
+        assert!(!runner::valid_model(bad), "{bad}");
+    }
+}

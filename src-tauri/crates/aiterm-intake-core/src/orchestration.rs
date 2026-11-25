@@ -80,6 +80,51 @@ pub fn modules<'a>(cards: &'a [BoardCard], agents: &[BoardAgent]) -> Vec<&'a Boa
         .collect()
 }
 
+// ---- 合併 ----
+
+/// 專案現在要不要有一張「合併待核准」卡，以及能不能核准。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeStatus {
+    /// 沒有新的成果需要合併（沒有模組，或上次合併之後沒有新完成的工作）。
+    NothingToMerge,
+    /// 有新成果，但還有模組沒審查通過或正在處理中：現在合併會動到還在用的 worktree。
+    NotReady,
+    /// 所有模組都審查通過，而且有上次合併之後的新成果。
+    Ready,
+}
+
+/// 模組（連同它的審查與修正）最近一次有動靜的時間。
+fn last_activity(module: &BoardCard, cards: &[BoardCard]) -> i64 {
+    cards
+        .iter()
+        .filter(|c| c.module_id.as_deref() == Some(module.id.as_str()))
+        .chain(std::iter::once(module))
+        .map(|c| c.finished_at.unwrap_or(0).max(c.dispatched_at.unwrap_or(0)))
+        .max()
+        .unwrap_or(0)
+}
+
+pub fn merge_status(cards: &[BoardCard], agents: &[BoardAgent]) -> MergeStatus {
+    let mods = modules(cards, agents);
+    if mods.is_empty() {
+        return MergeStatus::NothingToMerge;
+    }
+    let has_reviewer = agents.iter().any(|a| a.kind == "reviewer");
+    let last_merge = cards.iter().filter(|c| c.card_kind == "merge" && c.status == DONE).filter_map(|c| c.finished_at).max().unwrap_or(0);
+    if !mods.iter().any(|m| last_activity(m, cards) > last_merge) {
+        return MergeStatus::NothingToMerge;
+    }
+    let all_passed = mods.iter().all(|m| {
+        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(m.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix")).cloned().collect();
+        matches!(module_state(m, &chain, has_reviewer), ModuleState::Passed { .. })
+    });
+    if all_passed {
+        MergeStatus::Ready
+    } else {
+        MergeStatus::NotReady
+    }
+}
+
 // ---- 審查結論 ----
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,5 +342,50 @@ mod tests {
         assert_eq!(modules(&cards, &agents).iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["m"]);
         coder.kind = "reviewer".into();
         assert!(modules(&cards, &[coder]).is_empty());
+    }
+
+    fn coder_agent(id: &str) -> BoardAgent {
+        BoardAgent {
+            id: id.into(), project_id: "p".into(), kind: "coder".into(), name: "c".into(), role: String::new(), prompt_prefix: String::new(),
+            canvas_x: 0.0, canvas_y: 0.0, produces_spec: false, model: None, cli: "claude".into(), paused_card_id: None, created_by: String::new(),
+            created_at: 0, updated_at: 0, version: 1,
+        }
+    }
+    fn reviewer_agent() -> BoardAgent {
+        BoardAgent { id: "rv".into(), kind: "reviewer".into(), ..coder_agent("rv") }
+    }
+
+    #[test]
+    fn a_new_merge_is_due_only_for_work_finished_after_the_last_merge_and_never_while_modules_are_unfinished() {
+        let agents = [coder_agent("c1"), reviewer_agent()];
+        let mut m = module();
+        m.finished_at = Some(100);
+        let mut r = review("r", "m", "pass");
+        r.finished_at = Some(110);
+        assert_eq!(merge_status(&[m.clone(), r.clone()], &agents), MergeStatus::Ready, "還沒合併過：有成果就該合併");
+
+        let mut merged = card("mg", "merge", None);
+        merged.module_id = None;
+        merged.agent_id = None;
+        merged.finished_at = Some(120);
+        assert_eq!(merge_status(&[m.clone(), r.clone(), merged.clone()], &agents), MergeStatus::NothingToMerge, "合併過之後沒有新成果");
+
+        // 合併之後又做了第二個模組並通過：要再合併一次。
+        let mut m2 = module();
+        m2.id = "m2".into();
+        m2.finished_at = Some(200);
+        let mut r2 = review("r2", "m2", "pass");
+        r2.module_id = Some("m2".into());
+        r2.finished_at = Some(210);
+        assert_eq!(merge_status(&[m.clone(), r.clone(), merged.clone(), m2.clone(), r2], &agents), MergeStatus::Ready);
+
+        // 第二個模組還沒審查完：不能合併（會動到還在用的 worktree）。
+        assert_eq!(merge_status(&[m.clone(), r.clone(), merged.clone(), m2.clone()], &agents), MergeStatus::NotReady);
+        let mut running = m2;
+        running.status = "running".into();
+        running.finished_at = None;
+        running.dispatched_at = Some(205);
+        assert_eq!(merge_status(&[m, r, merged, running], &agents), MergeStatus::NotReady, "處理中的也算有動靜");
+        assert_eq!(merge_status(&[], &agents), MergeStatus::NothingToMerge);
     }
 }

@@ -1672,3 +1672,26 @@ mod keep_tail_tests {
         assert!(out.contains("世界"));
     }
 }
+
+/// 這個共用看板專案是不是「由 server 執行」。本機專案沒有這個概念，回 `None`。
+#[tauri::command]
+pub async fn tasks_get_orchestration(project_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<Option<bool>, String> {
+    let Some(pid) = crate::intake::board_remote::parse(&project_id) else { return Ok(None) };
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::orchestration(&api, pid).await.map(Some).map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 開關「由 server 執行」（管理員限定，由 server 判斷）。
+#[tauri::command]
+pub async fn tasks_set_orchestration(project_id: String, enabled: bool, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<(), String> {
+    let pid = crate::intake::board_remote::parse(&project_id).ok_or("只有共用看板專案能由 server 執行")?;
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::set_orchestration(&api, pid, enabled).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 核准 server 編排產生的「合併待核准」卡：把各 Coder 的分支合併進專案資料夾（管理員限定）。
+#[tauri::command]
+pub async fn tasks_approve_merge(card_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<String, String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::approve_merge(&api, &card_id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}

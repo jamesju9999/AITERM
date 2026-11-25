@@ -64,13 +64,9 @@ pub async fn advance(st: &AppState, pid: &str) -> Result<usize, sqlx::Error> {
     let reviewer = agents.iter().find(|a| a.kind == "reviewer");
     let mods = orch::modules(&cards, &agents);
     let mut created = 0;
-    let mut all_passed = !mods.is_empty();
     for m in &mods {
         let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(m.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix")).cloned().collect();
         let state = orch::module_state(m, &chain, reviewer.is_some());
-        if !matches!(state, ModuleState::Passed { .. }) {
-            all_passed = false;
-        }
         match state {
             ModuleState::NeedsReview { target } => {
                 let reviewed = cards.iter().find(|c| c.id == target).unwrap_or(m);
@@ -87,8 +83,11 @@ pub async fn advance(st: &AppState, pid: &str) -> Result<usize, sqlx::Error> {
             _ => {}
         }
     }
-    let has_merge = cards.iter().any(|c| c.card_kind == "merge");
-    if all_passed && !has_merge {
+    // 已經有一張等著核准的就不再建；核准過（done）的不算——合併之後新完成的模組要能再有一張。
+    let pending_merge = cards.iter().any(|c| c.card_kind == "merge" && c.status != bs::DONE);
+    // 剛建的審查／修正卡讓狀態變了，用最新的卡片重算「是不是全部通過」。
+    let latest = if created > 0 { bs::project_cards(pool, pid).await? } else { cards.clone() };
+    if !pending_merge && orch::merge_status(&latest, &agents) == orch::MergeStatus::Ready {
         let coders: Vec<&BoardAgent> = agents.iter().filter(|a| a.kind == "coder" && mods.iter().any(|m| m.agent_id.as_deref() == Some(a.id.as_str()))).collect();
         let list: String = coders.iter().map(|a| format!("- {}（分支 {}）\n", a.name, agent_branch(&a.id))).collect();
         let body = format!("所有模組都審查通過。核准後會把下列分支合併進專案資料夾目前的分支（不會自動合併，要管理員在 AITerm 核准）：\n\n{list}");
@@ -201,7 +200,7 @@ async fn run_inner(st: &Arc<AppState>, card_id: &str) -> Result<String, String> 
     let start = runner::git(&wt, &["rev-parse", "HEAD"]).await?.trim().to_string();
     let mode = Mode::Edit { verify_command: cfg.verify_command.clone() };
     let prompt = orch::work_prompt(&agent, &card);
-    let text = runner::exec_claude(&settings, &wt, &mode, &[], &prompt).await?;
+    let text = runner::exec_claude_as(&settings, &wt, &mode, &[], &prompt, agent.model.as_deref()).await?;
     if !runner::git(&wt, &["status", "--porcelain"]).await?.trim().is_empty() {
         runner::git(&wt, &["add", "-A"]).await?;
         runner::git(&wt, &["commit", "-q", "-m", &format!("{}：{}", agent.name, card.title.chars().take(60).collect::<String>())]).await?;
@@ -243,7 +242,7 @@ async fn run_review(st: &Arc<AppState>, settings: &runner::RunnerSettings, work_
     let wt = review_worktree(st, &card.id);
     std::fs::create_dir_all(wt.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
     runner::git(work_dir, &["worktree", "add", "--detach", &wt.to_string_lossy(), &end]).await?;
-    let out = runner::exec_claude(settings, &wt, &Mode::ReadOnly, &[], &prompt).await;
+    let out = runner::exec_claude_as(settings, &wt, &Mode::ReadOnly, &[], &prompt, agent.model.as_deref()).await;
     let _ = runner::git(work_dir, &["worktree", "remove", "--force", &wt.to_string_lossy()]).await;
     let _ = std::fs::remove_dir_all(&wt);
     let verdict = orch::parse_review(&out?)?;
@@ -262,6 +261,11 @@ pub async fn merge_approved(st: &AppState, card: &BoardCard) -> Result<String, S
     let pool = &st.pools.intake;
     let work_dir = work_dir_of(st, &card.project_id).await?;
     let agents = bs::list_agents(pool, &card.project_id).await.map_err(|e| e.to_string())?;
+    // 還有模組沒審查通過或正在處理：合併會刪掉它們還在用的 worktree，先等。
+    let cards = bs::project_cards(pool, &card.project_id).await.map_err(|e| e.to_string())?;
+    if orch::merge_status(&cards, &agents) == orch::MergeStatus::NotReady {
+        return Err("還有模組正在處理或還沒審查通過，現在合併會動到它們用的工作資料夾；等全部通過後再核准".into());
+    }
     let mut merged = Vec::new();
     for a in agents.iter().filter(|a| a.kind == "coder") {
         let branch = agent_branch(&a.id);
