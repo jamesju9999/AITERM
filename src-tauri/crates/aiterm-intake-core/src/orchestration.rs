@@ -20,6 +20,8 @@ pub enum ModuleState {
     NeedsReview { target: String },
     /// 最後一張審查不通過、還有修正次數：要建一張修正卡。`round` 從 1 算起。
     NeedsFix { review: String, round: usize },
+    /// 規格模組審查通過了，還沒有拆解卡：要建一張給 Orchestrator。`sha` 是通過的那版。
+    NeedsPlan { sha: Option<String> },
     /// 審查通過（或沒有 Reviewer）；`sha` 是通過的那版。
     Passed { sha: Option<String> },
     /// 審查不通過，而且修正次數用完了。
@@ -80,6 +82,140 @@ pub fn modules<'a>(cards: &'a [BoardCard], agents: &[BoardAgent]) -> Vec<&'a Boa
         .collect()
 }
 
+/// 模組的完整狀態：審查鏈（`module_state`）之外，規格模組通過審查後還要過「拆解」這一關
+/// （沒有 Orchestrator 就照一般模組算通過；人工放行的規格不拆）。`chain` 要包含拆解卡。
+pub fn module_status(module: &BoardCard, chain: &[BoardCard], has_reviewer: bool, has_orchestrator: bool) -> ModuleState {
+    let state = module_state(module, chain, has_reviewer);
+    let ModuleState::Passed { sha } = state else { return state };
+    if !module.is_spec || module.module_override || !has_orchestrator {
+        return ModuleState::Passed { sha };
+    }
+    match chain.iter().find(|c| c.card_kind == "plan") {
+        None => ModuleState::NeedsPlan { sha },
+        Some(p) if p.status != DONE => ModuleState::Waiting,
+        Some(p) if p.outcome.as_deref() == Some("success") => ModuleState::Passed { sha },
+        Some(p) => ModuleState::Stuck(format!("拆解「{}」失敗：{}", module.title, p.error_message.clone().unwrap_or_default())),
+    }
+}
+
+// ---- 拆解（Orchestrator）----
+
+/// 一次最多拆成幾張實作卡。
+pub const MAX_PLAN_TASKS: usize = 20;
+/// 介面約定的字數上限；超過就截斷（太長會把每張卡的內文洗掉）。
+pub const INTERFACES_LIMIT: usize = 1500;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct PlanTask {
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    /// 依賴的前面任務的索引（0 起算，只能指向排在它前面的任務）。
+    #[serde(default)]
+    pub depends_on: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plan {
+    pub tasks: Vec<PlanTask>,
+    /// 任務之間共用的介面約定；沒有就是 `None`。
+    pub interfaces: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct PlanFile {
+    #[serde(default)]
+    tasks: Vec<PlanTask>,
+    #[serde(default)]
+    interfaces: Option<String>,
+}
+
+/// 從 Orchestrator 的回答取出拆解結果（格式同桌版的 tasks.json）。容忍前後文字與 ``` 圍欄。
+/// 驗證：1～`MAX_PLAN_TASKS` 張、每張標題非空、depends_on 只能指向排在前面的任務。
+pub fn parse_plan(text: &str) -> Result<Plan, String> {
+    let (Some(a), Some(b)) = (text.find('{'), text.rfind('}')) else { return Err("拆解的回答裡找不到 JSON".into()) };
+    if b < a {
+        return Err("拆解的回答裡找不到 JSON".into());
+    }
+    let f: PlanFile = serde_json::from_str(&text[a..=b]).map_err(|e| format!("拆解的 JSON 讀不懂：{e}"))?;
+    let tasks: Vec<PlanTask> = f
+        .tasks
+        .into_iter()
+        .map(|mut t| {
+            t.depends_on.sort_unstable();
+            t.depends_on.dedup();
+            PlanTask { title: t.title.trim().to_string(), ..t }
+        })
+        .collect();
+    if tasks.is_empty() {
+        return Err("tasks 是空的".into());
+    }
+    if tasks.len() > MAX_PLAN_TASKS {
+        return Err(format!("最多 {MAX_PLAN_TASKS} 個任務，收到 {}", tasks.len()));
+    }
+    if tasks.iter().any(|t| t.title.is_empty()) {
+        return Err("有任務沒有標題".into());
+    }
+    for (i, t) in tasks.iter().enumerate() {
+        if let Some(bad) = t.depends_on.iter().find(|&&d| d >= i) {
+            return Err(format!("第 {i} 個任務「{}」的 depends_on 有 {bad}：只能指向排在它前面的任務（0 到 {}）", t.title, i as isize - 1));
+        }
+    }
+    let interfaces = f.interfaces.map(|i| i.trim().to_string()).filter(|i| !i.is_empty()).map(|i| {
+        if i.chars().count() > INTERFACES_LIMIT {
+            format!("{}…（太長，已截斷）", i.chars().take(INTERFACES_LIMIT).collect::<String>())
+        } else {
+            i
+        }
+    });
+    Ok(Plan { tasks, interfaces })
+}
+
+/// 拆解卡給 Orchestrator 的提示詞。`spec_text` 是規格全文（server 從 git 讀出來附上）。
+pub fn plan_prompt(agent: &BoardAgent, module: &BoardCard, implementers: &[(String, String)], spec_text: &str) -> String {
+    let mut s = String::new();
+    if !agent.prompt_prefix.trim().is_empty() {
+        s.push_str(agent.prompt_prefix.trim());
+        s.push_str("\n\n");
+    }
+    s.push_str(&format!(
+        "請把模組「{}」已通過審查的規格拆解成可以分頭實作的任務。你只能讀檔，不要修改任何東西。\n\n原始需求：\n{}\n\n可以接手實作的工程師（任務會自動派給最閒的一位，你不用指定）：\n",
+        module.title.trim(),
+        module.body.trim()
+    ));
+    if implementers.is_empty() {
+        s.push_str("- （目前沒有）\n");
+    }
+    for (name, role) in implementers {
+        s.push_str(&format!("- {name}（{role}）\n"));
+    }
+    s.push_str(&format!(
+        "\n拆解原則：每個任務要能獨立實作與審查；body 要自給自足，寫清楚要做什麼、對應規格的哪個章節、驗收條件。最多 {MAX_PLAN_TASKS} 個任務。\n\
+         \n相依關係（depends_on）：每位工程師在自己的分支上做，看不到別人還沒合併的程式碼。\n\
+         - 任務需要用到前面某些任務寫出來的程式碼，就在 depends_on 列出那些任務的索引（0 起算，只能指向排在它前面的任務）。\n\
+         - 整合類任務（例如把各模組組裝起來）要列出它要組裝的所有模組。\n\
+         - 被依賴的任務排在前面；彼此獨立的任務不要寫 depends_on，才能平行做。\n\
+         \n介面約定（interfaces）：任務之間會互相呼叫或共用的東西，先在這裡一次定死，每張任務都會附上這段。\n\
+         - 寫模組之間的函式簽名、資料格式、檔案或目錄的分工、共用的名稱與常數；只寫跨任務要對得上的部分，{INTERFACES_LIMIT} 字以內。\n\
+         - 任務只有一個、或彼此完全獨立時可以省略。\n"
+    ));
+    s.push_str("\n## 規格全文\n");
+    s.push_str(if spec_text.trim().is_empty() { "（讀不到規格檔案；請自己用工具讀專案裡的規格文件）" } else { spec_text });
+    s.push_str("\n\n拆完最後只回一段 JSON，不要加其他說明：\n{\"interfaces\": \"…\", \"tasks\": [{\"title\": \"…\", \"body\": \"…\"}, {\"title\": \"…\", \"body\": \"…\", \"depends_on\": [0]}]}\n");
+    s
+}
+
+/// 實作卡的內文：任務內容＋介面約定＋規格來源與全文（實作的 Coder 看不到規格撰寫師分支上的檔案，所以附全文）。
+pub fn impl_body(task: &PlanTask, interfaces: Option<&str>, spec_title: &str, spec_text: &str) -> String {
+    let contract = interfaces.map(|i| format!("\n\n## 介面約定（各任務共同遵守，不要自行更改）\n{i}")).unwrap_or_default();
+    format!("{}{contract}\n\n（這是從規格「{spec_title}」拆出來的任務；規格文件也一併附在下面。）\n\n{spec_text}", task.body.trim())
+}
+
+/// 卡片的前置（`depends_on`，JSON 陣列字串）。沒有或格式壞掉都當作沒有。
+pub fn deps_of(card: &BoardCard) -> Vec<String> {
+    card.depends_on.as_deref().and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default()
+}
+
 // ---- 合併 ----
 
 /// 專案現在要不要有一張「合併待核准」卡，以及能不能核准。
@@ -110,13 +246,14 @@ pub fn merge_status(cards: &[BoardCard], agents: &[BoardAgent]) -> MergeStatus {
         return MergeStatus::NothingToMerge;
     }
     let has_reviewer = agents.iter().any(|a| a.kind == "reviewer");
+    let has_orchestrator = agents.iter().any(|a| a.kind == "orchestrator");
     let last_merge = cards.iter().filter(|c| c.card_kind == "merge" && c.status == DONE).filter_map(|c| c.finished_at).max().unwrap_or(0);
     if !mods.iter().any(|m| last_activity(m, cards) > last_merge) {
         return MergeStatus::NothingToMerge;
     }
     let all_passed = mods.iter().all(|m| {
-        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(m.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix")).cloned().collect();
-        matches!(module_state(m, &chain, has_reviewer), ModuleState::Passed { .. })
+        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(m.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "plan")).cloned().collect();
+        matches!(module_status(m, &chain, has_reviewer, has_orchestrator), ModuleState::Passed { .. })
     });
     if all_passed {
         MergeStatus::Ready
@@ -387,5 +524,77 @@ mod tests {
         running.dispatched_at = Some(205);
         assert_eq!(merge_status(&[m, r, merged, running], &agents), MergeStatus::NotReady, "處理中的也算有動靜");
         assert_eq!(merge_status(&[], &agents), MergeStatus::NothingToMerge);
+    }
+
+    fn plan_card(outcome: Option<&str>, status: &str) -> BoardCard {
+        let mut p = card("plan1", "plan", None);
+        p.status = status.into();
+        p.outcome = outcome.map(str::to_string);
+        p.error_message = if outcome == Some("failed") { Some("JSON 壞了".into()) } else { None };
+        p
+    }
+
+    #[test]
+    fn a_spec_module_must_also_get_through_decomposition_before_it_counts_as_passed() {
+        let mut spec = module();
+        spec.is_spec = true;
+        let pass = review("r", "m", "pass");
+        let base = [pass.clone()];
+        assert_eq!(module_status(&spec, &base, true, true), ModuleState::NeedsPlan { sha: Some("sha-m".into()) }, "審查通過、還沒有拆解卡");
+        assert_eq!(module_status(&spec, &base, true, false), ModuleState::Passed { sha: Some("sha-m".into()) }, "沒有 Orchestrator 就照一般模組");
+        let with = |p: BoardCard| [pass.clone(), p];
+        assert_eq!(module_status(&spec, &with(plan_card(None, "queued")), true, true), ModuleState::Waiting);
+        assert_eq!(module_status(&spec, &with(plan_card(None, "running")), true, true), ModuleState::Waiting);
+        assert_eq!(module_status(&spec, &with(plan_card(Some("success"), "done")), true, true), ModuleState::Passed { sha: Some("sha-m".into()) });
+        assert!(matches!(module_status(&spec, &with(plan_card(Some("failed"), "done")), true, true), ModuleState::Stuck(s) if s.contains("JSON 壞了")));
+        // 審查還沒過：不會提早要求拆解。
+        assert_eq!(module_status(&spec, &[review("r", "m", "fail")], true, true), ModuleState::NeedsFix { review: "r".into(), round: 1 });
+        // 人工放行的規格不拆；一般模組完全不受影響。
+        let mut over = spec.clone();
+        over.module_override = true;
+        assert_eq!(module_status(&over, &[], true, true), ModuleState::Passed { sha: Some("sha-m".into()) });
+        assert_eq!(module_status(&module(), &base, true, true), ModuleState::Passed { sha: Some("sha-m".into()) });
+    }
+
+    #[test]
+    fn plans_are_read_out_of_chatter_validated_and_dependencies_may_only_point_backwards() {
+        let ok = parse_plan("好的：\n```json\n{\"interfaces\":\" 共用 User 結構 \",\"tasks\":[{\"title\":\" 資料層 \",\"body\":\"做 db\"},{\"title\":\"介面\",\"depends_on\":[0,0]}]}\n```").unwrap();
+        assert_eq!(ok.interfaces.as_deref(), Some("共用 User 結構"));
+        assert_eq!((ok.tasks[0].title.as_str(), ok.tasks[1].depends_on.clone(), ok.tasks[1].body.as_str()), ("資料層", vec![0], ""), "標題去空白、重複的相依去掉、body 可省略");
+        assert_eq!(parse_plan("{\"tasks\":[{\"title\":\"a\"}],\"interfaces\":\"  \"}").unwrap().interfaces, None);
+        let long = format!("{{\"tasks\":[{{\"title\":\"a\"}}],\"interfaces\":\"{}\"}}", "字".repeat(INTERFACES_LIMIT + 5));
+        assert!(parse_plan(&long).unwrap().interfaces.unwrap().ends_with("（太長，已截斷）"));
+        for (bad, why) in [
+            ("沒有 json", "找不到 JSON"),
+            ("{\"tasks\":[]}", "空的"),
+            ("{\"tasks\":[{\"title\":\" \"}]}", "沒有標題"),
+            ("{\"tasks\":[{\"title\":\"a\",\"depends_on\":[0]}]}", "只能指向排在它前面"),
+            ("{\"tasks\":[{\"title\":\"a\"},{\"title\":\"b\",\"depends_on\":[5]}]}", "只能指向排在它前面"),
+        ] {
+            assert!(parse_plan(bad).unwrap_err().contains(why), "{bad}");
+        }
+        let many = format!("{{\"tasks\":[{}]}}", (0..=MAX_PLAN_TASKS).map(|i| format!("{{\"title\":\"t{i}\"}}")).collect::<Vec<_>>().join(","));
+        assert!(parse_plan(&many).unwrap_err().contains("最多"));
+    }
+
+    #[test]
+    fn the_plan_prompt_and_implementation_card_carry_the_contract_and_the_spec() {
+        let agent = BoardAgent { prompt_prefix: "你是 Orchestrator".into(), ..coder_agent("o1") };
+        let mut m = module();
+        m.title = "記帳 App".into();
+        m.body = "做一個記帳 App".into();
+        let p = plan_prompt(&agent, &m, &[("工程師2".into(), "前端".into())], "### spec.md\n\n# 規格");
+        assert!(p.starts_with("你是 Orchestrator") && p.contains("做一個記帳 App") && p.contains("工程師2（前端）") && p.contains("# 規格") && p.contains("depends_on") && p.contains("\"interfaces\""));
+        assert!(plan_prompt(&agent, &m, &[], "").contains("（目前沒有）") && plan_prompt(&agent, &m, &[], "").contains("讀不到規格"));
+        let t = PlanTask { title: "資料層".into(), body: "做 db".into(), depends_on: vec![] };
+        let b = impl_body(&t, Some("User{id:int}"), "記帳 App", "## 規格全文");
+        assert!(b.starts_with("做 db") && b.contains("User{id:int}") && b.contains("從規格「記帳 App」拆出來") && b.contains("## 規格全文"));
+        assert!(!impl_body(&t, None, "x", "").contains("介面約定"));
+        let mut c = module();
+        assert!(deps_of(&c).is_empty());
+        c.depends_on = Some("[\"a\",\"b\"]".into());
+        assert_eq!(deps_of(&c), vec!["a", "b"]);
+        c.depends_on = Some("壞掉".into());
+        assert!(deps_of(&c).is_empty());
     }
 }

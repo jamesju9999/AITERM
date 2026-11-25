@@ -374,6 +374,9 @@ pub struct NewWorkflowCard<'a> {
     pub review_of: Option<&'a str>,
     /// 審查與修正直接排進待派送；合併卡放規劃中等管理員核准。
     pub status: &'a str,
+    /// 實作卡（`work`）：依賴的前置卡 id（JSON 陣列字串）與來源規格。
+    pub depends_on: Option<&'a str>,
+    pub from_spec: Option<&'a str>,
 }
 
 pub async fn create_workflow_card(pool: &SqlitePool, c: NewWorkflowCard<'_>) -> Result<BoardCard, sqlx::Error> {
@@ -381,10 +384,10 @@ pub async fn create_workflow_card(pool: &SqlitePool, c: NewWorkflowCard<'_>) -> 
     let t = now();
     let order = next_order(pool, c.project_id, c.status).await?;
     sqlx::query(
-        "INSERT INTO board_cards (id, project_id, title, body, status, sort_order, created_by, created_at, updated_at, version, agent_id, card_kind, module_id, review_of)
-         VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?)",
+        "INSERT INTO board_cards (id, project_id, title, body, status, sort_order, created_by, created_at, updated_at, version, agent_id, card_kind, module_id, review_of, depends_on, from_spec)
+         VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?)",
     )
-    .bind(&id).bind(c.project_id).bind(c.title).bind(c.body).bind(c.status).bind(order).bind("server").bind(t).bind(t).bind(c.agent_id).bind(c.kind).bind(c.module_id).bind(c.review_of)
+    .bind(&id).bind(c.project_id).bind(c.title).bind(c.body).bind(c.status).bind(order).bind("server").bind(t).bind(t).bind(c.agent_id).bind(c.kind).bind(c.module_id).bind(c.review_of).bind(c.depends_on).bind(c.from_spec)
     .execute(pool).await?;
     Ok(get_card(pool, &id).await?.expect("剛建立的卡片"))
 }
@@ -614,20 +617,22 @@ pub async fn assign_card(pool: &SqlitePool, card_id: &str, version: i64, agent_i
     if cur.status != PLANNING && cur.status != QUEUED {
         return Ok(Change::Refused("只有計畫中與待派送的卡片可以改指派".into()));
     }
+    let mut is_spec = false;
     let to_status = match agent_id {
         Some(a) => {
             match get_agent(pool, a).await? {
                 None => return Ok(Change::Refused("找不到這個 Agent".into())),
                 Some(ag) if ag.project_id != cur.project_id => return Ok(Change::Refused("Agent 與卡片不在同一個專案".into())),
-                Some(_) => {}
+                // 指派給「產出規格」的 Coder：這張是規格卡，通過審查後交給 Orchestrator 拆解。
+                Some(ag) => is_spec = ag.produces_spec,
             }
             QUEUED
         }
         None => PLANNING,
     };
     let order = next_order(pool, &cur.project_id, to_status).await?;
-    let r = sqlx::query("UPDATE board_cards SET agent_id = ?, status = ?, sort_order = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?")
-        .bind(agent_id).bind(to_status).bind(order).bind(now()).bind(card_id).bind(version).execute(pool).await?;
+    let r = sqlx::query("UPDATE board_cards SET agent_id = ?, status = ?, sort_order = ?, is_spec = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?")
+        .bind(agent_id).bind(to_status).bind(order).bind(is_spec).bind(now()).bind(card_id).bind(version).execute(pool).await?;
     if r.rows_affected() == 0 {
         return Ok(Change::Conflict);
     }
@@ -816,6 +821,28 @@ mod tests {
         assert!(!set_agent_position(&p, &a.id, f64::NAN, 1.0).await.unwrap());
         let moved = get_agent(&p, &a.id).await.unwrap().unwrap();
         assert_eq!((moved.canvas_x, moved.canvas_y, moved.version), (300.0, 400.0, 2), "拖動節點不算內容變動");
+    }
+
+    #[tokio::test]
+    async fn a_card_given_to_a_spec_writer_is_a_spec_and_stops_being_one_when_moved_to_another_coder() {
+        let p = pool().await;
+        let writer = create_agent(&p, NewAgent { produces_spec: true, ..agent("coder", "規格站") }).await.unwrap().unwrap();
+        let plain = create_agent(&p, agent("coder", "工程師")).await.unwrap().unwrap();
+        let c = card(&p, "x").await;
+        let Change::Ok(q) = assign_card(&p, &c.id, 1, Some(&writer.id)).await.unwrap() else { panic!() };
+        assert!(q.is_spec);
+        let Change::Ok(back) = assign_card(&p, &q.id, q.version, None).await.unwrap() else { panic!() };
+        assert!(!back.is_spec, "退回計畫中就不是規格了");
+        let Change::Ok(q2) = assign_card(&p, &back.id, back.version, Some(&plain.id)).await.unwrap() else { panic!() };
+        assert!(!q2.is_spec);
+    }
+
+    #[tokio::test]
+    async fn workflow_cards_keep_their_dependencies_and_the_spec_they_came_from() {
+        let p = pool().await;
+        let w = create_workflow_card(&p, NewWorkflowCard { project_id: "p1", title: "資料層", body: "b", kind: "work", agent_id: None, module_id: None, review_of: None, status: QUEUED, depends_on: Some("[\"x\"]"), from_spec: Some("spec1") }).await.unwrap();
+        let got = get_card(&p, &w.id).await.unwrap().unwrap();
+        assert_eq!((got.card_kind.as_str(), got.depends_on.as_deref(), got.from_spec.as_deref(), got.status.as_str()), ("work", Some("[\"x\"]"), Some("spec1"), QUEUED));
     }
 
     #[tokio::test]

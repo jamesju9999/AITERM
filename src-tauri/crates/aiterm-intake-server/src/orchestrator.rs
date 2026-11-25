@@ -22,6 +22,8 @@ use std::time::Duration;
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(120);
 /// 審查時最多帶多少字元的 diff 給 Reviewer。
 const MAX_DIFF_CHARS: usize = 60_000;
+/// 附在實作卡與拆解提示詞裡的規格全文上限。
+const SPEC_TEXT_LIMIT: usize = 30_000;
 
 /// 同一時間只讓一個 tick 在跑：迴圈與測試／手動觸發重疊時，不會重複建審查卡。
 static TICK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -62,22 +64,31 @@ pub async fn advance(st: &AppState, pid: &str) -> Result<usize, sqlx::Error> {
     let agents = bs::list_agents(pool, pid).await?;
     let cards = bs::project_cards(pool, pid).await?;
     let reviewer = agents.iter().find(|a| a.kind == "reviewer");
+    let orchestrator = agents.iter().find(|a| a.kind == "orchestrator");
     let mods = orch::modules(&cards, &agents);
     let mut created = 0;
     for m in &mods {
-        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(m.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix")).cloned().collect();
-        let state = orch::module_state(m, &chain, reviewer.is_some());
+        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(m.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "plan")).cloned().collect();
+        let state = orch::module_status(m, &chain, reviewer.is_some(), orchestrator.is_some());
         match state {
             ModuleState::NeedsReview { target } => {
                 let reviewed = cards.iter().find(|c| c.id == target).unwrap_or(m);
                 let title = format!("審查：{}", m.title);
-                bs::create_workflow_card(pool, NewWorkflowCard { project_id: pid, title: &title, body: &orch::review_card_body(m, reviewed), kind: "review", agent_id: reviewer.map(|a| a.id.as_str()), module_id: Some(&m.id), review_of: Some(&target), status: QUEUED }).await?;
+                bs::create_workflow_card(pool, NewWorkflowCard { project_id: pid, title: &title, body: &orch::review_card_body(m, reviewed), kind: "review", agent_id: reviewer.map(|a| a.id.as_str()), module_id: Some(&m.id), review_of: Some(&target), status: QUEUED, depends_on: None, from_spec: None }).await?;
                 created += 1;
             }
             ModuleState::NeedsFix { review, round } => {
                 let reasons = cards.iter().find(|c| c.id == review).map(reasons_of).unwrap_or_default();
                 let title = format!("修正（第 {round} 次）：{}", m.title);
-                bs::create_workflow_card(pool, NewWorkflowCard { project_id: pid, title: &title, body: &orch::fix_body(m, &reasons, round), kind: "fix", agent_id: m.agent_id.as_deref(), module_id: Some(&m.id), review_of: Some(&review), status: QUEUED }).await?;
+                bs::create_workflow_card(pool, NewWorkflowCard { project_id: pid, title: &title, body: &orch::fix_body(m, &reasons, round), kind: "fix", agent_id: m.agent_id.as_deref(), module_id: Some(&m.id), review_of: Some(&review), status: QUEUED, depends_on: None, from_spec: None }).await?;
+                created += 1;
+            }
+            ModuleState::NeedsPlan { sha } => {
+                // 規格審查通過：交給 Orchestrator 拆解（沒有 Orchestrator 時 module_status 不會走到這裡）。
+                let Some(orc) = orchestrator else { continue };
+                let title = format!("拆解規格：{}", m.title);
+                let plan = bs::create_workflow_card(pool, NewWorkflowCard { project_id: pid, title: &title, body: &format!("把通過審查的規格「{}」拆成可以分頭實作的任務，依相依順序派給工程師。", m.title), kind: "plan", agent_id: Some(&orc.id), module_id: Some(&m.id), review_of: None, status: QUEUED, depends_on: None, from_spec: None }).await?;
+                bs::set_shas(pool, &plan.id, m.start_sha.as_deref(), sha.as_deref()).await?;
                 created += 1;
             }
             _ => {}
@@ -91,7 +102,7 @@ pub async fn advance(st: &AppState, pid: &str) -> Result<usize, sqlx::Error> {
         let coders: Vec<&BoardAgent> = agents.iter().filter(|a| a.kind == "coder" && mods.iter().any(|m| m.agent_id.as_deref() == Some(a.id.as_str()))).collect();
         let list: String = coders.iter().map(|a| format!("- {}（分支 {}）\n", a.name, agent_branch(&a.id))).collect();
         let body = format!("所有模組都審查通過。核准後會把下列分支合併進專案資料夾目前的分支（不會自動合併，要管理員在 AITerm 核准）：\n\n{list}");
-        bs::create_workflow_card(pool, NewWorkflowCard { project_id: pid, title: "合併待核准", body: &body, kind: "merge", agent_id: None, module_id: None, review_of: None, status: bs::PLANNING }).await?;
+        bs::create_workflow_card(pool, NewWorkflowCard { project_id: pid, title: "合併待核准", body: &body, kind: "merge", agent_id: None, module_id: None, review_of: None, status: bs::PLANNING, depends_on: None, from_spec: None }).await?;
         created += 1;
     }
     Ok(created)
@@ -123,12 +134,16 @@ pub async fn tick_once(st: &Arc<AppState>) -> usize {
         }
         let Ok(agents) = bs::list_agents(&st.pools.intake, &p.id).await else { continue };
         let Ok(cards) = bs::project_cards(&st.pools.intake, &p.id).await else { continue };
-        for card in cards.iter().filter(|c| c.status == QUEUED && matches!(c.card_kind.as_str(), "work" | "fix" | "review")) {
+        for card in cards.iter().filter(|c| c.status == QUEUED && matches!(c.card_kind.as_str(), "work" | "fix" | "review" | "plan")) {
             if st.runner.running() >= settings.max_concurrent {
                 return started;
             }
             let Some(agent) = card.agent_id.as_deref().and_then(|id| agents.iter().find(|a| a.id == id)) else { continue };
             if agent.paused_card_id.is_some() || bs::agent_busy(&st.pools.intake, &agent.id).await.unwrap_or(true) {
+                continue;
+            }
+            // 前置（依賴）在別位工程師手上、還沒通過審查：先不開工，等它過了才有可以接的程式碼。
+            if !deps_ready(card, &cards, &agents) {
                 continue;
             }
             if !matches!(bs::claim_card(&st.pools.intake, &card.id, WHO, crate::db::now()).await, Ok(true)) {
@@ -195,8 +210,13 @@ async fn run_inner(st: &Arc<AppState>, card_id: &str) -> Result<String, String> 
     if card.card_kind == "review" {
         return run_review(st, &settings, &work_dir, &agent, &card).await;
     }
+    if card.card_kind == "plan" {
+        return run_plan(st, &settings, &work_dir, &agent, &card).await;
+    }
     // work／fix：在這個 Coder 專屬的 worktree 裡改。
     let wt = ensure_agent_worktree(st, &work_dir, &agent).await?;
+    // 先把別位工程師已通過審查的前置合併進來；起始版本要在這之後才記，審查的 diff 才不會把前置的程式碼算成這張卡的。
+    premerge_dependencies(st, &wt, &card).await?;
     let start = runner::git(&wt, &["rev-parse", "HEAD"]).await?.trim().to_string();
     let mode = Mode::Edit { verify_command: cfg.verify_command.clone() };
     let prompt = orch::work_prompt(&agent, &card);
@@ -248,6 +268,114 @@ async fn run_review(st: &Arc<AppState>, settings: &runner::RunnerSettings, work_
     let verdict = orch::parse_review(&out?)?;
     bs::set_verdict(pool, &card.id, if verdict.pass { "pass" } else { "fail" }, &verdict.reasons).await.map_err(|e| e.to_string())?;
     Ok(if verdict.pass { "審查通過".to_string() } else { format!("審查不通過：{}", verdict.reasons.join("；")) })
+}
+
+// ---- 拆解與相依 ----
+
+/// 規格在 `end` 版的全文：`start..end` 之間新增或修改的檔案，串成一段（太長就截斷）。
+/// 實作的 Coder 在自己的分支上看不到規格撰寫師分支上的檔案，所以實作卡要附全文。
+async fn spec_text(work_dir: &Path, start: Option<&str>, end: &str) -> String {
+    let range = match start {
+        Some(s) => format!("{s}..{end}"),
+        None => format!("{end}^..{end}"),
+    };
+    let Ok(names) = runner::git(work_dir, &["diff", "--name-only", &range]).await else { return String::new() };
+    let mut out = String::new();
+    for f in names.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(text) = runner::git(work_dir, &["show", &format!("{end}:{f}")]).await else { continue };
+        out.push_str(&format!("### {f}\n\n{text}\n\n"));
+        if out.chars().count() > SPEC_TEXT_LIMIT {
+            let cut: String = out.chars().take(SPEC_TEXT_LIMIT).collect();
+            return format!("{cut}\n\n（規格太長，已截斷；完整內容在版本 {end}）\n");
+        }
+    }
+    out
+}
+
+/// 這張卡的前置是否都滿足：在別位工程師手上的前置要已通過審查；同一位的靠佇列順序；找不到的不擋。
+fn deps_ready(card: &BoardCard, cards: &[BoardCard], agents: &[BoardAgent]) -> bool {
+    let (has_reviewer, has_orch) = (agents.iter().any(|a| a.kind == "reviewer"), agents.iter().any(|a| a.kind == "orchestrator"));
+    orch::deps_of(card).iter().filter_map(|d| cards.iter().find(|c| c.id == *d)).all(|dep| {
+        if dep.agent_id == card.agent_id {
+            return true;
+        }
+        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(dep.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "plan")).cloned().collect();
+        matches!(orch::module_status(dep, &chain, has_reviewer, has_orch), ModuleState::Passed { .. })
+    })
+}
+
+/// 開工前把別位工程師「已通過審查的版本」合併進這位的 worktree（已經在裡面就略過）。衝突就中止並讓這張卡失敗。
+async fn premerge_dependencies(st: &AppState, wt: &Path, card: &BoardCard) -> Result<(), String> {
+    let pool = &st.pools.intake;
+    let module = if card.card_kind == "fix" { bs::get_card(pool, card.module_id.as_deref().unwrap_or("")).await.map_err(|e| e.to_string())?.unwrap_or_else(|| card.clone()) } else { card.clone() };
+    let deps = orch::deps_of(&module);
+    if deps.is_empty() {
+        return Ok(());
+    }
+    let agents = bs::list_agents(pool, &card.project_id).await.map_err(|e| e.to_string())?;
+    let cards = bs::project_cards(pool, &card.project_id).await.map_err(|e| e.to_string())?;
+    let (has_reviewer, has_orch) = (agents.iter().any(|a| a.kind == "reviewer"), agents.iter().any(|a| a.kind == "orchestrator"));
+    for dep in deps.iter().filter_map(|d| cards.iter().find(|c| c.id == *d)).filter(|d| d.agent_id != module.agent_id) {
+        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(dep.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "plan")).cloned().collect();
+        let ModuleState::Passed { sha: Some(sha) } = orch::module_status(dep, &chain, has_reviewer, has_orch) else { return Err(format!("前置「{}」還沒有通過審查的版本", dep.title)) };
+        if runner::git(wt, &["merge-base", "--is-ancestor", &sha, "HEAD"]).await.is_ok() {
+            continue;
+        }
+        if let Err(e) = runner::git(wt, &["merge", "--no-ff", "-m", &format!("預先合併前置：{}", dep.title.chars().take(40).collect::<String>()), &sha]).await {
+            let _ = runner::git(wt, &["merge", "--abort"]).await;
+            return Err(format!("把前置「{}」合併進來時衝突（已還原）：{e}", dep.title));
+        }
+    }
+    Ok(())
+}
+
+/// 最閒的 Coder：先比待派送＋處理中的卡數，再比做過幾張。
+fn pick_least_busy<'a>(candidates: &'a [&BoardAgent], load: &std::collections::HashMap<String, (usize, usize)>) -> Option<&'a BoardAgent> {
+    candidates.iter().copied().min_by_key(|a| load.get(&a.id).copied().unwrap_or((0, 0)))
+}
+
+async fn run_plan(st: &Arc<AppState>, settings: &runner::RunnerSettings, work_dir: &Path, agent: &BoardAgent, card: &BoardCard) -> Result<String, String> {
+    let pool = &st.pools.intake;
+    let module = bs::get_card(pool, card.module_id.as_deref().unwrap_or("")).await.map_err(|e| e.to_string())?.ok_or("找不到要拆解的規格卡")?;
+    let end = card.end_sha.clone().ok_or("拆解卡沒有記下規格的版本")?;
+    let agents = bs::list_agents(pool, &card.project_id).await.map_err(|e| e.to_string())?;
+    let candidates: Vec<&BoardAgent> = agents.iter().filter(|a| a.kind == "coder" && !a.produces_spec).collect();
+    if candidates.is_empty() {
+        return Err("沒有可以接手實作的工程師：專案裡要有至少一位「不產出規格」的 Coder".into());
+    }
+    let spec = spec_text(work_dir, card.start_sha.as_deref(), &end).await;
+    let implementers: Vec<(String, String)> = candidates.iter().map(|a| (a.name.clone(), a.role.clone())).collect();
+    let prompt = orch::plan_prompt(agent, &module, &implementers, &spec);
+    // 在規格那一版的一次性 worktree 裡唯讀拆解（它可以自己讀專案裡的其他檔案）。
+    let wt = review_worktree(st, &card.id);
+    std::fs::create_dir_all(wt.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
+    runner::git(work_dir, &["worktree", "add", "--detach", &wt.to_string_lossy(), &end]).await?;
+    let out = runner::exec_claude_as(settings, &wt, &Mode::ReadOnly, &[], &prompt, agent.model.as_deref()).await;
+    let _ = runner::git(work_dir, &["worktree", "remove", "--force", &wt.to_string_lossy()]).await;
+    let _ = std::fs::remove_dir_all(&wt);
+    let plan = orch::parse_plan(&out?)?;
+
+    // 建實作卡：照最閒的工程師分；相依的索引換成前面建出來的卡 id。
+    let current = bs::project_cards(pool, &card.project_id).await.map_err(|e| e.to_string())?;
+    let mut load: std::collections::HashMap<String, (usize, usize)> = std::collections::HashMap::new();
+    for c in &candidates {
+        let busy = current.iter().filter(|t| t.agent_id.as_deref() == Some(c.id.as_str()) && matches!(t.status.as_str(), "queued" | "running")).count();
+        let total = current.iter().filter(|t| t.agent_id.as_deref() == Some(c.id.as_str()) && t.card_kind == "work").count();
+        load.insert(c.id.clone(), (busy, total));
+    }
+    let mut created: Vec<String> = Vec::new();
+    for t in &plan.tasks {
+        let coder = pick_least_busy(&candidates, &load).ok_or("沒有可以接手實作的工程師")?;
+        let deps: Vec<&String> = t.depends_on.iter().filter_map(|&i| created.get(i)).collect();
+        let deps_json = (!deps.is_empty()).then(|| serde_json::to_string(&deps).unwrap_or_default());
+        let body = orch::impl_body(t, plan.interfaces.as_deref(), &module.title, &spec);
+        let c = bs::create_workflow_card(pool, NewWorkflowCard { project_id: &card.project_id, title: &t.title, body: &body, kind: "work", agent_id: Some(&coder.id), module_id: None, review_of: None, status: QUEUED, depends_on: deps_json.as_deref(), from_spec: Some(&module.id) }).await.map_err(|e| e.to_string())?;
+        let e = load.entry(coder.id.clone()).or_insert((0, 0));
+        e.0 += 1;
+        e.1 += 1;
+        created.push(c.id);
+    }
+    Ok(format!("拆成 {} 張實作卡", created.len()))
 }
 
 // ---- 核准合併 ----

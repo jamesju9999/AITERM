@@ -44,6 +44,7 @@ case "$ALLOWED" in
     n=$(cat "$D/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$D/n"
     echo "coder $n start $(pwd)" >> "$D/log.txt"
     cp "$D/last_prompt.txt" "$D/coder_prompt_$n.txt"
+    ls > "$D/files_$n.txt"
     printf '%s\n' "$@" > "$D/coder_args_$n.txt"
     sleep @SECS@
     echo "change $n" >> "work-$n.txt"
@@ -51,6 +52,13 @@ case "$ALLOWED" in
     printf '{"type":"result","is_error":false,"result":"做完了"}'
     ;;
   *)
+    if grep -q '拆解成可以分頭實作' "$D/last_prompt.txt"; then
+      echo "planner $(pwd)" >> "$D/log.txt"
+      cp "$D/last_prompt.txt" "$D/plan_prompt.txt"
+      PLAN=$(cat "$D/plan.json" 2>/dev/null | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' ')
+      printf '{"type":"result","is_error":false,"result":"%s"}' "$PLAN"
+      exit 0
+    fi
     m=$(cat "$D/m" 2>/dev/null || echo 0); m=$((m+1)); echo $m > "$D/m"
     echo "reviewer $m $(pwd) $ALLOWED" >> "$D/log.txt"
     cp "$D/last_prompt.txt" "$D/review_prompt_$m.txt"
@@ -71,6 +79,9 @@ esac
     }
     fn read(&self, f: &str) -> String {
         std::fs::read_to_string(self.dir.path().join(f)).unwrap_or_default()
+    }
+    fn set_plan(&self, json: &str) {
+        std::fs::write(self.dir.path().join("plan.json"), json).unwrap();
     }
     fn log(&self) -> Vec<String> {
         self.read("log.txt").lines().map(str::to_string).collect()
@@ -316,6 +327,158 @@ async fn with_no_reviewer_a_finished_module_counts_as_passed_and_other_projects_
     assert_eq!(bs::get_card(r.pool(), &oc.id).await.unwrap().unwrap().status, "queued");
 }
 
+
+// ---- S4：Orchestrator 把通過審查的規格拆成實作卡 ----
+
+struct Rig4 {
+    r: Rig,
+    writer: bs::BoardAgent,
+    impl_b: bs::BoardAgent,
+    orchestrator: bs::BoardAgent,
+}
+
+async fn rig4(fake: &Fake) -> Rig4 {
+    let r = rig(fake).await;
+    let writer = bs::create_agent(r.pool(), NewAgent { project_id: &r.pid, kind: "coder", name: "規格站", role: "規格", prompt_prefix: "你寫規格", canvas_x: 0.0, canvas_y: 0.0, produces_spec: true, model: None, cli: "claude", created_by: "t" }).await.unwrap().unwrap();
+    let impl_b = agent(&r.srv, &r.pid, "coder", "工程師2", "你是工程師2").await;
+    let orchestrator = agent(&r.srv, &r.pid, "orchestrator", "調度者", "你是調度者").await;
+    Rig4 { r, writer, impl_b, orchestrator }
+}
+
+impl Rig4 {
+    /// 建一張指派給「規格站」的卡並排進待派送：指派時它就成為規格卡。
+    async fn spec(&self, title: &str) -> BoardCard {
+        let c = bs::create_card(self.r.pool(), NewCard { project_id: &self.r.pid, title, body: "做一個記帳功能", parallel_ok: true, interactive: false, label: None, created_by: "小華" }).await.unwrap();
+        let Change::Ok(c) = bs::assign_card(self.r.pool(), &c.id, c.version, Some(&self.writer.id)).await.unwrap() else { panic!("指派失敗") };
+        let Change::Ok(c) = bs::move_card(self.r.pool(), &c.id, c.version, "queued", None, None).await.unwrap() else { panic!("排入失敗") };
+        assert!(c.is_spec, "指派給產出規格的 Coder，這張就是規格卡");
+        *c
+    }
+    fn impl_cards<'a>(cards: &'a [BoardCard], spec: &BoardCard) -> Vec<&'a BoardCard> {
+        cards.iter().filter(|c| c.from_spec.as_deref() == Some(spec.id.as_str())).collect()
+    }
+}
+
+const PLAN3: &str = r#"{"interfaces":"User{id:int}","tasks":[{"title":"資料層","body":"做 db"},{"title":"介面層","body":"做 ui","depends_on":[0]},{"title":"文件","body":"寫文件"}]}"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reviewed_spec_is_split_by_the_orchestrator_into_cards_for_the_idlest_coders_and_dependents_get_the_approved_code() {
+    let fake = Fake::new(&["pass", "pass", "pass", "pass"], "0");
+    fake.set_plan(PLAN3);
+    let x = rig4(&fake).await;
+    x.r.enable().await;
+    let spec = x.spec("記帳規格").await;
+    x.r.pump("合併待核准", |c| c.iter().any(|k| k.card_kind == "merge")).await;
+    let cards = x.r.cards().await;
+
+    // 拆解卡：給 Orchestrator、讀規格那一版、唯讀；提示詞帶了需求、工程師名單與規格全文。
+    let plan = cards.iter().find(|c| c.card_kind == "plan").unwrap();
+    assert_eq!((plan.agent_id.as_deref(), plan.module_id.as_deref(), plan.outcome.as_deref(), plan.ai_summary.as_deref()), (Some(x.orchestrator.id.as_str()), Some(spec.id.as_str()), Some("success"), Some("拆成 3 張實作卡")));
+    let pl = fake.log().into_iter().find(|l| l.starts_with("planner ")).unwrap();
+    assert!(pl.contains("worktrees/review-"), "在一次性 worktree 裡拆解：{pl}");
+    let pp = fake.read("plan_prompt.txt");
+    assert!(pp.starts_with("你是調度者") && pp.contains("做一個記帳功能") && pp.contains("工程師1") && pp.contains("工程師2") && !pp.contains("規格站（"), "名單只有能實作的工程師，不含規格站：{pp}");
+    assert!(pp.contains("work-1.txt") && pp.contains("change 1"), "附上規格全文（規格站改動的檔案）：{pp}");
+
+    // 實作卡：來源是這份規格、照最閒的分、相依換成卡 id、內文帶介面約定與規格。
+    let impls = Rig4::impl_cards(&cards, &spec);
+    assert_eq!(impls.len(), 3);
+    let by_title = |t: &str| impls.iter().find(|c| c.title == t).copied().unwrap();
+    let (db, ui, doc) = (by_title("資料層"), by_title("介面層"), by_title("文件"));
+    // 同樣閒的時候誰先拿不固定；但第一張佔了一位之後，第二張一定給另一位，而且都不會派給規格站。
+    let implementers = [x.r.coder.id.as_str(), x.impl_b.id.as_str()];
+    assert!([db, ui, doc].iter().all(|c| implementers.contains(&c.agent_id.as_deref().unwrap())), "只派給能實作的工程師");
+    assert_ne!(db.agent_id, ui.agent_id, "資料層與介面層分給不同的人（才能平行、才會測到跨人的前置）");
+    assert_eq!(orchestrator_deps(ui), vec![db.id.clone()]);
+    assert!(db.depends_on.is_none() && doc.depends_on.is_none());
+    assert!(ui.body.starts_with("做 ui") && ui.body.contains("User{id:int}") && ui.body.contains("從規格「記帳規格」拆出來") && ui.body.contains("change 1"));
+    assert!(impls.iter().all(|c| c.card_kind == "work" && !c.is_spec));
+
+    // 相依：介面層的 Coder 開工時，資料層「通過審查的版本」已經在它的 worktree 裡。
+    let n_of = |needle: &str| (1..=8).find(|n| fake.read(&format!("coder_prompt_{n}.txt")).contains(needle)).unwrap();
+    let (n_db, n_ui) = (n_of("做 db"), n_of("做 ui"));
+    assert!(fake.read(&format!("files_{n_ui}.txt")).contains(&format!("work-{n_db}.txt")), "介面層開工時要看得到資料層的程式：{}", fake.read(&format!("files_{n_ui}.txt")));
+    // 審查看到的 diff 只有這張卡自己的改動，沒有被預先合併進來的前置。
+    assert!(!fake.read("review_prompt_3.txt").contains(&format!("+change {n_db}\n+change {n_ui}")));
+
+    // 規格＋三張實作卡全部通過後才有一張合併卡；專案資料夾在核准前沒被動到。
+    assert_eq!(x.r.kind("merge").await.len(), 1);
+    assert_eq!(sh(&x.r.work_path(), "git log --format=%s").trim(), "init");
+    let merge = x.r.kind("merge").await.remove(0);
+    x.r.admin.request(Method::POST, &format!("/v1/board/cards/{}/merge", merge.id), None).await.unwrap();
+    for n in 1..=4 {
+        assert!(x.r.work_path().join(format!("work-{n}.txt")).exists(), "work-{n}.txt 合併進專案了");
+    }
+}
+
+fn orchestrator_deps(c: &BoardCard) -> Vec<String> {
+    aiterm_intake_core::orchestration::deps_of(c)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dependent_card_waits_for_the_fixed_version_when_the_first_review_fails() {
+    // 規格過；資料層第一次審查退回、修正後才過。介面層必須拿到「修正後」的版本，不是退回的那版。
+    let fake = Fake::new(&["pass", "fail", "pass", "pass", "pass"], "0");
+    fake.set_plan(r#"{"tasks":[{"title":"資料層","body":"做 db"},{"title":"介面層","body":"做 ui","depends_on":[0]}]}"#);
+    let x = rig4(&fake).await;
+    x.r.enable().await;
+    let spec = x.spec("記帳規格").await;
+    x.r.pump("合併待核准", |c| c.iter().any(|k| k.card_kind == "merge")).await;
+    let cards = x.r.cards().await;
+    let db = Rig4::impl_cards(&cards, &spec).into_iter().find(|c| c.title == "資料層").unwrap().clone();
+    let fix = cards.iter().find(|c| c.card_kind == "fix" && c.module_id.as_deref() == Some(db.id.as_str())).expect("資料層被退回後有修正卡");
+    let ui_n = (1..=8).find(|n| fake.read(&format!("coder_prompt_{n}.txt")).contains("做 ui")).unwrap();
+    let fix_n = (1..=8).find(|n| fake.read(&format!("coder_prompt_{n}.txt")).contains("缺測試")).unwrap();
+    assert!(ui_n > fix_n, "介面層排在資料層修正之後才開工（序 {ui_n} > {fix_n}）");
+    assert!(fake.read(&format!("files_{ui_n}.txt")).contains(&format!("work-{fix_n}.txt")), "拿到的是修正後通過的版本：{}", fake.read(&format!("files_{ui_n}.txt")));
+    assert_eq!(fix.review_of.is_some(), true);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreadable_plan_fails_the_plan_card_creates_nothing_and_blocks_the_merge() {
+    let fake = Fake::new(&["pass"], "0");
+    fake.set_plan(r#"{"tasks":[{"title":"甲","depends_on":[3]}]}"#);
+    let x = rig4(&fake).await;
+    x.r.enable().await;
+    let spec = x.spec("記帳規格").await;
+    x.r.pump("拆解卡失敗", |c| c.iter().any(|k| k.card_kind == "plan" && k.status == "done")).await;
+    for _ in 0..6 {
+        orchestrator::tick_once(x.r.srv.state()).await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    let cards = x.r.cards().await;
+    let plan = cards.iter().find(|c| c.card_kind == "plan").unwrap();
+    assert_eq!(plan.outcome.as_deref(), Some("failed"));
+    assert!(plan.error_message.clone().unwrap().contains("只能指向排在它前面"), "{:?}", plan.error_message);
+    assert!(Rig4::impl_cards(&cards, &spec).is_empty(), "壞的計畫不建任何卡");
+    assert_eq!(cards.iter().filter(|c| c.card_kind == "plan").count(), 1, "不會一直重試");
+    assert!(cards.iter().all(|c| c.card_kind != "merge"), "規格沒拆成功就不能合併");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_an_implementer_the_plan_fails_with_a_clear_reason_and_without_an_orchestrator_a_spec_is_just_a_module() {
+    let fake = Fake::new(&["pass", "pass"], "0");
+    fake.set_plan(PLAN3);
+    let x = rig4(&fake).await;
+    // 只留規格站：沒有人可以實作。
+    bs::delete_agent(x.r.pool(), &x.r.coder.id).await.unwrap().unwrap();
+    bs::delete_agent(x.r.pool(), &x.impl_b.id).await.unwrap().unwrap();
+    x.r.enable().await;
+    x.spec("記帳規格").await;
+    x.r.pump("拆解卡失敗", |c| c.iter().any(|k| k.card_kind == "plan" && k.status == "done")).await;
+    let plan = x.r.kind("plan").await.remove(0);
+    assert!(plan.error_message.unwrap().contains("沒有可以接手實作的工程師"));
+
+    // 沒有 Orchestrator：規格審查通過就照一般模組算，直接有合併卡。
+    let fake2 = Fake::new(&["pass"], "0");
+    let y = rig4(&fake2).await;
+    bs::delete_agent(y.r.pool(), &y.orchestrator.id).await.unwrap().unwrap();
+    y.r.enable().await;
+    y.spec("記帳規格").await;
+    y.r.pump("合併待核准", |c| c.iter().any(|k| k.card_kind == "merge")).await;
+    assert!(y.r.kind("plan").await.is_empty());
+}
+
 /// 真實 Claude Code 的端到端演練（會用掉一點額度）：
 /// `cargo test -p aiterm-intake-server --test orchestrate -- --ignored --nocapture`
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -441,4 +604,44 @@ async fn approving_a_merge_while_another_module_is_still_being_worked_on_is_refu
     r.pump("模組乙通過", |c| c.iter().filter(|x| x.card_kind == "review" && x.status == "done").count() == 2).await;
     r.admin.request(Method::POST, &format!("/v1/board/cards/{}/merge", merge.id), None).await.unwrap();
     assert!(r.work_path().join("work-1.txt").exists() && r.work_path().join("work-2.txt").exists());
+}
+
+/// 真實 Claude Code 的 S4 端到端：規格站寫規格 → 審查 → Orchestrator 拆解 → 兩位工程師依相依實作 → 審查 → 待核准合併。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "需要真實的 Claude Code（已登入）"]
+async fn real_claude_code_writes_a_spec_the_orchestrator_splits_it_and_coders_build_it_in_dependency_order() {
+    let fake = Fake::new(&[], "0");
+    let x = rig4(&fake).await;
+    let r = &x.r;
+    r.admin.request(Method::PUT, "/v1/runner", Some(json!({"claude_path": "claude", "max_concurrent": 2, "timeout_secs": 300, "max_turns": 15}))).await.unwrap();
+    sqlx::query("UPDATE board_agents SET prompt_prefix = ? WHERE id = ?").bind("你是規格撰寫師：只寫文件，不要寫任何程式碼。").bind(&x.writer.id).execute(r.pool()).await.unwrap();
+    r.enable().await;
+    let c = bs::create_card(r.pool(), NewCard { project_id: &r.pid, title: "迷你數學套件規格", body: "請在專案根目錄寫一份 SPEC.md（只寫文件）。內容：要做兩個很小的 Python 模組放在 mathx 資料夾：1) mathx/add.py 提供 def add(a, b) 回傳 a + b；2) mathx/calc.py 提供 def double(x)，它必須呼叫 add 來算 add(x, x)。每個模組都要列出函式簽名與驗收條件。", parallel_ok: true, interactive: false, label: None, created_by: "小華" }).await.unwrap();
+    let Change::Ok(c) = bs::assign_card(r.pool(), &c.id, c.version, Some(&x.writer.id)).await.unwrap() else { panic!() };
+    bs::move_card(r.pool(), &c.id, c.version, "queued", None, None).await.unwrap();
+    for _ in 0..1500 {
+        orchestrator::tick_once(r.srv.state()).await;
+        let cards = r.cards().await;
+        if cards.iter().any(|k| k.card_kind == "merge") || cards.iter().any(|k| k.outcome.as_deref() == Some("failed")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let cards = r.cards().await;
+    for c in &cards {
+        println!("[{}] {} agent={} status={} outcome={:?} verdict={:?} deps={:?} err={:?}", c.card_kind, c.title, c.agent_id.as_deref().map(|a| &a[..4]).unwrap_or("-"), c.status, c.outcome, c.verdict, c.depends_on, c.error_message);
+        if c.card_kind == "plan" {
+            println!("   拆解摘要：{:?}", c.ai_summary);
+        }
+    }
+    let spec = cards.iter().find(|k| k.is_spec).unwrap();
+    let impls = Rig4::impl_cards(&cards, spec);
+    assert!(impls.len() >= 2, "Orchestrator 至少拆出 2 張：{}", impls.len());
+    assert!(impls.iter().any(|c| c.depends_on.is_some()), "double 依賴 add，至少有一張帶相依");
+    assert!(cards.iter().all(|c| c.outcome.as_deref() != Some("failed")), "沒有卡失敗");
+    let merge = cards.iter().find(|k| k.card_kind == "merge").expect("全部通過後有合併卡");
+    r.admin.request(Method::POST, &format!("/v1/board/cards/{}/merge", merge.id), None).await.unwrap();
+    println!("合併後的檔案：\n{}", sh(&r.work_path(), "git ls-files"));
+    assert!(r.work_path().join("mathx/add.py").exists() && r.work_path().join("mathx/calc.py").exists());
+    println!("{}", sh(&r.work_path(), "cat mathx/add.py mathx/calc.py"));
 }
