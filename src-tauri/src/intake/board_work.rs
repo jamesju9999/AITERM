@@ -325,6 +325,42 @@ mod tests {
         assert_eq!(r.server_card(&c.id).await.status, "queued", "沒有被一個過期的結果蓋掉");
     }
 
+    /// 排程器照常派工：它看到的影子卡片跟本機自己建的卡片沒有兩樣，做完就把結果寫成 done。
+    struct Finishes(&'static str);
+
+    #[async_trait::async_trait]
+    impl crate::tasks::scheduler::Dispatcher for Finishes {
+        async fn dispatch(&self, project: &crate::projects::ProjectHandle, task: &crate::tasks::store::TaskRow) -> Result<(), String> {
+            let outcome = self.0;
+            store::finish_task(&project.pool, &task.id, outcome, if outcome == "success" { None } else { Some("測試用失敗") }, None).await.map_err(|e| e.to_string())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_real_scheduler_runs_the_shadow_card_and_the_result_reaches_everyones_board() {
+        let r = rig(true).await;
+        let (win, lose) = (r.queued_card("會成功").await, r.queued_card("會失敗").await);
+        claim(r.app.handle(), &win.id).await.unwrap();
+        let reg = r.app.handle().state::<ProjectRegistry>();
+        crate::tasks::scheduler::drain_once(&reg, &Finishes("success"), 3).await;
+        assert_eq!(r.shadows().await.iter().filter(|t| t.status == "done").count(), 1, "排程器照常派工並完成影子卡片");
+        tick(r.app.handle(), HEARTBEAT_EVERY).await;
+        let s = r.server_card(&win.id).await;
+        assert_eq!((s.status.as_str(), s.outcome.as_deref(), s.claimed_by.as_deref()), ("done", Some("success"), Some("小華")), "server 上的卡片完成，別人也看到");
+
+        claim(r.app.handle(), &lose.id).await.unwrap();
+        crate::tasks::scheduler::drain_once(&reg, &Finishes("failed"), 3).await;
+        tick(r.app.handle(), HEARTBEAT_EVERY).await;
+        let f = r.server_card(&lose.id).await;
+        assert_eq!((f.outcome.as_deref(), f.error_message.as_deref()), (Some("failed"), Some("測試用失敗")));
+
+        // 另一位成員從自己的 AITERM 看到的是同一份結果。
+        let (other, _) = pair(&r.srv, "小美").await;
+        let views: Vec<aiterm_intake_core::board_store::BoardCardView> = other.get(&format!("/v1/board/projects/{}/cards", r.pid)).await.unwrap();
+        let outcomes: Vec<(String, Option<String>)> = views.into_iter().map(|v| (v.card.title, v.card.outcome)).collect();
+        assert!(outcomes.contains(&("會成功".to_string(), Some("success".to_string()))) && outcomes.contains(&("會失敗".to_string(), Some("failed".to_string()))), "{outcomes:?}");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn releasing_hands_the_card_back_and_stops_tracking() {
         let r = rig(true).await;
