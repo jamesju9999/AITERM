@@ -844,6 +844,7 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
       setDone(true);
       onError(null);
       load();
+      await loadModels(); // 登入完成就直接帶出可選的模型，不用再按一次
     } catch (e) {
       onError(errText(e));
     } finally {
@@ -860,6 +861,7 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
       setDone(true);
       onError(null);
       load();
+      await loadModels();
     } catch (e) {
       onError(errText(e));
     } finally {

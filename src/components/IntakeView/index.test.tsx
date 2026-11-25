@@ -1053,6 +1053,7 @@ describe("IntakeView", () => {
       fireEvent.change(screen.getByLabelText(t.intake_server_ai_login_paste), { target: { value: "code#state" } });
       fireEvent.click(finish);
       await waitFor(() => expect(ipc.intakeServerAiLoginComplete).toHaveBeenCalledWith("anthropic_oauth", "code#state"));
+      await waitFor(() => expect(ipc.intakeServerAiModels).toHaveBeenCalledWith("anthropic_oauth", "", ""));
       expect(await screen.findByText(t.intake_server_ai_login_ok)).toBeTruthy();
       expect(screen.queryByLabelText(t.intake_server_ai_login_paste)).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: t.intake_server_ai_logout }));
@@ -1074,8 +1075,12 @@ describe("IntakeView", () => {
       expect(await screen.findByText(t.intake_server_ai_login_waiting)).toBeTruthy();
       expect(screen.queryByLabelText(t.intake_server_ai_login_paste)).toBeNull();
       vi.mocked(ipc.intakeServerAiStatus).mockResolvedValue({ settings: { provider: id, model: "", base_url: "" }, configured: false, login: "ok" });
+      vi.mocked(ipc.intakeServerAiModels).mockResolvedValueOnce(["m-a", "m-b"]);
+      expect(ipc.intakeServerAiModels).not.toHaveBeenCalled();
       finish();
       expect(await screen.findByText(t.intake_server_ai_login_ok)).toBeTruthy();
+      await waitFor(() => expect(ipc.intakeServerAiModels).toHaveBeenCalledWith(id, "", ""));
+      expect(await screen.findByText(t.intake_server_ai_models_loaded.replace("{n}", "2"))).toBeTruthy();
       expect(screen.queryByText(t.intake_server_ai_login_waiting)).toBeNull();
       expect(screen.getByRole("button", { name: t.intake_server_ai_logout })).toBeTruthy();
       expect(screen.getByText(t.intake_server_ai_login_pick_model)).toBeTruthy();
