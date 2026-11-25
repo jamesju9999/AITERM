@@ -2142,6 +2142,37 @@ mod ai_oauth_crate_pin {
     }
 
     #[test]
+    fn the_shared_codex_constants_equal_the_ones_aiterm_logs_in_and_calls_with() {
+        use aiterm_ai_oauth::codex as c;
+        assert_eq!(c::CLIENT_ID, CODEX_OAUTH_CLIENT_ID);
+        assert_eq!(c::AUTH_URL, CODEX_OAUTH_AUTH_URL);
+        assert_eq!(c::TOKEN_URL, CODEX_OAUTH_TOKEN_URL);
+        assert_eq!(c::REDIRECT_URI, CODEX_OAUTH_REDIRECT_URI);
+        assert_eq!(c::REDIRECT_PORT, CODEX_OAUTH_REDIRECT_PORT);
+        assert_eq!(c::CLIENT_VERSION, crate::ai::codex::CODEX_CLIENT_VERSION);
+        assert_eq!(c::USER_AGENT, crate::ai::codex::CODEX_USER_AGENT);
+        let p = shared::Pkce::new();
+        let ours = format!(
+            "{}?response_type=code&client_id={}&redirect_uri={}&scope=openid+profile+email+offline_access&code_challenge={}&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&originator=codex_cli_rs&prompt=login&state={}",
+            CODEX_OAUTH_AUTH_URL, CODEX_OAUTH_CLIENT_ID, CODEX_OAUTH_REDIRECT_URI, p.challenge, p.state
+        );
+        assert_eq!(c::auth_url(&p), ours, "與 codex_oauth_login 開的網址一致");
+    }
+
+    #[test]
+    fn the_shared_google_constants_equal_the_ones_aiterm_logs_in_and_calls_with() {
+        use aiterm_ai_oauth::antigravity as g;
+        assert_eq!(g::CLIENT_ID, GOOGLE_OAUTH_CLIENT_ID);
+        assert_eq!(g::AUTH_URL, GOOGLE_OAUTH_AUTH_URL);
+        assert_eq!(g::TOKEN_URL, GOOGLE_OAUTH_TOKEN_URL);
+        assert_eq!(g::SCOPE, GOOGLE_OAUTH_SCOPE);
+        assert_eq!(g::API_BASE, ANTIGRAVITY_BOOTSTRAP_BASE_URL);
+        assert_eq!(g::API_BASE, crate::ai::antigravity::ANTIGRAVITY_BASE_URL);
+        assert_eq!(g::IDE_VERSION, crate::ai::antigravity::ANTIGRAVITY_IDE_VERSION);
+        assert_eq!(g::client_secret(), google_oauth_client_secret());
+    }
+
+    #[test]
     fn the_shared_auth_url_is_the_same_url_aiterm_opens_for_its_own_login() {
         let p = shared::Pkce::new();
         let ours = format!(

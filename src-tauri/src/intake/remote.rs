@@ -468,8 +468,14 @@ pub struct ServerAiTest {
 }
 
 /// 把為 server 登入取得的憑證交給 server（只有管理員做得到）。
-pub async fn ai_login_upload(api: &Api, provider: &str, access: &str, refresh: &str, expires_in: Option<u64>) -> Result<(), ClientError> {
-    api.request(Method::PUT, "/v1/ai/oauth", Some(json!({ "provider": provider, "access": access, "refresh": refresh, "expires_in": expires_in }))).await.map(|_| ())
+pub async fn ai_login_upload(api: &Api, provider: &str, login: &super::ai_login::Login) -> Result<(), ClientError> {
+    api.request(
+        Method::PUT,
+        "/v1/ai/oauth",
+        Some(json!({ "provider": provider, "access": login.access, "refresh": login.refresh, "expires_in": login.expires_in, "account_id": login.account_id, "project_id": login.project_id })),
+    )
+    .await
+    .map(|_| ())
 }
 
 pub async fn ai_logout(api: &Api) -> Result<(), ClientError> {
@@ -666,7 +672,7 @@ mod tests {
         let api = srv.paired("小華", Role::Admin).await;
         assert_eq!(ai_status(&api).await.unwrap().login, "none");
         ai_apply(&api, &ServerAiSettings { provider: "anthropic_oauth".into(), model: "claude-x".into(), base_url: String::new() }, "").await.unwrap();
-        ai_login_upload(&api, "anthropic_oauth", "ACCESS", "REFRESH", Some(3600)).await.unwrap();
+        ai_login_upload(&api, "anthropic_oauth", &crate::intake::ai_login::Login { access: "ACCESS".into(), refresh: "REFRESH".into(), expires_in: Some(3600), account_id: None, project_id: None }).await.unwrap();
         let v = ai_status(&api).await.unwrap();
         assert_eq!((v.configured, v.login.as_str(), v.settings.provider.as_str()), (true, "ok", "anthropic_oauth"));
         assert!(!serde_json::to_string(&v).unwrap().contains("REFRESH"), "憑證不會被讀回");
@@ -684,7 +690,7 @@ mod tests {
         assert!(ai_apply(&member, &ServerAiSettings { provider: "openai".into(), model: "m".into(), base_url: String::new() }, "k").await.is_err());
         let s = ServerMailSettings { smtp_host: "h".into(), smtp_port: 25, imap_host: String::new(), imap_port: 993, username: "u".into(), from: String::new() };
         assert!(mail_apply(&member, &s, "p").await.is_err());
-        assert!(ai_login_upload(&member, "anthropic_oauth", "A", "R", None).await.is_err());
+        assert!(ai_login_upload(&member, "anthropic_oauth", &crate::intake::ai_login::Login { access: "A".into(), refresh: "R".into(), expires_in: None, account_id: None, project_id: None }).await.is_err());
         assert!(ai_logout(&member).await.is_err());
     }
 

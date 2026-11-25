@@ -677,7 +677,22 @@ pub async fn intake_server_ai_login_complete(rs: State<'_, Arc<RemoteState>>, pe
     }
     let tokens = aiterm_ai_oauth::anthropic::exchange(&Default::default(), &code, &state, &pkce.verifier).await?;
     let refresh = tokens.refresh.ok_or("供應商沒有回傳續期憑證，無法交給 server")?;
-    super::remote::ai_login_upload(&api, &provider, &tokens.access, &refresh, tokens.expires_in).await.map_err(|e| super::remote::fail(&rs, e))
+    let login = super::ai_login::Login { access: tokens.access, refresh, expires_in: tokens.expires_in, account_id: None, project_id: None };
+    super::remote::ai_login_upload(&api, &provider, &login).await.map_err(|e| super::remote::fail(&rs, e))
+}
+
+/// 為 server 登入 ChatGPT／Gemini 訂閱：開瀏覽器授權，本機收下回呼、換成憑證後只交給 server。
+/// 會等到使用者在瀏覽器完成（最久 2 分鐘）才回傳。
+#[tauri::command]
+pub async fn intake_server_ai_login_browser(rs: State<'_, Arc<RemoteState>>, provider: String) -> Result<(), String> {
+    let api = rs.active().ok_or("尚未連到 server")?;
+    let open = |url: &str| crate::commands::provider::open_browser(url);
+    let login = match provider.as_str() {
+        "codex_oauth" => super::ai_login::login_codex(open).await?,
+        "antigravity_oauth" => super::ai_login::login_google(open).await?,
+        _ => return Err("這個供應商不是用瀏覽器回呼登入".into()),
+    };
+    super::remote::ai_login_upload(&api, &provider, &login).await.map_err(|e| super::remote::fail(&rs, e))
 }
 
 /// 登出 server 的 AI 訂閱（刪除 server 上的憑證）。

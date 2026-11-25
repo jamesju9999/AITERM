@@ -50,6 +50,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeServerAiApply: vi.fn(() => Promise.resolve()),
   intakeServerAiLoginStart: vi.fn(() => Promise.resolve("https://claude.ai/oauth/authorize?x=1")),
   intakeServerAiLoginComplete: vi.fn(() => Promise.resolve()),
+  intakeServerAiLoginBrowser: vi.fn(() => Promise.resolve()),
   intakeServerAiLogout: vi.fn(() => Promise.resolve()),
   intakeServerAiModels: vi.fn(() => Promise.resolve([])),
   intakeServerAiTest: vi.fn(() => Promise.resolve({ ok: true, ms: 120, message: "OK" })),
@@ -1056,6 +1057,50 @@ describe("IntakeView", () => {
       expect(screen.queryByLabelText(t.intake_server_ai_login_paste)).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: t.intake_server_ai_logout }));
       await waitFor(() => expect(ipc.intakeServerAiLogout).toHaveBeenCalled());
+    });
+
+    it.each([["codex_oauth", "ChatGPT 訂閱"], ["antigravity_oauth", "Gemini 訂閱"]])("logs the server in to %s through the browser callback: no paste box, waits, then shows logged in", async (id, label) => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      let finish: () => void = () => {};
+      vi.mocked(ipc.intakeServerAiLoginBrowser).mockImplementationOnce(() => new Promise<void>((r) => { finish = r; }));
+      await openSettings();
+      const select = await screen.findByLabelText(t.intake_server_ai_provider);
+      expect(screen.getByRole("option", { name: label })).toBeTruthy();
+      fireEvent.change(select, { target: { value: id } });
+      expect(screen.queryByLabelText(t.intake_server_ai_key)).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: t.intake_server_ai_login }));
+      await waitFor(() => expect(ipc.intakeServerAiLoginBrowser).toHaveBeenCalledWith(id));
+      expect(ipc.intakeServerAiLoginStart).not.toHaveBeenCalled();
+      expect(await screen.findByText(t.intake_server_ai_login_waiting)).toBeTruthy();
+      expect(screen.queryByLabelText(t.intake_server_ai_login_paste)).toBeNull();
+      vi.mocked(ipc.intakeServerAiStatus).mockResolvedValue({ settings: { provider: id, model: "", base_url: "" }, configured: false, login: "ok" });
+      finish();
+      expect(await screen.findByText(t.intake_server_ai_login_ok)).toBeTruthy();
+      expect(screen.queryByText(t.intake_server_ai_login_waiting)).toBeNull();
+      expect(screen.getByRole("button", { name: t.intake_server_ai_logout })).toBeTruthy();
+      expect(screen.getByText(t.intake_server_ai_login_pick_model)).toBeTruthy();
+    });
+
+    it("does not show the saved login as this provider's while a different provider is picked but not saved", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      vi.mocked(ipc.intakeServerAiStatus).mockResolvedValue({ settings: { provider: "anthropic_oauth", model: "claude-x", base_url: "" }, configured: true, login: "ok" });
+      await openSettings();
+      expect(await screen.findByText(t.intake_server_ai_login_ok)).toBeTruthy();
+      fireEvent.change(screen.getByLabelText(t.intake_server_ai_provider), { target: { value: "codex_oauth" } });
+      expect(screen.queryByText(t.intake_server_ai_login_ok)).toBeNull();
+      expect(screen.getByText(t.intake_server_ai_login_none)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: t.intake_server_ai_logout })).toBeNull();
+    });
+
+    it("a failed browser login shows the reason and leaves the card usable", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      vi.mocked(ipc.intakeServerAiLoginBrowser).mockRejectedValueOnce("無法在 1455 埠啟動本機回呼伺服器");
+      await openSettings();
+      fireEvent.change(await screen.findByLabelText(t.intake_server_ai_provider), { target: { value: "codex_oauth" } });
+      fireEvent.click(screen.getByRole("button", { name: t.intake_server_ai_login }));
+      expect((await screen.findByRole("alert")).textContent).toContain("1455");
+      expect(screen.queryByText(t.intake_server_ai_login_waiting)).toBeNull();
+      expect(screen.getByRole("button", { name: t.intake_server_ai_login }).matches(":disabled")).toBe(false);
     });
 
     it("says so when the server's subscription login has expired and shows why", async () => {

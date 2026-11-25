@@ -599,6 +599,7 @@ pub fn run() {
             intake::commands::intake_server_ai_status,
             intake::commands::intake_server_ai_login_start,
             intake::commands::intake_server_ai_login_complete,
+            intake::commands::intake_server_ai_login_browser,
             intake::commands::intake_server_ai_logout,
             intake::commands::intake_server_ai_models,
             intake::commands::intake_server_ai_test,

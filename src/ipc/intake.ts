@@ -304,4 +304,6 @@ export const intakeServerAiLoginStart = (provider: string) => invoke<string>("in
 /** 貼回授權碼（或完整回呼網址）完成登入；憑證只交給 server，不存進這台電腦。 */
 export const intakeServerAiLoginComplete = (provider: string, codeAndState: string) =>
   invoke<void>("intake_server_ai_login_complete", { provider, codeAndState });
+/** ChatGPT／Gemini 訂閱：開瀏覽器授權，由本機回呼完成；等到使用者在瀏覽器完成（最久 2 分鐘）才回傳。 */
+export const intakeServerAiLoginBrowser = (provider: string) => invoke<void>("intake_server_ai_login_browser", { provider });
 export const intakeServerAiLogout = () => invoke<void>("intake_server_ai_logout");

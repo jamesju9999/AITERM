@@ -21,6 +21,7 @@ import {
   intakeServerAiApply,
   intakeServerAiLoginComplete,
   intakeServerAiLoginStart,
+  intakeServerAiLoginBrowser,
   intakeServerAiLogout,
   intakeServerAiModels,
   intakeServerAiTest,
@@ -747,6 +748,8 @@ const AI_PROVIDERS: [string, string][] = [
   ["openai_compat", "OpenAI 相容"],
   ["ollama", "Ollama"],
   ["anthropic_oauth", "Claude 訂閱"],
+  ["codex_oauth", "ChatGPT 訂閱"],
+  ["antigravity_oauth", "Gemini 訂閱"],
 ];
 
 /** 連到 server 時：server 自己的 AI（題目分類與群組「是不是新問題」）。金鑰只寫入、不會被讀回。 */
@@ -814,7 +817,9 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
       setTesting(false);
     }
   }
-  const isOauth = provider === "anthropic_oauth";
+  const isOauth = provider.endsWith("_oauth");
+  // Claude 是貼回授權碼；ChatGPT／Gemini 是瀏覽器導回本機，由 AITerm 自己收下。
+  const pasteFlow = provider === "anthropic_oauth";
   const needsKey = provider !== "" && provider !== "ollama" && !isOauth;
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [paste, setPaste] = useState("");
@@ -827,6 +832,22 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
     } catch (e) {
       onError(errText(e));
     } finally {
+      setBusy(false);
+    }
+  }
+  const [waiting, setWaiting] = useState(false);
+  async function browserLogin() {
+    setBusy(true);
+    setWaiting(true);
+    try {
+      await intakeServerAiLoginBrowser(provider);
+      setDone(true);
+      onError(null);
+      load();
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setWaiting(false);
       setBusy(false);
     }
   }
@@ -857,7 +878,8 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
       setBusy(false);
     }
   }
-  const login = ai?.login ?? "none";
+  // 登入狀態是 server 目前存的那個供應商的；畫面上換到別家（還沒儲存）就當作還沒登入。
+  const login = provider === ai?.settings.provider ? (ai?.login ?? "none") : "none";
   const h = ai?.health;
   const lastCall = h?.error ? `${t.intake_server_ai_last_fail}：${h.error}` : h?.last_ok ? `${t.intake_server_ai_last_ok}（${new Date(h.last_ok * 1000).toLocaleString()}，${h.last_ms ?? 0} ms）` : t.intake_server_ai_last_none;
   return (
@@ -874,18 +896,20 @@ function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: str
             {login === "ok" ? t.intake_server_ai_login_ok : login === "needs_login" ? `${t.intake_server_ai_login_expired}${ai?.login_error ? `：${ai.login_error}` : ""}` : t.intake_server_ai_login_none}
           </span>
           {!authUrl && (
-            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy} onClick={() => void startLogin()}>
+            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy} onClick={() => void (pasteFlow ? startLogin() : browserLogin())}>
               {t.intake_server_ai_login}
             </button>
           )}
-          {login !== "none" && ai?.settings.provider === "anthropic_oauth" && (
+          {login !== "none" && (
             <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy} onClick={() => void logout()}>
               {t.intake_server_ai_logout}
             </button>
           )}
         </div>
       )}
-      {isOauth && authUrl && (
+      {isOauth && login === "ok" && model.trim() === "" && <p role="status" className="intake__mailcard-hint">{t.intake_server_ai_login_pick_model}</p>}
+      {isOauth && waiting && <p role="status" className="intake__mailcard-hint">{t.intake_server_ai_login_waiting}</p>}
+      {isOauth && pasteFlow && authUrl && (
         <div className="intake__mailcard-row">
           <input aria-label={t.intake_server_ai_login_paste} placeholder={t.intake_server_ai_login_paste} value={paste} onChange={(e) => setPaste(e.target.value)} />
           <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy || paste.trim() === ""} onClick={() => void finishLogin()}>

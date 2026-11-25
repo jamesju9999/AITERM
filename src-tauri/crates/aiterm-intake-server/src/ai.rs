@@ -1,5 +1,5 @@
 //! Server 自己的 AI 設定與一次性補全（題目分類、群組「是不是新問題」用）。
-//! 支援用 API 金鑰的供應商，以及訂閱登入（OAuth，目前是 Claude）：瀏覽器登入由管理員的 AITerm 完成，
+//! 支援用 API 金鑰的供應商，以及訂閱登入（OAuth：Claude、ChatGPT／Codex、Gemini／Antigravity）：瀏覽器登入由管理員的 AITerm 完成，
 //! 取得的憑證交給 server 存放與續期（見 `login`、`access_token`）。
 use aiterm_intake_core::host::{AiComplete, Secrets};
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,12 @@ pub const API_KEY_SECRET: &str = "ai_api_key";
 pub const OAUTH_ACCESS: &str = "ai_oauth_access";
 pub const OAUTH_REFRESH: &str = "ai_oauth_refresh";
 pub const OAUTH_EXPIRES_AT: &str = "ai_oauth_expires_at";
+/// 這組憑證是哪個供應商登入的（切換供應商後，別家的憑證不能拿來用）。
+pub const OAUTH_KIND: &str = "ai_oauth_kind";
+/// Codex 要帶在每個請求上的 ChatGPT 帳號 id。
+pub const OAUTH_ACCOUNT_ID: &str = "ai_oauth_account_id";
+/// Antigravity 登入時開通取得的 Cloud Code 專案 id。
+pub const OAUTH_PROJECT_ID: &str = "ai_oauth_project_id";
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct AiSettings {
@@ -26,11 +32,39 @@ pub struct AiSettings {
     pub base_url: String,
 }
 
-pub const PROVIDERS: [&str; 5] = ["openai", "anthropic", "openai_compat", "ollama", "anthropic_oauth"];
+pub const OAUTH_PROVIDERS: [&str; 3] = ["anthropic_oauth", "codex_oauth", "antigravity_oauth"];
+pub const PROVIDERS: [&str; 7] = ["openai", "anthropic", "openai_compat", "ollama", "anthropic_oauth", "codex_oauth", "antigravity_oauth"];
 
 /// 用訂閱登入（OAuth）而不是 API 金鑰的供應商。
 pub fn is_oauth(provider: &str) -> bool {
-    provider == "anthropic_oauth"
+    OAUTH_PROVIDERS.contains(&provider)
+}
+
+/// 提早多久續期（秒）：Google 的 token 較短命。
+fn refresh_skew(provider: &str) -> u64 {
+    match provider {
+        "antigravity_oauth" => aiterm_ai_oauth::antigravity::REFRESH_SKEW_SECS,
+        "codex_oauth" => aiterm_ai_oauth::codex::REFRESH_SKEW_SECS,
+        _ => aiterm_ai_oauth::anthropic::REFRESH_SKEW_SECS,
+    }
+}
+
+/// 訂閱登入用的各家端點；測試時指向假的伺服器。
+#[derive(Debug, Clone, Default)]
+pub struct OauthEndpoints {
+    pub anthropic: aiterm_ai_oauth::anthropic::Endpoints,
+    pub codex: aiterm_ai_oauth::codex::Endpoints,
+    pub antigravity: aiterm_ai_oauth::antigravity::Endpoints,
+}
+
+/// 一次登入取得的憑證與各家需要的附加資料。
+#[derive(Debug, Clone, Default)]
+pub struct LoginTokens {
+    pub access: String,
+    pub refresh: String,
+    pub expires_in: Option<u64>,
+    pub account_id: Option<String>,
+    pub project_id: Option<String>,
 }
 
 pub async fn load(pool: &SqlitePool) -> AiSettings {
@@ -50,7 +84,7 @@ pub fn configured(s: &AiSettings, secrets: &dyn Secrets) -> bool {
         return false;
     }
     if is_oauth(&s.provider) {
-        return secrets.get(OAUTH_REFRESH).is_some();
+        return secrets.get(OAUTH_REFRESH).is_some() && secrets.get(OAUTH_KIND).as_deref() == Some(s.provider.as_str());
     }
     s.provider == "ollama" || secrets.get(API_KEY_SECRET).is_some()
 }
@@ -75,7 +109,7 @@ pub struct ServerAi {
     /// 續期被供應商拒絕（憑證失效）時的原因；重新登入或登出後清除。
     login_error: parking_lot::Mutex<Option<String>>,
     /// 訂閱登入的端點；測試時指向假的伺服器。
-    endpoints: parking_lot::Mutex<aiterm_ai_oauth::anthropic::Endpoints>,
+    endpoints: parking_lot::Mutex<OauthEndpoints>,
 }
 
 /// 登入狀態：`none` 沒登入、`ok` 可用、`needs_login` 憑證失效要重新登入。
@@ -88,31 +122,57 @@ impl ServerAi {
 
     /// 測試用：換掉訂閱登入的端點。
     pub fn set_oauth_endpoints(&self, ep: aiterm_ai_oauth::anthropic::Endpoints) {
-        *self.endpoints.lock() = ep;
+        self.endpoints.lock().anthropic = ep;
     }
 
-    /// 存下一次登入取得的憑證（續期憑證必須有）。
-    pub fn store_login(&self, access: &str, refresh: &str, expires_in: Option<u64>) -> Result<(), String> {
-        if access.trim().is_empty() || refresh.trim().is_empty() {
+    pub fn set_codex_endpoints(&self, ep: aiterm_ai_oauth::codex::Endpoints) {
+        self.endpoints.lock().codex = ep;
+    }
+
+    pub fn set_antigravity_endpoints(&self, ep: aiterm_ai_oauth::antigravity::Endpoints) {
+        self.endpoints.lock().antigravity = ep;
+    }
+
+    /// 存下一次登入取得的憑證（續期憑證必須有；Antigravity 還要有專案 id）。
+    pub fn store_login(&self, provider: &str, t: &LoginTokens) -> Result<(), String> {
+        if !is_oauth(provider) {
+            return Err("這個供應商不用訂閱登入".into());
+        }
+        if t.access.trim().is_empty() || t.refresh.trim().is_empty() {
             return Err("憑證不完整：需要存取憑證與續期憑證".into());
         }
-        self.secrets.set(OAUTH_REFRESH, refresh.trim())?;
-        self.secrets.set(OAUTH_ACCESS, access.trim())?;
-        self.secrets.set(OAUTH_EXPIRES_AT, &(now_secs() + expires_in.unwrap_or(3600)).to_string())?;
+        if provider == "antigravity_oauth" && t.project_id.as_deref().unwrap_or("").trim().is_empty() {
+            return Err("憑證不完整：Gemini 訂閱需要 Cloud Code 專案 id".into());
+        }
+        // 先清掉上一個供應商留下的附加資料，免得混在一起。
+        for id in [OAUTH_ACCOUNT_ID, OAUTH_PROJECT_ID] {
+            let _ = self.secrets.delete(id);
+        }
+        if let Some(a) = t.account_id.as_deref().filter(|a| !a.trim().is_empty()) {
+            self.secrets.set(OAUTH_ACCOUNT_ID, a.trim())?;
+        }
+        if let Some(p) = t.project_id.as_deref().filter(|p| !p.trim().is_empty()) {
+            self.secrets.set(OAUTH_PROJECT_ID, p.trim())?;
+        }
+        self.secrets.set(OAUTH_KIND, provider)?;
+        self.secrets.set(OAUTH_REFRESH, t.refresh.trim())?;
+        self.secrets.set(OAUTH_ACCESS, t.access.trim())?;
+        self.secrets.set(OAUTH_EXPIRES_AT, &(now_secs() + t.expires_in.unwrap_or(3600)).to_string())?;
         *self.login_error.lock() = None;
         Ok(())
     }
 
     pub fn clear_login(&self) {
-        for id in [OAUTH_ACCESS, OAUTH_REFRESH, OAUTH_EXPIRES_AT] {
+        for id in [OAUTH_ACCESS, OAUTH_REFRESH, OAUTH_EXPIRES_AT, OAUTH_KIND, OAUTH_ACCOUNT_ID, OAUTH_PROJECT_ID] {
             let _ = self.secrets.delete(id);
         }
         *self.login_error.lock() = None;
     }
 
-    pub fn login_state(&self) -> (LoginState, Option<String>) {
+    /// `provider` 是目前選的供應商；憑證是別家登入的就當作沒登入。
+    pub fn login_state(&self, provider: &str) -> (LoginState, Option<String>) {
         let err = self.login_error.lock().clone();
-        if self.secrets.get(OAUTH_REFRESH).is_none() {
+        if self.secrets.get(OAUTH_REFRESH).is_none() || self.secrets.get(OAUTH_KIND).as_deref() != Some(provider) {
             ("none", None)
         } else if err.is_some() {
             ("needs_login", err)
@@ -121,18 +181,32 @@ impl ServerAi {
         }
     }
 
-    /// 拿一個可用的存取憑證；快到期就先續期（排隊，一次只有一個在續期）。
+    /// 目前選的供應商的可用存取憑證。
     pub async fn access_token(&self) -> Result<String, String> {
+        let provider = load(&self.pool).await.provider;
+        self.access_token_for(&provider).await
+    }
+
+    /// 拿一個可用的存取憑證；快到期就先續期（排隊，一次只有一個在續期）。
+    pub async fn access_token_for(&self, provider: &str) -> Result<String, String> {
         let _guard = self.refresh_lock.lock().await;
+        if !is_oauth(provider) || self.secrets.get(OAUTH_KIND).as_deref() != Some(provider) {
+            return Err("尚未登入：請在 AITerm 為 server 登入這個訂閱帳號".into());
+        }
         let access = self.secrets.get(OAUTH_ACCESS).unwrap_or_default();
         let expires_at = self.secrets.get(OAUTH_EXPIRES_AT).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
         let now = now_secs();
-        if !access.is_empty() && expires_at > now + aiterm_ai_oauth::anthropic::REFRESH_SKEW_SECS {
+        if !access.is_empty() && expires_at > now + refresh_skew(provider) {
             return Ok(access);
         }
         let Some(refresh) = self.secrets.get(OAUTH_REFRESH) else { return Err("尚未登入：請在 AITerm 為 server 登入訂閱帳號".into()) };
         let ep = self.endpoints.lock().clone();
-        match aiterm_ai_oauth::anthropic::refresh(&ep, &refresh).await {
+        let renewed = match provider {
+            "codex_oauth" => aiterm_ai_oauth::codex::refresh(&ep.codex, &refresh).await,
+            "antigravity_oauth" => aiterm_ai_oauth::antigravity::refresh(&ep.antigravity, &refresh).await,
+            _ => aiterm_ai_oauth::anthropic::refresh(&ep.anthropic, &refresh).await,
+        };
+        match renewed {
             Ok(t) => {
                 // 先存新的續期憑證：舊的已經失效，存不進去就是這次登入作廢，必須明講而不是默默繼續用。
                 if let Some(new_refresh) = t.refresh.as_deref() {
@@ -161,9 +235,13 @@ impl ServerAi {
     /// 問供應商有哪些模型；訂閱型用已登入的憑證，金鑰型用 `key`。
     pub async fn list_models(&self, s: &AiSettings, key: &str) -> Result<Vec<String>, String> {
         if is_oauth(&s.provider) {
-            let token = self.access_token().await?;
+            let token = self.access_token_for(&s.provider).await?;
             let ep = self.endpoints.lock().clone();
-            return aiterm_ai_oauth::anthropic::list_models(&ep, &token).await;
+            return match s.provider.as_str() {
+                "codex_oauth" => Ok(aiterm_ai_oauth::codex::list_models(&ep.codex, &token, self.secrets.get(OAUTH_ACCOUNT_ID).as_deref()).await),
+                "antigravity_oauth" => Ok(aiterm_ai_oauth::antigravity::list_models(&ep.antigravity, &token, self.secrets.get(OAUTH_PROJECT_ID).as_deref()).await),
+                _ => aiterm_ai_oauth::anthropic::list_models(&ep.anthropic, &token).await,
+            };
         }
         list_models_with(s, key).await
     }
@@ -187,9 +265,16 @@ impl ServerAi {
     }
 
     async fn complete_oauth(&self, s: &AiSettings, system: &str, user: &str) -> Result<String, String> {
-        let token = self.access_token().await?;
+        let token = self.access_token_for(&s.provider).await?;
         let ep = self.endpoints.lock().clone();
-        aiterm_ai_oauth::anthropic::complete(&ep, &token, &s.model, system, user).await
+        match s.provider.as_str() {
+            "codex_oauth" => aiterm_ai_oauth::codex::complete(&ep.codex, &token, self.secrets.get(OAUTH_ACCOUNT_ID).as_deref(), &s.model, system, user).await,
+            "antigravity_oauth" => {
+                let project = self.secrets.get(OAUTH_PROJECT_ID).ok_or("登入資料缺少 Cloud Code 專案 id：請重新為 server 登入")?;
+                aiterm_ai_oauth::antigravity::complete(&ep.antigravity, &token, &project, &s.model, system, user).await
+            }
+            _ => aiterm_ai_oauth::anthropic::complete(&ep.anthropic, &token, &s.model, system, user).await,
+        }
     }
 
     pub fn health(&self) -> Health {

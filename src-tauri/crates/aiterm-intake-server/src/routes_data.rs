@@ -497,7 +497,7 @@ pub struct AiView {
 async fn get_ai(State(st): St) -> Response {
     let settings = crate::ai::load(&st.pools.intake).await;
     let configured = crate::ai::configured(&settings, st.secrets.as_ref());
-    let (login, login_error) = if crate::ai::is_oauth(&settings.provider) { st.ai.login_state() } else { ("none", None) };
+    let (login, login_error) = if crate::ai::is_oauth(&settings.provider) { st.ai.login_state(&settings.provider) } else { ("none", None) };
     Json(AiView { settings, configured, health: st.ai.health(), login: login.to_string(), login_error }).into_response()
 }
 
@@ -542,6 +542,12 @@ pub struct OauthLogin {
     pub refresh: String,
     #[serde(default)]
     pub expires_in: Option<u64>,
+    /// Codex：ChatGPT 帳號 id。
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// Antigravity：Cloud Code 專案 id。
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 /// 管理員的 AITerm 完成瀏覽器登入後，把憑證交給 server 存放與續期。
@@ -549,11 +555,15 @@ async fn put_oauth(State(st): St, Admin(me): Admin, Json(b): Json<OauthLogin>) -
     if !crate::ai::is_oauth(&b.provider) {
         return bad("這個供應商不用訂閱登入");
     }
-    if let Err(e) = st.ai.store_login(&b.access, &b.refresh, b.expires_in) {
+    if let Err(e) = st.ai.store_login(&b.provider, &crate::ai::LoginTokens { access: b.access.clone(), refresh: b.refresh.clone(), expires_in: b.expires_in, account_id: b.account_id.clone(), project_id: b.project_id.clone() }) {
         return bad(&e);
     }
-    // 切到這個供應商；模型與位址沿用已存的（沒有就留空，由畫面補）。
+    // 切到這個供應商。換了家，原本的模型與位址是別家的，不能沿用（留空，由畫面讓使用者選）；同一家重新登入則不動。
     let mut settings = crate::ai::load(&st.pools.intake).await;
+    if settings.provider != b.provider {
+        settings.model.clear();
+        settings.base_url.clear();
+    }
     settings.provider = b.provider.clone();
     if let Err(e) = crate::ai::save(&st.pools.intake, &settings).await {
         return bad(&e);

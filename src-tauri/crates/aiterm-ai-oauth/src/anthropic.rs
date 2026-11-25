@@ -1,10 +1,6 @@
 //! Anthropic（Claude 訂閱）：授權碼＋PKCE 登入、續期、一次性呼叫、模型清單。
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use serde::Serialize;
 use std::time::Duration;
-use uuid::Uuid;
 
 pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 pub const AUTH_URL: &str = "https://claude.ai/oauth/authorize";
@@ -22,36 +18,7 @@ pub const CLAUDE_CODE_SENTINEL: &str = "You are Claude Code, Anthropic's officia
 /// 提早多久續期（秒）。
 pub const REFRESH_SKEW_SECS: u64 = 300;
 
-/// 一次登入的 PKCE 資料。`state` 與 `verifier` 只存在記憶體，登入完成就丟掉。
-#[derive(Debug, Clone, PartialEq)]
-pub struct Pkce {
-    pub verifier: String,
-    pub challenge: String,
-    pub state: String,
-}
-
-impl Pkce {
-    pub fn new() -> Self {
-        let verifier = URL_SAFE_NO_PAD.encode([Uuid::new_v4().as_bytes().as_slice(), Uuid::new_v4().as_bytes().as_slice()].concat());
-        let challenge = challenge_of(&verifier);
-        // 24 位元組 → 32 個 base64url 字元，與其他 Anthropic OAuth 用戶端相同的格式。
-        let (b1, b2) = (Uuid::new_v4(), Uuid::new_v4());
-        let mut bytes = Vec::with_capacity(24);
-        bytes.extend_from_slice(b1.as_bytes());
-        bytes.extend_from_slice(&b2.as_bytes()[..8]);
-        Self { verifier, challenge, state: URL_SAFE_NO_PAD.encode(bytes) }
-    }
-}
-
-impl Default for Pkce {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-pub fn challenge_of(verifier: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
-}
+pub use crate::{challenge_of, Pkce, Tokens};
 
 /// 要在瀏覽器開啟的授權網址。
 pub fn auth_url(p: &Pkce) -> String {
@@ -72,17 +39,6 @@ pub fn parse_pasted(input: &str) -> Result<(String, String), String> {
     }
     let (c, s) = input.split_once('#').ok_or("格式不對：請貼上瀏覽器顯示的授權碼（code#state）或完整網址")?;
     Ok((c.to_owned(), s.to_owned()))
-}
-
-/// 取得的憑證。
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Tokens {
-    #[serde(rename = "access_token")]
-    pub access: String,
-    #[serde(rename = "refresh_token", default)]
-    pub refresh: Option<String>,
-    #[serde(rename = "expires_in", default)]
-    pub expires_in: Option<u64>,
 }
 
 /// 可替換的端點（測試用）；預設是正式位址。
@@ -246,7 +202,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"access_token": "A", "refresh_token": "R", "expires_in": 3600})))
             .mount(&srv)
             .await;
-        assert_eq!(exchange(&ep(&srv), "C", "S", "V").await.unwrap(), Tokens { access: "A".into(), refresh: Some("R".into()), expires_in: Some(3600) });
+        assert_eq!(exchange(&ep(&srv), "C", "S", "V").await.unwrap(), Tokens { access: "A".into(), refresh: Some("R".into()), id_token: None, expires_in: Some(3600) });
         let sent = &srv.received_requests().await.unwrap()[0];
         assert_eq!(sent.headers.get("anthropic-beta").unwrap().to_str().unwrap(), OAUTH_BETA_HEADER);
     }
