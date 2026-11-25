@@ -15,6 +15,8 @@ export interface AttachmentRow {
 
 export interface TaskRow {
   id: string;
+  /** 連到 server 的共用看板：這張卡正由誰領取處理（只有從 server 來的卡片會有）。 */
+  claimed_by?: string | null;
   title: string;
   body: string;
   project_dir: string;

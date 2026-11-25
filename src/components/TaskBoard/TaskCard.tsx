@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import type { Translations } from "../../lib/i18n";
+import { intakeBoardClaim, intakeBoardRelease } from "../../ipc/intake";
 import { useLocale } from "../../contexts/LocaleContext";
 import { localizedCardTitle } from "../AgentCanvas/cardTitle";
 import { abortMerge, archiveTask, cloneTask, deleteTask, markTaskDone, mergeTaskWorktree, stopTask, type MergeOutcome, type TaskWithAttachments } from "../../ipc/tasks";
@@ -58,6 +59,8 @@ export function TaskCard({
   agentName?: string;
 }) {
   const { t } = useLocale();
+  // 連到 server 的共用看板（專案 id 是 remote:…）：領取與放回走 server；停止、續聊、合併等只屬於本機的操作不顯示。
+  const remote = projectId.startsWith("remote:");
   const createdLabel = formatCreatedAt(card.created_at);
   const durationSecs = taskDurationSecs(card);
   const [busy, setBusy] = useState(false);
@@ -271,9 +274,25 @@ export function TaskCard({
           </>
         )}
         {card.status === "queued" && (
-          <button className="tb-btn tb-btn--ghost" onClick={onEditLabel}>{t.board_action_edit_label}</button>
+          <>
+            {remote && (
+              <button className="tb-btn tb-btn--primary" disabled={busy} onClick={() => void run(() => intakeBoardClaim(card.id))}>
+                {t.board_remote_claim}
+              </button>
+            )}
+            <button className="tb-btn tb-btn--ghost" onClick={onEditLabel}>{t.board_action_edit_label}</button>
+          </>
         )}
-        {card.status === "running" && (
+        {card.status === "running" && remote && (
+          <>
+            <span className="task-card-meta">{t.board_remote_claimed_by.replace("{name}", card.claimed_by ?? "")}</span>
+            <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => intakeBoardRelease(card.id))}>
+              {t.board_remote_release}
+            </button>
+            <button className="tb-btn tb-btn--ghost" onClick={onEditLabel}>{t.board_action_edit_label}</button>
+          </>
+        )}
+        {card.status === "running" && !remote && (
           <>
             <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => stopTask(projectId, card.id))}>
               {t.board_action_stop}
@@ -292,9 +311,11 @@ export function TaskCard({
             {card.transcript_path && (
               <button className="tb-btn tb-btn--ghost" onClick={onViewTranscript}>{t.board_action_transcript}</button>
             )}
-            <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => cloneTask(projectId, card.id))}>
-              {t.board_action_requeue}
-            </button>
+            {!remote && (
+              <button className="tb-btn tb-btn--ghost" disabled={busy} onClick={() => void run(() => cloneTask(projectId, card.id))}>
+                {t.board_action_requeue}
+              </button>
+            )}
             {card.worktree_branch && (
               <button className="tb-btn tb-btn--primary" disabled={busy} onClick={() => void mergeWorktree()}>
                 {mergeLabel}

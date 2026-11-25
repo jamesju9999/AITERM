@@ -1282,3 +1282,27 @@ select.task-field-input {
   white-space: nowrap;
 }
 .tb-card-templates { align-items: center; gap: 6px; margin-bottom: 6px; }
+
+/* 連到 server 的共用看板：我電腦上的專案對應列 */
+.task-board-remote-map {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border-radius: 8px;
+  font-size: 12px;
+}
+.task-board-remote-map select,
+.task-board-remote-map .task-field-input {
+  min-width: 180px;
+}
+.task-board-remote-hint {
+  flex-basis: 100%;
+  opacity: 0.7;
+}
+.task-board-remote-map .tb-warn {
+  color: var(--warn, #d9822b);
+}

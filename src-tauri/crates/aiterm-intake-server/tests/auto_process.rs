@@ -1,3 +1,4 @@
+#![cfg(unix)] // 假的 claude 是 shell 腳本，Windows 無法當成程式執行；執行器本身在 Windows 要把 claude_path 設成 claude.exe 的完整路徑。
 //! Server 自動處理題目：用假的 `claude`（可設定路徑的腳本）驅動，驗證工具參數、模式、worktree、
 //! 驗證、核准合併、駁回、衝突、逾時、並行上限與「claude 不可用就不領題」。
 use aiterm_intake_client::api::Api;

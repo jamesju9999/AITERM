@@ -397,7 +397,8 @@ mod tests {
         let item = r.add_item_as("內部的題目", "line", Level::Internal).await;
         r.tick().await;
         assert!(r.wait_for(&dispatcher::marker_for(&item.id)).await);
-        assert!(r.saw("shared-notes-xyz") && r.saw("internal-notes-xyz"), "內部題目帶本機設定的兩組");
+        // 參考資料夾的提示在提示詞最後面：標記出現時還沒打完，要等它出現再看。
+        assert!(r.wait_for("internal-notes-xyz").await && r.wait_for("shared-notes-xyz").await, "內部題目帶本機設定的兩組");
         assert!(!r.saw("only-on-the-server"), "server 上的路徑不帶");
         runtime::complete(r.app.handle(), &r.tab, &item.id, Some("好".into())).await;
 
@@ -405,6 +406,13 @@ mod tests {
         let ext = r.add_item_as("外部客戶的題目", "line", Level::External).await;
         r.tick().await;
         assert!(r.wait_for(&dispatcher::marker_for(&ext.id)).await);
+        // 同樣等提示詞打完（共用那組的路徑在最後面）才檢查「沒有僅內部那組」，否則沒打完也會誤判通過。
+        for _ in 0..100 {
+            if String::from_utf8_lossy(&r.out.lock()[before..]).contains("shared-notes-xyz") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         let after = String::from_utf8_lossy(&r.out.lock()[before..]).to_string();
         assert!(after.contains("shared-notes-xyz") && !after.contains("internal-notes-xyz"), "外部客戶的題目只拿共用那組：{after}");
         r.pty.close(&r.tab).ok();

@@ -121,6 +121,10 @@ pub struct TaskRow {
     /// 模組卡：小修改快速路徑，做完跳過審查直接算通過（改動太大會自動關掉，見 `workflow::FAST_MAX_FILES`）。
     #[sqlx(default)]
     pub fast: bool,
+    /// 連到 server 的共用看板時，這張卡正由誰領取處理（只有從 server 來的卡片會有）。
+    #[sqlx(default)]
+    #[serde(default)]
+    pub claimed_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

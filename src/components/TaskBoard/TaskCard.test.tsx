@@ -17,6 +17,12 @@ vi.mock("../../ipc/tasks", () => ({
   markTaskDone: vi.fn(),
   stopTask: vi.fn(),
 }));
+const intakeBoardClaim = vi.fn();
+const intakeBoardRelease = vi.fn();
+vi.mock("../../ipc/intake", () => ({
+  intakeBoardClaim: (...a: unknown[]) => intakeBoardClaim(...a),
+  intakeBoardRelease: (...a: unknown[]) => intakeBoardRelease(...a),
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: (...a: unknown[]) => confirmDialog(...a),
   message: (...a: unknown[]) => messageDialog(...a),
@@ -426,5 +432,54 @@ describe("TaskCard 的 Codex 徽章", () => {
     unmount();
     show({ cli: "codex", model: "gpt-6-luna", interactive: true });
     expect(screen.queryByTestId("task-codex-badge")).toBeNull();
+  });
+});
+
+describe("連到 server 的共用看板上的卡片（專案 id 是 remote:…）", () => {
+  const mountRemote = (over: Partial<TaskWithAttachments>, onChanged = vi.fn()) => {
+    render(
+      <LocaleProvider>
+        <TaskCard projectId="remote:srv-1" card={card(over)} onEdit={vi.fn()} onViewTranscript={vi.fn()}
+          onEditLabel={vi.fn()} onChanged={onChanged} />
+      </LocaleProvider>,
+    );
+    return onChanged;
+  };
+
+  it("待派送的卡片有「我來處理」，按下去向 server 領取並重新載入", async () => {
+    intakeBoardClaim.mockResolvedValue(undefined);
+    const onChanged = mountRemote({ status: "queued", worktree_path: null, worktree_branch: null });
+    await userEvent.click(screen.getByRole("button", { name: "我來處理" }));
+    await waitFor(() => expect(intakeBoardClaim).toHaveBeenCalledWith("t1"));
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("領取失敗（例如還沒設定我電腦上的專案、或已被別人領走）要把原因講出來", async () => {
+    intakeBoardClaim.mockRejectedValue("請先設定「我電腦上的專案」：選一個本機看板專案與執行資料夾");
+    const onChanged = mountRemote({ status: "queued", worktree_path: null, worktree_branch: null });
+    await userEvent.click(screen.getByRole("button", { name: "我來處理" }));
+    await waitFor(() => expect(messageDialog).toHaveBeenCalled());
+    expect(String(messageDialog.mock.calls[0][0])).toContain("請先設定");
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("處理中的卡片顯示是誰在處理、可以放回；只屬於本機的停止與完成按鈕不出現", async () => {
+    intakeBoardRelease.mockResolvedValue(undefined);
+    mountRemote({ status: "running", outcome: null, interactive: true, claimed_by: "小華", worktree_path: null, worktree_branch: null });
+    expect(screen.getByText("處理中：小華")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "停止" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "放回" }));
+    await waitFor(() => expect(intakeBoardRelease).toHaveBeenCalledWith("t1"));
+  });
+
+  it("本機的看板沒有「我來處理」，完成的卡片仍可重新派工", () => {
+    mount();
+    expect(screen.queryByRole("button", { name: "我來處理" })).toBeNull();
+    expect(screen.getByRole("button", { name: "重新派工" })).toBeTruthy();
+  });
+
+  it("共用看板上完成的卡片沒有重新派工（它是 server 的卡片，不是本機卡片）", () => {
+    mountRemote({ status: "done", worktree_path: null, worktree_branch: null });
+    expect(screen.queryByRole("button", { name: "重新派工" })).toBeNull();
   });
 });

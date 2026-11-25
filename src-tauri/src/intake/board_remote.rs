@@ -83,6 +83,7 @@ pub fn to_task(c: &BoardCard, project_dir: &str) -> TaskRow {
         model: None,
         provides: None,
         fast: false,
+        claimed_by: c.claimed_by.clone(),
     }
 }
 
