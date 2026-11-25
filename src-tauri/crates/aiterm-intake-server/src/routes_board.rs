@@ -4,7 +4,7 @@ use crate::routes::{api_error, Admin};
 use crate::routes_data::{bad, conflict, internal, not_found};
 use crate::state::AppState;
 use aiterm_intake_core::attach::{self, Raw};
-use aiterm_intake_core::board_store::{self as bs, Change, Edit, NewCard};
+use aiterm_intake_core::board_store::{self as bs, AgentChange, AgentEdit, Change, Edit, NewAgent, NewCard};
 use aiterm_intake_core::host::Notifier;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -359,6 +359,212 @@ async fn summary(State(st): St, Extension(me): Extension<Me>, Path(id): Path<Str
     }
 }
 
+// ---- Agent 協作：Agent、指派、記事本、簡介 ----
+
+async fn list_agents(State(st): St, Path(pid): Path<String>) -> Response {
+    if !project_exists(&st, &pid).await {
+        return not_found();
+    }
+    match bs::list_agents(&st.pools.intake, &pid).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AgentBody {
+    #[serde(default)]
+    kind: String,
+    name: String,
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    prompt_prefix: String,
+    #[serde(default)]
+    canvas_x: f64,
+    #[serde(default)]
+    canvas_y: f64,
+    #[serde(default)]
+    produces_spec: bool,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default = "claude")]
+    cli: String,
+}
+
+fn claude() -> String {
+    "claude".into()
+}
+
+async fn create_agent(State(st): St, Extension(me): Extension<Me>, Path(pid): Path<String>, Json(b): Json<AgentBody>) -> Response {
+    if !project_exists(&st, &pid).await {
+        return not_found();
+    }
+    let r = bs::create_agent(&st.pools.intake, NewAgent { project_id: &pid, kind: &b.kind, name: &b.name, role: &b.role, prompt_prefix: &b.prompt_prefix, canvas_x: b.canvas_x, canvas_y: b.canvas_y, produces_spec: b.produces_spec, model: b.model.as_deref(), cli: &b.cli, created_by: &me.name }).await;
+    match r {
+        Ok(Ok(a)) => {
+            crate::audit::record(&st.pools.server, &me.name, "board.agent.create", &a.id).await;
+            st.events.changed();
+            (StatusCode::CREATED, Json(a)).into_response()
+        }
+        Ok(Err(why)) => bad(&why),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AgentUpdate {
+    version: i64,
+    #[serde(flatten)]
+    agent: AgentBody,
+}
+
+async fn update_agent(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>, Json(b): Json<AgentUpdate>) -> Response {
+    let a = &b.agent;
+    match bs::update_agent(&st.pools.intake, &id, b.version, AgentEdit { name: &a.name, role: &a.role, prompt_prefix: &a.prompt_prefix, produces_spec: a.produces_spec, model: a.model.as_deref(), cli: &a.cli }).await {
+        Ok(Ok(agent)) => {
+            crate::audit::record(&st.pools.server, &me.name, "board.agent.update", &id).await;
+            st.events.changed();
+            Json(agent).into_response()
+        }
+        Ok(Err(AgentChange::Conflict)) => conflict("這個 Agent 已被別人修改，請重新載入後再試"),
+        Ok(Err(AgentChange::NotFound)) => not_found(),
+        Ok(Err(AgentChange::Refused(why))) => api_error(StatusCode::UNPROCESSABLE_ENTITY, &why),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct PositionBody {
+    x: f64,
+    y: f64,
+}
+
+async fn agent_position(State(st): St, Path(id): Path<String>, Json(b): Json<PositionBody>) -> Response {
+    match bs::set_agent_position(&st.pools.intake, &id, b.x, b.y).await {
+        Ok(true) => {
+            st.events.changed();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => bad("找不到這個 Agent，或位置不是有效的數字"),
+        Err(e) => internal(e),
+    }
+}
+
+/// 刪除 Agent：建立者或管理員；它還有處理中的卡片就不能刪。
+async fn delete_agent(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>) -> Response {
+    let Ok(Some(a)) = bs::get_agent(&st.pools.intake, &id).await else { return not_found() };
+    if me.role != Role::Admin && a.created_by != me.name {
+        return api_error(StatusCode::FORBIDDEN, "只有 Agent 的建立者或管理員可以刪除");
+    }
+    match bs::delete_agent(&st.pools.intake, &id).await {
+        Ok(Ok(_)) => {
+            crate::audit::record(&st.pools.server, &me.name, "board.agent.delete", &id).await;
+            st.events.changed();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(Err(why)) => conflict(&why),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AssignBody {
+    version: i64,
+    #[serde(default)]
+    agent_id: Option<String>,
+}
+
+async fn assign(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>, Json(b): Json<AssignBody>) -> Response {
+    match bs::assign_card(&st.pools.intake, &id, b.version, b.agent_id.as_deref()).await {
+        Ok(c) => {
+            if matches!(c, Change::Ok(_)) {
+                crate::audit::record(&st.pools.server, &me.name, "board.assign", &format!("{id} → {}", b.agent_id.as_deref().unwrap_or("-"))).await;
+            }
+            changed_response(&st, c)
+        }
+        Err(e) => internal(e),
+    }
+}
+
+async fn notes(State(st): St, Path(pid): Path<String>) -> Response {
+    match bs::list_notes(&st.pools.intake, &pid).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct NoteBody {
+    text: String,
+    /// 署名（Agent 或空白）；成員自己加的用成員名稱。
+    #[serde(default)]
+    author: Option<String>,
+}
+
+async fn add_note(State(st): St, Extension(me): Extension<Me>, Path(pid): Path<String>, Json(b): Json<NoteBody>) -> Response {
+    if !project_exists(&st, &pid).await {
+        return not_found();
+    }
+    if b.text.trim().is_empty() {
+        return bad("記事不能是空的");
+    }
+    let author = b.author.filter(|a| !a.trim().is_empty()).unwrap_or_else(|| me.name.clone());
+    match bs::add_note(&st.pools.intake, &pid, &author, &b.text).await {
+        Ok(n) => {
+            st.events.changed();
+            (StatusCode::CREATED, Json(n)).into_response()
+        }
+        Err(e) => internal(e),
+    }
+}
+
+async fn delete_note(State(st): St, Path(id): Path<i64>) -> Response {
+    match bs::delete_note(&st.pools.intake, id).await {
+        Ok(true) => {
+            st.events.changed();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => not_found(),
+        Err(e) => internal(e),
+    }
+}
+
+fn brief_key(pid: &str) -> String {
+    format!("board_brief:{pid}")
+}
+
+async fn get_brief(State(st): St, Path(pid): Path<String>) -> Response {
+    let v = aiterm_intake_core::store::get_setting(&st.pools.intake, &brief_key(&pid)).await.ok().flatten();
+    Json(v).into_response()
+}
+
+#[derive(Deserialize)]
+struct BriefBody {
+    brief: Option<String>,
+}
+
+/// 專案簡介（每張 Agent 卡派工時放在提示前面）。空白＝刪除。
+async fn set_brief(State(st): St, Extension(me): Extension<Me>, Path(pid): Path<String>, Json(b): Json<BriefBody>) -> Response {
+    if !project_exists(&st, &pid).await {
+        return not_found();
+    }
+    let text = b.brief.unwrap_or_default();
+    let r = if text.trim().is_empty() {
+        sqlx::query("DELETE FROM intake_settings WHERE key = ?").bind(brief_key(&pid)).execute(&st.pools.intake).await.map(|_| ())
+    } else {
+        aiterm_intake_core::store::set_setting(&st.pools.intake, &brief_key(&pid), text.trim()).await
+    };
+    match r {
+        Ok(()) => {
+            crate::audit::record(&st.pools.server, &me.name, "board.brief", &pid).await;
+            st.events.changed();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => internal(e),
+    }
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v1/board/projects/{pid}/cards", get(list).post(create))
@@ -375,4 +581,11 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/board/cards/{id}/summary", post(summary))
         .route("/v1/board/attachments/{aid}/file", get(attachment_file))
         .route("/v1/board/attachments/{aid}", delete(remove_attachment))
+        .route("/v1/board/projects/{pid}/agents", get(list_agents).post(create_agent))
+        .route("/v1/board/agents/{id}", put(update_agent).delete(delete_agent))
+        .route("/v1/board/agents/{id}/position", post(agent_position))
+        .route("/v1/board/cards/{id}/assign", post(assign))
+        .route("/v1/board/projects/{pid}/notes", get(notes).post(add_note))
+        .route("/v1/board/notes/{id}", delete(delete_note))
+        .route("/v1/board/projects/{pid}/brief", get(get_brief).put(set_brief))
 }

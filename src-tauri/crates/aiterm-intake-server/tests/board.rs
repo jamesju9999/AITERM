@@ -191,3 +191,72 @@ async fn board_changes_are_announced_and_the_expired_lease_sweep_runs_with_the_s
     aiterm_intake_server::channels::tick_once(r.srv.state()).await;
     assert_eq!(list(&a, &r.pid).await[0].card.status, "queued", "伺服器定時掃描把逾期的卡片放回待派送");
 }
+
+async fn agent(api: &Api, pid: &str, kind: &str, name: &str) -> aiterm_intake_core::board_store::BoardAgent {
+    api.typed(Method::POST, &format!("/v1/board/projects/{pid}/agents"), Some(json!({"kind": kind, "name": name, "role": "Senior Coder", "canvas_x": 10.0, "canvas_y": 20.0}))).await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn everyone_shares_the_same_agents_and_a_stale_agent_edit_is_refused() {
+    let r = rig().await;
+    let (a, b) = (r.srv.paired("小明", Role::Member).await, r.srv.paired("小華", Role::Member).await);
+    let coder = agent(&a, &r.pid, "coder", "Coder A").await;
+    assert_eq!((coder.kind.as_str(), coder.created_by.as_str(), coder.version, coder.cli.as_str()), ("coder", "小明", 1, "claude"));
+    let seen: Vec<aiterm_intake_core::board_store::BoardAgent> = b.get(&format!("/v1/board/projects/{}/agents", r.pid)).await.unwrap();
+    assert_eq!(seen.len(), 1, "另一位成員看到同一個 Agent");
+    assert!(a.request(Method::POST, &format!("/v1/board/projects/{}/agents", r.pid), Some(json!({"kind": "boss", "name": "x"}))).await.is_err(), "種類要合法");
+    assert!(a.request(Method::POST, "/v1/board/projects/不存在/agents", Some(json!({"kind": "coder", "name": "x"}))).await.is_err());
+
+    let edit = |n: &str| json!({"version": 1, "name": n, "role": "Lead", "prompt_prefix": "多寫測試", "produces_spec": true, "model": "opus", "cli": "codex"});
+    let first: aiterm_intake_core::board_store::BoardAgent = a.typed(Method::PUT, &format!("/v1/board/agents/{}", coder.id), Some(edit("甲改的"))).await.unwrap();
+    assert_eq!((first.version, first.name.as_str(), first.model.as_deref(), first.cli.as_str()), (2, "甲改的", Some("opus"), "codex"));
+    let second = b.typed::<aiterm_intake_core::board_store::BoardAgent>(Method::PUT, &format!("/v1/board/agents/{}", coder.id), Some(edit("乙改的"))).await;
+    assert!(is_server_err(&second, "已被別人修改"), "{second:?}");
+    // 拖動節點不帶版本，也不會讓別人的編輯過期。
+    b.request(Method::POST, &format!("/v1/board/agents/{}/position", coder.id), Some(json!({"x": 300.5, "y": 40.0}))).await.unwrap();
+    let moved: Vec<aiterm_intake_core::board_store::BoardAgent> = a.get(&format!("/v1/board/projects/{}/agents", r.pid)).await.unwrap();
+    assert_eq!((moved[0].canvas_x, moved[0].version), (300.5, 2));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assigning_cards_to_agents_deleting_agents_and_who_may_delete() {
+    let r = rig().await;
+    let (a, b) = (r.srv.paired("小明", Role::Member).await, r.srv.paired("小華", Role::Member).await);
+    let admin = r.srv.paired("管理員", Role::Admin).await;
+    let coder = agent(&a, &r.pid, "coder", "Coder A").await;
+    let c = create(&a, &r.pid, "要做的模組").await;
+    let assigned: BoardCard = a.typed(Method::POST, &format!("/v1/board/cards/{}/assign", c.id), Some(json!({"version": c.version, "agent_id": coder.id}))).await.unwrap();
+    assert_eq!((assigned.status.as_str(), assigned.agent_id.as_deref()), ("queued", Some(coder.id.as_str())));
+    let stale = a.typed::<BoardCard>(Method::POST, &format!("/v1/board/cards/{}/assign", c.id), Some(json!({"version": c.version, "agent_id": null}))).await;
+    assert!(is_server_err(&stale, "已被別人修改"), "{stale:?}");
+    assert!(a.request(Method::POST, &format!("/v1/board/cards/{}/assign", c.id), Some(json!({"version": assigned.version, "agent_id": "沒有"}))).await.is_err());
+
+    assert!(b.request(Method::DELETE, &format!("/v1/board/agents/{}", coder.id), None).await.is_err(), "別人不能刪");
+    a.request(Method::POST, &format!("/v1/board/cards/{}/claim", c.id), None).await.unwrap();
+    assert!(is_server_err(&admin.request(Method::DELETE, &format!("/v1/board/agents/{}", coder.id), None).await, "處理中"), "有卡片在跑不能刪");
+    a.request(Method::POST, &format!("/v1/board/cards/{}/release", c.id), None).await.unwrap();
+    admin.request(Method::DELETE, &format!("/v1/board/agents/{}", coder.id), None).await.unwrap();
+    let after = &list(&a, &r.pid).await[0].card;
+    assert_eq!((after.agent_id.clone(), after.status.as_str()), (None, "planning"), "Agent 刪掉後卡片取消指派");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_notes_and_the_brief_are_shared_and_per_project() {
+    let r = rig().await;
+    let other_pid = r.srv.project("別的專案").await;
+    let (a, b) = (r.srv.paired("小明", Role::Member).await, r.srv.paired("小華", Role::Member).await);
+    a.request(Method::POST, &format!("/v1/board/projects/{}/notes", r.pid), Some(json!({"text": "  先做登入  "}))).await.unwrap();
+    b.request(Method::POST, &format!("/v1/board/projects/{}/notes", r.pid), Some(json!({"text": "資料庫用 SQLite", "author": "Coder A"}))).await.unwrap();
+    assert!(a.request(Method::POST, &format!("/v1/board/projects/{}/notes", r.pid), Some(json!({"text": "  "}))).await.is_err());
+    let notes: Vec<Value> = b.get(&format!("/v1/board/projects/{}/notes", r.pid)).await.unwrap();
+    assert_eq!(notes.iter().map(|n| (n["author"].as_str().unwrap(), n["text"].as_str().unwrap())).collect::<Vec<_>>(), vec![("小明", "先做登入"), ("Coder A", "資料庫用 SQLite")], "沒署名的用成員名稱");
+    assert!(b.get::<Vec<Value>>(&format!("/v1/board/projects/{other_pid}/notes")).await.unwrap().is_empty());
+    b.request(Method::DELETE, &format!("/v1/board/notes/{}", notes[0]["id"]), None).await.unwrap();
+    assert_eq!(a.get::<Vec<Value>>(&format!("/v1/board/projects/{}/notes", r.pid)).await.unwrap().len(), 1);
+
+    assert_eq!(a.get::<Option<String>>(&format!("/v1/board/projects/{}/brief", r.pid)).await.unwrap(), None);
+    a.request(Method::PUT, &format!("/v1/board/projects/{}/brief", r.pid), Some(json!({"brief": "  這是一個記帳 App  "}))).await.unwrap();
+    assert_eq!(b.get::<Option<String>>(&format!("/v1/board/projects/{}/brief", r.pid)).await.unwrap().as_deref(), Some("這是一個記帳 App"));
+    b.request(Method::PUT, &format!("/v1/board/projects/{}/brief", r.pid), Some(json!({"brief": "  "}))).await.unwrap();
+    assert_eq!(a.get::<Option<String>>(&format!("/v1/board/projects/{}/brief", r.pid)).await.unwrap(), None, "空白＝刪除");
+}
