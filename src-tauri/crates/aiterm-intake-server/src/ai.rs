@@ -40,6 +40,11 @@ pub fn is_oauth(provider: &str) -> bool {
     OAUTH_PROVIDERS.contains(&provider)
 }
 
+/// 這組憑證是哪個供應商登入的。加上這個標記之前只有 Claude 能登入，所以有續期憑證卻沒標記的視為 Claude。
+fn login_kind(secrets: &dyn Secrets) -> Option<String> {
+    secrets.get(OAUTH_KIND).or_else(|| secrets.get(OAUTH_REFRESH).map(|_| "anthropic_oauth".to_string()))
+}
+
 /// 提早多久續期（秒）：Google 的 token 較短命。
 fn refresh_skew(provider: &str) -> u64 {
     match provider {
@@ -84,7 +89,7 @@ pub fn configured(s: &AiSettings, secrets: &dyn Secrets) -> bool {
         return false;
     }
     if is_oauth(&s.provider) {
-        return secrets.get(OAUTH_REFRESH).is_some() && secrets.get(OAUTH_KIND).as_deref() == Some(s.provider.as_str());
+        return secrets.get(OAUTH_REFRESH).is_some() && login_kind(secrets).as_deref() == Some(s.provider.as_str());
     }
     s.provider == "ollama" || secrets.get(API_KEY_SECRET).is_some()
 }
@@ -172,7 +177,7 @@ impl ServerAi {
     /// `provider` 是目前選的供應商；憑證是別家登入的就當作沒登入。
     pub fn login_state(&self, provider: &str) -> (LoginState, Option<String>) {
         let err = self.login_error.lock().clone();
-        if self.secrets.get(OAUTH_REFRESH).is_none() || self.secrets.get(OAUTH_KIND).as_deref() != Some(provider) {
+        if self.secrets.get(OAUTH_REFRESH).is_none() || login_kind(self.secrets.as_ref()).as_deref() != Some(provider) {
             ("none", None)
         } else if err.is_some() {
             ("needs_login", err)
@@ -190,7 +195,7 @@ impl ServerAi {
     /// 拿一個可用的存取憑證；快到期就先續期（排隊，一次只有一個在續期）。
     pub async fn access_token_for(&self, provider: &str) -> Result<String, String> {
         let _guard = self.refresh_lock.lock().await;
-        if !is_oauth(provider) || self.secrets.get(OAUTH_KIND).as_deref() != Some(provider) {
+        if !is_oauth(provider) || login_kind(self.secrets.as_ref()).as_deref() != Some(provider) {
             return Err("尚未登入：請在 AITerm 為 server 登入這個訂閱帳號".into());
         }
         let access = self.secrets.get(OAUTH_ACCESS).unwrap_or_default();
@@ -534,6 +539,17 @@ mod tests {
             self.0.lock().remove(id);
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_login_saved_before_the_kind_marker_existed_counts_as_claude() {
+        let secrets = Mem(Default::default());
+        assert_eq!(login_kind(&secrets), None);
+        secrets.set(OAUTH_REFRESH, "R").unwrap();
+        assert_eq!(login_kind(&secrets).as_deref(), Some("anthropic_oauth"));
+        let s = AiSettings { provider: "anthropic_oauth".into(), model: "m".into(), base_url: String::new() };
+        assert!(configured(&s, &secrets));
+        assert!(!configured(&AiSettings { provider: "codex_oauth".into(), ..s }, &secrets), "舊登入不能被當成 ChatGPT 的");
     }
 
     #[tokio::test]
