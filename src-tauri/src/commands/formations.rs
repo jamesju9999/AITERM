@@ -18,6 +18,9 @@ fn s(e: sqlx::Error) -> String {
 /// 編制狀態。舊專案（桌布上有 Agent、還沒有任何編制）第一次打開時先建立 `default_name`。
 #[tauri::command]
 pub async fn formations_state(project_id: String, default_name: String, reg: State<'_, ProjectRegistry>) -> Result<FormationsState, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(crate::tasks::formations::FormationsState { formations: Vec::new(), active: None, pending: None, busy: Vec::new(), log: Vec::new() });
+    }
     let p = project(&reg, &project_id)?;
     formations::ensure_default(&p.pool, &default_name).await.map_err(s)?;
     formations::state(&p.pool).await.map_err(s)
@@ -124,6 +127,9 @@ pub async fn formations_cancel_switch(
 /// 已經從桌布移除的 Agent（已完成卡片的歷史顯示名稱用）。
 #[tauri::command]
 pub async fn agents_retired(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Vec<RetiredAgent>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Vec::new());
+    }
     let p = project(&reg, &project_id)?;
     formations::retired(&p.pool).await.map_err(s)
 }

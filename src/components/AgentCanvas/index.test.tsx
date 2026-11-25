@@ -11,6 +11,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 vi.mock("../../ipc/fs", () => ({ writeTextFile: vi.fn().mockResolvedValue(undefined) }));
 
 // 抓住 tasks-updated 的回呼，測試裡手動觸發「後端說資料變了」。
+// 畫布有好幾處訂閱 tasks-updated（載入資料、專案清單…）：全部都要收到，所以收集全部回呼。
+let tasksUpdatedCbs: Array<() => void> = [];
 let tasksUpdated: (() => void) | null = null;
 vi.mock("../../ipc/tasks", () => ({
   listTasks: vi.fn(),
@@ -21,7 +23,8 @@ vi.mock("../../ipc/tasks", () => ({
   setProjectBrief: vi.fn().mockResolvedValue(undefined),
   getTaskBoardConfig: vi.fn().mockResolvedValue({ max_concurrent: 3 }),
   onTasksUpdated: vi.fn((cb: () => void) => {
-    tasksUpdated = cb;
+    tasksUpdatedCbs.push(cb);
+    tasksUpdated = () => tasksUpdatedCbs.forEach((c) => c());
     return Promise.resolve(() => {});
   }),
   readTranscript: vi.fn().mockResolvedValue(""),
@@ -285,6 +288,7 @@ beforeEach(() => {
   vi.mocked(checkRepo).mockResolvedValue({ status: "ok", branch: "main" });
   vi.mocked(setReferences).mockImplementation(async (_p, refs) => refs);
   tasksUpdated = null;
+  tasksUpdatedCbs = [];
   try {
     localStorage.clear();
     // 教學輔助預設「都看過、都關了」，既有測試不受導覽遮罩與提示影響；教學輔助自己的測試再清掉。
@@ -1325,6 +1329,50 @@ describe("AgentCanvasView", () => {
     await waitFor(() => expect(listAgents).toHaveBeenCalledWith("p2"));
     fireEvent.change(select, { target: { value: "p1" } });
     expect(onProjectChange).toHaveBeenLastCalledWith("p1", "HTBKTW");
+  });
+
+  it("連上 server 之後，開機就掛著的畫布下拉選單也會多出 server 的共用看板專案", async () => {
+    const proj = (id: string, name: string) => ({
+      id, name, description: "", path: `/${id}`, status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null,
+    });
+    vi.mocked(listProjects).mockResolvedValue([proj("p1", "HTBKTW")]); // 開機時還沒連上
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    render(
+      <LocaleProvider>
+        <AgentCanvasView isActive />
+      </LocaleProvider>,
+    );
+    const select = (await screen.findByDisplayValue("HTBKTW")) as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(["HTBKTW"]);
+    // 連線完成：後端送 tasks-updated，專案清單多了一筆。
+    vi.mocked(listProjects).mockResolvedValue([proj("p1", "HTBKTW"), proj("remote:srv-1", "🌐 範例科技")]);
+    await act(async () => {
+      tasksUpdated?.();
+    });
+    await waitFor(() => expect(Array.from(select.options).map((o) => o.textContent)).toEqual(["HTBKTW", "🌐 範例科技"]));
+    expect(select.value).toBe("p1"); // 已經選好的專案不會被換掉
+  });
+
+  it("切到載入失敗的專案（server 連不上）：不留著上一個專案的節點", async () => {
+    const proj = (id: string, name: string) => ({
+      id, name, description: "", path: `/${id}`, status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null,
+    });
+    vi.mocked(listProjects).mockResolvedValue([proj("p1", "HTBKTW"), proj("remote:srv", "🌐 範例科技")]);
+    vi.mocked(listAgents).mockImplementation(async (id: string) => {
+      if (id === "remote:srv") throw new Error("連不上 server");
+      return [agent({ name: "工程師甲" })];
+    });
+    vi.mocked(listTasks).mockResolvedValue([]);
+    render(
+      <LocaleProvider>
+        <AgentCanvasView isActive initialProjectId="p1" />
+      </LocaleProvider>,
+    );
+    expect(await screen.findByText("工程師甲")).toBeTruthy();
+    fireEvent.change(screen.getByDisplayValue("HTBKTW"), { target: { value: "remote:srv" } });
+    await waitFor(() => expect(screen.queryByText("工程師甲")).toBeNull());
+    expect(await screen.findByText(/連不上 server/)).toBeTruthy();
   });
 
   it("新分頁沒有記住的專案：用上次選的，並記到這個分頁上", async () => {

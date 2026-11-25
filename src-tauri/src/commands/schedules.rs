@@ -23,6 +23,9 @@ fn now_secs() -> i64 {
 
 #[tauri::command]
 pub async fn schedules_list(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Vec<ScheduleView>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Vec::new());
+    }
     let p = project(&reg, &project_id)?;
     let mut out = Vec::new();
     for row in schedules::list(&p.pool).await.map_err(|e| e.to_string())? {

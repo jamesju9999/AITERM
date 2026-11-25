@@ -3,6 +3,8 @@
 //! `tasks-updated`，前端是被動的渲染器。
 //! 見 `docs/superpowers/specs/2026-10-15-agent-canvas-design.md`。
 
+use std::sync::Arc;
+
 use serde::Deserialize;
 use tauri::{AppHandle, State};
 
@@ -21,11 +23,13 @@ fn agent_or_err(row: Option<AgentRow>) -> Result<AgentRow, String> {
 #[tauri::command]
 pub async fn agents_list(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<Vec<AgentRow>, String> {
-    // 連到 server 的共用看板（M1）沒有 Agent 協作。
-    if crate::intake::board_remote::parse(&project_id).is_some() {
-        return Ok(Vec::new());
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let list = crate::intake::board_remote::agents(&api, &rs, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        return Ok(list.iter().map(|a| crate::intake::board_remote::to_agent(a, "")).collect());
     }
     let p = project(&reg, &project_id)?;
     agents::list_agents(&p.pool).await.map_err(|e| e.to_string())
@@ -54,10 +58,18 @@ pub struct CreateAgentArgs {
 #[tauri::command]
 pub async fn agents_create(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     args: CreateAgentArgs,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<String, String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let f = crate::intake::board_remote::AgentFields { kind: &args.kind, name: &args.name, role: &args.role, prompt_prefix: &args.prompt_prefix, canvas_x: args.canvas_x, canvas_y: args.canvas_y, produces_spec: args.produces_spec, model: args.model.as_deref().filter(|m| !m.trim().is_empty()), cli: args.cli.as_deref().unwrap_or("claude") };
+        let id = crate::intake::board_remote::create_agent(&api, &rs, pid, f).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(id);
+    }
     let p = project(&reg, &project_id)?;
     // 不是 git repo 就擋下：Agent 的隔離、依序累積與合併都建立在分支上。
     // 一般卡片「不是 repo 就退回原資料夾」的做法在這裡會讓兩個 Coder 同時
@@ -124,10 +136,25 @@ pub struct UpdateAgentArgs {
 #[tauri::command]
 pub async fn agents_update(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     args: UpdateAgentArgs,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        // `None`＝不改：先讀目前的值補上，才能判斷內容有沒有變。
+        let api = crate::intake::board_remote::require(&rs)?;
+        let cur = crate::intake::board_remote::agents(&api, &rs, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?.into_iter().find(|a| a.id == args.id).ok_or("找不到這個 Agent")?;
+        let model = match &args.model {
+            Some(m) if m.trim().is_empty() => None,
+            Some(m) => Some(m.as_str()),
+            None => cur.model.as_deref(),
+        };
+        let f = crate::intake::board_remote::AgentFields { kind: &cur.kind, name: &args.name, role: &args.role, prompt_prefix: &args.prompt_prefix, canvas_x: args.canvas_x, canvas_y: args.canvas_y, produces_spec: args.produces_spec.unwrap_or(cur.produces_spec), model, cli: args.cli.as_deref().unwrap_or(&cur.cli) };
+        crate::intake::board_remote::update_agent(&api, &rs, pid, &args.id, f).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     agents::update_agent(&p.pool, &args.id, &args.name, &args.role, &args.prompt_prefix, args.canvas_x, args.canvas_y)
         .await
@@ -148,10 +175,17 @@ pub async fn agents_update(
 #[tauri::command]
 pub async fn agents_delete(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     id: String,
     reg: State<'_, ProjectRegistry>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        crate::intake::board_remote::delete_agent(&api, &id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     agents::delete_agent(&p.pool, &id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
@@ -173,6 +207,9 @@ pub async fn agents_manual_pause_state(
     project_id: String,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<crate::tasks::manual_pause::ManualPause, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Default::default());
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::manual_pause::get(&p.pool).await.map_err(|e| e.to_string())
 }
@@ -199,6 +236,7 @@ pub async fn agents_set_manual_pause(
 #[tauri::command]
 pub async fn tasks_assign_agent(
     project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     task_id: String,
     agent_id: Option<String>,
     fast: Option<bool>,
@@ -206,6 +244,12 @@ pub async fn tasks_assign_agent(
     app: AppHandle,
     scheduler: State<'_, SchedulerHandle>,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        crate::intake::board_remote::assign(&api, &rs, &task_id, agent_id.as_deref()).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     agents::assign_task_with(&p.pool, &task_id, agent_id.as_deref(), fast.unwrap_or(false))
         .await
@@ -549,6 +593,9 @@ pub async fn agents_db_queries(
     project_id: String,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<Vec<crate::tasks::db_skill::DbQueryRow>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Vec::new());
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::db_skill::recent_queries(&p.pool, 100).await.map_err(|e| e.to_string())
 }
@@ -559,6 +606,9 @@ pub async fn agents_get_references(
     project_id: String,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<Vec<crate::tasks::references::Reference>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Vec::new());
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::references::get(&p.pool).await.map_err(|e| e.to_string())
 }
@@ -700,6 +750,9 @@ pub async fn agents_skill_uses(
     project_id: String,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<Vec<crate::tasks::custom_skills::SkillUseRow>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Vec::new());
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::custom_skills::recent_uses(&p.pool, 100).await.map_err(|e| e.to_string())
 }
@@ -710,6 +763,9 @@ pub async fn agents_reference_reads(
     project_id: String,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<Vec<crate::tasks::references::ReferenceReadRow>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(Vec::new());
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::references::recent_reads(&p.pool, 100).await.map_err(|e| e.to_string())
 }
@@ -720,6 +776,9 @@ pub async fn agents_project_repo(
     project_id: String,
     reg: State<'_, ProjectRegistry>,
 ) -> Result<Option<crate::tasks::repo_check::ProjectRepo>, String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        return Ok(None);
+    }
     let p = project(&reg, &project_id)?;
     let dirs: Vec<String> = agents::list_agents(&p.pool).await.map_err(|e| e.to_string())?.into_iter().map(|a| a.project_dir).collect();
     let saved = crate::tasks::repo_check::saved_project_repo(&p.pool).await.map_err(|e| e.to_string())?;

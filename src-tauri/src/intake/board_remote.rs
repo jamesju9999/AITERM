@@ -10,7 +10,7 @@ use crate::commands::tasks::TaskWithAttachments;
 use crate::tasks::store::{AttachmentRow, TaskRow};
 use aiterm_intake_client::api::Api;
 use aiterm_intake_client::ClientError;
-use aiterm_intake_core::board_store::{BoardAttachment, BoardCard, BoardCardView};
+use aiterm_intake_core::board_store::{BoardAgent, BoardAttachment, BoardCard, BoardCardView, BoardNote};
 use reqwest::Method;
 use serde_json::json;
 
@@ -218,6 +218,118 @@ pub async fn result(api: &Api, id: &str, outcome: &str, summary: Option<&str>, e
     api.typed(Method::POST, &format!("/v1/board/cards/{}/result", enc(id)), Some(json!({"outcome": outcome, "summary": summary, "error": error}))).await
 }
 
+// ---- Agent 協作：Agent、指派、記事本、簡介 ----
+
+/// server 的 Agent → 畫布用的 `AgentRow`。只屬於一台電腦的欄位（worktree、分支、技能）留空；`project_dir` 用這位成員自己設定的資料夾。
+pub fn to_agent(a: &BoardAgent, project_dir: &str) -> crate::tasks::agents::AgentRow {
+    crate::tasks::agents::AgentRow {
+        id: a.id.clone(),
+        kind: a.kind.clone(),
+        name: a.name.clone(),
+        role: a.role.clone(),
+        prompt_prefix: a.prompt_prefix.clone(),
+        project_dir: project_dir.to_string(),
+        canvas_x: a.canvas_x,
+        canvas_y: a.canvas_y,
+        worktree_path: None,
+        branch: None,
+        paused_task_id: a.paused_card_id.clone(),
+        created_at: stamp(a.created_at),
+        last_merge_signature: None,
+        produces_spec: a.produces_spec,
+        model: a.model.clone(),
+        cli: a.cli.clone(),
+        db_skill: None,
+        custom_skills: None,
+        systems: None,
+    }
+}
+
+pub async fn agents(api: &Api, rs: &RemoteState, server_pid: &str) -> Result<Vec<BoardAgent>, ClientError> {
+    let list: Vec<BoardAgent> = api.get(&format!("/v1/board/projects/{}/agents", enc(server_pid))).await?;
+    for a in &list {
+        rs.set_board_version(&a.id, a.version);
+    }
+    Ok(list)
+}
+
+pub struct AgentFields<'a> {
+    pub kind: &'a str,
+    pub name: &'a str,
+    pub role: &'a str,
+    pub prompt_prefix: &'a str,
+    pub canvas_x: f64,
+    pub canvas_y: f64,
+    pub produces_spec: bool,
+    pub model: Option<&'a str>,
+    pub cli: &'a str,
+}
+
+pub async fn create_agent(api: &Api, rs: &RemoteState, server_pid: &str, f: AgentFields<'_>) -> Result<String, ClientError> {
+    let a: BoardAgent = api
+        .typed(Method::POST, &format!("/v1/board/projects/{}/agents", enc(server_pid)), Some(json!({"kind": f.kind, "name": f.name, "role": f.role, "prompt_prefix": f.prompt_prefix, "canvas_x": f.canvas_x, "canvas_y": f.canvas_y, "produces_spec": f.produces_spec, "model": f.model, "cli": f.cli})))
+        .await?;
+    rs.set_board_version(&a.id, a.version);
+    Ok(a.id)
+}
+
+/// 畫布上拖動節點也會送更新：內容（名稱、角色…）沒變就只改位置（不帶版本、不會讓別人的編輯過期），有變才用版本更新內容。
+pub async fn update_agent(api: &Api, rs: &RemoteState, server_pid: &str, id: &str, f: AgentFields<'_>) -> Result<(), ClientError> {
+    // 先記下畫面最後看到的版本：下面重新讀取會把它更新成最新的，那樣就擋不住「別人先改過」了。
+    let seen = rs.board_version(id);
+    let cur = agents(api, rs, server_pid).await?.into_iter().find(|a| a.id == id);
+    if let Some(cur) = &cur {
+        let same = cur.name == f.name && cur.role == f.role && cur.prompt_prefix == f.prompt_prefix && cur.produces_spec == f.produces_spec && cur.model.as_deref() == f.model && cur.cli == f.cli;
+        if !same {
+            let version = seen.unwrap_or(cur.version);
+            let a: BoardAgent = api
+                .typed(Method::PUT, &format!("/v1/board/agents/{}", enc(id)), Some(json!({"version": version, "name": f.name, "role": f.role, "prompt_prefix": f.prompt_prefix, "produces_spec": f.produces_spec, "model": f.model, "cli": f.cli})))
+                .await?;
+            rs.set_board_version(&a.id, a.version);
+        }
+    }
+    if cur.as_ref().map(|a| (a.canvas_x, a.canvas_y)) != Some((f.canvas_x, f.canvas_y)) {
+        api.request(Method::POST, &format!("/v1/board/agents/{}/position", enc(id)), Some(json!({"x": f.canvas_x, "y": f.canvas_y}))).await?;
+    }
+    Ok(())
+}
+
+pub async fn delete_agent(api: &Api, id: &str) -> Result<(), ClientError> {
+    api.request(Method::DELETE, &format!("/v1/board/agents/{}", enc(id)), None).await.map(|_| ())
+}
+
+/// 指派（排進 Agent 的佇列）或取消指派；用最新的版本（指派是改一個欄位，不該因為版本過期失敗）。
+pub async fn assign(api: &Api, rs: &RemoteState, card_id: &str, agent_id: Option<&str>) -> Result<(), ClientError> {
+    let cur = get_card(api, rs, card_id).await?;
+    let c: BoardCard = api.typed(Method::POST, &format!("/v1/board/cards/{}/assign", enc(card_id)), Some(json!({"version": cur.version, "agent_id": agent_id}))).await?;
+    rs.set_board_version(&c.id, c.version);
+    Ok(())
+}
+
+pub async fn notes(api: &Api, server_pid: &str) -> Result<Vec<BoardNote>, ClientError> {
+    api.get(&format!("/v1/board/projects/{}/notes", enc(server_pid))).await
+}
+
+pub fn to_note(n: &BoardNote) -> crate::tasks::notes::NoteRow {
+    crate::tasks::notes::NoteRow { id: n.id, author: n.author.clone(), text: n.text.clone(), created_at: stamp(n.created_at) }
+}
+
+pub async fn add_note(api: &Api, server_pid: &str, text: &str) -> Result<BoardNote, ClientError> {
+    api.typed(Method::POST, &format!("/v1/board/projects/{}/notes", enc(server_pid)), Some(json!({"text": text}))).await
+}
+
+pub async fn delete_note(api: &Api, id: i64) -> Result<(), ClientError> {
+    api.request(Method::DELETE, &format!("/v1/board/notes/{id}"), None).await.map(|_| ())
+}
+
+pub async fn brief(api: &Api, server_pid: &str) -> Result<Option<String>, ClientError> {
+    api.get(&format!("/v1/board/projects/{}/brief", enc(server_pid))).await
+}
+
+pub async fn set_brief(api: &Api, server_pid: &str, brief: Option<&str>) -> Result<(), ClientError> {
+    api.request(Method::PUT, &format!("/v1/board/projects/{}/brief", enc(server_pid)), Some(json!({"brief": brief}))).await.map(|_| ())
+}
+
 /// 專案清單用：每個 server 專案一筆，卡片數從 server 算。
 pub async fn project_infos(api: &Api) -> Vec<(String, String, [i64; 4])> {
     let projects: Vec<serde_json::Value> = api.get("/v1/projects").await.unwrap_or_default();
@@ -368,5 +480,63 @@ mod tests {
         delete(&r.api, &waiting).await.unwrap();
         assert_eq!(list(&r.api, &r.rs, &r.pid, false).await.unwrap().len(), 0);
         assert_eq!(list(&r.api, &r.rs, &r.pid, true).await.unwrap().len(), 1);
+    }
+
+    fn agent_fields<'a>(name: &'a str) -> AgentFields<'a> {
+        AgentFields { kind: "coder", name, role: "Senior Coder", prompt_prefix: "多寫測試", canvas_x: 10.0, canvas_y: 20.0, produces_spec: false, model: None, cli: "claude" }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agents_are_shared_and_a_canvas_drag_only_moves_the_node_without_touching_the_content() {
+        let r = rig().await;
+        let id = create_agent(&r.api, &r.rs, &r.pid, agent_fields("Coder A")).await.unwrap();
+        let theirs = RemoteState::default();
+        let seen = agents(&r.other, &theirs, &r.pid).await.unwrap();
+        assert_eq!(seen.len(), 1, "另一位成員看到同一個 Agent");
+        let row = to_agent(&seen[0], "/my/repo");
+        assert_eq!((row.id.as_str(), row.kind.as_str(), row.project_dir.as_str(), row.worktree_path.clone(), row.cli.as_str()), (id.as_str(), "coder", "/my/repo", None, "claude"), "只屬於本機的欄位留空，資料夾用我自己的");
+
+        // 小明在小華不知道的時候改了名稱；小華只是拖動節點，不能蓋掉小明的修改。
+        update_agent(&r.other, &theirs, &r.pid, &id, agent_fields("小明改的名字")).await.unwrap();
+        update_agent(&r.api, &r.rs, &r.pid, &id, AgentFields { canvas_x: 300.0, canvas_y: 40.0, ..agent_fields("Coder A") }).await.expect_err("內容跟 server 不同，會被當成內容編輯；版本過期要擋下");
+        let after = agents(&r.api, &r.rs, &r.pid).await.unwrap();
+        assert_eq!((after[0].name.as_str(), after[0].canvas_x), ("小明改的名字", 10.0), "沒有靜默覆蓋，位置也沒被半套改掉");
+        // 重新載入之後（畫布現在顯示的是 server 的內容）再拖動，只改位置。
+        let latest = after[0].name.clone();
+        update_agent(&r.api, &r.rs, &r.pid, &id, AgentFields { canvas_x: 300.0, canvas_y: 40.0, ..agent_fields(&latest) }).await.unwrap();
+        let moved = agents(&r.api, &r.rs, &r.pid).await.unwrap();
+        assert_eq!((moved[0].canvas_x, moved[0].canvas_y, moved[0].version), (300.0, 40.0, after[0].version), "拖動不算內容變動，版本不變");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn assigning_notes_and_the_brief_go_through_the_server() {
+        let r = rig().await;
+        let agent = create_agent(&r.api, &r.rs, &r.pid, agent_fields("Coder A")).await.unwrap();
+        let card = create(&r.api, &r.rs, &r.pid, fields("要做的模組")).await.unwrap();
+        // 別人先改了卡片：指派仍然成功（指派只改一個欄位，用最新版本）。
+        let theirs = RemoteState::default();
+        list(&r.other, &theirs, &r.pid, false).await.unwrap();
+        update(&r.other, &theirs, &card, fields("模組（改過）")).await.unwrap();
+        assign(&r.api, &r.rs, &card, Some(&agent)).await.unwrap();
+        let c = &list(&r.api, &r.rs, &r.pid, false).await.unwrap()[0].task;
+        assert_eq!((c.title.as_str(), c.status.as_str(), c.agent_id.as_deref()), ("模組（改過）", "queued", Some(agent.as_str())));
+        assign(&r.api, &r.rs, &card, None).await.unwrap();
+        assert_eq!(list(&r.api, &r.rs, &r.pid, false).await.unwrap()[0].task.agent_id, None);
+        assert!(assign(&r.api, &r.rs, &card, Some("不存在")).await.is_err());
+
+        let n = add_note(&r.api, &r.pid, "  先做登入  ").await.unwrap();
+        let rows: Vec<_> = notes(&r.other, &r.pid).await.unwrap().iter().map(to_note).collect();
+        assert_eq!((rows.len(), rows[0].text.as_str(), rows[0].author.as_str(), rows[0].created_at.len()), (1, "先做登入", "小華", 19));
+        delete_note(&r.other, n.id).await.unwrap();
+        assert!(notes(&r.api, &r.pid).await.unwrap().is_empty());
+
+        assert_eq!(brief(&r.api, &r.pid).await.unwrap(), None);
+        set_brief(&r.other, &r.pid, Some("記帳 App")).await.unwrap();
+        assert_eq!(brief(&r.api, &r.pid).await.unwrap().as_deref(), Some("記帳 App"));
+        set_brief(&r.api, &r.pid, None).await.unwrap();
+        assert_eq!(brief(&r.other, &r.pid).await.unwrap(), None);
+
+        delete_agent(&r.api, &agent).await.unwrap();
+        assert!(agents(&r.api, &r.rs, &r.pid).await.unwrap().is_empty());
     }
 }

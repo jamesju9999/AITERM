@@ -431,6 +431,22 @@ export function AgentCanvasView({
     };
   }, []);
 
+  // 連到 server（或中斷連線）時，專案清單會多出／少掉 server 的共用看板專案：畫布是開機時就掛上的，
+  // 只載一次的話下拉選單永遠看不到它。後端在連線狀態改變與看板有變動時都會送 tasks-updated。
+  useEffect(() => {
+    let alive = true;
+    const reload = () => {
+      void listProjects()
+        .then((ps) => alive && setProjects(ps.filter((p) => p.status === "ok")))
+        .catch(() => {});
+    };
+    const unlisten = unlistenOnCleanup(onTasksUpdated(reload), "tasks-updated");
+    return () => {
+      alive = false;
+      unlisten();
+    };
+  }, []);
+
   /** 在協作頁新增／開啟專案：成功後重讀清單並切到那個專案（跟下拉選單換專案同一套動作）。 */
   const [creatingProject, setCreatingProject] = useState(false);
   const switchToProject = async (id: string) => {
@@ -453,6 +469,9 @@ export function AgentCanvasView({
       setToast(errText(e));
     }
   };
+
+  // 畫布上的 agents／tasks 目前屬於哪個專案（成功載入才記）。
+  const loadedProject = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!projectId) return;
@@ -509,6 +528,7 @@ export function AgentCanvasView({
       Promise.all([listAgents(projectId), listTasks(projectId)])
         .then(([a, ts]) => {
           if (!alive) return;
+          loadedProject.current = projectId;
           const fresh = diffPulses(prevTasks.current, ts, a);
           prevTasks.current = ts;
           setAgents(a);
@@ -518,7 +538,16 @@ export function AgentCanvasView({
             window.setTimeout(() => setPulses((cur) => cur.filter((p) => !fresh.includes(p))), 1300);
           }
         })
-        .catch((e) => alive && setToast(errText(e)));
+        .catch((e) => {
+          if (!alive) return;
+          // 這個專案的資料載不到（例如連不上 server）：畫布上若還是上一個專案的節點，不能留著，
+          // 否則看起來像這個專案的內容，拖動或編輯還會寫到錯的專案。同一專案的暫時失敗則保留現況。
+          if (loadedProject.current !== projectId) {
+            setAgents([]);
+            setTasks([]);
+          }
+          setToast(errText(e));
+        });
       listTokenUsage(projectId)
         .then((map) => alive && setUsageOf({ projectId, map }))
         .catch(() => {});

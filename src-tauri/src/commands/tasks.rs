@@ -101,9 +101,11 @@ pub async fn tasks_set_token_budget(
 
 /// 專案簡介（`None` = 沒寫）。每張 Agent 卡派工時放在提示前面。
 #[tauri::command]
-pub async fn tasks_get_project_brief(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Option<String>, String> {
-    if crate::intake::board_remote::parse(&project_id).is_some() {
-        return Ok(None);
+pub async fn tasks_get_project_brief(project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>, reg: State<'_, ProjectRegistry>) -> Result<Option<String>, String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        return crate::intake::board_remote::brief(&api, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e));
     }
     let p = project(&reg, &project_id)?;
     crate::tasks::context::get_brief(&p.pool).await.map_err(|e| e.to_string())
@@ -111,16 +113,24 @@ pub async fn tasks_get_project_brief(project_id: String, reg: State<'_, ProjectR
 
 /// 設定專案簡介（空白 = 刪除）。只影響之後派工的卡。
 #[tauri::command]
-pub async fn tasks_set_project_brief(project_id: String, brief: Option<String>, reg: State<'_, ProjectRegistry>) -> Result<(), String> {
+pub async fn tasks_set_project_brief(project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>, brief: Option<String>, reg: State<'_, ProjectRegistry>) -> Result<(), String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        return crate::intake::board_remote::set_brief(&api, pid, brief.as_deref()).await.map_err(|e| crate::intake::board_remote::fail(&rs, e));
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::context::set_brief(&p.pool, brief.as_deref()).await.map_err(|e| e.to_string())
 }
 
 /// 專案記事本：各張卡用 `remember` 留下、之後每張卡都會帶的共用筆記。
 #[tauri::command]
-pub async fn tasks_list_notes(project_id: String, reg: State<'_, ProjectRegistry>) -> Result<Vec<crate::tasks::notes::NoteRow>, String> {
-    if crate::intake::board_remote::parse(&project_id).is_some() {
-        return Ok(Vec::new());
+pub async fn tasks_list_notes(project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>, reg: State<'_, ProjectRegistry>) -> Result<Vec<crate::tasks::notes::NoteRow>, String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let rows = crate::intake::board_remote::notes(&api, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        return Ok(rows.iter().map(crate::intake::board_remote::to_note).collect());
     }
     let p = project(&reg, &project_id)?;
     crate::tasks::notes::list_notes(&p.pool).await.map_err(|e| e.to_string())
@@ -128,13 +138,24 @@ pub async fn tasks_list_notes(project_id: String, reg: State<'_, ProjectRegistry
 
 /// 使用者自己加一則（署名留空）。
 #[tauri::command]
-pub async fn tasks_add_note(project_id: String, text: String, reg: State<'_, ProjectRegistry>) -> Result<crate::tasks::notes::NoteRow, String> {
+pub async fn tasks_add_note(project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>, text: String, reg: State<'_, ProjectRegistry>) -> Result<crate::tasks::notes::NoteRow, String> {
+    if let Some(pid) = crate::intake::board_remote::parse(&project_id) {
+        let api = crate::intake::board_remote::require(&rs)?;
+        let n = crate::intake::board_remote::add_note(&api, pid, &text).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        return Ok(crate::intake::board_remote::to_note(&n));
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::notes::add_note(&p.pool, "", &text).await
 }
 
 #[tauri::command]
-pub async fn tasks_delete_note(project_id: String, id: i64, reg: State<'_, ProjectRegistry>) -> Result<(), String> {
+pub async fn tasks_delete_note(project_id: String,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>, id: i64, reg: State<'_, ProjectRegistry>) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        return crate::intake::board_remote::delete_note(&api, id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e));
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::notes::delete_note(&p.pool, id).await.map_err(|e| e.to_string())
 }
