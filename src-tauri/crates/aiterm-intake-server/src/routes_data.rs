@@ -595,13 +595,17 @@ pub struct TelegramView {
     /// 已設定機器人金鑰。
     pub has_token: bool,
     pub listening: bool,
+    /// 有金鑰、但沒有任何專案啟用 Telegram：server 沒在收訊（要到專案的 Telegram 分頁開啟）。
+    #[serde(default)]
+    pub idle: bool,
     pub error: Option<String>,
 }
 
 async fn telegram_view(st: &AppState) -> TelegramView {
     let health = st.channels.telegram_health.lock().clone();
     let has_token = st.secrets.get(crate::telegram::TOKEN_SECRET).is_some();
-    TelegramView { settings: crate::telegram::load(&st.pools.intake).await, has_token, listening: has_token && health.last_ok.is_some() && health.error.is_none(), error: health.error }
+    let idle = has_token && !crate::telegram::has_enabled_project(st).await;
+    TelegramView { settings: crate::telegram::load(&st.pools.intake).await, has_token, listening: has_token && !idle && health.last_ok.is_some() && health.error.is_none(), idle, error: health.error }
 }
 
 async fn get_telegram(State(st): St) -> Response {

@@ -292,6 +292,8 @@ export interface IntakeServerTelegram {
   settings: { owner_chat_id: string };
   has_token: boolean;
   listening: boolean;
+  /** 有金鑰但沒有專案啟用 Telegram：server 沒在收訊。 */
+  idle?: boolean;
   error: string | null;
 }
 export const intakeServerTelegramStatus = () => invoke<IntakeServerTelegram>("intake_server_telegram_status");

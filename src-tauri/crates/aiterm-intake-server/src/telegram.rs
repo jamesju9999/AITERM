@@ -136,6 +136,11 @@ async fn candidates(st: &AppState) -> Vec<Candidate> {
     out
 }
 
+/// 是否至少有一個專案啟用了 Telegram（沒有的話 server 不會輪詢，金鑰設了也收不到）。
+pub async fn has_enabled_project(st: &AppState) -> bool {
+    !candidates(st).await.is_empty()
+}
+
 /// 下載 Telegram 上的檔案（先 getFile 取路徑，再下載）。超過 `max_bytes` 視為失敗。
 async fn download_file(client: &reqwest::Client, base: &str, token: &str, file_id: &str, name: &str) -> Result<Raw, String> {
     let info: serde_json::Value = client.get(format!("{base}/bot{token}/getFile")).query(&[("file_id", file_id)]).send().await.map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())?;

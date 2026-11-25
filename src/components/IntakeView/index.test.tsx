@@ -1127,6 +1127,16 @@ describe("IntakeView", () => {
       expect(screen.queryByText(t.intake_server_ai)).toBeNull();
     });
 
+    it("says Telegram is not active, with the reason, when the token is set but no project turned it on", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
+      vi.mocked(ipc.intakeServerTelegramStatus).mockResolvedValue({ settings: { owner_chat_id: "" }, has_token: true, listening: false, idle: true, error: null });
+      await openSettings();
+      fireEvent.click(screen.getByRole("tab", { name: new RegExp(t.intake_sec_telegram) }));
+      expect(await screen.findByText(t.intake_server_tg_idle)).toBeTruthy();
+      expect(screen.getByText(t.intake_server_tg_idle_hint)).toBeTruthy();
+      expect(screen.queryByText(t.intake_server_tg_listening)).toBeNull();
+    });
+
     it("shows the server's Telegram state and saves the bot token and owner chat", async () => {
       vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("admin"));
       vi.mocked(ipc.intakeServerTelegramStatus).mockResolvedValue({ settings: { owner_chat_id: "111" }, has_token: true, listening: false, error: "另一個程式正在輪詢同一個機器人（HTTP 409）" });

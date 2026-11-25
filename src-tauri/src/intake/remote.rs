@@ -514,6 +514,9 @@ pub struct ServerTelegram {
     pub settings: ServerTelegramSettings,
     pub has_token: bool,
     pub listening: bool,
+    /// 有金鑰但沒有專案啟用 Telegram：server 沒在收訊。
+    #[serde(default)]
+    pub idle: bool,
     pub error: Option<String>,
 }
 

@@ -721,7 +721,7 @@ function ServerTelegramCard({ canEdit, onError }: { canEdit: boolean; onError: (
       setBusy(false);
     }
   }
-  const state = !tg ? "" : !tg.has_token ? t.intake_server_tg_no_token : tg.listening ? t.intake_server_tg_listening : t.intake_server_tg_waiting;
+  const state = !tg ? "" : !tg.has_token ? t.intake_server_tg_no_token : tg.idle ? t.intake_server_tg_idle : tg.listening ? t.intake_server_tg_listening : t.intake_server_tg_waiting;
   return (
     <fieldset className="intake__mailcard" disabled={!canEdit}>
       <div className="intake__mailcard-head">
@@ -729,6 +729,7 @@ function ServerTelegramCard({ canEdit, onError }: { canEdit: boolean; onError: (
         {state && <span className={`intake__tab-chip ${tg?.listening ? "intake__tab-chip--on" : ""}`}>{state}</span>}
       </div>
       {tg?.error && <div className="intake__error" role="alert">{tg.error}</div>}
+      {tg?.idle && <p className="intake__mailcard-hint" role="status">{t.intake_server_tg_idle_hint}</p>}
       <div className="intake__mailcard-row">
         <input type="password" autoComplete="off" aria-label={t.intake_server_tg_token} placeholder={`${t.intake_server_tg_token}（${t.intake_server_ai_key_keep}）`} value={token} onChange={(e) => { setToken(e.target.value); setDone(false); }} />
         <input aria-label={t.intake_server_tg_owner} placeholder={t.intake_server_tg_owner} value={owner} onChange={(e) => { setOwner(e.target.value); setDone(false); }} />

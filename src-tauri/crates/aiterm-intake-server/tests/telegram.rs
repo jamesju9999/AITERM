@@ -107,3 +107,27 @@ async fn settings_are_validated_and_only_admins_can_change_them_and_the_token_is
     assert!(!v.to_string().contains("secret-token"));
     assert_eq!((v["settings"]["owner_chat_id"].as_str(), v["has_token"].as_bool()), (Some("111"), Some(true)));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_token_with_no_project_turning_telegram_on_is_reported_idle_not_receiving() {
+    let tg = MockServer::start().await;
+    Mock::given(method("GET")).and(path_regex(r"/getUpdates$")).respond_with(updates(json!([]))).mount(&tg).await;
+    let srv = TestServer::start().await;
+    *srv.state().telegram_api_base.lock() = tg.uri();
+    let admin = srv.paired("小華", Role::Admin).await;
+    let pid = srv.project("範例科技").await;
+    admin.request(Method::PUT, "/v1/secrets/telegram_bot_token", Some(json!({"value": TOKEN}))).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let v: Value = admin.get("/v1/telegram").await.unwrap();
+    assert_eq!((v["has_token"].as_bool(), v["idle"].as_bool(), v["listening"].as_bool()), (Some(true), Some(true), Some(false)), "沒有專案啟用 Telegram 時 server 沒在收訊，不能顯示收訊中：{v}");
+    assert!(tg.received_requests().await.unwrap().is_empty(), "沒有專案啟用就不該打 Telegram");
+
+    let cfg = Config { enabled: true, telegram_enabled: true, ..Config::default() };
+    admin.request(Method::PUT, &format!("/v1/projects/{pid}/config"), Some(json!({"config": cfg, "telegram_default": false}))).await.unwrap();
+    let v: Value = eventually(|| async {
+        let v: Value = admin.get("/v1/telegram").await.unwrap();
+        v["listening"].as_bool().unwrap_or(false).then_some(v)
+    })
+    .await;
+    assert_eq!(v["idle"].as_bool(), Some(false), "{v}");
+}
