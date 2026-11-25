@@ -9,7 +9,9 @@ const SECRET_BODY: &str = "K58FWR486LdLJ1mLB8sXC4z6qDAf";
 pub const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const API_BASE: &str = "https://cloudcode-pa.googleapis.com";
-pub const IDE_VERSION: &str = "2.1.1";
+/// 後端會拒絕太舊的版本：回 HTTP 200，但內容只是一句「This version of Antigravity is no longer supported」，
+/// 所以看起來像成功。實測 2.0.6～2.5.0 都被擋、3.0.0 可用；日後再被擋就是要升這個數字（兩邊要一起升，有測試對照）。
+pub const IDE_VERSION: &str = "3.0.0";
 /// 刻意不含 `openid`（會讓 Google 導到卡住的同意畫面）；`cclog`、`experimentsandconfigs` 是後端要求的。
 pub const SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
 /// Google 的 token 較短命，提早 15 分鐘續期。
@@ -181,7 +183,14 @@ pub fn parse_sse(body: &str) -> Result<String, String> {
             }
         }
     }
-    if out.is_empty() { Err("AI 回應裡找不到文字".into()) } else { Ok(out) }
+    if out.is_empty() {
+        return Err("AI 回應裡找不到文字".into());
+    }
+    // 版本過舊時後端不報錯，而是回 200 與一句提示文字；當成成功會讓「測試連線」誤報通過。
+    if out.contains("is no longer supported") && out.contains("Antigravity") {
+        return Err(format!("Google 拒絕了這個 Antigravity 版本號（{IDE_VERSION}），需要更新 AITerm：{}", out.chars().take(120).collect::<String>()));
+    }
+    Ok(out)
 }
 
 /// 從 `fetchAvailableModels` 回應取 id。真實格式是以模型 id 為鍵的物件（`isInternal` 的要略過）；陣列格式留作備援。
@@ -303,6 +312,14 @@ mod tests {
         assert_eq!(parse_sse(&sse(&[serde_json::json!({"candidates": [{"content": {"parts": [{"text": "x"}]}}]})])).unwrap(), "x");
         assert!(parse_sse(&sse(&[serde_json::json!({"response": {"candidates": [], "promptFeedback": {"blockReason": "SAFETY"}}})])).unwrap_err().contains("SAFETY"));
         assert!(parse_sse("").is_err());
+    }
+
+    #[test]
+    fn an_outdated_version_notice_is_an_error_not_a_successful_answer() {
+        let notice = sse(&[serde_json::json!({"response": {"candidates": [{"content": {"parts": [{"text": "This version of Antigravity is no longer supported. Please download and install the latest version."}]}}]}})]);
+        let e = parse_sse(&notice).unwrap_err();
+        assert!(e.contains("版本號") && e.contains(IDE_VERSION), "{e}");
+        assert_eq!(parse_sse(&sse(&[serde_json::json!({"candidates": [{"content": {"parts": [{"text": "Antigravity is great"}]}}]})])).unwrap(), "Antigravity is great", "一般回答不受影響");
     }
 
     #[tokio::test]

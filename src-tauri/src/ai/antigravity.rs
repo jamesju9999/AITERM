@@ -40,7 +40,7 @@ use crate::ai::{
 /// Hardcoded fallback client version. Dynamic fetching from Antigravity's
 /// auto-updater feed is a documented fast-follow (see plan Task 13) — the
 /// real response shape of that endpoint hasn't been verified yet.
-pub(crate) const ANTIGRAVITY_IDE_VERSION: &str = "2.1.1";
+pub(crate) const ANTIGRAVITY_IDE_VERSION: &str = "3.0.0";
 
 pub struct AntigravityClient {
     access_token: String,
