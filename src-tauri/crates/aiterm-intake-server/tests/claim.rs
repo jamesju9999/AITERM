@@ -113,6 +113,33 @@ async fn the_result_becomes_a_redacted_draft_and_only_the_claimer_may_submit_it(
 }
 
 #[tokio::test]
+async fn a_verification_report_travels_with_the_draft_redacted_and_an_old_client_without_one_still_works() {
+    let srv = TestServer::start().await;
+    let pid = srv.project("甲").await;
+    let a = srv.paired("小明", Role::Member).await;
+    let (with, without, failed) = (add(&srv, &pid, "有報告", store::QUEUED).await, add(&srv, &pid, "舊版", store::QUEUED).await, add(&srv, &pid, "沒過", store::QUEUED).await);
+    for it in [&with, &without, &failed] {
+        claim(&a, &it.id).await.unwrap();
+    }
+    let post = |id: &str, body: serde_json::Value| {
+        let (a, path) = (a.clone(), format!("/v1/items/{id}/result"));
+        async move { a.request(Method::POST, &path, Some(body)).await.unwrap() }
+    };
+    post(&with.id, json!({"reply": "好了", "verification": "測試通過：/Users/someone/proj 共 12 項 sk-abcdefghijklmnop1234", "verified": true})).await;
+    post(&without.id, json!({"reply": "好了"})).await;
+    post(&failed.id, json!({"reply": "試了", "verification": "第 3 項失敗", "verified": false})).await;
+
+    let g = get(&a, &with.id).await;
+    assert_eq!(g.verified, Some(true));
+    let report = g.verification.unwrap();
+    assert!(report.contains("12 項") && !report.contains("someone") && !report.contains("sk-abcdef"), "報告要去敏：{report}");
+    let o = get(&a, &without.id).await;
+    assert_eq!((o.status.as_str(), o.verification, o.verified), (store::DRAFT, None, None), "舊版 AITerm 不帶驗證欄位：照常變草稿，沒有驗證結果");
+    let f = get(&a, &failed.id).await;
+    assert_eq!((f.status.as_str(), f.verified), (store::DRAFT, Some(false)), "驗證沒過不阻擋交回，但要標出來");
+}
+
+#[tokio::test]
 async fn a_failure_report_sends_the_item_back_to_pending_with_the_reason() {
     let srv = TestServer::start().await;
     let pid = srv.project("甲").await;

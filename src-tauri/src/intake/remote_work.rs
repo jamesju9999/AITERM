@@ -4,10 +4,10 @@
 use super::remote::{self, RemoteState};
 use super::runtime::{self, IntakeRuntime};
 use super::store::IntakeItem;
-use super::{dispatcher, CHANGED_EVENT};
+use super::{dispatcher, verify, IntakeDb, CHANGED_EVENT};
 use crate::pty::PtyManager;
 use aiterm_intake_client::api::Api;
-use aiterm_intake_core::config::Handling;
+use aiterm_intake_core::config::{Config, Handling, RefFolders};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -21,22 +21,70 @@ fn changed<R: Runtime>(app: &AppHandle<R>) {
     let _ = app.emit(CHANGED_EVENT, ());
 }
 
-/// 題目的提示詞：與本機派送同一份（含診斷模式的提示）；附件先下載到本機。
-/// server 設定裡的參考資料夾是 server 上的路徑，這台電腦不一定有，第一版不帶。
-async fn build_prompt(api: &Api, rs: &RemoteState, item: &IntakeItem) -> String {
+/// 這台電腦上、某個 server 專案的參考資料夾（只存在本機；server 設定的路徑是 server 上的，帶不過來）。
+const LOCAL_REFS_KEY: &str = "remote_refs:";
+
+pub async fn load_local_refs(pool: &sqlx::SqlitePool, project_id: &str) -> RefFolders {
+    aiterm_intake_core::store::get_setting(pool, &format!("{LOCAL_REFS_KEY}{project_id}")).await.ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+/// 存本機的參考資料夾。每一項要是絕對路徑，而且在這台電腦上找得到（`~` 開頭的略過檢查）；回傳整理過的內容。
+pub async fn save_local_refs(pool: &sqlx::SqlitePool, project_id: &str, refs: &RefFolders) -> Result<RefFolders, String> {
+    let refs = refs.cleaned();
+    for p in refs.shared.iter().chain(refs.internal.iter()) {
+        if !dispatcher::is_absolute_like(p) {
+            return Err(format!("請填完整路徑（不是相對路徑）：{p}"));
+        }
+        if !p.starts_with('~') && !std::path::Path::new(p).exists() {
+            return Err(format!("這台電腦上找不到這個資料夾：{p}"));
+        }
+    }
+    let json = serde_json::to_string(&refs).map_err(|e| e.to_string())?;
+    aiterm_intake_core::store::set_setting(pool, &format!("{LOCAL_REFS_KEY}{project_id}"), &json).await.map_err(|e| e.to_string())?;
+    Ok(refs)
+}
+
+/// 派工時實際帶給 Claude Code 的參考資料夾：本機設定的，外部客戶的題目只拿共用那組；已經不存在的略過。
+fn usable_refs(refs: &RefFolders, internal: bool) -> Vec<String> {
+    let cfg = Config { reference_folders: refs.clone(), ..Config::default() };
+    cfg.refs_for(internal).into_iter().filter(|p| p.starts_with('~') || std::path::Path::new(p).exists()).collect()
+}
+
+/// 題目的提示詞：與本機派送同一份（含診斷模式的提示與參考資料夾）；附件先下載到本機。
+/// 參考資料夾用的是**這台電腦**上設定的（見 `save_local_refs`），不是 server 設定裡的路徑。
+/// 同時回傳專案設定（讀不到就是 `None`，此時用較保守的「只診斷」，也不驗證）。
+async fn build_prompt(api: &Api, rs: &RemoteState, pool: Option<&sqlx::SqlitePool>, item: &IntakeItem) -> (String, Option<Config>) {
     let images = remote::download_attachments(api, &item.id, &rs.attach_root()).await;
-    let diagnose = match remote::get_config(api, &item.project_id).await {
-        Ok(v) => v.config.handling(&item.source) == Handling::Diagnose,
-        Err(_) => true, // 讀不到設定時用較保守的「只診斷」
+    let cfg = remote::get_config(api, &item.project_id).await.ok().map(|v| v.config);
+    let diagnose = cfg.as_ref().map(|c| c.handling(&item.source) == Handling::Diagnose).unwrap_or(true);
+    let refs = match pool {
+        Some(p) => usable_refs(&load_local_refs(p, &item.project_id).await, item.sender_level == "internal"),
+        None => Vec::new(),
     };
-    dispatcher::build_prompt(item, &images, diagnose)
+    (format!("{}{}", dispatcher::build_prompt(item, &images, diagnose), dispatcher::refs_note(&refs)), cfg)
+}
+
+/// 這題做完後要不要驗證：只有「要改程式」的才驗證——server 標了是提問、或這個管道設成只診斷，就不驗證；
+/// 沒標種類時保守當成要改程式（與本機派送相同）。
+fn wants_verify(item: &IntakeItem, cfg: Option<&Config>) -> bool {
+    item.kind.as_deref() != Some("question") && cfg.is_some_and(|c| c.handling(&item.source) != Handling::Diagnose)
 }
 
 /// 把領到的題目打進分頁。失敗就把題目交還給 server（回報原因），並釋放分頁。
 pub async fn dispatch<R: Runtime>(app: &AppHandle<R>, api: &Api, rs: &RemoteState, rt: &IntakeRuntime, pty: &PtyManager, tab: &str, item: &IntakeItem) {
     rt.registry.assign(tab, &item.id);
     rs.track_claim(&item.id, tab);
-    let prompt = build_prompt(api, rs, item).await;
+    let pool = app.try_state::<IntakeDb>().map(|d| d.pool.clone());
+    let (prompt, cfg) = build_prompt(api, rs, pool.as_ref(), item).await;
+    if wants_verify(item, cfg.as_ref()) {
+        // 派工前記下 git HEAD，做完才知道改了哪些檔案。
+        let snapshot = match pty.get_cwd(tab) {
+            Some(cwd) => verify::snapshot(&cwd).await,
+            None => None,
+        };
+        let c = cfg.unwrap_or_default();
+        rs.set_verify_plan(&item.id, remote::VerifyPlan { command: c.verify_command.clone(), timeout: Duration::from_secs(c.verify_timeout_secs.max(1)), snapshot });
+    }
     // 下載附件可能花一點時間：打字前再確認一次分頁還能收。
     let sent = match runtime::can_type_prompt(&rt.registry, pty, tab) {
         Ok(()) => crate::tasks::dispatch::write_then_submit(pty, tab, &prompt).await,
@@ -138,11 +186,23 @@ pub async fn claim_manual<R: Runtime>(app: &AppHandle<R>, item_id: &str) -> Resu
 /// Claude Code 做完一題：交回 server。回傳這題是不是從 server 領來的（不是就交給本機流程）。
 pub async fn complete<R: Runtime>(app: &AppHandle<R>, item_id: &str, answer: Option<String>) -> bool {
     let Some((api, rs)) = remote::active(app) else { return false };
-    if rs.untrack_claim(item_id).is_none() {
+    let Some(claim) = rs.take_claim(item_id) else {
         return false;
-    }
+    };
     let sent = match answer {
-        Some(a) if !a.trim().is_empty() => remote::submit_reply(&api, item_id, &a).await,
+        Some(a) if !a.trim().is_empty() => {
+            let mut reply = a;
+            let mut verification = None;
+            if let Some(plan) = &claim.verify {
+                // 在領取者自己的工作資料夾驗證；報告去敏後附在回覆最後，並把是否通過一起交回。
+                let cwd = app.try_state::<Arc<PtyManager>>().and_then(|p| p.get_cwd(&claim.tab)).unwrap_or_default();
+                let report = verify::verify(&cwd, plan.snapshot.as_deref(), &plan.command, plan.timeout).await;
+                let text = aiterm_intake_core::filter::redact(&report.text());
+                reply = format!("{reply}\n\n{text}");
+                verification = Some((text, report.passed()));
+            }
+            remote::submit_reply(&api, item_id, &reply, verification.as_ref().map(|(t, ok)| (t.as_str(), *ok))).await
+        }
         _ => remote::submit_error(&api, item_id, "無法取得 Agent 的回答").await,
     };
     if let Err(e) = sent {
@@ -211,6 +271,12 @@ mod tests {
                 .unwrap()
                 .unwrap()
         }
+        async fn add_item_as(&self, subject: &str, source: &str, level: Level) -> IntakeItem {
+            store::insert_item(&self.srv.state().pools.intake, NewItem { project_id: &self.pid, id: None, source, sender: "line:u0123456789abcdef0123456789abcdef", level, subject, body: "請幫我看電腦", message_id: subject, status: store::QUEUED })
+                .await
+                .unwrap()
+                .unwrap()
+        }
         async fn server_item(&self, id: &str) -> IntakeItem {
             store::get_item(&self.srv.state().pools.intake, id).await.unwrap().unwrap()
         }
@@ -222,6 +288,11 @@ mod tests {
     /// 一台已連線的 AITERM（假視窗）、一個已登錄為「收集中」的真 PTY 分頁（`cat` 扮演 Claude Code：
     /// 先送出「Claude Code 在跑」與「有指令在跑」的標記，再卡在 cat 等輸入，並把收到的提問原樣回顯）。
     async fn rig() -> Rig {
+        rig_in(None).await
+    }
+
+    /// 同 `rig`，但假的 Claude Code 分頁一開始就在 `cwd`（驗證要看領取者的工作資料夾）。
+    async fn rig_in(cwd: Option<&std::path::Path>) -> Rig {
         let srv = TestServer::start().await;
         let pid = srv.project("範例科技").await;
         let app = tauri::test::mock_app();
@@ -247,9 +318,14 @@ mod tests {
 
         let out = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let sink = out.clone();
-        let tab = pty.create_with_callback(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }, move |c| sink.lock().extend_from_slice(&c)).unwrap();
+        let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+        let tab = match cwd {
+            // 分頁一開始就在指定資料夾：PTY 追蹤的工作資料夾是從這裡開始算的（驗證要看它）。
+            Some(dir) => pty.create_with_callback_and_id(size, format!("tab-{}", uuid::Uuid::new_v4()), Some(dir.to_path_buf()), vec![], vec![], move |c| sink.lock().extend_from_slice(&c)).unwrap(),
+            None => pty.create_with_callback(size, move |c| sink.lock().extend_from_slice(&c)).unwrap(),
+        };
         tokio::time::sleep(Duration::from_millis(1200)).await; // 等 shell 起來
-        pty.write(&tab, b"printf '\\033]7771;claude=1\\007\\033]133;C\\007'; cat\r").unwrap();
+        pty.write(&tab, format!("printf '\\033]7771;claude=1\\007\\033]133;C\\007'; cat\r").as_bytes()).unwrap();
         let rig = Rig { app, rs, rt, pty, srv, pid, tab, out, _tmp: tmp };
         // 要等到真正的標記（ESC 開頭）出現，而不是命令列自己的回顯。
         for _ in 0..100 {
@@ -280,6 +356,107 @@ mod tests {
         assert_eq!((done.status.as_str(), done.reply_draft.as_deref()), (store::DRAFT, Some("請重開機再試試")), "變成草稿等人看過再寄出");
         assert!(r.rt.registry.running().is_empty(), "分頁釋放，可以領下一題");
         assert!(!r.rs.is_claimed(&item.id));
+        r.pty.close(&r.tab).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_reference_folders_are_validated_saved_per_project_and_only_this_computers_paths_count() {
+        let r = rig().await;
+        let pool = r.app.handle().state::<IntakeDb>().pool.clone();
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (pa, pb) = (a.path().to_string_lossy().to_string(), b.path().to_string_lossy().to_string());
+        assert!(save_local_refs(&pool, &r.pid, &RefFolders { shared: vec!["docs/faq".into()], internal: vec![] }).await.unwrap_err().contains("完整路徑"));
+        assert!(save_local_refs(&pool, &r.pid, &RefFolders { shared: vec!["/不存在/的/資料夾".into()], internal: vec![] }).await.unwrap_err().contains("找不到"));
+        let saved = save_local_refs(&pool, &r.pid, &RefFolders { shared: vec![format!(" {pa} "), pa.clone(), String::new()], internal: vec![pb.clone()] }).await.unwrap();
+        assert_eq!((saved.shared.clone(), saved.internal.clone()), (vec![pa.clone()], vec![pb.clone()]), "去空白、去重、略過空白項");
+        assert_eq!(load_local_refs(&pool, &r.pid).await, saved);
+        assert_eq!(load_local_refs(&pool, "別的專案").await, RefFolders::default(), "每個專案各自一份");
+        assert_eq!(usable_refs(&saved, true), vec![pa.clone(), pb.clone()]);
+        assert_eq!(usable_refs(&saved, false), vec![pa.clone()], "外部客戶的題目拿不到僅內部的");
+        drop(b);
+        assert_eq!(usable_refs(&saved, true), vec![pa], "資料夾後來被刪掉就略過，不要叫 Claude Code 去讀不存在的路徑");
+        r.pty.close(&r.tab).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_claimers_own_reference_folders_go_into_the_prompt_and_servers_paths_do_not() {
+        let r = rig().await;
+        let pool = r.app.handle().state::<IntakeDb>().pool.clone();
+        let base = tempfile::tempdir().unwrap();
+        let (shared, internal) = (base.path().join("shared-notes-xyz"), base.path().join("internal-notes-xyz"));
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::create_dir_all(&internal).unwrap();
+        save_local_refs(&pool, &r.pid, &RefFolders { shared: vec![shared.to_string_lossy().into()], internal: vec![internal.to_string_lossy().into()] }).await.unwrap();
+        // server 設定裡的路徑是 server 上的，不能被帶出去。
+        let mut cfg = aiterm_intake_core::config::load(&r.srv.state().pools.intake, &r.pid).await;
+        cfg.reference_folders = RefFolders { shared: vec!["/srv/only-on-the-server".into()], internal: vec![] };
+        aiterm_intake_core::config::save(&r.srv.state().pools.intake, &r.pid, &cfg).await.unwrap();
+
+        let item = r.add_item_as("內部的題目", "line", Level::Internal).await;
+        r.tick().await;
+        assert!(r.wait_for(&dispatcher::marker_for(&item.id)).await);
+        assert!(r.saw("shared-notes-xyz") && r.saw("internal-notes-xyz"), "內部題目帶本機設定的兩組");
+        assert!(!r.saw("only-on-the-server"), "server 上的路徑不帶");
+        runtime::complete(r.app.handle(), &r.tab, &item.id, Some("好".into())).await;
+
+        let before = r.out.lock().len();
+        let ext = r.add_item_as("外部客戶的題目", "line", Level::External).await;
+        r.tick().await;
+        assert!(r.wait_for(&dispatcher::marker_for(&ext.id)).await);
+        let after = String::from_utf8_lossy(&r.out.lock()[before..]).to_string();
+        assert!(after.contains("shared-notes-xyz") && !after.contains("internal-notes-xyz"), "外部客戶的題目只拿共用那組：{after}");
+        r.pty.close(&r.tab).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_code_change_is_verified_in_the_claimers_folder_and_the_report_goes_back_with_the_draft() {
+        // 領取者的終端機在一個 git 專案裡；Claude Code 做完時改了一個檔案。
+        let repo = tempfile::tempdir().unwrap();
+        let sh = |cmd: &str| std::process::Command::new("sh").arg("-c").arg(cmd).current_dir(repo.path()).output().unwrap();
+        sh("git init -q && git config user.email a@b.c && git config user.name t && echo v1 > app.txt && git add -A && git commit -qm init");
+        let r = rig_in(Some(repo.path())).await;
+        // email 預設是「可改檔案」；驗證指令用一個一定會過的。
+        let mut cfg = aiterm_intake_core::config::load(&r.srv.state().pools.intake, &r.pid).await;
+        cfg.verify_command = "true".into();
+        aiterm_intake_core::config::save(&r.srv.state().pools.intake, &r.pid, &cfg).await.unwrap();
+
+        let item = r.add_item_as("程式有 bug", "email", Level::Internal).await;
+        r.tick().await;
+        assert!(r.wait_for(&dispatcher::marker_for(&item.id)).await);
+        sh("echo v2 > app.txt");
+        runtime::complete(r.app.handle(), &r.tab, &item.id, Some("已修好".into())).await;
+        let done = r.server_item(&item.id).await;
+        assert_eq!(done.status, store::DRAFT);
+        assert_eq!(done.verified, Some(true), "有改檔案、驗證指令通過：{:?}", done.verification);
+        let report = done.verification.clone().unwrap();
+        assert!(report.contains("app.txt") && report.contains("測試通過"), "{report}");
+        assert!(done.reply_draft.unwrap().contains("已修好") && report.starts_with("【驗證】"), "草稿帶回覆與驗證報告");
+        r.pty.close(&r.tab).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_or_missing_change_is_marked_unverified_but_still_handed_back_and_a_diagnose_only_item_is_not_verified() {
+        let repo = tempfile::tempdir().unwrap();
+        let sh = |cmd: &str| std::process::Command::new("sh").arg("-c").arg(cmd).current_dir(repo.path()).output().unwrap();
+        sh("git init -q && git config user.email a@b.c && git config user.name t && echo v1 > app.txt && git add -A && git commit -qm init");
+        let r = rig_in(Some(repo.path())).await;
+
+        // 沒有任何檔案變更：驗證沒過，但回覆照常交回。
+        let a = r.add_item_as("沒改東西", "email", Level::Internal).await;
+        r.tick().await;
+        assert!(r.wait_for(&dispatcher::marker_for(&a.id)).await);
+        runtime::complete(r.app.handle(), &r.tab, &a.id, Some("我看了".into())).await;
+        let done = r.server_item(&a.id).await;
+        assert_eq!((done.status.as_str(), done.verified), (store::DRAFT, Some(false)));
+        assert!(done.verification.unwrap().contains("沒有偵測到任何檔案變更"));
+
+        // LINE 預設只診斷：不驗證，草稿裡沒有驗證報告。
+        let b = r.add_item_as("只診斷", "line", Level::Internal).await;
+        r.tick().await;
+        assert!(r.wait_for(&dispatcher::marker_for(&b.id)).await);
+        runtime::complete(r.app.handle(), &r.tab, &b.id, Some("請重開機".into())).await;
+        let done = r.server_item(&b.id).await;
+        assert_eq!((done.reply_draft.as_deref(), done.verification, done.verified), (Some("請重開機"), None, None));
         r.pty.close(&r.tab).ok();
     }
 

@@ -18,7 +18,7 @@ pub fn marker_for(item_id: &str) -> String {
 /// 提問者要求實作／修改、但這個管道只診斷時，回覆開頭要有的告知（要原樣寫出，方便辨識）。
 pub const DIAGNOSE_NOTICE: &str = "【診斷模式】這個管道目前設定為只診斷，我不會修改任何檔案；以下是建議做法，請自行套用，或請管理員把這個管道改成可改檔案。";
 
-fn is_absolute_like(p: &str) -> bool {
+pub fn is_absolute_like(p: &str) -> bool {
     let b = p.as_bytes();
     // 與目前平台無關：`/…`、`\…`、`~…`、`C:\…`、UNC 都不是「相對於專案資料夾」。
     // （Windows 的 `Path::is_absolute("/docs")` 是 false，不能只靠它。）

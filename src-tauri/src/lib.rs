@@ -594,6 +594,8 @@ pub fn run() {
             intake::commands::intake_remote_pair,
             intake::commands::intake_remote_disconnect,
             intake::commands::intake_remote_claim,
+            intake::commands::intake_remote_refs_get,
+            intake::commands::intake_remote_refs_set,
             intake::commands::intake_server_telegram_status,
             intake::commands::intake_server_telegram_apply,
             intake::commands::intake_server_ai_status,

@@ -706,6 +706,17 @@ pub async fn intake_server_ai_logout(rs: State<'_, Arc<RemoteState>>) -> Result<
 #[derive(Default)]
 pub struct ServerAiLogin(pub tokio::sync::Mutex<Option<aiterm_ai_oauth::anthropic::Pkce>>);
 
+/// 這台電腦上、某個 server 專案的參考資料夾（領取處理時帶給 Claude Code；只存在本機）。
+#[tauri::command]
+pub async fn intake_remote_refs_get(db: State<'_, IntakeDb>, project_id: String) -> Result<aiterm_intake_core::config::RefFolders, String> {
+    Ok(super::remote_work::load_local_refs(&db.pool, &project_id).await)
+}
+
+#[tauri::command]
+pub async fn intake_remote_refs_set(db: State<'_, IntakeDb>, project_id: String, shared: Vec<String>, internal: Vec<String>) -> Result<aiterm_intake_core::config::RefFolders, String> {
+    super::remote_work::save_local_refs(&db.pool, &project_id, &aiterm_intake_core::config::RefFolders { shared, internal }).await
+}
+
 /// 手動「我來處理」：領 server 上這一題，派進你「收集中」且閒置的分頁。
 #[tauri::command]
 pub async fn intake_remote_claim(app: AppHandle, item_id: String) -> Result<(), String> {

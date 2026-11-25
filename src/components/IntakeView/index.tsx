@@ -21,6 +21,8 @@ import {
   intakeServerAiApply,
   intakeServerAiLoginComplete,
   intakeServerAiLoginStart,
+  intakeRemoteRefsGet,
+  intakeRemoteRefsSet,
   intakeServerAiLoginBrowser,
   intakeServerAiLogout,
   intakeServerAiModels,
@@ -753,6 +755,82 @@ const AI_PROVIDERS: [string, string][] = [
   ["antigravity_oauth", "Gemini 訂閱"],
 ];
 
+/** 連到 server 時：這台電腦上的參考資料夾。領取處理時帶給自己的 Claude Code；只存在本機，任何成員都能設。 */
+function LocalRefsCard({ projectId, onError }: { projectId: string; onError: (m: string | null) => void }) {
+  const { t } = useLocale();
+  const [refs, setRefs] = useState<IntakeRefFolders>({ shared: [], internal: [] });
+  const [draft, setDraft] = useState<Record<keyof IntakeRefFolders, string>>({ shared: "", internal: "" });
+  useEffect(() => {
+    let live = true;
+    intakeRemoteRefsGet(projectId)
+      .then((r) => live && setRefs(r))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [projectId]);
+  async function save(next: IntakeRefFolders) {
+    try {
+      setRefs(await intakeRemoteRefsSet(projectId, next.shared, next.internal));
+      onError(null);
+      return true;
+    } catch (e) {
+      onError(errText(e));
+      return false;
+    }
+  }
+  async function add(ch: keyof IntakeRefFolders, raw: string) {
+    const p = raw.trim();
+    if (!p || refs[ch].includes(p)) return;
+    if (await save({ ...refs, [ch]: [...refs[ch], p] })) setDraft((d) => ({ ...d, [ch]: "" }));
+  }
+  async function pick(ch: keyof IntakeRefFolders) {
+    try {
+      const picked = await openDialog({ directory: true, multiple: false });
+      if (typeof picked === "string" && picked) await add(ch, picked);
+    } catch (e) {
+      onError(errText(e));
+    }
+  }
+  const group = (ch: keyof IntakeRefFolders, title: string, shortLabel: string) => {
+    const label = `${t.intake_local_refs} ${shortLabel}`;
+    return (
+    <div className="intake__field">
+      <label>{title}</label>
+      <ul className="intake__reflist">
+        {refs[ch].map((p) => (
+          <li key={p}>
+            <code>{p}</code>
+            <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_local_refs_remove} ${p}`} onClick={() => void save({ ...refs, [ch]: refs[ch].filter((x) => x !== p) })}>
+              {t.intake_local_refs_remove}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="intake__field intake__field--inline">
+        <input aria-label={`${label} ${t.intake_refs_path}`} value={draft[ch]} placeholder={t.intake_refs_ph} onChange={(e) => setDraft((d) => ({ ...d, [ch]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter") void add(ch, draft[ch]); }} />
+        <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_refs_add}`} disabled={!draft[ch].trim()} onClick={() => void add(ch, draft[ch])}>
+          {t.intake_refs_add}
+        </button>
+        <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-label={`${label} ${t.intake_refs_pick}`} onClick={() => void pick(ch)}>
+          {t.intake_refs_pick}
+        </button>
+      </div>
+    </div>
+    );
+  };
+  return (
+    <fieldset className="intake__mailcard">
+      <div className="intake__mailcard-head">
+        <strong>{t.intake_local_refs}</strong>
+      </div>
+      {group("shared", t.intake_refs_shared, t.intake_refs_shared_label)}
+      {group("internal", t.intake_refs_internal, t.intake_refs_internal_label)}
+      <p className="intake__mailcard-hint">{t.intake_local_refs_hint}</p>
+    </fieldset>
+  );
+}
+
 /** 連到 server 時：server 自己的 AI（題目分類與群組「是不是新問題」）。金鑰只寫入、不會被讀回。 */
 function ServerAiCard({ canEdit, onError }: { canEdit: boolean; onError: (m: string | null) => void }) {
   const { t } = useLocale();
@@ -1218,6 +1296,7 @@ function SettingsPanel({ projectId, projectName, legacySettings, remote, onError
       {readOnly && <div className="intake__meta intake__readonly" role="status">{t.intake_conn_readonly}</div>}
       {remote.connected && <div className="intake__meta intake__hint">{t.intake_conn_channels_note}</div>}
       {remote.connected && <ServerAiCard canEdit={!readOnly} onError={onError} />}
+      {remote.connected && <LocalRefsCard projectId={projectId} onError={onError} />}
       <fieldset className="intake__fieldset" disabled={readOnly}>
       {!hasOwn && legacySettings && (
         <div className="intake__banner intake__adopt">

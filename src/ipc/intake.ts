@@ -301,6 +301,12 @@ export const intakeServerTelegramStatus = () => invoke<IntakeServerTelegram>("in
 export const intakeServerTelegramApply = (ownerChatId: string, botToken: string) =>
   invoke<void>("intake_server_telegram_apply", { ownerChatId, botToken });
 
+/** 這台電腦上、某個 server 專案的參考資料夾（領取處理時帶給 Claude Code；只存在本機）。 */
+export const intakeRemoteRefsGet = (projectId: string) => invoke<IntakeRefFolders>("intake_remote_refs_get", { projectId });
+/** 存下並回傳整理過的內容；路徑不是絕對路徑或在這台電腦上找不到會丟錯。 */
+export const intakeRemoteRefsSet = (projectId: string, shared: string[], internal: string[]) =>
+  invoke<IntakeRefFolders>("intake_remote_refs_set", { projectId, shared, internal });
+
 /** 為 server 登入訂閱：開瀏覽器走授權，回傳授權網址（瀏覽器沒開時讓使用者自己開）。 */
 export const intakeServerAiLoginStart = (provider: string) => invoke<string>("intake_server_ai_login_start", { provider });
 /** 貼回授權碼（或完整回呼網址）完成登入；憑證只交給 server，不存進這台電腦。 */

@@ -44,6 +44,8 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeRemoteStatus: vi.fn(() => Promise.resolve({ connected: false, online: false, addr: "", name: "", role: null, error: null })),
   intakeRemotePair: vi.fn(),
   intakeRemoteClaim: vi.fn(() => Promise.resolve()),
+  intakeRemoteRefsGet: vi.fn(() => Promise.resolve({ shared: [], internal: [] })),
+  intakeRemoteRefsSet: vi.fn((_p: string, shared: string[], internal: string[]) => Promise.resolve({ shared, internal })),
   intakeServerMailStatus: vi.fn(() => Promise.resolve({ settings: { smtp_host: "", smtp_port: 587, imap_host: "", imap_port: 993, username: "", from: "" }, configured: false })),
   intakeServerMailApply: vi.fn(() => Promise.resolve()),
   intakeServerAiStatus: vi.fn(() => Promise.resolve({ settings: { provider: "", model: "", base_url: "" }, configured: false })),
@@ -940,7 +942,10 @@ describe("IntakeView", () => {
       await openSettings();
       expect(screen.queryByText(t.intake_conn_readonly)).toBeNull();
       expect(screen.getByRole("button", { name: t.intake_set_save }).matches(":disabled")).toBe(false);
-      expect(screen.queryAllByRole("button", { name: new RegExp(t.intake_refs_pick) })).toHaveLength(0);
+      // server 路徑那組沒有選擇器（路徑在 server 上）；只有「我電腦上的參考資料夾」那張卡有。
+      const pickers = screen.queryAllByRole("button", { name: new RegExp(t.intake_refs_pick) });
+      expect(pickers.filter((b) => !(b.getAttribute("aria-label") ?? "").startsWith(t.intake_local_refs))).toHaveLength(0);
+      expect(pickers).toHaveLength(2);
       expect(screen.getAllByText(t.intake_conn_server_path).length).toBeGreaterThan(0);
     });
 
@@ -1125,6 +1130,32 @@ describe("IntakeView", () => {
       vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue({ connected: false, online: false, addr: "", name: "", role: null, error: null });
       await openSettings();
       expect(screen.queryByText(t.intake_server_ai)).toBeNull();
+    });
+
+    it("lets any member keep this computer's reference folders for the project, saved locally, with a clear note that server paths are not used", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("member"));
+      vi.mocked(ipc.intakeRemoteRefsGet).mockResolvedValue({ shared: ["/Users/me/faq"], internal: [] });
+      await openSettings();
+      expect(await screen.findByText("/Users/me/faq")).toBeTruthy();
+      expect(screen.getByText(t.intake_local_refs_hint)).toBeTruthy();
+      const input = screen.getByLabelText(`${t.intake_local_refs} ${t.intake_refs_internal_label} ${t.intake_refs_path}`);
+      fireEvent.change(input, { target: { value: " /Users/me/notes " } });
+      fireEvent.click(screen.getByRole("button", { name: `${t.intake_local_refs} ${t.intake_refs_internal_label} ${t.intake_refs_add}` }));
+      await waitFor(() => expect(ipc.intakeRemoteRefsSet).toHaveBeenCalledWith(expect.any(String), ["/Users/me/faq"], ["/Users/me/notes"]));
+      expect(await screen.findByText("/Users/me/notes")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: `${t.intake_local_refs} ${t.intake_refs_shared_label} ${t.intake_local_refs_remove} /Users/me/faq` }));
+      await waitFor(() => expect(ipc.intakeRemoteRefsSet).toHaveBeenLastCalledWith(expect.any(String), [], ["/Users/me/notes"]));
+    });
+
+    it("shows the reason and keeps the list when the computer rejects a folder", async () => {
+      vi.mocked(ipc.intakeRemoteStatus).mockResolvedValue(remoteStatus("member"));
+      vi.mocked(ipc.intakeRemoteRefsSet).mockRejectedValueOnce("這台電腦上找不到這個資料夾：/nope");
+      await openSettings();
+      const input = await screen.findByLabelText(`${t.intake_local_refs} ${t.intake_refs_shared_label} ${t.intake_refs_path}`);
+      fireEvent.change(input, { target: { value: "/nope" } });
+      fireEvent.click(screen.getByRole("button", { name: `${t.intake_local_refs} ${t.intake_refs_shared_label} ${t.intake_refs_add}` }));
+      expect((await screen.findByRole("alert")).textContent).toContain("找不到");
+      expect((input as HTMLInputElement).value).toBe("/nope");
     });
 
     it("says Telegram is not active, with the reason, when the token is set but no project turned it on", async () => {

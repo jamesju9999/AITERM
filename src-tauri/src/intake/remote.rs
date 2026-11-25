@@ -55,6 +55,16 @@ struct Inner {
 pub struct Claim {
     pub tab: String,
     pub last_beat: std::time::Instant,
+    /// 做完後要驗證時的計畫（只有「要改程式」的題目才有）。
+    pub verify: Option<VerifyPlan>,
+}
+
+/// 領取時決定、做完後執行的驗證：驗證指令與逾時取自專案設定，`snapshot` 是派工前的 git HEAD。
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifyPlan {
+    pub command: String,
+    pub timeout: Duration,
+    pub snapshot: Option<String>,
 }
 
 #[derive(Default)]
@@ -90,12 +100,24 @@ impl RemoteState {
 
     /// 記下這題是從 server 領來、正在某個分頁處理。
     pub fn track_claim(&self, item_id: &str, tab: &str) {
-        self.claims.lock().insert(item_id.to_string(), Claim { tab: tab.to_string(), last_beat: std::time::Instant::now() });
+        self.claims.lock().insert(item_id.to_string(), Claim { tab: tab.to_string(), last_beat: std::time::Instant::now(), verify: None });
+    }
+
+    /// 這題做完後要驗證（要在 `track_claim` 之後呼叫）。
+    pub fn set_verify_plan(&self, item_id: &str, plan: VerifyPlan) {
+        if let Some(c) = self.claims.lock().get_mut(item_id) {
+            c.verify = Some(plan);
+        }
     }
 
     /// 不再處理這題；回傳它原本在哪個分頁。不是領來的題目回 `None`。
     pub fn untrack_claim(&self, item_id: &str) -> Option<String> {
         self.claims.lock().remove(item_id).map(|c| c.tab)
+    }
+
+    /// 同 `untrack_claim`，但連驗證計畫一起拿走（做完要驗證時用）。
+    pub fn take_claim(&self, item_id: &str) -> Option<Claim> {
+        self.claims.lock().remove(item_id)
     }
 
     pub fn is_claimed(&self, item_id: &str) -> bool {
@@ -565,8 +587,14 @@ pub async fn release(api: &Api, id: &str) -> Result<bool, ClientError> {
     api.typed(Method::POST, &format!("/v1/items/{}/release", enc(id)), None).await
 }
 
-pub async fn submit_reply(api: &Api, id: &str, reply: &str) -> Result<bool, ClientError> {
-    api.typed(Method::POST, &format!("/v1/items/{}/result", enc(id)), Some(json!({ "reply": reply }))).await
+/// 交回結果；`verification` 是（報告文字、是否通過），沒驗證傳 `None`。
+pub async fn submit_reply(api: &Api, id: &str, reply: &str, verification: Option<(&str, bool)>) -> Result<bool, ClientError> {
+    let mut body = json!({ "reply": reply });
+    if let Some((report, passed)) = verification {
+        body["verification"] = json!(report);
+        body["verified"] = json!(passed);
+    }
+    api.typed(Method::POST, &format!("/v1/items/{}/result", enc(id)), Some(body)).await
 }
 
 pub async fn submit_error(api: &Api, id: &str, error: &str) -> Result<bool, ClientError> {

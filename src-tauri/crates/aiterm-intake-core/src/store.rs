@@ -385,9 +385,10 @@ pub async fn release_claim(pool: &SqlitePool, id: &str, only_by: Option<&str>, n
 }
 
 /// 領取者交結果：存成草稿（保留 `claimed_by` 當作「誰處理的」）。
-pub async fn finish_claim(pool: &SqlitePool, id: &str, who: &str, reply: &str, now: i64) -> Result<bool, sqlx::Error> {
-    let r = sqlx::query("UPDATE intake_items SET status = ?, reply_draft = ?, claim_expires_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND status = ? AND claimed_by = ?")
-        .bind(DRAFT).bind(reply).bind(now).bind(id).bind(RUNNING).bind(who)
+/// `verification` 是領取者做完後跑驗證的結果（報告文字、是否通過）；沒驗證（例如只是提問）傳 `None`。
+pub async fn finish_claim(pool: &SqlitePool, id: &str, who: &str, reply: &str, verification: Option<(&str, bool)>, now: i64) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET status = ?, reply_draft = ?, verification = ?, verified = ?, claim_expires_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND status = ? AND claimed_by = ?")
+        .bind(DRAFT).bind(reply).bind(verification.map(|v| v.0)).bind(verification.map(|v| v.1)).bind(now).bind(id).bind(RUNNING).bind(who)
         .execute(pool).await?;
     Ok(r.rows_affected() == 1)
 }
@@ -660,14 +661,15 @@ mod tests {
         let it = insert_item(&p, new("m", QUEUED)).await.unwrap().unwrap();
         claim_item(&p, &it.id, "小明", 1).await.unwrap();
         assert!(!release_claim(&p, &it.id, Some("小華"), 2).await.unwrap());
-        assert!(!finish_claim(&p, &it.id, "小華", "x", 2).await.unwrap());
+        assert!(!finish_claim(&p, &it.id, "小華", "x", None, 2).await.unwrap());
         assert!(!fail_claim(&p, &it.id, "小華", "x", 2).await.unwrap());
         assert!(release_claim(&p, &it.id, None, 2).await.unwrap(), "管理員（不指定人）可以放回");
         claim_item(&p, &it.id, "小明", 3).await.unwrap();
-        assert!(finish_claim(&p, &it.id, "小明", "回覆內容", 4).await.unwrap());
+        assert!(finish_claim(&p, &it.id, "小明", "回覆內容", Some(("驗證報告", false)), 4).await.unwrap());
         let done = get_item(&p, &it.id).await.unwrap().unwrap();
         assert_eq!((done.status.as_str(), done.reply_draft.as_deref(), done.claimed_by.as_deref()), (DRAFT, Some("回覆內容"), Some("小明")));
-        assert!(!finish_claim(&p, &it.id, "小明", "again", 5).await.unwrap(), "交過之後不能再交");
+        assert_eq!((done.verification.as_deref(), done.verified), (Some("驗證報告"), Some(false)), "領取者交回的驗證結果跟著草稿存下來");
+        assert!(!finish_claim(&p, &it.id, "小明", "again", None, 5).await.unwrap(), "交過之後不能再交");
     }
 
     #[tokio::test]

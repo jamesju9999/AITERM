@@ -374,13 +374,24 @@ async fn release(State(st): St, Extension(me): Extension<Me>, Path(id): Path<Str
 pub struct ResultBody {
     pub reply: Option<String>,
     pub error: Option<String>,
+    /// 領取者做完後跑驗證的報告（選填；舊版 AITerm 不會帶）。
+    #[serde(default)]
+    pub verification: Option<String>,
+    /// 驗證是否通過；有 `verification` 才有意義，沒帶時視為沒通過（保守）。
+    #[serde(default)]
+    pub verified: Option<bool>,
 }
 
 /// 領取者交結果：`reply` → 草稿（先去敏）；`error` → 回待核准並記原因。
 async fn claim_result(State(st): St, Extension(me): Extension<Me>, Path(id): Path<String>, Json(b): Json<ResultBody>) -> Response {
     let now = crate::db::now();
     let (done, action) = match (b.reply, b.error) {
-        (Some(reply), _) if !reply.trim().is_empty() => (store::finish_claim(&st.pools.intake, &id, &me.name, &aiterm_intake_core::filter::redact(&reply), now).await, "item.result"),
+        (Some(reply), _) if !reply.trim().is_empty() => {
+            // 報告也先去敏：驗證指令的輸出可能帶出路徑、金鑰之類。
+            let report = b.verification.as_deref().filter(|r| !r.trim().is_empty()).map(aiterm_intake_core::filter::redact);
+            let verification = report.as_deref().map(|r| (r, b.verified.unwrap_or(false)));
+            (store::finish_claim(&st.pools.intake, &id, &me.name, &aiterm_intake_core::filter::redact(&reply), verification, now).await, "item.result")
+        }
         (_, Some(error)) => (store::fail_claim(&st.pools.intake, &id, &me.name, &error, now).await, "item.fail"),
         _ => return bad("要帶 reply 或 error"),
     };
