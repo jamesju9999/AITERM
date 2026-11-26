@@ -17,30 +17,27 @@ const MAP_KEY: &str = "board_map:";
 /// 影子卡片上的標籤，讓使用者在本機看板認得它來自 server。
 pub const SHADOW_LABEL: &str = "🌐 server";
 
-/// 這位成員自己電腦上，某個 server 專案對應的看板專案與執行資料夾。
+/// 這位成員自己電腦上，某個 server 專案對應的本機專案。
+/// 執行資料夾就是那個本機專案的資料夾，領卡時才從專案取，不另存一份（兩份會對不起來）。
+/// 舊版存過 `work_dir`，讀的時候直接忽略。
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct BoardMap {
-    /// 影子卡片放在哪個本機看板專案（`ProjectRegistry` 的專案 id）。
+    /// 本機看板專案（`ProjectRegistry` 的專案 id）；影子卡片放在這裡，Claude Code 在它的資料夾執行。
     pub board_project_id: String,
-    /// Claude Code 在哪個資料夾執行（這台電腦上的專案資料夾）。
-    pub work_dir: String,
 }
 
 pub async fn load_map(pool: &sqlx::SqlitePool, server_project_id: &str) -> Option<BoardMap> {
     let raw = aiterm_intake_core::store::get_setting(pool, &format!("{MAP_KEY}{server_project_id}")).await.ok().flatten()?;
-    serde_json::from_str::<BoardMap>(&raw).ok().filter(|m| !m.board_project_id.is_empty() && !m.work_dir.is_empty())
+    serde_json::from_str::<BoardMap>(&raw).ok().filter(|m| !m.board_project_id.is_empty())
 }
 
-/// 存對應。看板專案要是這台電腦上開著的，資料夾要存在。
-pub async fn save_map(pool: &sqlx::SqlitePool, reg: &ProjectRegistry, server_project_id: &str, map: &BoardMap) -> Result<(), String> {
-    if reg.get(&map.board_project_id).is_none() {
-        return Err("找不到這個本機看板專案（可能已關閉）".into());
+/// 存對應。本機專案要是這台電腦上開著的，它的資料夾要存在。
+pub async fn save_map(pool: &sqlx::SqlitePool, reg: &ProjectRegistry, server_project_id: &str, board_project_id: &str) -> Result<(), String> {
+    let handle = reg.get(board_project_id).ok_or("找不到這個本機看板專案（可能已關閉）")?;
+    if !handle.path.is_dir() {
+        return Err(format!("這台電腦上找不到這個專案的資料夾：{}", handle.path.display()));
     }
-    let dir = map.work_dir.trim();
-    if dir.is_empty() || !std::path::Path::new(dir).is_dir() {
-        return Err(format!("這台電腦上找不到這個資料夾：{dir}"));
-    }
-    let clean = BoardMap { board_project_id: map.board_project_id.clone(), work_dir: dir.to_string() };
+    let clean = BoardMap { board_project_id: board_project_id.to_string() };
     aiterm_intake_core::store::set_setting(pool, &format!("{MAP_KEY}{server_project_id}"), &serde_json::to_string(&clean).map_err(|e| e.to_string())?).await.map_err(|e| e.to_string())
 }
 
@@ -55,13 +52,14 @@ pub async fn claim<R: Runtime>(app: &AppHandle<R>, card_id: &str) -> Result<(), 
     let db = app.try_state::<super::IntakeDb>().ok_or("intake 未就緒")?;
     let reg = app.try_state::<ProjectRegistry>().ok_or("看板未就緒")?;
     let card = board_remote::get_card(&api, &rs, card_id).await.map_err(|e| remote::fail(&rs, e))?;
-    let map = load_map(&db.pool, &card.project_id).await.ok_or("請先設定「我電腦上的專案」：選一個本機看板專案與執行資料夾")?;
+    let map = load_map(&db.pool, &card.project_id).await.ok_or("請先設定「在我的電腦處理」：選一個本機專案")?;
     let handle = reg.get(&map.board_project_id).ok_or("這個 server 專案對應的本機看板專案已不存在，請重新設定")?;
-    if !std::path::Path::new(&map.work_dir).is_dir() {
-        return Err(format!("執行資料夾不存在：{}", map.work_dir));
+    let work_dir = handle.path.to_string_lossy().into_owned();
+    if !handle.path.is_dir() {
+        return Err(format!("執行資料夾不存在：{work_dir}"));
     }
     let claimed = board_remote::claim(&api, &rs, card_id).await.map_err(|e| remote::fail(&rs, e))?;
-    match make_shadow(&handle.pool, &claimed, &map).await {
+    match make_shadow(&handle.pool, &claimed, &work_dir).await {
         Ok(local_id) => {
             rs.track_board_claim(card_id, &handle.id, &local_id);
             changed(app);
@@ -74,8 +72,8 @@ pub async fn claim<R: Runtime>(app: &AppHandle<R>, card_id: &str) -> Result<(), 
     }
 }
 
-async fn make_shadow(pool: &sqlx::SqlitePool, card: &aiterm_intake_core::board_store::BoardCard, map: &BoardMap) -> Result<String, String> {
-    let id = store::create_task(pool, &card.title, &card.body, &map.work_dir, card.parallel_ok, card.interactive).await.map_err(|e| e.to_string())?;
+async fn make_shadow(pool: &sqlx::SqlitePool, card: &aiterm_intake_core::board_store::BoardCard, work_dir: &str) -> Result<String, String> {
+    let id = store::create_task(pool, &card.title, &card.body, work_dir, card.parallel_ok, card.interactive).await.map_err(|e| e.to_string())?;
     store::set_label(pool, &id, Some(SHADOW_LABEL)).await.map_err(|e| e.to_string())?;
     let order = store::midpoint_between(pool, store::STATUS_QUEUED, None, None).await.map_err(|e| e.to_string())?;
     store::move_task(pool, &id, store::STATUS_QUEUED, order).await.map_err(|e| e.to_string())?;
@@ -208,7 +206,7 @@ mod tests {
         }
         async fn map(&self) -> Result<(), String> {
             let reg = self.app.handle().state::<ProjectRegistry>();
-            save_map(&self.local(), &reg, &self.pid, &BoardMap { board_project_id: self.board.id.clone(), work_dir: self.work.path().to_string_lossy().into() }).await
+            save_map(&self.local(), &reg, &self.pid, &self.board.id).await
         }
         /// 另一位成員先把一張卡片排進待派送。
         async fn queued_card(&self, title: &str) -> BoardCard {
@@ -233,14 +231,15 @@ mod tests {
         assert_eq!(r.server_card(&c.id).await.status, "queued", "沒設定對應就不會去領");
 
         let reg = r.app.handle().state::<ProjectRegistry>();
-        let bad_project = save_map(&r.local(), &reg, &r.pid, &BoardMap { board_project_id: "不存在".into(), work_dir: r.work.path().to_string_lossy().into() }).await;
+        let bad_project = save_map(&r.local(), &reg, &r.pid, "不存在").await;
         assert!(bad_project.unwrap_err().contains("看板專案"));
-        let bad_dir = save_map(&r.local(), &reg, &r.pid, &BoardMap { board_project_id: r.board.id.clone(), work_dir: "/不存在/的資料夾".into() }).await;
-        assert!(bad_dir.unwrap_err().contains("找不到"));
         r.map().await.unwrap();
         let m = load_map(&r.local(), &r.pid).await.unwrap();
-        assert_eq!((m.board_project_id.as_str(), m.work_dir.as_str()), (r.board.id.as_str(), r.work.path().to_str().unwrap()));
+        assert_eq!(m.board_project_id, r.board.id, "只存本機專案；資料夾是專案自己的，不另存");
         assert!(load_map(&r.local(), "別的專案").await.is_none(), "每個 server 專案各自一份");
+        // 舊版存的是 {board_project_id, work_dir}，升級後仍要讀得到，資料夾以專案為準。
+        aiterm_intake_core::store::set_setting(&r.local(), &format!("{MAP_KEY}舊專案"), r#"{"board_project_id":"p9","work_dir":"/舊的/路徑"}"#).await.unwrap();
+        assert_eq!(load_map(&r.local(), "舊專案").await.unwrap().board_project_id, "p9");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -254,7 +253,7 @@ mod tests {
         assert_eq!(shadows.len(), 1);
         let t = &shadows[0];
         assert_eq!((t.title.as_str(), t.body.as_str(), t.status.as_str(), t.label.as_deref(), t.parallel_ok), ("印表機卡紙", "請處理", "queued", Some(SHADOW_LABEL), false));
-        assert_eq!(t.project_dir, r.work.path().to_string_lossy(), "在我設定的資料夾執行");
+        assert_eq!(t.project_dir, r.board.path.to_string_lossy(), "在對應的本機專案的資料夾執行");
         assert_eq!(r.rs().board_claims().len(), 1);
     }
 

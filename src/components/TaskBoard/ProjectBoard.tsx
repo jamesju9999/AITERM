@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import {
@@ -15,7 +15,7 @@ import {
 } from "../../ipc/tasks";
 import { listAgents } from "../../ipc/agents";
 import { intakeBoardMapGet, intakeBoardMapSet } from "../../ipc/intake";
-import { listProjects, type ProjectInfo } from "../../ipc/projects";
+import { listProjects, openProject, type ProjectInfo } from "../../ipc/projects";
 import { setRunningTaskTabs } from "../../lib/runningTaskTabRegistry";
 import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { ArchiveDialog } from "./ArchiveDialog";
@@ -41,54 +41,93 @@ interface DragState {
   started: boolean;
 }
 
-/** 連到 server 的共用看板：這位成員自己電腦上的對應（影子卡片放哪個本機看板專案、在哪個資料夾執行）。 */
+/**
+ * 連到 server 的共用看板：這位成員「在自己電腦處理」時用哪個本機專案。
+ * 只選一個本機專案；執行資料夾就是那個專案的資料夾，不另外填。設好之後預設收起來。
+ */
 export function RemoteMapBar({ serverProjectId }: { serverProjectId: string }) {
   const { t } = useLocale();
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [boardId, setBoardId] = useState("");
-  const [dir, setDir] = useState("");
   const [saved, setSaved] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** 使用者自己展開／收合過就照他的；沒動過時，沒設定就展開、設好就收起。 */
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const loadProjects = () => listProjects().then((p) => p.filter((x) => x.status === "ok" && !x.id.startsWith("remote:")));
   useEffect(() => {
     let live = true;
-    void listProjects().then((p) => live && setProjects(p.filter((x) => x.status === "ok" && !x.id.startsWith("remote:"))));
+    void loadProjects().then((p) => live && setProjects(p));
     void intakeBoardMapGet(serverProjectId).then((m) => {
       if (!live) return;
       setBoardId(m?.board_project_id ?? "");
-      setDir(m?.work_dir ?? "");
       setSaved(m !== null);
     });
     return () => {
       live = false;
     };
   }, [serverProjectId]);
-  async function save() {
+  const fail = (e: unknown) => setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+  /** 選了就存，不用再按儲存。 */
+  async function choose(id: string) {
+    setBoardId(id);
     setError(null);
+    if (!id) {
+      setSaved(false);
+      return;
+    }
+    setSaved(null);
     try {
-      await intakeBoardMapSet(serverProjectId, boardId, dir.trim());
+      await intakeBoardMapSet(serverProjectId, id);
       setSaved(true);
     } catch (e) {
-      setError(typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+      fail(e);
     }
   }
+  async function openExisting() {
+    setError(null);
+    try {
+      const picked = await openDialog({ filters: [{ name: "AITerm 專案", extensions: ["aitprj"] }] });
+      if (typeof picked !== "string") return;
+      const id = await openProject(picked);
+      setProjects(await loadProjects());
+      await choose(id);
+    } catch (e) {
+      fail(e);
+    }
+  }
+  const chosen = projects.find((p) => p.id === boardId);
+  const summary = saved === true && chosen ? t.board_remote_map_summary.replace("{name}", chosen.name) : t.board_remote_map_summary_none;
   return (
-    <div className="task-board-remote-map" role="group" aria-label={t.board_remote_map_title}>
-      <strong>{t.board_remote_map_title}</strong>
-      {saved === false && <span className="tb-warn">{t.board_remote_map_missing}</span>}
-      <select aria-label={t.board_remote_map_project} value={boardId} onChange={(e) => { setBoardId(e.target.value); setSaved(null); }}>
-        <option value="">{t.board_remote_map_project}</option>
-        {projects.map((p) => (
-          <option key={p.id} value={p.id}>{p.name}</option>
-        ))}
-      </select>
-      <input className="task-field-input" aria-label={t.board_remote_map_dir} placeholder={t.board_remote_map_dir} value={dir} onChange={(e) => { setDir(e.target.value); setSaved(null); }} />
-      <button className="tb-btn tb-btn--ghost" disabled={!boardId || !dir.trim()} onClick={() => void save()}>
-        {t.board_remote_map_save}
-      </button>
-      {saved === true && <span role="status">{t.board_remote_map_saved}</span>}
-      {error && <span role="alert" className="tb-warn">{error}</span>}
-      <span className="task-board-remote-hint">{t.board_remote_map_hint}</span>
-    </div>
+    <details
+      className="task-board-remote-details"
+      open={userOpen ?? saved === false}
+      onToggle={(e) => setUserOpen(e.currentTarget.open)}
+    >
+      <summary>
+        <strong>{t.board_remote_map_title}</strong>
+        <span className="task-board-remote-summary"> · {summary}</span>
+      </summary>
+      <div className="task-board-remote-map" role="group" aria-label={t.board_remote_map_title}>
+        {saved === false && <span className="tb-warn">{t.board_remote_map_missing}</span>}
+        {projects.length === 0 ? (
+          <span>{t.board_remote_map_none}</span>
+        ) : (
+          <select aria-label={t.board_remote_map_project} value={boardId} onChange={(e) => void choose(e.target.value)}>
+            <option value="">{t.board_remote_map_project}</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        )}
+        <button className="tb-btn tb-btn--ghost" onClick={() => void openExisting()}>
+          {t.board_remote_map_open}
+        </button>
+        {chosen && <span className="task-board-remote-path" title={chosen.path}>{t.board_remote_map_path}：{chosen.path}</span>}
+        {saved === true && <span role="status">{t.board_remote_map_saved}</span>}
+        {error && <span role="alert" className="tb-warn">{error}</span>}
+        <span className="task-board-remote-hint">{t.board_remote_map_hint}</span>
+      </div>
+    </details>
   );
 }
 

@@ -313,14 +313,13 @@ export const intakeRemoteRefsGet = (projectId: string) => invoke<IntakeRefFolder
 export const intakeRemoteRefsSet = (projectId: string, shared: string[], internal: string[]) =>
   invoke<IntakeRefFolders>("intake_remote_refs_set", { projectId, shared, internal });
 
-/** 這位成員為某個 server 看板專案設定的「我電腦上的專案」：影子卡片放哪個本機看板專案、在哪個資料夾執行。 */
+/** 這位成員為某個 server 看板專案設定的「在我的電腦處理」：用哪個本機專案（卡片放在那裡，在它的資料夾執行）。 */
 export interface IntakeBoardMap {
   board_project_id: string;
-  work_dir: string;
 }
 export const intakeBoardMapGet = (serverProjectId: string) => invoke<IntakeBoardMap | null>("intake_board_map_get", { serverProjectId });
-export const intakeBoardMapSet = (serverProjectId: string, boardProjectId: string, workDir: string) =>
-  invoke<void>("intake_board_map_set", { serverProjectId, boardProjectId, workDir });
+export const intakeBoardMapSet = (serverProjectId: string, boardProjectId: string) =>
+  invoke<void>("intake_board_map_set", { serverProjectId, boardProjectId });
 /** 領取 server 看板上的一張待派送卡片，在自己電腦處理。 */
 export const intakeBoardClaim = (cardId: string) => invoke<void>("intake_board_claim", { cardId });
 /** 不做了：把領取的卡片放回 server。 */

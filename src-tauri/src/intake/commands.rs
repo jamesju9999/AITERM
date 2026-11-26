@@ -728,15 +728,15 @@ pub async fn intake_server_ai_logout(rs: State<'_, Arc<RemoteState>>) -> Result<
 #[derive(Default)]
 pub struct ServerAiLogin(pub tokio::sync::Mutex<Option<aiterm_ai_oauth::anthropic::Pkce>>);
 
-/// 這位成員為某個 server 專案設定的「我電腦上的專案」（影子卡片放哪個本機看板專案、在哪個資料夾執行）。
+/// 這位成員為某個 server 專案設定的「我電腦上的專案」（要處理卡片時用哪個本機專案：影子卡片放在那裡、在它的資料夾執行）。
 #[tauri::command]
 pub async fn intake_board_map_get(db: State<'_, IntakeDb>, server_project_id: String) -> Result<Option<super::board_work::BoardMap>, String> {
     Ok(super::board_work::load_map(&db.pool, &server_project_id).await)
 }
 
 #[tauri::command]
-pub async fn intake_board_map_set(db: State<'_, IntakeDb>, reg: State<'_, crate::projects::ProjectRegistry>, server_project_id: String, board_project_id: String, work_dir: String) -> Result<(), String> {
-    super::board_work::save_map(&db.pool, &reg, &server_project_id, &super::board_work::BoardMap { board_project_id, work_dir }).await
+pub async fn intake_board_map_set(db: State<'_, IntakeDb>, reg: State<'_, crate::projects::ProjectRegistry>, server_project_id: String, board_project_id: String) -> Result<(), String> {
+    super::board_work::save_map(&db.pool, &reg, &server_project_id, &board_project_id).await
 }
 
 /// 領取 server 看板上的一張待派送卡片，在自己電腦處理。
