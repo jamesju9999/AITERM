@@ -1,0 +1,6 @@
+.shared-server-page { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
+.shared-server-page h2 { margin: 0; font-size: 20px; }
+.shared-server-intro { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-secondary, #888); }
+.shared-server-page .intake__settings .intake__meta,
+.shared-server-page .intake__settings .intake__error { margin-left: 0; }
+.shared-server-page .intake__settings .intake__hint { margin-left: 0; }

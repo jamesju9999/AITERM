@@ -67,7 +67,6 @@ import { mailListAccounts, type MailAccount } from "../../ipc/mail";
 import { systemsList, type SystemConnection } from "../../ipc/systems";
 import { useIntakeChanged } from "../../hooks/useIntakeChanged";
 import { useIntakeRemote } from "../../hooks/useIntakeRemote";
-import { ConnectionCard } from "./ConnectionCard";
 import { useLocale } from "../../contexts/LocaleContext";
 import { displayAddress, validAddress } from "../../lib/intakeAddress";
 import { flowSteps } from "../../lib/intakeFlow";
@@ -115,7 +114,7 @@ export function IntakeView() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
   const remote = useIntakeRemote();
-  const [showConn, setShowConn] = useState(false);
+  const navigate = useNavigate();
 
   const loadProjects = useCallback(() => {
     intakeProjects()
@@ -208,12 +207,13 @@ export function IntakeView() {
           {unassigned > 0 && <option value="">{t.intake_unassigned} ({unassigned})</option>}
         </select>
         {!inUnassigned && !noProject && (
-          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showSettings} onClick={() => { setShowConn(false); setShowSettings((v) => !v); }}>
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showSettings} onClick={() => setShowSettings((v) => !v)}>
             {showSettings ? t.intake_settings_back : t.intake_settings}
           </button>
         )}
-        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-pressed={showConn} onClick={() => { setShowSettings(false); setShowConn((v) => !v); }}>
-          {showConn ? t.intake_settings_back : t.intake_conn_button}
+        {/* 連線是整個 AITerm 共用的，設定頁才是正主；這裡只是捷徑。 */}
+        <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" onClick={() => navigate("/settings", { state: { tab: "sharedServer" } })}>
+          {t.intake_conn_button}
         </button>
       </div>
       {remote.connected && (
@@ -223,9 +223,7 @@ export function IntakeView() {
       )}
       {error && <div className="intake__error" role="alert">{error}</div>}
 
-      {showConn ? (
-        <ConnectionCard status={remote} />
-      ) : noProject ? (
+      {noProject ? (
         <p className="intake__empty">{t.intake_no_projects}</p>
       ) : showSettings && !inUnassigned ? (
         <SettingsPanel key={projectId} projectId={projectId} projectName={current?.name ?? ""} legacySettings={legacySettings} remote={remote} onError={setError} />

@@ -1,5 +1,6 @@
 import { useLocale } from "../../contexts/LocaleContext";
 import { useIntakeRemote } from "../../hooks/useIntakeRemote";
+import "./SharedServerPage.css";
 import { ConnectionCard } from "../IntakeView/ConnectionCard";
 
 /**
@@ -12,8 +13,11 @@ export function SharedServerPage() {
   return (
     <div className="shared-server-page">
       <h2>{t.settings_tab_sharedServer}</h2>
-      <p className="intake__meta intake__hint">{t.settings_shared_server_intro}</p>
-      <ConnectionCard status={remote} />
+      <p className="shared-server-intro">{t.settings_shared_server_intro}</p>
+      {/* 卡片裡的欄位樣式掛在 .intake__settings 底下（問題收集頁的設定面板），這裡沿用同一套。 */}
+      <div className="intake__settings">
+        <ConnectionCard status={remote} />
+      </div>
     </div>
   );
 }

@@ -1,6 +1,12 @@
 import { render, screen, waitFor, fireEvent, within, cleanup } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+
+const navigateMock = vi.hoisted(() => vi.fn());
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return { ...actual, useNavigate: () => navigateMock };
+});
 import { IntakeView } from "./index";
 import { validAddress } from "../../lib/intakeAddress";
 import { LocaleProvider } from "../../contexts/LocaleContext";
@@ -96,6 +102,7 @@ function cfgView(over: Partial<ipc.IntakeConfig> = {}, extra: Partial<ipc.Intake
 }
 
 beforeEach(() => {
+  navigateMock.mockReset();
   vi.clearAllMocks();
   try {
     localStorage.clear();
@@ -1309,34 +1316,19 @@ describe("IntakeView", () => {
       expect((await screen.findByRole("alert")).textContent).toContain("沒有可用的分頁");
     });
 
-    it("turns the connection button into a back button while the card is open", async () => {
+    it("the connection button jumps to the shared-server page in Settings", async () => {
       vi.mocked(ipc.intakeList).mockResolvedValue([]);
       wrap();
       fireEvent.click(await screen.findByRole("button", { name: t.intake_conn_button }));
-      const back = screen.getByRole("button", { name: t.intake_settings_back });
-      expect(screen.getByText(t.intake_conn_title)).toBeTruthy();
-      fireEvent.click(back);
-      await waitFor(() => expect(screen.queryByText(t.intake_conn_title)).toBeNull());
-      expect(screen.queryByRole("button", { name: t.intake_settings_back })).toBeNull();
+      expect(navigateMock).toHaveBeenCalledWith("/settings", { state: { tab: "sharedServer" } });
     });
 
-    it("shows only one back button when the connection card is opened from the settings page", async () => {
-      vi.mocked(ipc.intakeList).mockResolvedValue([]);
-      vi.mocked(ipc.intakeGetConfig).mockResolvedValue(cfgView());
-      wrap();
-      fireEvent.click(await screen.findByText(t.intake_settings));
-      await screen.findByText(t.intake_set_save);
-      fireEvent.click(screen.getByRole("button", { name: t.intake_conn_button }));
-      expect(screen.getAllByRole("button", { name: t.intake_settings_back })).toHaveLength(1);
-      expect(screen.getByText(t.intake_conn_title)).toBeTruthy();
-    });
-
-    it("opens the connection card from the bar even when there are no projects yet", async () => {
+    it("the connection button is there even when there are no projects yet", async () => {
       vi.mocked(ipc.intakeProjects).mockResolvedValue({ projects: [], unassigned: 0, legacy_settings: false });
       vi.mocked(ipc.intakeList).mockResolvedValue([]);
       render(<LocaleProvider><MemoryRouter><IntakeView /></MemoryRouter></LocaleProvider>);
       fireEvent.click(await screen.findByRole("button", { name: t.intake_conn_button }));
-      expect(await screen.findByLabelText(t.intake_conn_addr)).toBeTruthy();
+      expect(navigateMock).toHaveBeenCalledWith("/settings", { state: { tab: "sharedServer" } });
     });
   });
 });
