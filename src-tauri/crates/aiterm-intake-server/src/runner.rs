@@ -130,6 +130,9 @@ pub enum Mode {
     ReadOnly,
     /// 可改檔案；`verify_command` 是唯一額外開放的指令（可為空）。
     Edit { verify_command: String },
+    /// 驗收：開放 Bash 與（有的話）瀏覽器，但不給編輯工具；`deny` 是禁止清單（每條 `Bash(...)`）。
+    /// `mcp_config` 是只含瀏覽器的 MCP 設定檔路徑（沒有 Node 就沒有）。
+    Verify { deny: Vec<String>, browser: bool, mcp_config: Option<String> },
 }
 
 /// 子行程只拿到它需要的環境變數：不要把 server 的其他祕密環境帶進去。
@@ -222,6 +225,12 @@ pub fn claude_args_with(s: &RunnerSettings, mode: &Mode, extra_dirs: &[String], 
             }
             (a, "WebFetch,WebSearch,NotebookEdit".to_string())
         }
+        Mode::Verify { deny, browser, .. } => {
+            let allowed = if *browser { "Read,Grep,Glob,Bash,mcp__playwright".to_string() } else { "Read,Grep,Glob,Bash".to_string() };
+            let mut dis: Vec<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch"].iter().map(|x| x.to_string()).collect();
+            dis.extend(deny.iter().cloned());
+            (allowed, dis.join(","))
+        }
     };
     let mut args: Vec<String> = ["-p", "--output-format", "json"].iter().map(|x| x.to_string()).collect();
     match session {
@@ -233,6 +242,9 @@ pub fn claude_args_with(s: &RunnerSettings, mode: &Mode, extra_dirs: &[String], 
     args.extend(["--max-turns".into(), s.max_turns.to_string(), "--allowedTools".into(), allowed, "--disallowedTools".into(), disallowed]);
     for d in extra_dirs {
         args.extend(["--add-dir".into(), d.clone()]);
+    }
+    if let Mode::Verify { mcp_config: Some(path), .. } = mode {
+        args.extend(["--mcp-config".into(), path.clone(), "--strict-mcp-config".into()]);
     }
     args
 }
@@ -254,6 +266,27 @@ pub async fn exec_claude_as(s: &RunnerSettings, cwd: &Path, mode: &Mode, extra_d
 
 /// 同 `exec_claude_as`，另外可指定這次對話要不要保留、或接續上一段。
 pub async fn exec_claude_session(s: &RunnerSettings, cwd: &Path, mode: &Mode, extra_dirs: &[String], prompt: &str, model: Option<&str>, session: &SessionUse) -> Result<String, String> {
+    exec_claude_full(s, cwd, mode, extra_dirs, prompt, model, session).await.map(|r| r.text)
+}
+
+/// 一次 `claude -p` 的結果：最終回答，以及被權限規則（禁止清單）擋下的 Bash 命令。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ClaudeRun {
+    pub text: String,
+    pub denied: Vec<String>,
+}
+
+/// 輸出裡被拒絕的 Bash 命令（`permission_denials` 裡 `tool_name` 是 Bash 的 `tool_input.command`）。
+pub fn denied_commands(stdout: &str) -> Vec<String> {
+    let t = stdout.trim();
+    let Some(v) = serde_json::from_str::<serde_json::Value>(t).ok().or_else(|| serde_json::from_str(t.lines().last().unwrap_or("")).ok()) else { return Vec::new() };
+    v["permission_denials"]
+        .as_array()
+        .map(|a| a.iter().filter(|d| d["tool_name"] == "Bash").filter_map(|d| d["tool_input"]["command"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+pub async fn exec_claude_full(s: &RunnerSettings, cwd: &Path, mode: &Mode, extra_dirs: &[String], prompt: &str, model: Option<&str>, session: &SessionUse) -> Result<ClaudeRun, String> {
     let mut args = claude_args_with(s, mode, extra_dirs, session);
     if let Some(m) = model.map(str::trim).filter(|m| valid_model(m)) {
         args.extend(["--model".to_string(), m.to_string()]);
@@ -284,7 +317,7 @@ pub async fn exec_claude_session(s: &RunnerSettings, cwd: &Path, mode: &Mode, ex
         let why = if stdout.trim().is_empty() && !stderr.is_empty() { stderr } else { parsed.err().unwrap_or(stderr) };
         return Err(format!("Claude Code 失敗（{}）：{why}", out.status));
     }
-    parsed
+    Ok(ClaudeRun { text: parsed?, denied: denied_commands(&stdout) })
 }
 
 /// Claude Code 的錯誤是不是「額度或速率限制」（不是這張卡本身的問題，等一等就會好）。
@@ -460,6 +493,8 @@ async fn process_inner(st: &Arc<AppState>, item: &IntakeItem) -> Result<Done, St
     let prompt = format!("{}{}", dispatcher::build_prompt(item, &attachments, matches!(mode, Mode::ReadOnly)), dispatcher::refs_note(&refs));
 
     match mode {
+        // 驗收只由編排（`verifier::run_verify`）使用，問題收集的題目不會走到這裡。
+        Mode::Verify { .. } => Err("內部錯誤：題目不應該用驗收模式處理".to_string()),
         Mode::ReadOnly => {
             let text = exec_claude(&settings, &work_dir, &mode, &extra, &prompt).await?;
             Ok(Done { reply: aiterm_intake_core::filter::redact(&text), verification: None, branch: None, work_dir: None })

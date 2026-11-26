@@ -412,3 +412,29 @@ fn quota_and_rate_limit_errors_are_told_apart_from_a_card_that_really_failed_and
         assert_eq!(runner::quota_wait(e, now), None, "{e}");
     }
 }
+
+#[test]
+fn verify_mode_gives_bash_and_the_browser_but_no_edit_tools_and_carries_the_deny_list() {
+    let s = runner::RunnerSettings::default();
+    let mode = runner::Mode::Verify { deny: vec!["Bash(sudo:*)".into(), "Bash(git push:*)".into()], browser: true, mcp_config: Some("/v/mcp.json".into()) };
+    let args = runner::claude_args(&s, &mode, &[]);
+    let after = |f: &str| args.iter().position(|a| a == f).map(|i| args[i + 1].clone());
+    assert_eq!(after("--allowedTools").as_deref(), Some("Read,Grep,Glob,Bash,mcp__playwright"));
+    let disallowed = after("--disallowedTools").unwrap();
+    for needle in ["Edit", "Write", "MultiEdit", "WebFetch", "WebSearch", "Bash(sudo:*)", "Bash(git push:*)"] {
+        assert!(disallowed.contains(needle), "禁止清單缺：{needle}");
+    }
+    assert_eq!(after("--mcp-config").as_deref(), Some("/v/mcp.json"));
+    assert!(args.iter().any(|a| a == "--strict-mcp-config"));
+    let no_browser = runner::claude_args(&s, &runner::Mode::Verify { deny: vec![], browser: false, mcp_config: None }, &[]);
+    assert_eq!(no_browser.iter().position(|a| a == "--allowedTools").map(|i| no_browser[i + 1].clone()).as_deref(), Some("Read,Grep,Glob,Bash"));
+    assert!(!no_browser.iter().any(|a| a == "--mcp-config"));
+}
+
+#[test]
+fn denied_bash_calls_are_read_from_claude_output() {
+    let out = r#"{"type":"result","is_error":false,"result":"ok","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git push origin main"}},{"tool_name":"Edit","tool_input":{"file_path":"x"}}]}"#;
+    assert_eq!(runner::denied_commands(out), vec!["git push origin main".to_string()]);
+    assert!(runner::denied_commands("not json").is_empty());
+    assert!(runner::denied_commands(r#"{"result":"ok"}"#).is_empty());
+}
