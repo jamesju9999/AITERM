@@ -136,7 +136,8 @@ pub enum Gate {
 }
 
 /// 依目前簽章與驗收卡歷史（舊→新）判斷下一步。
-/// 輪數 = 從最近一次 `pass` 之後，連續 `fail`／`attention` 的驗收卡張數。
+/// 輪數 = 從最近一次 `pass` 之後，連續 `fail`／`attention` 的驗收卡張數；`Failed { rounds }` 的 `rounds` 就是
+/// 這次要開的修正的輪次（第 1 次失敗＝第 1 輪修正）。最多自動修正 `MAX_FIX_ROUNDS` 輪，再失敗就停下來等人。
 pub fn gate(cards: &[VerifyCardView], current: &str) -> Gate {
     let tail_rounds = cards
         .iter()
@@ -153,7 +154,7 @@ pub fn gate(cards: &[VerifyCardView], current: &str) -> Gate {
     }
     match last.verdict.as_deref() {
         Some("pass") => Gate::Passed,
-        Some("fail") if tail_rounds >= MAX_FIX_ROUNDS => Gate::NeedsHuman,
+        Some("fail") if tail_rounds > MAX_FIX_ROUNDS => Gate::NeedsHuman,
         Some("fail") => Gate::Failed { rounds: tail_rounds },
         _ => Gate::NeedsHuman,
     }
@@ -319,8 +320,20 @@ mod tests {
         assert_eq!(gate(&[vc("v1", "sig1", "done", Some("failed"), None)], "sig1"), Gate::NeedsHuman, "驗收卡自己失敗：停住等管理員");
         assert_eq!(
             gate(&[vc("v1", "s1", "done", Some("success"), Some("fail")), vc("v2", "s2", "done", Some("success"), Some("fail"))], "s2"),
+            Gate::Failed { rounds: 2 },
+            "第二次失敗還有第二輪修正"
+        );
+        assert_eq!(
+            gate(
+                &[
+                    vc("v1", "s1", "done", Some("success"), Some("fail")),
+                    vc("v2", "s2", "done", Some("success"), Some("fail")),
+                    vc("v3", "s3", "done", Some("success"), Some("fail"))
+                ],
+                "s3"
+            ),
             Gate::NeedsHuman,
-            "連續兩次 fail 之後輪數用完"
+            "兩輪修正之後再失敗：停下來等人"
         );
         // 中間通過過一次，輪數重新算。
         assert_eq!(

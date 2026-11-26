@@ -34,6 +34,18 @@ fn next_of<'a>(of: &BoardCard, chain: &'a [BoardCard]) -> Option<&'a BoardCard> 
     chain.iter().find(|c| c.review_of.as_deref() == Some(of.id.as_str()))
 }
 
+/// 模組鏈目前的尾端：從模組開始沿 `review_of` 一路走到底。驗收退回的修正卡（vfix）要接在這張後面。
+pub fn chain_tail<'a>(module: &'a BoardCard, chain: &'a [BoardCard]) -> &'a BoardCard {
+    let mut tail = module;
+    for _ in 0..chain.len() + 1 {
+        match next_of(tail, chain) {
+            Some(n) => tail = n,
+            None => break,
+        }
+    }
+    tail
+}
+
 /// `chain` 是屬於這個模組的所有 review／fix 卡（`module_id` 指向它，順序不拘）。
 pub fn module_state(module: &BoardCard, chain: &[BoardCard], has_reviewer: bool) -> ModuleState {
     if module.module_override {
@@ -252,7 +264,7 @@ pub fn merge_status(cards: &[BoardCard], agents: &[BoardAgent]) -> MergeStatus {
         return MergeStatus::NothingToMerge;
     }
     let all_passed = mods.iter().all(|m| {
-        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(m.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "plan")).cloned().collect();
+        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(m.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "vfix" | "plan")).cloned().collect();
         matches!(module_status(m, &chain, has_reviewer, has_orchestrator), ModuleState::Passed { .. })
     });
     if all_passed {
@@ -451,6 +463,20 @@ mod tests {
         let vf = card("vf", "vfix", Some("p1"));
         let f2 = review("f2", "vf", "fail");
         assert_eq!(module_state(&m, &[f1, x1, p1, vf, f2], true), ModuleState::NeedsFix { review: "f2".into(), round: 2 }, "vfix 不算審查退回輪數");
+    }
+
+    #[test]
+    fn the_chain_tail_is_the_last_card_in_the_chain_whatever_the_order() {
+        let m = module();
+        assert_eq!(chain_tail(&m, &[]).id, "m");
+        let r1 = review("r1", "m", "fail");
+        let f1 = card("f1", "fix", Some("r1"));
+        let r2 = review("r2", "f1", "pass");
+        assert_eq!(chain_tail(&m, &[r2.clone(), r1.clone(), f1.clone()]).id, "r2");
+        // 環也不會卡死。
+        let a = card("a", "fix", Some("b"));
+        let b = card("b", "fix", Some("a"));
+        let _ = chain_tail(&m, &[a, b]);
     }
 
     #[test]

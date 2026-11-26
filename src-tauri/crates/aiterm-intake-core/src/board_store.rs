@@ -89,7 +89,7 @@ pub struct BoardCard {
 pub struct BoardAgent {
     pub id: String,
     pub project_id: String,
-    /// `coder`｜`reviewer`｜`orchestrator`。
+    /// `coder`｜`reviewer`｜`orchestrator`｜`verifier`。
     pub kind: String,
     pub name: String,
     pub role: String,
@@ -411,6 +411,11 @@ pub async fn create_workflow_card(pool: &SqlitePool, c: NewWorkflowCard<'_>) -> 
 /// 專案裡所有沒封存的卡片（沒有附件資訊，編排用）。
 pub async fn project_cards(pool: &SqlitePool, project_id: &str) -> Result<Vec<BoardCard>, sqlx::Error> {
     sqlx::query_as::<_, BoardCard>("SELECT * FROM board_cards WHERE project_id = ? AND archived_at IS NULL ORDER BY sort_order, created_at").bind(project_id).fetch_all(pool).await
+}
+
+/// 專案的驗收卡，依建立順序（舊→新）。用 rowid 排序而不是 created_at：同一秒建的卡順序要對。
+pub async fn verify_cards(pool: &SqlitePool, project_id: &str) -> Result<Vec<BoardCard>, sqlx::Error> {
+    sqlx::query_as::<_, BoardCard>("SELECT * FROM board_cards WHERE project_id = ? AND card_kind = 'verify' AND archived_at IS NULL ORDER BY rowid").bind(project_id).fetch_all(pool).await
 }
 
 /// 這個 Agent 現在有沒有處理中的卡片（一個 Agent 一次只做一張）。
@@ -883,7 +888,7 @@ pub async fn list_comments(pool: &SqlitePool, card_id: &str) -> Result<Vec<Board
 
 // ---- Agent 協作：Agent、指派、記事本 ----
 
-pub const KINDS: [&str; 3] = ["coder", "reviewer", "orchestrator"];
+pub const KINDS: [&str; 4] = ["coder", "reviewer", "orchestrator", "verifier"];
 
 pub struct NewAgent<'a> {
     pub project_id: &'a str,

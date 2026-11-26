@@ -57,7 +57,7 @@ pub async fn round_result(st: &AppState, s: &BoardSchedule) -> Result<RoundResul
     }
     let agents = bs::list_agents(pool, &s.project_id).await.map_err(|e| e.to_string())?;
     let cards = bs::project_cards(pool, &s.project_id).await.map_err(|e| e.to_string())?;
-    let chain: Vec<_> = cards.iter().filter(|c| c.module_id.as_deref() == Some(card.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "plan")).cloned().collect();
+    let chain: Vec<_> = cards.iter().filter(|c| c.module_id.as_deref() == Some(card.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "vfix" | "plan")).cloned().collect();
     Ok(match orch::module_status(&card, &chain, agents.iter().any(|a| a.kind == "reviewer"), agents.iter().any(|a| a.kind == "orchestrator")) {
         ModuleState::Passed { .. } => RoundResult::Success,
         ModuleState::Exhausted | ModuleState::Stuck(_) => RoundResult::Failed,

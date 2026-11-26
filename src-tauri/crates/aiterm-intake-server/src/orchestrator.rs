@@ -42,6 +42,19 @@ pub async fn set_enabled(pool: &sqlx::SqlitePool, pid: &str, on: bool) -> Result
     store::set_setting(pool, &key(pid), if on { "1" } else { "0" }).await
 }
 
+fn verify_key(pid: &str) -> String {
+    format!("verify_enabled:{pid}")
+}
+
+/// 這個專案有沒有開「由 server 執行驗收」（還要畫布上有驗收者才會真的驗）。
+pub async fn verify_enabled(pool: &sqlx::SqlitePool, pid: &str) -> bool {
+    store::get_setting(pool, &verify_key(pid)).await.ok().flatten().as_deref() == Some("1")
+}
+
+pub async fn set_verify_enabled(pool: &sqlx::SqlitePool, pid: &str, on: bool) -> Result<(), sqlx::Error> {
+    store::set_setting(pool, &verify_key(pid), if on { "1" } else { "0" }).await
+}
+
 pub fn agent_branch(agent_id: &str) -> String {
     format!("agent/{}", agent_id.chars().take(12).collect::<String>())
 }
@@ -70,7 +83,7 @@ pub async fn advance(st: &AppState, pid: &str) -> Result<usize, sqlx::Error> {
     let mods = orch::modules(&cards, &agents);
     let mut created = 0;
     for m in &mods {
-        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(m.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "plan")).cloned().collect();
+        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(m.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "vfix" | "plan")).cloned().collect();
         let state = orch::module_status(m, &chain, reviewer.is_some(), orchestrator.is_some());
         match state {
             ModuleState::NeedsReview { target } => {
@@ -101,13 +114,28 @@ pub async fn advance(st: &AppState, pid: &str) -> Result<usize, sqlx::Error> {
     // 剛建的審查／修正卡讓狀態變了，用最新的卡片重算「是不是全部通過」。
     let latest = if created > 0 { bs::project_cards(pool, pid).await? } else { cards.clone() };
     if !pending_merge && orch::merge_status(&latest, &agents) == orch::MergeStatus::Ready {
-        let coders: Vec<&BoardAgent> = agents.iter().filter(|a| a.kind == "coder" && mods.iter().any(|m| m.agent_id.as_deref() == Some(a.id.as_str()))).collect();
-        let list: String = coders.iter().map(|a| format!("- {}（分支 {}）\n", a.name, agent_branch(&a.id))).collect();
-        let body = format!("所有模組都審查通過。核准後會把下列分支合併進專案資料夾目前的分支（不會自動合併，要管理員在 AITerm 核准）：\n\n{list}");
-        bs::create_workflow_card(pool, NewWorkflowCard { project_id: pid, title: "合併待核准", body: &body, kind: "merge", agent_id: None, module_id: None, review_of: None, status: bs::PLANNING, depends_on: None, from_spec: None }).await?;
-        created += 1;
+        // 啟用驗收（專案開關開、畫布上有驗收者）：先驗收，通過才建合併卡；沒啟用就照舊。
+        match agents.iter().find(|a| a.kind == "verifier") {
+            Some(v) if verify_enabled(pool, pid).await => {
+                created += crate::verifier::advance_verification(st, pid, v, &latest, &agents, &mods).await?;
+            }
+            _ => {
+                create_merge_card(pool, pid, &agents, &mods, "").await?;
+                created += 1;
+            }
+        }
     }
     Ok(created)
+}
+
+/// 建「合併待核准」卡（放規劃中，等管理員核准）。`note` 非空時寫進內文（例如「也通過了驗收」）。
+pub(crate) async fn create_merge_card(pool: &sqlx::SqlitePool, pid: &str, agents: &[BoardAgent], mods: &[&BoardCard], note: &str) -> Result<(), sqlx::Error> {
+    let coders: Vec<&BoardAgent> = agents.iter().filter(|a| a.kind == "coder" && mods.iter().any(|m| m.agent_id.as_deref() == Some(a.id.as_str()))).collect();
+    let list: String = coders.iter().map(|a| format!("- {}（分支 {}）\n", a.name, agent_branch(&a.id))).collect();
+    let lead = if note.is_empty() { "所有模組都審查通過。".to_string() } else { format!("所有模組都審查通過，{note}。") };
+    let body = format!("{lead}核准後會把下列分支合併進專案資料夾目前的分支（不會自動合併，要管理員在 AITerm 核准）：\n\n{list}");
+    bs::create_workflow_card(pool, NewWorkflowCard { project_id: pid, title: "合併待核准", body: &body, kind: "merge", agent_id: None, module_id: None, review_of: None, status: bs::PLANNING, depends_on: None, from_spec: None }).await?;
+    Ok(())
 }
 
 // ---- 派工 ----
@@ -136,7 +164,7 @@ pub async fn tick_once(st: &Arc<AppState>) -> usize {
         }
         let Ok(agents) = bs::list_agents(&st.pools.intake, &p.id).await else { continue };
         let Ok(cards) = bs::project_cards(&st.pools.intake, &p.id).await else { continue };
-        for card in cards.iter().filter(|c| c.status == QUEUED && matches!(c.card_kind.as_str(), "work" | "fix" | "review" | "plan")) {
+        for card in cards.iter().filter(|c| c.status == QUEUED && matches!(c.card_kind.as_str(), "work" | "fix" | "vfix" | "review" | "plan" | "verify")) {
             if st.runner.running() >= settings.max_concurrent {
                 return started;
             }
@@ -220,7 +248,7 @@ async fn drop_session(pool: &sqlx::SqlitePool, card_id: &str) {
     }
 }
 
-async fn work_dir_of(st: &AppState, project_id: &str) -> Result<PathBuf, String> {
+pub(crate) async fn work_dir_of(st: &AppState, project_id: &str) -> Result<PathBuf, String> {
     let wd: String = sqlx::query_scalar("SELECT work_dir FROM projects WHERE id = ?").bind(project_id).fetch_optional(&st.pools.server).await.ok().flatten().unwrap_or_default();
     let p = PathBuf::from(wd.trim());
     if wd.trim().is_empty() {
@@ -244,6 +272,9 @@ async fn run_inner(st: &Arc<AppState>, card_id: &str) -> Result<String, String> 
     }
     if card.card_kind == "plan" {
         return run_plan(st, &settings, &work_dir, &agent, &card).await;
+    }
+    if card.card_kind == "verify" {
+        return crate::verifier::run_verify(st, &settings, &work_dir, &agent, &card).await;
     }
     // work／fix：在這個 Coder 專屬的 worktree 裡改。
     let wt = ensure_agent_worktree(st, &work_dir, &agent).await?;
@@ -337,7 +368,7 @@ async fn run_review(st: &Arc<AppState>, settings: &runner::RunnerSettings, work_
 
 /// 規格在 `end` 版的全文：`start..end` 之間新增或修改的檔案，串成一段（太長就截斷）。
 /// 實作的 Coder 在自己的分支上看不到規格撰寫師分支上的檔案，所以實作卡要附全文。
-async fn spec_text(work_dir: &Path, start: Option<&str>, end: &str) -> String {
+pub(crate) async fn spec_text(work_dir: &Path, start: Option<&str>, end: &str) -> String {
     let range = match start {
         Some(s) => format!("{s}..{end}"),
         None => format!("{end}^..{end}"),
@@ -362,7 +393,7 @@ fn deps_ready(card: &BoardCard, cards: &[BoardCard], agents: &[BoardAgent]) -> b
         if dep.agent_id == card.agent_id {
             return true;
         }
-        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(dep.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "plan")).cloned().collect();
+        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(dep.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "vfix" | "plan")).cloned().collect();
         matches!(orch::module_status(dep, &chain, has_reviewer, has_orch), ModuleState::Passed { .. })
     })
 }
@@ -370,7 +401,7 @@ fn deps_ready(card: &BoardCard, cards: &[BoardCard], agents: &[BoardAgent]) -> b
 /// 開工前把別位工程師「已通過審查的版本」合併進這位的 worktree（已經在裡面就略過）。衝突就中止並讓這張卡失敗。
 async fn premerge_dependencies(st: &AppState, wt: &Path, card: &BoardCard) -> Result<(), String> {
     let pool = &st.pools.intake;
-    let module = if card.card_kind == "fix" { bs::get_card(pool, card.module_id.as_deref().unwrap_or("")).await.map_err(|e| e.to_string())?.unwrap_or_else(|| card.clone()) } else { card.clone() };
+    let module = if matches!(card.card_kind.as_str(), "fix" | "vfix") { bs::get_card(pool, card.module_id.as_deref().unwrap_or("")).await.map_err(|e| e.to_string())?.unwrap_or_else(|| card.clone()) } else { card.clone() };
     let deps = orch::deps_of(&module);
     if deps.is_empty() {
         return Ok(());
@@ -379,7 +410,7 @@ async fn premerge_dependencies(st: &AppState, wt: &Path, card: &BoardCard) -> Re
     let cards = bs::project_cards(pool, &card.project_id).await.map_err(|e| e.to_string())?;
     let (has_reviewer, has_orch) = (agents.iter().any(|a| a.kind == "reviewer"), agents.iter().any(|a| a.kind == "orchestrator"));
     for dep in deps.iter().filter_map(|d| cards.iter().find(|c| c.id == *d)).filter(|d| d.agent_id != module.agent_id) {
-        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(dep.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "plan")).cloned().collect();
+        let chain: Vec<BoardCard> = cards.iter().filter(|c| c.module_id.as_deref() == Some(dep.id.as_str()) && matches!(c.card_kind.as_str(), "review" | "fix" | "vfix" | "plan")).cloned().collect();
         let ModuleState::Passed { sha: Some(sha) } = orch::module_status(dep, &chain, has_reviewer, has_orch) else { return Err(format!("前置「{}」還沒有通過審查的版本", dep.title)) };
         if runner::git(wt, &["merge-base", "--is-ancestor", &sha, "HEAD"]).await.is_ok() {
             continue;

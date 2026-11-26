@@ -107,15 +107,16 @@ fn parse_netstat(text: &str, port: u16) -> Vec<u32> {
 
 #[cfg(unix)]
 fn terminate(pid: u32) {
-    let alive = |pid: u32| std::process::Command::new("kill").args(["-0", &pid.to_string()]).status().is_ok_and(|s| s.success());
-    let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+    let quiet = |args: [&str; 2]| std::process::Command::new("kill").args(args).stderr(std::process::Stdio::null()).status();
+    let alive = |pid: u32| quiet(["-0", &pid.to_string()]).is_ok_and(|s| s.success());
+    let _ = quiet(["-TERM", &pid.to_string()]);
     for _ in 0..10 {
         if !alive(pid) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    let _ = std::process::Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+    let _ = quiet(["-KILL", &pid.to_string()]);
 }
 
 #[cfg(windows)]

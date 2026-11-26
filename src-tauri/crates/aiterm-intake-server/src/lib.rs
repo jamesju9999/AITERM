@@ -17,6 +17,7 @@ pub mod orchestrator;
 pub mod scheduler;
 pub mod state;
 pub mod verify_env;
+pub mod verifier;
 pub mod telegram;
 pub mod tls;
 pub mod routes;
