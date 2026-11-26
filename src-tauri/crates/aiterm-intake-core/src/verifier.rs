@@ -73,6 +73,11 @@ pub fn check_quality(r: &VerifyReport) -> Result<(), Vec<String>> {
     }
 }
 
+/// 實際驗證通過的條件數（`status == pass`，不含 manual）。
+pub fn passed_count(r: &VerifyReport) -> usize {
+    r.items.iter().filter(|i| i.status == "pass").count()
+}
+
 pub fn manual_count(r: &VerifyReport) -> usize {
     r.items.iter().filter(|i| i.status == "manual").count()
 }
@@ -279,6 +284,14 @@ mod tests {
         let ok = parse_verify_json(r#"{"verdict":"pass","items":[{"criterion":"c","status":"pass","evidence":["npm test: 12 passed"]},{"criterion":"d","status":"manual","notes":"原生畫面"}]}"#).unwrap();
         assert!(check_quality(&ok).is_ok());
         assert_eq!(manual_count(&ok), 1);
+    }
+
+    #[test]
+    fn only_really_verified_items_count_as_passed() {
+        let all_manual = parse_verify_json(r#"{"verdict":"pass","items":[{"criterion":"a","status":"manual","notes":"伺服器被擋"},{"criterion":"b","status":"manual","notes":"無法開瀏覽器"}]}"#).unwrap();
+        assert_eq!((passed_count(&all_manual), manual_count(&all_manual)), (0, 2), "全部 manual＝沒有實際驗證任何條件");
+        let some = parse_verify_json(r#"{"verdict":"pass","items":[{"criterion":"a","status":"pass","evidence":["x"]},{"criterion":"b","status":"manual","notes":"n"}]}"#).unwrap();
+        assert_eq!(passed_count(&some), 1);
     }
 
     #[test]

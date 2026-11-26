@@ -366,6 +366,24 @@ async fn failures_without_a_known_module_stop_for_a_human_and_open_no_fix_card()
     assert!(merge.body.contains("驗收由管理員「小華」放行"), "{}", merge.body);
 }
 
+/// 全部條件都標成 manual（驗收者什麼都沒能實際驗證）不能算通過：停下來等管理員，不會有合併卡。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_report_where_nothing_was_really_verified_needs_a_human_instead_of_passing() {
+    let fake = Fake::new(&["pass"], "0");
+    let (r, _v) = rig_v(&fake).await;
+    let m = r.module("計時器", "x").await;
+    fake.verify_json(1, &json!({"verdict": "pass", "items": [{"criterion": "按開始倒數", "status": "manual", "module_id": m.id, "notes": "伺服器被禁止清單擋下，無法啟動"}]}).to_string());
+    r.pump_verify(1).await;
+    r.settle().await;
+    let v = r.verify_cards().await.remove(0);
+    assert_eq!((v.outcome.as_deref(), v.verdict.as_deref()), (Some("success"), Some("attention")));
+    assert!(v.ai_summary.as_deref().unwrap_or("").contains("沒能實際驗證任何條件"), "{:?}", v.ai_summary);
+    assert!(r.kind("merge").await.is_empty() && r.kind("vfix").await.is_empty(), "不能放行，也沒有東西可退回");
+    let meta = bs::get_verify(r.pool(), &v.id).await.unwrap().unwrap();
+    assert_eq!(meta.manual_count, 1);
+    assert!(meta.report.is_some(), "報告照樣存下來，管理員才看得到 manual 的原因");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_retried_verification_runs_again_and_a_pass_then_opens_the_merge_card() {
     let fake = Fake::new(&["pass"], "0");

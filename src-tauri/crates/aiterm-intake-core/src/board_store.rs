@@ -703,6 +703,12 @@ pub async fn force_verify_pass(pool: &SqlitePool, card_id: &str) -> Result<bool,
     Ok(r.rows_affected() == 1)
 }
 
+/// 驗收沒做完（沒有報告）時，也記下被禁止清單擋下的命令。
+pub async fn save_verify_denied(pool: &SqlitePool, card_id: &str, denied: &[String]) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE board_verify SET denied = ? WHERE card_id = ?").bind(serde_json::to_string(denied).unwrap_or_default()).bind(card_id).execute(pool).await?;
+    Ok(())
+}
+
 pub async fn set_verify_override(pool: &SqlitePool, card_id: &str, by: &str) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE board_verify SET overridden_by = ? WHERE card_id = ?").bind(by).bind(card_id).execute(pool).await?;
     Ok(())

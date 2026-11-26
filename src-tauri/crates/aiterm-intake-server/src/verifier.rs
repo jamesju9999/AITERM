@@ -262,8 +262,14 @@ async fn run_in_worktree(st: &AppState, settings: &RunnerSettings, work_dir: &Pa
     let run = runner::exec_claude_full(&s, wt, &mode, &[], &prompt, agent.model.as_deref(), &SessionUse::New(sid)).await?;
 
     // 5. 讀結論。沒寫、讀不懂、品質不合格都算失敗，不會當成通過。
-    let text = std::fs::read_to_string(json_path).map_err(|_| "驗收者沒有寫出 verify.json（驗收沒有完成）".to_string())?;
-    let report = vcore::parse_verify_json(&text).map_err(|e| format!("verify.json 讀不懂：{e}"))?;
+    // 失敗時也把被禁止清單擋下的命令記起來，管理員才看得出是不是誤擋造成驗收做不完。
+    bs::save_verify_denied(pool, &card.id, &run.denied).await.ok();
+    let said: String = run.text.chars().take(300).collect();
+    let text = std::fs::read_to_string(json_path).map_err(|_| {
+        let denied = if run.denied.is_empty() { String::new() } else { format!("；被禁止清單擋下：{}", run.denied.join("、")) };
+        format!("驗收者沒有寫出 verify.json（驗收沒有完成）{denied}。Claude 的回答：{said}")
+    })?;
+    let report = vcore::parse_verify_json(&text).map_err(|e| format!("verify.json 讀不懂：{e}。Claude 的回答：{said}"))?;
     if let Err(bad) = vcore::check_quality(&report) {
         return Err(format!("驗收報告品質不合格：{}", bad.join("；")));
     }
@@ -271,6 +277,13 @@ async fn run_in_worktree(st: &AppState, settings: &RunnerSettings, work_dir: &Pa
     let report_json = serde_json::to_string(&report).map_err(|e| e.to_string())?;
     bs::save_verify_report(pool, &card.id, &report_json, &run.denied, manual as i64).await.map_err(|e| e.to_string())?;
     let reasons: Vec<String> = report.items.iter().filter(|i| i.status == "fail").map(|i| i.criterion.clone()).collect();
+    // 一個實際通過的條件都沒有（全部 manual）不能算通過：驗收者沒能真的驗任何東西（例如伺服器被禁止清單擋下、瀏覽器打不開），
+    // 放行合併等於沒有驗收。改成「需要你決定」，管理員看報告後可以放行或重新驗收。
+    if report.verdict == "pass" && vcore::passed_count(&report) == 0 {
+        let why = vec![format!("沒有任何條件被實際驗證（{manual} 項全部標成需人工確認）；請看報告裡的原因，再決定放行或重新驗收")];
+        bs::set_verdict(pool, &card.id, "attention", &why).await.map_err(|e| e.to_string())?;
+        return Ok(format!("驗收沒能實際驗證任何條件（{manual} 項需人工確認），需要你決定"));
+    }
     bs::set_verdict(pool, &card.id, &report.verdict, &reasons).await.map_err(|e| e.to_string())?;
     Ok(if report.verdict == "pass" {
         if manual > 0 { format!("驗收通過（{manual} 項需要你確認）") } else { "驗收通過".to_string() }
