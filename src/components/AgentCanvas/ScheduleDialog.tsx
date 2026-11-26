@@ -18,6 +18,7 @@ export function ScheduleDialog({
   agents,
   initial,
   defaultAgentId,
+  serverTime,
   onSave,
   onDelete,
   onRunNow,
@@ -28,6 +29,8 @@ export function ScheduleDialog({
   initial: ScheduleView | null;
   /** 新增時預先選好的角色（把定時器拖到角色方塊上時帶入）。 */
   defaultAgentId?: string;
+  /** 共用看板專案：定時器由 server 觸發，時間以 server 主機的時區為準。 */
+  serverTime?: boolean;
   onSave: (s: NewSchedule) => Promise<void>;
   onDelete?: () => Promise<void>;
   onRunNow?: () => Promise<string>;
@@ -223,6 +226,7 @@ export function ScheduleDialog({
             <option value="weekly">{t.sched_mode_weekly}</option>
             <option value="interval">{t.sched_mode_interval}</option>
           </select>
+          {serverTime && <span className="task-field-hint" data-testid="sched-server-time-hint">{t.sched_server_time_hint}</span>}
         </label>
 
         {kind === "weekly" && (

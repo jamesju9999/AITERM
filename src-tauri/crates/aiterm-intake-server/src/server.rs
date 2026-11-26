@@ -36,6 +36,10 @@ pub async fn start(bind: SocketAddr, state: Arc<AppState>, identity: Identity) -
     crate::channels::start_ticker(&state);
     crate::channels::start_email(&state);
     crate::channels::start_telegram(&state);
+    // 行程重啟後，上一個行程領的卡片／題目已經沒人在做：立刻放回，不必等租約逾期。
+    let now = crate::db::now();
+    aiterm_intake_core::board_store::release_claims_by(&state.pools.intake, crate::runner::WHO, now).await.ok();
+    aiterm_intake_core::store::release_claims_by(&state.pools.intake, crate::runner::WHO, now).await.ok();
     crate::runner::start(&state);
     crate::orchestrator::start(&state);
     crate::scheduler::start(&state);

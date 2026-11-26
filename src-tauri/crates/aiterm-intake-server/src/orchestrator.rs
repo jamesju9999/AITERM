@@ -240,7 +240,7 @@ async fn run_inner(st: &Arc<AppState>, card_id: &str) -> Result<String, String> 
     premerge_dependencies(st, &wt, &card).await?;
     let start = runner::git(&wt, &["rev-parse", "HEAD"]).await?.trim().to_string();
     let mode = Mode::Edit { verify_command: cfg.verify_command.clone() };
-    let prompt = orch::work_prompt(&agent, &card);
+    let prompt = format!("{}{}", orch::work_prompt(&agent, &card), orch::verify_note(&cfg.verify_command));
     let before = verify::snapshot(&wt).await;
     let text = runner::exec_claude_as(&settings, &wt, &mode, &[], &prompt, agent.model.as_deref()).await?;
     // 專案設了驗證指令：Coder 做完由 server 在 worktree 裡實際跑一次（Coder 自己多半沒權限跑），結果交給審查。

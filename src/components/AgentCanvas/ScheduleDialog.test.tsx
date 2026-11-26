@@ -33,6 +33,17 @@ function mount(props: Partial<React.ComponentProps<typeof ScheduleDialog>> = {})
   return { onSave, onClose };
 }
 
+describe("ScheduleDialog server time hint", () => {
+  it("shows the server-time-zone hint only for shared boards", () => {
+    mount({ serverTime: true });
+    expect(screen.getByTestId("sched-server-time-hint")).toHaveTextContent("server 主機的時區");
+  });
+  it("does not show it for local projects", () => {
+    mount();
+    expect(screen.queryByTestId("sched-server-time-hint")).toBeNull();
+  });
+});
+
 async function fillBasics() {
   await userEvent.type(screen.getByLabelText("名稱"), "每日測試");
   await userEvent.type(screen.getByLabelText("固定指令"), "跑完整測試");

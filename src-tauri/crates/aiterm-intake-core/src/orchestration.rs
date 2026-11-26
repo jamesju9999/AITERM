@@ -179,7 +179,7 @@ pub fn plan_prompt(agent: &BoardAgent, module: &BoardCard, implementers: &[(Stri
         s.push_str("\n\n");
     }
     s.push_str(&format!(
-        "請把模組「{}」已通過審查的規格拆解成可以分頭實作的任務。你只能讀檔，不要修改任何東西。\n\n原始需求：\n{}\n\n可以接手實作的工程師（任務會自動派給最閒的一位，你不用指定）：\n",
+        "請把模組「{}」已通過審查的規格拆解成可以分頭實作的任務。你只能讀檔，不要修改任何東西。\n注意：在這個流程裡你只負責拆解；合併分支、解衝突、跑測試都不是你的工作（合併由管理員核准後處理）。上面的角色說明若提到這些，請忽略，只做拆解。\n\n原始需求：\n{}\n\n可以接手實作的工程師（任務會自動派給最閒的一位，你不用指定）：\n",
         module.title.trim(),
         module.body.trim()
     ));
@@ -297,6 +297,17 @@ pub fn parse_review(text: &str) -> Result<Verdict, String> {
 }
 
 // ---- 提示詞 ----
+
+/// 附在 Coder 提示詞後面，說明這個環境能不能跑測試：沒設驗證指令時 Coder 沒有執行指令的權限，
+/// 不講清楚它會一直嘗試被拒絕；設了就告訴它做完後 server 會跑，它自己也可以先跑。
+pub fn verify_note(verify_command: &str) -> String {
+    let c = verify_command.trim();
+    if c.is_empty() {
+        "\n注意：這個環境沒有設定驗證指令，你沒有執行任何指令的權限（跑測試、編譯、安裝套件都會被拒絕），不要嘗試。請仔細讀程式碼、自己推演行為，並在回報裡註明「未實際執行測試」。\n".to_string()
+    } else {
+        format!("\n做完後 server 會在你的分支上執行驗證指令 `{c}` 並把結果交給審查者；你也可以先自己執行它確認。除此之外你沒有執行其他指令的權限。\n")
+    }
+}
 
 /// 模組卡（或修正卡）給 Coder 的提示詞。
 pub fn work_prompt(agent: &BoardAgent, card: &BoardCard) -> String {
@@ -591,6 +602,13 @@ mod tests {
     }
 
     #[test]
+    fn verify_note_tells_the_coder_whether_it_can_run_anything() {
+        assert!(verify_note("  ").contains("沒有設定驗證指令") && verify_note("").contains("未實際執行測試"));
+        let n = verify_note(" cargo test ");
+        assert!(n.contains("`cargo test`") && !n.contains("沒有設定驗證指令"));
+    }
+
+    #[test]
     fn the_plan_prompt_and_implementation_card_carry_the_contract_and_the_spec() {
         let agent = BoardAgent { prompt_prefix: "你是 Orchestrator".into(), ..coder_agent("o1") };
         let mut m = module();
@@ -598,6 +616,9 @@ mod tests {
         m.body = "做一個記帳 App".into();
         let p = plan_prompt(&agent, &m, &[("工程師2".into(), "前端".into())], "### spec.md\n\n# 規格");
         assert!(p.starts_with("你是 Orchestrator") && p.contains("做一個記帳 App") && p.contains("工程師2（前端）") && p.contains("# 規格") && p.contains("depends_on") && p.contains("\"interfaces\""));
+        let merge_agent = BoardAgent { prompt_prefix: "你是協調者。依序合併各工程師的分支，合併後跑測試。".into(), ..coder_agent("o2") };
+        let mp = plan_prompt(&merge_agent, &m, &[], "");
+        assert!(mp.find("依序合併").unwrap() < mp.find("只負責拆解").unwrap() && mp.contains("請忽略"), "角色說明偏合併時，拆解提示詞要在它後面明確覆蓋");
         assert!(plan_prompt(&agent, &m, &[], "").contains("（目前沒有）") && plan_prompt(&agent, &m, &[], "").contains("讀不到規格"));
         let t = PlanTask { title: "資料層".into(), body: "做 db".into(), depends_on: vec![] };
         let b = impl_body(&t, Some("User{id:int}"), "記帳 App", "## 規格全文");

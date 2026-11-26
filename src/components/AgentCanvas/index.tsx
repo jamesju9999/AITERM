@@ -2245,6 +2245,7 @@ export function AgentCanvasView({
           agents={agents}
           initial={schedDialog.initial}
           defaultAgentId={schedDialog.agentId}
+          serverTime={projectId.startsWith("remote:")}
           onClose={() => setSchedDialog(null)}
           onSave={async (args) => {
             // 從頂列拖出來的新定時器：用放開的位置；其餘照對話框送出的值。

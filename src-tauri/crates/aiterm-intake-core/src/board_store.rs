@@ -721,6 +721,13 @@ pub async fn expire_claims(pool: &SqlitePool, now: i64) -> Result<u64, sqlx::Err
     Ok(r.rows_affected())
 }
 
+/// server 重啟時：它自己領的處理中卡片，行程已經沒了，立刻放回待派送，不必等租約逾期。成員領的不動。
+pub async fn release_claims_by(pool: &SqlitePool, who: &str, now: i64) -> Result<u64, sqlx::Error> {
+    let r = sqlx::query("UPDATE board_cards SET status = ?, claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL, error_message = ?, updated_at = ?, version = version + 1 WHERE status = ? AND claimed_by = ?")
+        .bind(QUEUED).bind("server 重啟，這張卡重新開始").bind(now).bind(RUNNING).bind(who).execute(pool).await?;
+    Ok(r.rows_affected())
+}
+
 // ---- 附件與留言 ----
 
 pub async fn add_attachment(pool: &SqlitePool, card_id: &str, a: &crate::attach::Saved) -> Result<BoardAttachment, sqlx::Error> {
@@ -1004,6 +1011,22 @@ mod tests {
         assert!(finish_claim(&p, &c.id, "小華", "failed", None, Some("Claude Code 結束了"), 500).await.unwrap());
         let f = get_card(&p, &c.id).await.unwrap().unwrap();
         assert_eq!((f.outcome.as_deref(), f.error_message.as_deref()), (Some("failed"), Some("Claude Code 結束了")));
+    }
+
+    #[tokio::test]
+    async fn release_claims_by_only_frees_that_claimers_running_cards() {
+        let p = pool().await;
+        let (a, b, c) = (card(&p, "a").await, card(&p, "b").await, card(&p, "c").await);
+        for x in [&a, &b, &c] {
+            move_card(&p, &x.id, 1, QUEUED, None, None).await.unwrap();
+        }
+        claim_card(&p, &a.id, "server", 100).await.unwrap();
+        claim_card(&p, &b.id, "小明", 100).await.unwrap();
+        assert_eq!(release_claims_by(&p, "server", 101).await.unwrap(), 1, "只放 server 自己領的");
+        let (ra, rb, rc) = (get_card(&p, &a.id).await.unwrap().unwrap(), get_card(&p, &b.id).await.unwrap().unwrap(), get_card(&p, &c.id).await.unwrap().unwrap());
+        assert_eq!((ra.status.as_str(), ra.claimed_by), (QUEUED, None));
+        assert_eq!((rb.status.as_str(), rb.claimed_by.as_deref()), (RUNNING, Some("小明")), "成員領的不動");
+        assert_eq!(rc.status, QUEUED);
     }
 
     #[tokio::test]

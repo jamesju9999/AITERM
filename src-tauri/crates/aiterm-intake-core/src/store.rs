@@ -438,6 +438,14 @@ pub async fn expire_claims(pool: &SqlitePool, now: i64) -> Result<u64, sqlx::Err
     Ok(r.rows_affected())
 }
 
+/// server 重啟時：它自己領的處理中題目，行程已經沒了，立刻放回待處理。成員領的不動。
+pub async fn release_claims_by(pool: &SqlitePool, who: &str, now: i64) -> Result<u64, sqlx::Error> {
+    let r = sqlx::query("UPDATE intake_items SET status = ?, claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL, updated_at = ? WHERE status = ? AND claimed_by = ?")
+        .bind(QUEUED).bind(now).bind(RUNNING).bind(who)
+        .execute(pool).await?;
+    Ok(r.rows_affected())
+}
+
 /// 完成並存回覆。`auto_send` 為真→`done`（呼叫端隨後寄出）；否則→`draft`。
 pub async fn finish(pool: &SqlitePool, id: &str, reply: &str, auto_send: bool) -> Result<bool, sqlx::Error> {
     let to = if auto_send { DONE } else { DRAFT };
@@ -928,6 +936,20 @@ mod tests {
         assert!(dropped_counts(&p, "b").await.unwrap().is_empty());
         assert_eq!(count_from_sender_since(&p, "a", "a@corp.com", 0).await.unwrap(), 1);
         assert_eq!(count_from_sender_since(&p, "zzz", "a@corp.com", 0).await.unwrap(), 0, "限流各專案獨立");
+    }
+
+    #[tokio::test]
+    async fn release_claims_by_only_frees_that_claimers_running_items() {
+        let p = pool().await;
+        let mk = |mid: &'static str| NewItem { project_id: "a", id: None, source: "email", sender: "a@corp.com", level: Level::Internal, subject: "s", body: "b", message_id: mid, status: QUEUED };
+        let (x, y) = (insert_item(&p, mk("m1")).await.unwrap().unwrap(), insert_item(&p, mk("m2")).await.unwrap().unwrap());
+        assert!(claim_item(&p, &x.id, "server", 100).await.unwrap());
+        assert!(claim_item(&p, &y.id, "小明", 100).await.unwrap());
+        assert_eq!(release_claims_by(&p, "server", 101).await.unwrap(), 1);
+        let rx = list_items(&p, "a", None).await.unwrap();
+        let (rx_, ry_) = (rx.iter().find(|i| i.id == x.id).unwrap(), rx.iter().find(|i| i.id == y.id).unwrap());
+        assert_eq!((rx_.status.as_str(), rx_.claimed_by.as_deref()), (QUEUED, None));
+        assert_eq!((ry_.status.as_str(), ry_.claimed_by.as_deref()), (RUNNING, Some("小明")));
     }
 
     #[tokio::test]
