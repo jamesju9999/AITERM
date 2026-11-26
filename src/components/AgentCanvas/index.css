@@ -1044,7 +1044,7 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-sched-node--dragging { cursor: grabbing; z-index: 5; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4); }
 
 /* ── 驗收禁止清單 ── */
-.ac-deny-dialog { max-width: 640px; }
+.ac-deny-dialog { max-width: 640px; overflow-x: hidden; overflow-wrap: anywhere; }
 .ac-deny-tabs { display: flex; gap: 6px; margin: 4px 0 8px; }
 .ac-deny-list { list-style: none; margin: 0 0 8px; padding: 0; max-height: 320px; overflow-y: auto; }
 .ac-deny-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; }

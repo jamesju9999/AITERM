@@ -338,6 +338,18 @@ export function AgentNode({
           {t.ac_verify_report}
         </button>
       );
+      // 驗收卡自己失敗（server 驗收：合併衝突、沒寫出報告…）：沒有結論，要人處理（可放行或到報告重新驗收）。
+      if (lastVerify.status === "done" && lastVerify.outcome === "failed") {
+        return (
+          <span>
+            <span className="ac-bad-text">⚠ {t.ac_verify_incomplete}</span> · {report}{" "}
+            {lastVerify.error_message && <span className="ac-attention-msg">{lastVerify.error_message.slice(0, 60)} </span>}
+            <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" onClick={() => onAcceptVerify?.(lastVerify.id)}>
+              {t.ac_verify_accept}
+            </button>
+          </span>
+        );
+      }
       if (lastVerify.verdict === "pass") {
         return (
           <span>
