@@ -43,8 +43,21 @@ export function SavedServers({ status }: { status: IntakeRemoteStatus }) {
 
   return (
     <section className="intake__card intake__conn" data-testid="saved-servers">
-      <h3 className="intake__card-title">{t.intake_conn_saved_title}</h3>
+      <div className="intake__card-head">
+        <h3 className="intake__card-title">{t.intake_conn_saved_title}</h3>
+        {status.connected && (
+          <button className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" aria-expanded={adding} onClick={() => setAdding((v) => !v)}>
+            {adding ? t.intake_conn_add_cancel : t.intake_conn_add}
+          </button>
+        )}
+      </div>
       <p className="intake__meta intake__hint">{t.intake_conn_saved_hint}</p>
+      {status.connected && adding && (
+        <div className="intake__saved-add">
+          <p className="intake__meta intake__hint">{t.intake_conn_add_hint}</p>
+          <ConnectForm onConnected={() => setAdding(false)} />
+        </div>
+      )}
       <ul className="intake__saved-list">
         {list.map((c) => {
           const label = `${c.name} · ${c.addr}`;
@@ -74,19 +87,6 @@ export function SavedServers({ status }: { status: IntakeRemoteStatus }) {
         })}
       </ul>
       {error && <div className="intake__error" role="alert">{error}</div>}
-      {status.connected && !adding && (
-        <div className="intake__actions">
-          <button className="aiterm-btn aiterm-btn--secondary" onClick={() => setAdding(true)}>
-            {t.intake_conn_add}
-          </button>
-        </div>
-      )}
-      {status.connected && adding && (
-        <>
-          <p className="intake__meta intake__hint">{t.intake_conn_add_hint}</p>
-          <ConnectForm onConnected={() => setAdding(false)} />
-        </>
-      )}
     </section>
   );
 }

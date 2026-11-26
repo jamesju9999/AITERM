@@ -84,6 +84,9 @@ describe("SavedServers（已記錄的 server）", () => {
     fireEvent.click(await screen.findByRole("button", { name: t.intake_conn_add }));
     expect(screen.getByLabelText(t.intake_conn_addr)).toBeTruthy();
     expect(screen.getByLabelText(t.intake_conn_code)).toBeTruthy();
+    // 按鈕在標題列，展開後變成「取消新增」，再按就收起。
+    fireEvent.click(screen.getByRole("button", { name: t.intake_conn_add_cancel }));
+    expect(screen.queryByLabelText(t.intake_conn_addr)).toBeNull();
   });
 
   it("本機模式（已中斷但有記錄）可以直接按「連線」回去，且不顯示新增（上面的卡片就是表單）", async () => {
