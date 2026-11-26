@@ -27,7 +27,7 @@ pub mod manual_pause;
 pub mod codex;
 pub mod context;
 pub mod tools_check;
-pub mod sql_guard;
+pub use aiterm_db::sql_guard;
 pub mod db_skill;
 pub mod references;
 pub mod custom_skills;
