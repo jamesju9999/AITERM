@@ -4,6 +4,7 @@ pub mod audit;
 pub mod channels;
 pub mod cli;
 pub mod db;
+pub mod deny;
 pub mod events;
 pub mod imap;
 pub mod mail;
