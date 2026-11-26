@@ -186,7 +186,9 @@ pub async fn run_verify(st: &AppState, settings: &RunnerSettings, work_dir: &Pat
     let dir = card_dir(st, &card.id);
     let evidence = dir.join("evidence");
     let json_path = dir.join("verify.json");
+    // 被打斷後重新驗收：上一次留下的證據與結論不能和這次的混在一起。
     let _ = std::fs::remove_file(&json_path);
+    let _ = std::fs::remove_dir_all(&evidence);
     std::fs::create_dir_all(&evidence).map_err(|e| format!("無法建立驗收資料夾：{e}"))?;
 
     let result = run_in_worktree(st, settings, work_dir, agent, card, &wt, &dir, &evidence, &json_path, &ports).await;
