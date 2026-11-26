@@ -35,9 +35,12 @@ export function TaskColumn({
     >
       <div className="task-column-head">
         <span className="task-column-title">{title}</span>
-        <div className="task-column-head-right">
+        {/* 排序等控制項自成一組：欄位夠寬時跟標題同一列，太窄時整組換到第二列（見 index.css 的 @container）。 */}
+        <div className="task-column-tools">
           {sortControl}
           {sortExtra}
+        </div>
+        <div className="task-column-head-right">
           <span className="task-column-count">{count}</span>
           {headerAction}
         </div>

@@ -450,7 +450,31 @@
    同權重時後者勝出——不加這個屬性的話，拖曳中的卡片會被染回狀態色，
    中性白就失效了。 */
 .task-card-ghost .task-card[data-task-status] { border-color: var(--tb-ghost-border); }
-.task-column-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
+.task-column-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "title tools right";
+  align-items: center;
+  column-gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.task-column-head > .task-column-title { grid-area: title; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-column-tools { grid-area: tools; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.task-column-head-right { grid-area: right; }
+/* 欄位太窄放不下「標題＋排序＋不分組＋計數＋動作」時，控制項整組換到第二列，
+   不再把標題擠成直排。四欄等寬，所以門檻對每一欄一樣，欄頭高度才會一致。 */
+.task-column { container-type: inline-size; container-name: col; }
+@container col (max-width: 380px) {
+  .task-column-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title right" "tools tools";
+    row-gap: 6px;
+  }
+  .task-column-tools { justify-content: space-between; }
+  .task-column-sort { max-width: none; flex: 1 1 auto; }
+}
 /* 欄位頂端的狀態色線——跟卡片左側色條同一套語意色，讓四欄一眼分得出來，
    同時標題文字維持灰色、不跟卡片標題搶注意力。畫在 .task-column-head 的
    border-top 上而不是欄位本身：.task-column 的 border 已經被拖放高亮
