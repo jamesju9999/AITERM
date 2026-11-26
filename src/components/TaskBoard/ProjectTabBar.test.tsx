@@ -29,6 +29,7 @@ const mount = (over: Partial<Parameters<typeof ProjectTabBar>[0]> = {}) => {
     onActivate: vi.fn(),
     onClose: vi.fn(),
     onOpenOther: vi.fn(),
+    onCreate: vi.fn(),
     onBackToList: vi.fn(),
     ...over,
   };
@@ -82,9 +83,30 @@ describe("ProjectTabBar", () => {
     expect(props.onBackToList).toHaveBeenCalled();
   });
 
-  it("開啟其他專案的按鈕", async () => {
+  it("「＋」展開成選單：新增專案、開啟現有專案各走各的，選完選單收起", async () => {
+    const props = mount();
+    expect(screen.queryByRole("menu")).toBeNull();
+    await userEvent.click(screen.getByTestId("project-tab-add"));
+    await userEvent.click(screen.getByTestId("project-tab-menu-open"));
+    expect(props.onOpenOther).toHaveBeenCalledTimes(1);
+    expect(props.onCreate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    await userEvent.click(screen.getByTestId("project-tab-add"));
+    await userEvent.click(screen.getByTestId("project-tab-menu-new"));
+    expect(props.onCreate).toHaveBeenCalledTimes(1);
+    expect(props.onOpenOther).toHaveBeenCalledTimes(1);
+  });
+
+  it("選單開著時按 Esc 或點選單外面就收起，什麼都不做", async () => {
     const props = mount();
     await userEvent.click(screen.getByTestId("project-tab-add"));
-    expect(props.onOpenOther).toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    await userEvent.click(screen.getByTestId("project-tab-add"));
+    await userEvent.click(screen.getByTestId("project-tab-back"));
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(props.onCreate).not.toHaveBeenCalled();
+    expect(props.onOpenOther).not.toHaveBeenCalled();
   });
 });

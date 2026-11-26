@@ -21,6 +21,7 @@ import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { ArchiveDialog } from "./ArchiveDialog";
 import { loadFlatColumns, loadSortModes, saveFlatColumns, saveSortModes, sortByCreated, SORT_MODES, type SortMode } from "./cardSort";
 import { groupByLabel } from "./groupByLabel";
+import { ProjectCreateDialog } from "./ProjectCreateDialog";
 import { TaskCard } from "./TaskCard";
 import { TaskColumn } from "./TaskColumn";
 import { TaskEditorDialog } from "./TaskEditorDialog";
@@ -83,6 +84,7 @@ export function RemoteMapBar({ serverProjectId }: { serverProjectId: string }) {
       fail(e);
     }
   }
+  const [creating, setCreating] = useState(false);
   async function openExisting() {
     setError(null);
     try {
@@ -98,6 +100,7 @@ export function RemoteMapBar({ serverProjectId }: { serverProjectId: string }) {
   const chosen = projects.find((p) => p.id === boardId);
   const summary = saved === true && chosen ? t.board_remote_map_summary.replace("{name}", chosen.name) : t.board_remote_map_summary_none;
   return (
+    <>
     <details
       className="task-board-remote-details"
       open={userOpen ?? saved === false}
@@ -119,6 +122,9 @@ export function RemoteMapBar({ serverProjectId }: { serverProjectId: string }) {
             ))}
           </select>
         )}
+        <button className="tb-btn tb-btn--ghost" data-testid="remote-map-create" onClick={() => setCreating(true)}>
+          + {t.board_remote_map_create}
+        </button>
         <button className="tb-btn tb-btn--ghost" onClick={() => void openExisting()}>
           {t.board_remote_map_open}
         </button>
@@ -128,6 +134,17 @@ export function RemoteMapBar({ serverProjectId }: { serverProjectId: string }) {
         <span className="task-board-remote-hint">{t.board_remote_map_hint}</span>
       </div>
     </details>
+    {creating && (
+        <ProjectCreateDialog
+          onClose={() => setCreating(false)}
+          onCreated={(id) => {
+            setCreating(false);
+            // 新建的本機專案直接設成這個 server 專案的對應，使用者不用再去下拉選。
+            void loadProjects().then(setProjects).then(() => choose(id));
+          }}
+        />
+      )}
+    </>
   );
 }
 

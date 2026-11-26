@@ -11,7 +11,12 @@ vi.mock("../../ipc/intake", () => ({
   intakeBoardRelease: vi.fn(),
 }));
 const openProject = vi.fn();
-vi.mock("../../ipc/projects", () => ({ listProjects: (...a: unknown[]) => listProjects(...a), openProject: (...a: unknown[]) => openProject(...a) }));
+const createProject = vi.fn();
+vi.mock("../../ipc/projects", () => ({
+  listProjects: (...a: unknown[]) => listProjects(...a),
+  openProject: (...a: unknown[]) => openProject(...a),
+  createProject: (...a: unknown[]) => createProject(...a),
+}));
 vi.mock("../../ipc/tasks", () => ({}));
 vi.mock("../../ipc/agents", () => ({ listAgents: vi.fn() }));
 const openDialog = vi.fn();
@@ -62,6 +67,22 @@ describe("RemoteMapBar（在我的電腦處理）", () => {
     expect(detailsOf().open).toBe(false);
     expect((screen.getByLabelText(PROJECT) as HTMLSelectElement).value).toBe("local-1");
     expect(screen.queryByText(/還沒設定/)).toBeNull();
+  });
+
+  it("在這裡直接新增本機專案：建好就自動設成這個 server 專案的對應", async () => {
+    createProject.mockResolvedValue("local-new");
+    mount();
+    await screen.findByText(/還沒設定/);
+    // 建好之後清單多了新專案。
+    listProjects.mockResolvedValue([proj("local-1", "本機專案"), proj("local-new", "新的")]);
+    fireEvent.click(screen.getByTestId("remote-map-create"));
+    fireEvent.change(screen.getByTestId("project-create-name"), { target: { value: "新的" } });
+    fireEvent.change(screen.getByTestId("project-create-parent"), { target: { value: "/work" } });
+    fireEvent.click(screen.getByTestId("project-create-submit"));
+    await waitFor(() => expect(createProject).toHaveBeenCalledWith({ parentDir: "/work", name: "新的", description: "" }));
+    await waitFor(() => expect(intakeBoardMapSet).toHaveBeenCalledWith("srv-1", "local-new"));
+    expect(await screen.findByText(/資料夾：\/p\/新的/)).toBeTruthy();
+    expect(screen.queryByTestId("project-create-submit")).toBeNull();
   });
 
   it("本機拒絕時（例如資料夾不見了）把原因顯示出來，且不會當成已儲存", async () => {

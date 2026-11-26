@@ -5,6 +5,7 @@ import { listProjects, openProject, type ProjectInfo } from "../../ipc/projects"
 import { onTasksUpdated } from "../../ipc/tasks";
 import { unlistenOnCleanup } from "../../lib/eventSubscription";
 import { ProjectBoard } from "./ProjectBoard";
+import { ProjectCreateDialog } from "./ProjectCreateDialog";
 import { ProjectList } from "./ProjectList";
 import { ProjectTabBar } from "./ProjectTabBar";
 import { ReportDialog } from "./ReportDialog";
@@ -36,6 +37,7 @@ export function TaskBoardView() {
     () => localStorage.getItem(ACTIVE_KEY),
   );
   const [showList, setShowList] = useState(false);
+  const [creating, setCreating] = useState(false);
   /** 開著報告視窗的專案 id；null 代表沒開。 */
   const [reportFor, setReportFor] = useState<string | null>(null);
 
@@ -133,6 +135,7 @@ export function TaskBoardView() {
         onActivate={activate}
         onClose={closeTab}
         onOpenOther={() => void openOther()}
+        onCreate={() => setCreating(true)}
         onBackToList={() => setShowList(true)}
       />
       {/* key 讓切換專案時整個 ProjectBoard 重新掛載，狀態不會殘留。
@@ -145,6 +148,16 @@ export function TaskBoardView() {
           projectId={reportFor}
           projectName={projects.find((p) => p.id === reportFor)?.name ?? ""}
           onClose={() => setReportFor(null)}
+        />
+      )}
+      {creating && (
+        <ProjectCreateDialog
+          onClose={() => setCreating(false)}
+          onCreated={(id) => {
+            setCreating(false);
+            // 同 ProjectList：先等清單載入，新專案的分頁才會顯示。
+            void refresh().then(() => activate(id));
+          }}
         />
       )}
     </div>

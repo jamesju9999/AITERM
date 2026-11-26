@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+
 import { useLocale } from "../../contexts/LocaleContext";
 import type { ProjectInfo } from "../../ipc/projects";
 
@@ -17,6 +19,7 @@ export function ProjectTabBar({
   onActivate,
   onClose,
   onOpenOther,
+  onCreate,
   onBackToList,
 }: {
   projects: ProjectInfo[];
@@ -25,9 +28,29 @@ export function ProjectTabBar({
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onOpenOther: () => void;
+  onCreate: () => void;
   onBackToList: () => void;
 }) {
   const { t } = useLocale();
+  // 「＋」展開成兩項：新增、開啟現有。分頁列是 overflow 容器，選單用 fixed 定位才不會被裁掉。
+  const [menu, setMenu] = useState<{ top: number; right: number } | null>(null);
+  const addRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+  const toggleMenu = () => {
+    if (menu) return setMenu(null);
+    const r = addRef.current?.getBoundingClientRect();
+    setMenu({ top: (r?.bottom ?? 0) + 4, right: window.innerWidth - (r?.right ?? 0) });
+  };
   const open = openIds
     .map((id) => projects.find((p) => p.id === id))
     .filter((p): p is ProjectInfo => p !== undefined);
@@ -83,13 +106,45 @@ export function ProjectTabBar({
       </div>
 
       <button
+        ref={addRef}
         className="project-tabbar-add"
         data-testid="project-tab-add"
-        title={t.proj_tab_open_other}
-        onClick={onOpenOther}
+        title={t.proj_tab_add_menu}
+        aria-haspopup="menu"
+        aria-expanded={menu !== null}
+        onClick={toggleMenu}
       >
         +
       </button>
+      {menu && (
+        <div
+          className="project-tabbar-menu"
+          role="menu"
+          style={{ top: menu.top, right: menu.right }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            role="menuitem"
+            data-testid="project-tab-menu-new"
+            onClick={() => {
+              setMenu(null);
+              onCreate();
+            }}
+          >
+            {t.proj_new}
+          </button>
+          <button
+            role="menuitem"
+            data-testid="project-tab-menu-open"
+            onClick={() => {
+              setMenu(null);
+              onOpenOther();
+            }}
+          >
+            {t.proj_open_existing}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
