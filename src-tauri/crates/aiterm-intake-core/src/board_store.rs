@@ -696,6 +696,13 @@ pub async fn save_verify_report(pool: &SqlitePool, card_id: &str, report_json: &
     Ok(())
 }
 
+/// 管理員放行：把這張驗收卡改成通過（即使它失敗或在等人處理），之後編排就會建合併卡。
+pub async fn force_verify_pass(pool: &SqlitePool, card_id: &str) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE board_cards SET verdict = 'pass', outcome = 'success', error_message = NULL, updated_at = ?, version = version + 1 WHERE id = ? AND card_kind = 'verify' AND status = ?")
+        .bind(now()).bind(card_id).bind(DONE).execute(pool).await?;
+    Ok(r.rows_affected() == 1)
+}
+
 pub async fn set_verify_override(pool: &SqlitePool, card_id: &str, by: &str) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE board_verify SET overridden_by = ? WHERE card_id = ?").bind(by).bind(card_id).execute(pool).await?;
     Ok(())

@@ -101,6 +101,11 @@ pub async fn save_global(pool: &sqlx::SqlitePool, rules: &[Rule]) -> Result<(), 
     aiterm_intake_core::store::set_setting(pool, GLOBAL_KEY, &serde_json::to_string(rules).map_err(|e| e.to_string())?).await.map_err(|e| e.to_string())
 }
 
+/// 還原成預設（刪掉管理員存過的清單）。
+pub async fn reset_global(pool: &sqlx::SqlitePool) -> Result<(), String> {
+    sqlx::query("DELETE FROM intake_settings WHERE key = ?").bind(GLOBAL_KEY).execute(pool).await.map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// 這個專案這次驗收實際生效的規則（全域＋專案覆寫）。
 pub async fn effective_for(pool: &sqlx::SqlitePool, project_id: &str) -> Vec<String> {
     let global = load_global(pool).await;

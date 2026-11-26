@@ -23,6 +23,7 @@ pub mod tls;
 pub mod routes;
 pub mod routes_data;
 pub mod routes_board;
+pub mod routes_verify;
 pub mod server;
 #[doc(hidden)]
 pub mod testkit;

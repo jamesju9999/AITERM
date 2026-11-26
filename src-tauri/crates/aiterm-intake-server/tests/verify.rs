@@ -359,6 +359,56 @@ async fn failures_without_a_known_module_stop_for_a_human_and_open_no_fix_card()
     assert_eq!(v.verdict.as_deref(), Some("attention"), "找不到模組：停住等管理員");
     assert!(r.kind("vfix").await.is_empty() && r.kind("merge").await.is_empty());
     assert_eq!(r.verify_cards().await.len(), 1, "不會一直重建驗收卡");
+    // 管理員放行：視為通過，這時才有合併卡。
+    r.admin.request(Method::POST, &format!("/v1/board/cards/{}/verify/override", v.id), None).await.unwrap();
+    r.pump("放行後合併待核准的卡出現", |c| c.iter().any(|x| x.card_kind == "merge")).await;
+    let merge = r.kind("merge").await.remove(0);
+    assert!(merge.body.contains("驗收由管理員「小華」放行"), "{}", merge.body);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retried_verification_runs_again_and_a_pass_then_opens_the_merge_card() {
+    let fake = Fake::new(&["pass"], "0");
+    let (r, _v) = rig_v(&fake).await;
+    let m = r.module("計時器", "x").await;
+    // 第一次驗收者忘了寫 verify.json → 失敗；管理員重新驗收，第二次寫好了。
+    r.pump_verify(1).await;
+    let first = r.verify_cards().await.remove(0);
+    assert_eq!(first.outcome.as_deref(), Some("failed"));
+    r.settle().await;
+    assert!(r.kind("merge").await.is_empty());
+    fake.verify_json(2, &pass_json(&m.id));
+    r.admin.request(Method::POST, &format!("/v1/board/cards/{}/verify/retry", first.id), None).await.unwrap();
+    r.pump("重新驗收通過後合併待核准的卡出現", |c| c.iter().any(|x| x.card_kind == "merge")).await;
+    let vs = r.verify_cards().await;
+    assert_eq!(vs.len(), 2);
+    assert_eq!((vs[1].outcome.as_deref(), vs[1].verdict.as_deref()), (Some("success"), Some("pass")));
+}
+
+/// server 被強制結束時，驗收啟動的伺服器還佔著埠：重啟時依記錄的埠收掉，別的行程不動。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_cleanup_stops_leftover_verification_servers_on_the_recorded_ports_only() {
+    let fake = Fake::new(&["pass"], "0");
+    let r = rig(&fake).await;
+    let listen = |port: u16| {
+        Command::new("python3")
+            .args(["-c", &format!("import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('127.0.0.1',{port}));s.listen(1);time.sleep(60)")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let ports = aiterm_intake_server::verify_env::pick_free_ports(2);
+    let (mut recorded, mut other) = (listen(ports[0]), listen(ports[1]));
+    let c = bs::create_workflow_card(r.pool(), bs::NewWorkflowCard { project_id: &r.pid, title: "驗收", body: "", kind: "verify", agent_id: None, module_id: None, review_of: None, status: "running", depends_on: None, from_spec: None }).await.unwrap();
+    bs::set_verify_meta(r.pool(), &c.id, "s#0", &[ports[0]]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    aiterm_intake_server::verifier::cleanup_stale(r.srv.state()).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(recorded.try_wait().unwrap().is_some(), "記錄過的埠上的行程被結束");
+    assert!(other.try_wait().unwrap().is_none(), "沒記錄的埠上的行程不動");
+    other.kill().ok();
+    other.wait().ok();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
