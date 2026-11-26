@@ -110,6 +110,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiterm-db"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "aiterm-elevated-host"
 version = "0.1.0"
 dependencies = [
@@ -370,6 +382,7 @@ dependencies = [
  "aes-gcm",
  "aiterm-ai-oauth",
  "aiterm-core",
+ "aiterm-db",
  "aiterm-intake-client",
  "aiterm-intake-core",
  "aiterm-intake-server",

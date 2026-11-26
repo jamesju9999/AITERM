@@ -1,10 +1,8 @@
-pub mod adapter;
+// 這四個適配器搬到共用的 aiterm-db（server 也用）；這裡 re-export，原本的路徑不變。
+pub use aiterm_db::{adapter, mysql, postgres, sqlite};
 pub mod manager;
 pub mod design;
 pub mod loop_sessions;
-pub mod postgres;
-pub mod mysql;
-pub mod sqlite;
 pub mod mssql;
 pub mod db2;
 pub mod db2_sidecar;

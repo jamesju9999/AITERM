@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/aiterm-ai-oauth", "crates/aiterm-core", "crates/aiterm-host", "crates/aiterm-elevated-host", "crates/aiterm-intake-core", "crates/aiterm-intake-server", "crates/aiterm-intake-client"]
+members = [".", "crates/aiterm-ai-oauth", "crates/aiterm-core", "crates/aiterm-host", "crates/aiterm-elevated-host", "crates/aiterm-intake-core", "crates/aiterm-intake-server", "crates/aiterm-intake-client", "crates/aiterm-db"]
 
 [package]
 name = "app"
@@ -25,6 +25,7 @@ aiterm-core = { path = "crates/aiterm-core" }
 aiterm-intake-core = { path = "crates/aiterm-intake-core" }
 aiterm-intake-client = { path = "crates/aiterm-intake-client" }
 aiterm-ai-oauth = { path = "crates/aiterm-ai-oauth" }
+aiterm-db = { path = "crates/aiterm-db" }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 ignore = "0.4"
 serde = { version = "1.0", features = ["derive"] }
