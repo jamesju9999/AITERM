@@ -18,7 +18,11 @@
   padding: 24px 16px;
   width: 200px;
   box-sizing: border-box;
+  /* 視窗矮時（或項目變多）側邊欄可以上下捲動，不會把底部的項目切掉 */
+  overflow-y: auto;
 }
+
+.settings-sidebar > * { flex-shrink: 0; }
 
 .settings-sidebar-title {
   color: var(--text-muted, #666);
