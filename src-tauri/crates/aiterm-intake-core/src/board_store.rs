@@ -221,6 +221,10 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "CREATE INDEX IF NOT EXISTS board_schedules_project ON board_schedules(project_id)",
         "CREATE TABLE IF NOT EXISTS board_card_wait (card_id TEXT PRIMARY KEY NOT NULL, until INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 1, reason TEXT NOT NULL DEFAULT '')",
         // 卡片處理到一半被打斷（server 重啟、額度用完）後要接著做：記 Claude Code 的對話 id 與起始版本。
+        // 驗收卡的附屬資料：驗收簽章、這次用的埠、解析後的報告、被禁止清單擋下的命令、管理員放行者。
+        "CREATE TABLE IF NOT EXISTS board_verify (card_id TEXT PRIMARY KEY NOT NULL, signature TEXT NOT NULL, ports TEXT NOT NULL DEFAULT '[]', report TEXT, denied TEXT NOT NULL DEFAULT '[]', manual_count INTEGER NOT NULL DEFAULT 0, overridden_by TEXT, created_at INTEGER NOT NULL)",
+        // 專案層的驗收禁止清單覆寫：移除某條全域預設，或新增專案專屬的規則。
+        "CREATE TABLE IF NOT EXISTS board_verify_deny (project_id TEXT NOT NULL, rule TEXT NOT NULL, kind TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (project_id, rule))",
         "CREATE TABLE IF NOT EXISTS board_card_session (card_id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL, start_sha TEXT)",
         "CREATE TABLE IF NOT EXISTS board_card_verification (card_id TEXT PRIMARY KEY NOT NULL, report TEXT NOT NULL, passed INTEGER NOT NULL, created_at INTEGER NOT NULL)",
         "CREATE TABLE IF NOT EXISTS board_schedule_runs (schedule_id TEXT NOT NULL, fired_at INTEGER NOT NULL, card_id TEXT, result TEXT NOT NULL)",
@@ -660,6 +664,85 @@ pub async fn clear_card_wait(pool: &SqlitePool, card_id: &str) -> Result<(), sql
     Ok(())
 }
 
+// ---- 驗收 ----
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BoardVerify {
+    pub card_id: String,
+    pub signature: String,
+    pub ports: Vec<u16>,
+    /// 解析後的 verify.json（JSON 字串）；還沒跑完是 `None`。
+    pub report: Option<String>,
+    /// 這次被禁止清單擋下的命令。
+    pub denied: Vec<String>,
+    pub manual_count: i64,
+    pub overridden_by: Option<String>,
+}
+
+pub async fn set_verify_meta(pool: &SqlitePool, card_id: &str, signature: &str, ports: &[u16]) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO board_verify (card_id, signature, ports, created_at) VALUES (?,?,?,?) ON CONFLICT(card_id) DO UPDATE SET signature = excluded.signature, ports = excluded.ports")
+        .bind(card_id).bind(signature).bind(serde_json::to_string(ports).unwrap_or_default()).bind(now()).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn save_verify_report(pool: &SqlitePool, card_id: &str, report_json: &str, denied: &[String], manual_count: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE board_verify SET report = ?, denied = ?, manual_count = ? WHERE card_id = ?")
+        .bind(report_json).bind(serde_json::to_string(denied).unwrap_or_default()).bind(manual_count).bind(card_id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn set_verify_override(pool: &SqlitePool, card_id: &str, by: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE board_verify SET overridden_by = ? WHERE card_id = ?").bind(by).bind(card_id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn get_verify(pool: &SqlitePool, card_id: &str) -> Result<Option<BoardVerify>, sqlx::Error> {
+    let row: Option<(String, String, String, Option<String>, String, i64, Option<String>)> =
+        sqlx::query_as("SELECT card_id, signature, ports, report, denied, manual_count, overridden_by FROM board_verify WHERE card_id = ?").bind(card_id).fetch_optional(pool).await?;
+    Ok(row.map(|(card_id, signature, ports, report, denied, manual_count, overridden_by)| BoardVerify {
+        card_id,
+        signature,
+        report,
+        manual_count,
+        overridden_by,
+        ports: serde_json::from_str(&ports).unwrap_or_default(),
+        denied: serde_json::from_str(&denied).unwrap_or_default(),
+    }))
+}
+
+/// 所有驗收卡留下的埠（server 啟動時補清上一個行程留下的佔埠行程）。
+pub async fn all_verify_ports(pool: &SqlitePool) -> Result<Vec<u16>, sqlx::Error> {
+    let rows: Vec<String> = sqlx::query_scalar("SELECT ports FROM board_verify").fetch_all(pool).await?;
+    let mut out: Vec<u16> = rows.iter().flat_map(|r| serde_json::from_str::<Vec<u16>>(r).unwrap_or_default()).collect();
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DenyOverride {
+    pub rule: String,
+    /// `add`｜`remove`
+    pub kind: String,
+    pub enabled: bool,
+}
+
+pub async fn put_deny_override(pool: &SqlitePool, project_id: &str, rule: &str, kind: &str, enabled: bool) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO board_verify_deny (project_id, rule, kind, enabled) VALUES (?,?,?,?) ON CONFLICT(project_id, rule) DO UPDATE SET kind = excluded.kind, enabled = excluded.enabled")
+        .bind(project_id).bind(rule).bind(kind).bind(enabled).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn delete_deny_override(pool: &SqlitePool, project_id: &str, rule: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM board_verify_deny WHERE project_id = ? AND rule = ?").bind(project_id).bind(rule).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn list_deny_overrides(pool: &SqlitePool, project_id: &str) -> Result<Vec<DenyOverride>, sqlx::Error> {
+    let rows: Vec<(String, String, bool)> = sqlx::query_as("SELECT rule, kind, enabled FROM board_verify_deny WHERE project_id = ? ORDER BY rule").bind(project_id).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|(rule, kind, enabled)| DenyOverride { rule, kind, enabled }).collect())
+}
+
 // ---- 中途接續：處理到一半的對話 ----
 
 /// 一張卡上次處理留下的 Claude Code 對話（接續用）。
@@ -1061,6 +1144,36 @@ mod tests {
         assert_eq!(clear_session(&p, &c.id).await.unwrap().as_deref(), Some("sid-2"));
         assert_eq!(get_session(&p, &c.id).await.unwrap(), None);
         assert_eq!(clear_session(&p, &c.id).await.unwrap(), None, "沒有可清的不報錯");
+    }
+
+    #[tokio::test]
+    async fn verify_rows_round_trip_and_unknown_cards_have_none() {
+        let p = pool().await;
+        let c = card(&p, "驗收").await;
+        set_verify_meta(&p, &c.id, "sig-1", &[4001, 4002, 4003]).await.unwrap();
+        let v = get_verify(&p, &c.id).await.unwrap().unwrap();
+        assert_eq!((v.signature.as_str(), v.ports.clone(), v.report.is_none()), ("sig-1", vec![4001, 4002, 4003], true));
+        save_verify_report(&p, &c.id, r#"{"verdict":"pass","items":[]}"#, &["git push".to_string()], 2).await.unwrap();
+        let v = get_verify(&p, &c.id).await.unwrap().unwrap();
+        assert_eq!((v.manual_count, v.denied.clone(), v.report.is_some()), (2, vec!["git push".to_string()], true));
+        set_verify_override(&p, &c.id, "小華").await.unwrap();
+        assert_eq!(get_verify(&p, &c.id).await.unwrap().unwrap().overridden_by.as_deref(), Some("小華"));
+        assert!(get_verify(&p, "不存在").await.unwrap().is_none());
+        assert_eq!(all_verify_ports(&p).await.unwrap(), vec![4001, 4002, 4003]);
+    }
+
+    #[tokio::test]
+    async fn project_deny_overrides_keep_add_and_remove_separate_and_per_project() {
+        let p = pool().await;
+        put_deny_override(&p, "P1", "Bash(docker push:*)", "remove", true).await.unwrap();
+        put_deny_override(&p, "P1", "Bash(make deploy:*)", "add", true).await.unwrap();
+        put_deny_override(&p, "P2", "Bash(foo:*)", "add", true).await.unwrap();
+        let p1 = list_deny_overrides(&p, "P1").await.unwrap();
+        assert_eq!(p1.len(), 2);
+        assert!(p1.iter().any(|o| o.rule == "Bash(docker push:*)" && o.kind == "remove"));
+        assert_eq!(list_deny_overrides(&p, "P2").await.unwrap().len(), 1);
+        delete_deny_override(&p, "P1", "Bash(make deploy:*)").await.unwrap();
+        assert_eq!(list_deny_overrides(&p, "P1").await.unwrap().len(), 1);
     }
 
     #[tokio::test]
