@@ -237,6 +237,8 @@ export const INTAKE_REMOTE_EVENT = "intake://remote";
 export type IntakeRemoteRole = "member" | "admin";
 
 export interface IntakeRemoteStatus {
+  /** 現在連著的是已記錄清單的哪一筆；本機模式為空字串（後端一定會送，型別選填只是讓手寫的測試狀態不必都補）。 */
+  id?: string;
   /** 已連到 server（本機的收訊與派送因此停止）。 */
   connected: boolean;
   /** WebSocket 目前連得上；false 代表離線，清單是最後一次的內容。 */
@@ -251,7 +253,23 @@ export interface IntakeRemoteStatus {
 export const intakeRemoteStatus = () => invoke<IntakeRemoteStatus>("intake_remote_status");
 /** 用邀請碼配對並連線。 */
 export const intakeRemotePair = (addr: string, code: string) => invoke<IntakeRemoteStatus>("intake_remote_pair", { addr, code });
+/** 中斷連線並切回本機；記錄與登入資訊保留，之後可以一鍵再連。 */
 export const intakeRemoteDisconnect = () => invoke<void>("intake_remote_disconnect");
+
+/** 已記錄的一組 server 連線（沒有 token 與指紋）。 */
+export interface IntakeRemoteConnection {
+  id: string;
+  addr: string;
+  name: string;
+  role: IntakeRemoteRole;
+  /** 現在連著的是不是這一筆。 */
+  active: boolean;
+}
+export const intakeRemoteConnections = () => invoke<IntakeRemoteConnection[]>("intake_remote_connections");
+/** 切換到已記錄的另一組；有領來的工作在處理時後端會拒絕。 */
+export const intakeRemoteSwitch = (id: string) => invoke<IntakeRemoteStatus>("intake_remote_switch", { id });
+/** 從記錄刪掉一組（連同它的登入資訊）。 */
+export const intakeRemoteForget = (id: string) => invoke<void>("intake_remote_forget", { id });
 export function onIntakeRemote(cb: (s: IntakeRemoteStatus) => void): Promise<UnlistenFn> {
   return listen<IntakeRemoteStatus>(INTAKE_REMOTE_EVENT, (e) => cb(e.payload));
 }

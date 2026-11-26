@@ -4,7 +4,7 @@ import { render, screen } from "@testing-library/react";
 const remote = vi.hoisted(() => ({
   s: { connected: false, online: false, addr: "", name: "", role: null as null | "admin", error: null as null | string },
 }));
-vi.mock("../../hooks/useIntakeRemote", () => ({ useIntakeRemote: () => remote.s }));
+vi.mock("../../hooks/useIntakeRemote", () => ({ useIntakeRemote: () => remote.s, useIntakeConnections: () => [] }));
 vi.mock("../../ipc/intake", () => ({ intakeRemotePair: vi.fn(), intakeRemoteDisconnect: vi.fn() }));
 
 import { LocaleProvider } from "../../contexts/LocaleContext";

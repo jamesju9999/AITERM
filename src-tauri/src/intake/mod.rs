@@ -9,6 +9,7 @@ pub mod board_remote;
 pub mod board_work;
 pub use aiterm_intake_core::pipeline;
 pub mod commands;
+pub mod conn_store;
 pub use aiterm_intake_core::config;
 pub use aiterm_intake_core::dispatcher;
 pub use aiterm_intake_core::filter;

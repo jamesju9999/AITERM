@@ -1,6 +1,7 @@
 //! Client 模式：問題收集連到 aiterm-intake-server，看同一份清單與狀態。
 //! 連線中時本機的收訊（LINE、網頁表單、信箱、Telegram）與派送都停止，避免同一封信被本機和 server 各收一次。
 use super::commands::{ProjectSummary, ProjectsView, RefreshResult};
+use super::conn_store;
 use super::store::{self, AttachmentRow, IntakeItem};
 use super::CHANGED_EVENT;
 use aiterm_intake_client::api::{decide_pin, Api};
@@ -16,8 +17,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-pub const CONNECTION_KEY: &str = "remote_connection";
-pub const TOKEN_SECRET_ID: &str = "intake_remote_token";
 pub const REMOTE_EVENT: &str = "intake://remote";
 
 /// 存起來的連線資訊（token 不在這裡，在系統鑰匙圈）。
@@ -33,6 +32,8 @@ pub struct Saved {
 /// 給畫面顯示的連線狀態。
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 pub struct RemoteStatus {
+    /// 現在連著的是已記錄清單中的哪一筆（本機模式為空）。
+    pub id: String,
     pub connected: bool,
     pub online: bool,
     pub addr: String,
@@ -77,6 +78,8 @@ pub struct RemoteState {
     board_versions: Mutex<std::collections::HashMap<String, i64>>,
     /// 我領取、正在本機處理的看板卡片（server 卡片 id → 本機的影子卡片）。
     board_claims: Mutex<std::collections::HashMap<String, BoardClaim>>,
+    /// 目前連線是清單中的哪一筆；只由連線流程設定（`install` 不碰，測試直接 install 也不受影響）。
+    active_id: Mutex<Option<String>>,
 }
 
 /// 領取的看板卡片在本機的對應：影子卡片放在哪個本機看板專案、id 是什麼。
@@ -133,9 +136,18 @@ impl RemoteState {
     pub fn status(&self) -> RemoteStatus {
         let g = self.inner.lock();
         match &g.saved {
-            Some(s) => RemoteStatus { connected: true, online: g.online, addr: s.addr.clone(), name: s.name.clone(), role: Some(s.role), error: g.error.clone() },
+            Some(s) => RemoteStatus { id: self.active_id.lock().clone().unwrap_or_default(), connected: true, online: g.online, addr: s.addr.clone(), name: s.name.clone(), role: Some(s.role), error: g.error.clone() },
             None => RemoteStatus::default(),
         }
+    }
+
+    fn set_active_id(&self, id: Option<String>) {
+        *self.active_id.lock() = id;
+    }
+
+    /// 有從 server 領來、還在本機處理的題目或看板卡片：這時候不能換 server，換了結果就回不去原來那台。
+    pub fn has_work_in_progress(&self) -> bool {
+        !self.claims.lock().is_empty() || !self.board_claims.lock().is_empty()
     }
 
     pub fn attach_root(&self) -> std::path::PathBuf {
@@ -231,25 +243,6 @@ fn status_changed<R: Runtime>(app: &AppHandle<R>) {
 
 // ───────── 連線、中斷、還原 ─────────
 
-async fn save<R: Runtime>(app: &AppHandle<R>, saved: &Saved, token: &str) -> Result<(), String> {
-    let db = app.try_state::<super::IntakeDb>().ok_or("intake 未就緒")?;
-    let secrets = app.try_state::<Arc<crate::secret::SecretStore>>().ok_or("密鑰庫尚未就緒")?;
-    secrets.set(TOKEN_SECRET_ID, token).map_err(|e| e.to_string())?;
-    store::set_setting(&db.pool, CONNECTION_KEY, &serde_json::to_string(saved).map_err(|e| e.to_string())?).await.map_err(|e| e.to_string())
-}
-
-/// 用邀請碼配對並連線。成功後本機收訊停止。
-pub async fn connect<R: Runtime>(app: &AppHandle<R>, addr: &str, code: &str) -> Result<RemoteStatus, String> {
-    let paired = pair::pair(addr, code).await.map_err(|e| e.to_string())?;
-    let fingerprint = decide_pin(addr, &paired.response.fingerprint).await;
-    let api = Api::new(addr, &paired.token, fingerprint.clone()).map_err(|e| e.to_string())?;
-    api.check_version().await.map_err(|e| e.to_string())?;
-    let saved = Saved { addr: addr.trim().to_string(), fingerprint, name: paired.response.me.name.clone(), role: paired.response.me.role };
-    save(app, &saved, &paired.token).await?;
-    install(app, saved, api).await;
-    Ok(app.state::<Arc<RemoteState>>().status())
-}
-
 pub(crate) async fn install<R: Runtime>(app: &AppHandle<R>, saved: Saved, api: Api) {
     let Some(rs) = app.try_state::<Arc<RemoteState>>().map(|s| s.inner().clone()) else { return };
     {
@@ -285,7 +278,59 @@ fn stop_local<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// 中斷連線並切回本機：刪除 token（server 端的成員紀錄不動，撤銷是管理員的事）。
+const BUSY: &str = "正在處理從 server 領來的工作，請先完成或放回 server，再切換連線。";
+
+fn guard_idle<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    match app.try_state::<Arc<RemoteState>>() {
+        Some(rs) if rs.has_work_in_progress() => Err(BUSY.into()),
+        _ => Ok(()),
+    }
+}
+
+fn parts<R: Runtime>(app: &AppHandle<R>) -> Result<(tauri::State<'_, super::IntakeDb>, tauri::State<'_, Arc<crate::secret::SecretStore>>), String> {
+    let db = app.try_state::<super::IntakeDb>().ok_or("intake 未就緒")?;
+    let secrets = app.try_state::<Arc<crate::secret::SecretStore>>().ok_or("密鑰庫尚未就緒")?;
+    Ok((db, secrets))
+}
+
+/// 用邀請碼配對並連線（新增一筆記錄，或更新同位址的那一筆）。成功後本機收訊停止。
+/// 已經連著別台時會換過去；有領來的工作在處理就擋下。
+pub async fn connect<R: Runtime>(app: &AppHandle<R>, addr: &str, code: &str) -> Result<RemoteStatus, String> {
+    guard_idle(app)?;
+    let paired = pair::pair(addr, code).await.map_err(|e| e.to_string())?;
+    let fingerprint = decide_pin(addr, &paired.response.fingerprint).await;
+    let api = Api::new(addr, &paired.token, fingerprint.clone()).map_err(|e| e.to_string())?;
+    api.check_version().await.map_err(|e| e.to_string())?;
+    let saved = Saved { addr: addr.trim().to_string(), fingerprint, name: paired.response.me.name.clone(), role: paired.response.me.role };
+    let (db, secrets) = parts(app)?;
+    let id = conn_store::upsert(&db.pool, &saved).await?;
+    secrets.set(&conn_store::token_secret_id(&id), &paired.token).map_err(|e| e.to_string())?;
+    conn_store::set_active(&db.pool, Some(&id)).await?;
+    activate(app, id, saved, api).await;
+    Ok(app.state::<Arc<RemoteState>>().status())
+}
+
+async fn activate<R: Runtime>(app: &AppHandle<R>, id: String, saved: Saved, api: Api) {
+    install(app, saved, api).await;
+    if let Some(rs) = app.try_state::<Arc<RemoteState>>() {
+        rs.set_active_id(Some(id));
+    }
+    status_changed(app);
+}
+
+/// 切換到已記錄的另一組 server（不需要再輸入邀請碼）。換之前有領來的工作就擋下。
+pub async fn switch<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<RemoteStatus, String> {
+    guard_idle(app)?;
+    let (db, secrets) = parts(app)?;
+    let entry = conn_store::get(&db.pool, id).await.ok_or("找不到這筆 server 記錄")?;
+    let token = secrets.get(&conn_store::token_secret_id(id)).map_err(|e| e.to_string())?.ok_or("這筆記錄的登入資訊不見了，請刪除後重新用邀請碼連線")?;
+    let api = Api::new(&entry.saved.addr, &token, entry.saved.fingerprint.clone()).map_err(|e| e.to_string())?;
+    conn_store::set_active(&db.pool, Some(id)).await?;
+    activate(app, entry.id, entry.saved, api).await;
+    Ok(app.state::<Arc<RemoteState>>().status())
+}
+
+/// 中斷連線並切回本機。**記錄與 token 都保留**，之後可以一鍵再連；要刪掉用 `forget`。
 pub async fn disconnect<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if let Some(rs) = app.try_state::<Arc<RemoteState>>() {
         let mut g = rs.inner.lock();
@@ -293,12 +338,11 @@ pub async fn disconnect<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             h.abort();
         }
         *g = Inner::default();
-    }
-    if let Some(secrets) = app.try_state::<Arc<crate::secret::SecretStore>>() {
-        secrets.delete(TOKEN_SECRET_ID).ok();
+        drop(g);
+        rs.set_active_id(None);
     }
     if let Some(db) = app.try_state::<super::IntakeDb>() {
-        sqlx::query("DELETE FROM intake_settings WHERE key = ?").bind(CONNECTION_KEY).execute(&db.pool).await.ok();
+        conn_store::set_active(&db.pool, None).await.ok();
     }
     status_changed(app);
     let _ = app.emit(CHANGED_EVENT, ());
@@ -308,13 +352,45 @@ pub async fn disconnect<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
-/// 啟動時還原上次的連線。
+/// 從記錄裡刪掉一組（連同它的 token）。刪的是目前連線的就先切回本機；server 端的成員紀錄不動，撤銷是管理員的事。
+pub async fn forget<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
+    let (db, secrets) = parts(app)?;
+    let is_active = app.try_state::<Arc<RemoteState>>().is_some_and(|rs| rs.status().id == id);
+    if is_active {
+        guard_idle(app)?;
+        disconnect(app).await?;
+    }
+    secrets.delete(&conn_store::token_secret_id(id)).ok();
+    conn_store::remove(&db.pool, id).await?;
+    status_changed(app);
+    Ok(())
+}
+
+/// 已記錄的 server 清單（畫面用）。
+pub async fn connections<R: Runtime>(app: &AppHandle<R>) -> Vec<conn_store::ConnView> {
+    match app.try_state::<super::IntakeDb>() {
+        Some(db) => conn_store::views(&db.pool).await,
+        None => Vec::new(),
+    }
+}
+
+/// 啟動時還原上次連著的那一組；第一次升級時把舊版單一連線搬進清單。
 pub async fn restore<R: Runtime>(app: &AppHandle<R>) {
     let Some(db) = app.try_state::<super::IntakeDb>() else { return };
-    let Some(saved) = store::get_setting(&db.pool, CONNECTION_KEY).await.ok().flatten().and_then(|s| serde_json::from_str::<Saved>(&s).ok()) else { return };
-    let Some(token) = app.try_state::<Arc<crate::secret::SecretStore>>().and_then(|s| s.get(TOKEN_SECRET_ID).ok().flatten()) else { return };
-    match Api::new(&saved.addr, &token, saved.fingerprint.clone()) {
-        Ok(api) => install(app, saved, api).await,
+    let Some(secrets) = app.try_state::<Arc<crate::secret::SecretStore>>() else { return };
+    if let Some(entry) = conn_store::migrate_legacy(&db.pool).await {
+        // token 搬到這一筆自己的鑰匙圈項目；舊項目搬完才刪，中途失敗不會把使用者鎖在外面。
+        if let Ok(Some(token)) = secrets.get(conn_store::LEGACY_TOKEN_ID) {
+            if secrets.set(&conn_store::token_secret_id(&entry.id), &token).is_ok() {
+                secrets.delete(conn_store::LEGACY_TOKEN_ID).ok();
+            }
+        }
+    }
+    let Some(id) = conn_store::active_id(&db.pool).await else { return };
+    let Some(entry) = conn_store::get(&db.pool, &id).await else { return };
+    let Some(token) = secrets.get(&conn_store::token_secret_id(&id)).ok().flatten() else { return };
+    match Api::new(&entry.saved.addr, &token, entry.saved.fingerprint.clone()) {
+        Ok(api) => activate(app, entry.id, entry.saved, api).await,
         Err(e) => log::warn!("intake: 無法還原 server 連線：{e}"),
     }
 }
@@ -739,6 +815,24 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+    }
+
+    #[test]
+    fn switching_is_blocked_while_claimed_work_is_in_progress_and_status_names_the_active_entry() {
+        let rs = RemoteState::default();
+        assert!(!rs.has_work_in_progress());
+        rs.track_claim("item-1", "tab-1");
+        assert!(rs.has_work_in_progress(), "領來的題目在處理");
+        rs.untrack_claim("item-1");
+        rs.track_board_claim("card-1", "proj-1", "task-1");
+        assert!(rs.has_work_in_progress(), "領來的看板卡片在處理");
+        rs.untrack_board_claim("card-1");
+        assert!(!rs.has_work_in_progress());
+
+        assert_eq!(rs.status().id, "", "本機模式沒有目前連線");
+        rs.inner.lock().saved = Some(Saved { addr: "a:1".into(), fingerprint: None, name: "甲".into(), role: Role::Member });
+        rs.set_active_id(Some("entry-7".into()));
+        assert_eq!(rs.status().id, "entry-7");
     }
 
     #[tokio::test]

@@ -589,6 +589,24 @@ pub async fn intake_remote_disconnect(app: AppHandle) -> Result<(), String> {
     super::remote::disconnect(&app).await
 }
 
+/// 已記錄的 server 清單（每組有自己的 token；目前連著的標 active）。
+#[tauri::command]
+pub async fn intake_remote_connections(app: AppHandle) -> Vec<super::conn_store::ConnView> {
+    super::remote::connections(&app).await
+}
+
+/// 切換到已記錄的另一組 server，不用再輸入邀請碼；有領來的工作在處理時會被擋下。
+#[tauri::command]
+pub async fn intake_remote_switch(app: AppHandle, id: String) -> Result<super::remote::RemoteStatus, String> {
+    super::remote::switch(&app, &id).await
+}
+
+/// 從記錄刪掉一組（連同它的 token）。
+#[tauri::command]
+pub async fn intake_remote_forget(app: AppHandle, id: String) -> Result<(), String> {
+    super::remote::forget(&app, &id).await
+}
+
 /// server 目前的寄信帳號（要先連到 server）。
 #[tauri::command]
 pub async fn intake_server_mail_status(rs: State<'_, Arc<RemoteState>>) -> Result<super::remote::ServerMail, String> {

@@ -7,7 +7,8 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-export function ConnectionCard({ status }: { status: IntakeRemoteStatus }) {
+/** 位址＋邀請碼的連線表單。連線成功（新增並連上）後呼叫 `onConnected`。 */
+export function ConnectForm({ onConnected }: { onConnected?: () => void }) {
   const { t } = useLocale();
   const [addr, setAddr] = useState("");
   const [code, setCode] = useState("");
@@ -23,12 +24,39 @@ export function ConnectionCard({ status }: { status: IntakeRemoteStatus }) {
     try {
       await intakeRemotePair(addr.trim(), code.trim());
       setCode("");
+      onConnected?.();
     } catch (e) {
       setError(errText(e));
     } finally {
       setBusy(false);
     }
   }
+
+  return (
+    <>
+      <label className="intake__field">
+        <span>{t.intake_conn_addr}</span>
+        <input aria-label={t.intake_conn_addr} value={addr} placeholder="192.168.1.20:8443" onChange={(e) => setAddr(e.target.value)} disabled={busy} />
+      </label>
+      {addr.trim() !== "" && !addrOk && <p className="intake__meta intake__warn" role="alert">{t.intake_conn_addr_bad}</p>}
+      <label className="intake__field">
+        <span>{t.intake_conn_code}</span>
+        <input aria-label={t.intake_conn_code} value={code} placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XX" onChange={(e) => setCode(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      {code.trim() !== "" && !codeOk && <p className="intake__meta intake__warn" role="alert">{t.intake_conn_code_bad}</p>}
+      {error && <div className="intake__error" role="alert">{error}</div>}
+      <div className="intake__actions">
+        <button className="aiterm-btn aiterm-btn--primary" disabled={busy || !addrOk || !codeOk} onClick={() => void connect()}>
+          {busy ? t.intake_conn_connecting : t.intake_conn_connect}
+        </button>
+      </div>
+    </>
+  );
+}
+
+export function ConnectionCard({ status }: { status: IntakeRemoteStatus }) {
+  const { t } = useLocale();
+  const [error, setError] = useState<string | null>(null);
 
   async function disconnect() {
     setError(null);
@@ -71,22 +99,7 @@ export function ConnectionCard({ status }: { status: IntakeRemoteStatus }) {
     <section className="intake__card intake__conn">
       <h3 className="intake__card-title">{t.intake_conn_title}</h3>
       <p className="intake__meta intake__hint">{t.intake_conn_intro}</p>
-      <label className="intake__field">
-        <span>{t.intake_conn_addr}</span>
-        <input aria-label={t.intake_conn_addr} value={addr} placeholder="192.168.1.20:8443" onChange={(e) => setAddr(e.target.value)} disabled={busy} />
-      </label>
-      {addr.trim() !== "" && !addrOk && <p className="intake__meta intake__warn" role="alert">{t.intake_conn_addr_bad}</p>}
-      <label className="intake__field">
-        <span>{t.intake_conn_code}</span>
-        <input aria-label={t.intake_conn_code} value={code} placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XX" onChange={(e) => setCode(e.target.value)} disabled={busy} autoComplete="off" />
-      </label>
-      {code.trim() !== "" && !codeOk && <p className="intake__meta intake__warn" role="alert">{t.intake_conn_code_bad}</p>}
-      {error && <div className="intake__error" role="alert">{error}</div>}
-      <div className="intake__actions">
-        <button className="aiterm-btn aiterm-btn--primary" disabled={busy || !addrOk || !codeOk} onClick={() => void connect()}>
-          {busy ? t.intake_conn_connecting : t.intake_conn_connect}
-        </button>
-      </div>
+      <ConnectForm />
     </section>
   );
 }
