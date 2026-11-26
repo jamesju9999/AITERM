@@ -318,12 +318,25 @@ async fn activate<R: Runtime>(app: &AppHandle<R>, id: String, saved: Saved, api:
     status_changed(app);
 }
 
+/// 取這一筆的 token。升級自舊版的那一筆，token 可能還在舊的鑰匙圈項目（搬移被打斷、鑰匙圈當時沒授權）：
+/// 找不到自己的就退回舊項目，並盡力搬過來；搬不成不影響這次使用。
+fn token_for(secrets: &crate::secret::SecretStore, id: &str) -> Result<Option<String>, String> {
+    if let Some(t) = secrets.get(&conn_store::token_secret_id(id)).map_err(|e| e.to_string())? {
+        return Ok(Some(t));
+    }
+    let Some(t) = secrets.get(conn_store::LEGACY_TOKEN_ID).map_err(|e| e.to_string())? else { return Ok(None) };
+    if secrets.set(&conn_store::token_secret_id(id), &t).is_ok() {
+        secrets.delete(conn_store::LEGACY_TOKEN_ID).ok();
+    }
+    Ok(Some(t))
+}
+
 /// 切換到已記錄的另一組 server（不需要再輸入邀請碼）。換之前有領來的工作就擋下。
 pub async fn switch<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<RemoteStatus, String> {
     guard_idle(app)?;
     let (db, secrets) = parts(app)?;
     let entry = conn_store::get(&db.pool, id).await.ok_or("找不到這筆 server 記錄")?;
-    let token = secrets.get(&conn_store::token_secret_id(id)).map_err(|e| e.to_string())?.ok_or("這筆記錄的登入資訊不見了，請刪除後重新用邀請碼連線")?;
+    let token = token_for(&secrets, id)?.ok_or("這筆記錄的登入資訊不見了，請刪除後重新用邀請碼連線")?;
     let api = Api::new(&entry.saved.addr, &token, entry.saved.fingerprint.clone()).map_err(|e| e.to_string())?;
     conn_store::set_active(&db.pool, Some(id)).await?;
     activate(app, entry.id, entry.saved, api).await;
@@ -368,27 +381,25 @@ pub async fn forget<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), Stri
 
 /// 已記錄的 server 清單（畫面用）。
 pub async fn connections<R: Runtime>(app: &AppHandle<R>) -> Vec<conn_store::ConnView> {
-    match app.try_state::<super::IntakeDb>() {
-        Some(db) => conn_store::views(&db.pool).await,
-        None => Vec::new(),
+    let Some(db) = app.try_state::<super::IntakeDb>() else { return Vec::new() };
+    let mut list = conn_store::views(&db.pool).await;
+    // 「目前連線」看實際連線狀態，不看記錄：記錄說連著、但還原失敗（例如鑰匙圈沒授權）時，不能顯示成已連線。
+    let live = app.try_state::<Arc<RemoteState>>().map(|rs| rs.status().id).unwrap_or_default();
+    for c in &mut list {
+        c.active = !live.is_empty() && c.id == live;
     }
+    list
 }
 
 /// 啟動時還原上次連著的那一組；第一次升級時把舊版單一連線搬進清單。
 pub async fn restore<R: Runtime>(app: &AppHandle<R>) {
     let Some(db) = app.try_state::<super::IntakeDb>() else { return };
     let Some(secrets) = app.try_state::<Arc<crate::secret::SecretStore>>() else { return };
-    if let Some(entry) = conn_store::migrate_legacy(&db.pool).await {
-        // token 搬到這一筆自己的鑰匙圈項目；舊項目搬完才刪，中途失敗不會把使用者鎖在外面。
-        if let Ok(Some(token)) = secrets.get(conn_store::LEGACY_TOKEN_ID) {
-            if secrets.set(&conn_store::token_secret_id(&entry.id), &token).is_ok() {
-                secrets.delete(conn_store::LEGACY_TOKEN_ID).ok();
-            }
-        }
-    }
+    conn_store::migrate_legacy(&db.pool).await;
     let Some(id) = conn_store::active_id(&db.pool).await else { return };
     let Some(entry) = conn_store::get(&db.pool, &id).await else { return };
-    let Some(token) = secrets.get(&conn_store::token_secret_id(&id)).ok().flatten() else { return };
+    // 升級自舊版時 token 還在舊項目：`token_for` 會讀到並盡力搬過來，舊項目搬完才刪，不會把使用者鎖在外面。
+    let Some(token) = token_for(&secrets, &id).ok().flatten() else { return };
     match Api::new(&entry.saved.addr, &token, entry.saved.fingerprint.clone()) {
         Ok(api) => activate(app, entry.id, entry.saved, api).await,
         Err(e) => log::warn!("intake: 無法還原 server 連線：{e}"),
