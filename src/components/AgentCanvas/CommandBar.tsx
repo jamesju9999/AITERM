@@ -125,14 +125,20 @@ export function CommandBar({
     }
   };
 
+  // 收到新的「回報問題」就重設表單：在渲染期間依 props 調整 state（比 effect 少一次多餘的渲染）。
+  const [seenReport, setSeenReport] = useState(report);
+  if (report !== seenReport) {
+    setSeenReport(report);
+    if (report) {
+      setRelatedId(report.moduleId);
+      setAssigneeId(null);
+      setPhase({ kind: "idle" });
+      setNotice(null);
+      setError(null);
+    }
+  }
   useEffect(() => {
-    if (!report) return;
-    setRelatedId(report.moduleId);
-    setAssigneeId(null);
-    setPhase({ kind: "idle" });
-    setNotice(null);
-    setError(null);
-    inputRef.current?.focus();
+    if (report) inputRef.current?.focus();
   }, [report]);
 
   const modules = tasks.filter((x) => x.card_kind === "work" && x.status === "done" && x.agent_id && !x.archived_at);
@@ -145,15 +151,15 @@ export function CommandBar({
 
   // 等 Agent 回答：問答卡完成就顯示它寫的答案；失敗就說明原因。
   const asked = phase.kind === "asking" ? tasks.find((x) => x.id === phase.taskId) : undefined;
-  useEffect(() => {
-    if (phase.kind !== "asking" || !asked || asked.status !== "done") return;
+  // phase 一換掉就不再是 "asking"，所以這段只會跑一次（渲染期間調整 state，不用 effect）。
+  if (phase.kind === "asking" && asked && asked.status === "done") {
     if (asked.outcome === "success" && asked.ai_summary?.trim()) {
       setPhase({ kind: "answer", text: asked.ai_summary.trim() });
     } else {
       setError(`${t.ac_cmd_ask_failed}${asked.error_message ? `：${asked.error_message}` : ""}`);
       setPhase({ kind: "idle" });
     }
-  }, [phase, asked, t]);
+  }
   const kindLabel = (k: InputKind) => t[`ac_cmd_kind_${k}` as const];
   const kindTip = (k: InputKind) => t[`ac_cmd_kind_${k}_tip` as const];
 
