@@ -30,8 +30,9 @@ export function ProjectCreateDialog({
     setBusy(true);
     setError(null);
     try {
-      localStorage.setItem(LAST_PARENT_KEY, parent);
-      const id = await createProject({ parentDir: parent, name: name.trim(), description });
+      const dir = parent.trim();
+      localStorage.setItem(LAST_PARENT_KEY, dir);
+      const id = await createProject({ parentDir: dir, name: name.trim(), description });
       onCreated(id);
     } catch (e) {
       setError(String(e));
@@ -40,7 +41,7 @@ export function ProjectCreateDialog({
     }
   };
 
-  const ready = name.trim().length > 0 && parent.length > 0 && !busy;
+  const ready = name.trim().length > 0 && parent.trim().length > 0 && !busy;
 
   // 建立中不關：關掉對話框也停不下已經送出的建立。
   useEffect(() => {
@@ -81,8 +82,9 @@ export function ProjectCreateDialog({
           <div className="task-field-row">
             <input
               className="task-field-input"
-              readOnly
               value={parent}
+              onChange={(e) => setParent(e.target.value)}
+              spellCheck={false}
               data-testid="project-create-parent"
             />
             <button
@@ -96,9 +98,9 @@ export function ProjectCreateDialog({
           </div>
         </label>
 
-        {parent && name.trim() && (
+        {parent.trim() && name.trim() && (
           <div className="task-field-hint">
-            {t.proj_create_preview}：{parent}/{name.trim()}
+            {t.proj_create_preview}：{parent.trim()}/{name.trim()}
           </div>
         )}
         {error && <div className="task-field-hint">{error}</div>}

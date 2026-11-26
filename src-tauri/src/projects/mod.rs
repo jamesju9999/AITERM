@@ -184,6 +184,10 @@ impl ProjectRegistry {
         name: &str,
         description: &str,
     ) -> Result<ProjectHandle, ProjectError> {
+        // 位置欄可以手打：相對路徑會建到程式自己的工作目錄底下，一律擋下。
+        if !parent.is_absolute() {
+            return Err(ProjectError::Io(format!("建立位置必須是完整路徑：{}", parent.display())));
+        }
         let folder_name = naming::safe_folder_name(name);
         let folder = parent.join(&folder_name);
 
@@ -342,6 +346,14 @@ mod registry_tests {
         let rows = crate::tasks::store::list_tasks(&handle.pool).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, id);
+    }
+
+    #[tokio::test]
+    async fn a_relative_parent_is_rejected_and_nothing_is_created() {
+        let reg = ProjectRegistry::new();
+        let err = reg.create(std::path::Path::new("relative/dir"), "nope", "").await.unwrap_err();
+        assert!(matches!(&err, ProjectError::Io(m) if m.contains("完整路徑")), "{err:?}");
+        assert!(!std::path::Path::new("relative/dir/nope").exists(), "不能在工作目錄底下偷偷建出資料夾");
     }
 
     #[tokio::test]

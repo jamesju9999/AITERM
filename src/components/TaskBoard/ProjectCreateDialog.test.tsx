@@ -67,6 +67,19 @@ describe("ProjectCreateDialog", () => {
     expect(onCreated).toHaveBeenCalledWith("new-id");
   });
 
+  it("建立位置可以直接輸入（不必開選資料夾對話框），前後空白會去掉", async () => {
+    mount();
+    await userEvent.type(screen.getByTestId("project-create-name"), "typed");
+    await userEvent.clear(screen.getByTestId("project-create-parent"));
+    await userEvent.type(screen.getByTestId("project-create-parent"), "  /tmp/work  ");
+    await userEvent.click(screen.getByTestId("project-create-submit"));
+    await waitFor(() =>
+      expect(createProject).toHaveBeenCalledWith({ parentDir: "/tmp/work", name: "typed", description: "" }),
+    );
+    expect(openDialog).not.toHaveBeenCalled();
+    expect(localStorage.getItem("aiterm_last_project_parent")).toBe("/tmp/work");
+  });
+
   it("記住上次的建立位置", async () => {
     localStorage.setItem("aiterm_last_project_parent", "/remembered");
     mount();
