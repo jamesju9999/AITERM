@@ -92,6 +92,7 @@ export function SettingsView() {
           分組：一般置頂、關於置底，中間依用途分成三組。企業版分頁在側邊欄是隱藏的
           （分頁、頁面、下方的 render 分支都還在，要恢復只要在這裡加回一項）。
         */}
+        <div className="sidebar-scroll" data-tauri-drag-region>
         {SIDEBAR_ITEMS(t).map((entry, i) =>
           "heading" in entry ? (
             entry.heading
@@ -114,6 +115,7 @@ export function SettingsView() {
           抓的區域都不能拖。
         */}
         <div className="sidebar-spacer" data-tauri-drag-region />
+        </div>
 
         <button className="sidebar-back" onClick={() => navigate("/")}>
           {t.back_to_terminal}

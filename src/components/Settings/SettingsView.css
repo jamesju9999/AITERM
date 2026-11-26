@@ -13,16 +13,24 @@
   border-right: 1px solid var(--border-color, #222);
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 200px;
+  min-width: 216px;
   padding: 24px 16px;
-  width: 200px;
+  width: 216px;
   box-sizing: border-box;
-  /* 視窗矮時（或項目變多）側邊欄可以上下捲動，不會把底部的項目切掉 */
-  overflow-y: auto;
 }
 
-.settings-sidebar > * { flex-shrink: 0; }
+/* 標題與「回到終端機」固定不動，只有中間的項目清單在視窗矮時上下捲動。 */
+.sidebar-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.sidebar-scroll > * { flex-shrink: 0; }
+.settings-sidebar-title, .sidebar-back { flex-shrink: 0; }
 
 .settings-sidebar-title {
   color: var(--text-muted, #666);
@@ -46,10 +54,11 @@
   font-family: inherit;
   font-size: 13px;
   font-weight: 500;
-  padding: 10px 12px;
+  padding: 8px 12px;
   text-align: left;
   width: 100%;
   transition: var(--transition-smooth);
+  white-space: nowrap;
 }
 
 .sidebar-item:hover {
