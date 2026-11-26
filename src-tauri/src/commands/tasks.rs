@@ -1689,6 +1689,65 @@ pub async fn tasks_set_orchestration(project_id: String, enabled: bool, rs: Stat
     crate::intake::board_remote::set_orchestration(&api, pid, enabled).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
 }
 
+/// 這個共用看板專案的驗收設定（有沒有開、畫布上有沒有驗收者）。本機專案沒有這個概念，回 `None`。
+#[tauri::command]
+pub async fn tasks_get_verify(project_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<Option<crate::intake::board_remote::VerifySettings>, String> {
+    let Some(pid) = crate::intake::board_remote::parse(&project_id) else { return Ok(None) };
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::verify_settings(&api, pid).await.map(Some).map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 開關「由 server 執行驗收」（管理員限定，由 server 判斷）。
+#[tauri::command]
+pub async fn tasks_set_verify(project_id: String, enabled: bool, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<(), String> {
+    let pid = crate::intake::board_remote::parse(&project_id).ok_or("只有共用看板專案能由 server 驗收")?;
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::set_verify_enabled(&api, pid, enabled).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 重新驗收一張沒通過的驗收卡（管理員限定）。
+#[tauri::command]
+pub async fn tasks_retry_verification(task_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>, app: AppHandle) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::verify_retry(&api, &task_id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+    emit_updated(&app);
+    Ok(())
+}
+
+/// 驗收者的禁止清單（全域預設；管理員限定）。
+#[tauri::command]
+pub async fn verify_deny_global_get(rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<serde_json::Value, String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::deny_global(&api).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+#[tauri::command]
+pub async fn verify_deny_global_set(rules: serde_json::Value, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<serde_json::Value, String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::set_deny_global(&api, rules).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+#[tauri::command]
+pub async fn verify_deny_global_reset(rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<serde_json::Value, String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::reset_deny_global(&api).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 某個共用看板專案的禁止清單：全域、專案覆寫、實際生效的規則。
+#[tauri::command]
+pub async fn verify_deny_project_get(project_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<serde_json::Value, String> {
+    let pid = crate::intake::board_remote::parse(&project_id).ok_or("只有共用看板專案有驗收禁止清單")?;
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::deny_project(&api, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+#[tauri::command]
+pub async fn verify_deny_project_set(project_id: String, overrides: serde_json::Value, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<serde_json::Value, String> {
+    let pid = crate::intake::board_remote::parse(&project_id).ok_or("只有共用看板專案有驗收禁止清單")?;
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::set_deny_project(&api, pid, overrides).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
 /// 核准 server 編排產生的「合併待核准」卡：把各 Coder 的分支合併進專案資料夾（管理員限定）。
 #[tauri::command]
 pub async fn tasks_approve_merge(card_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<String, String> {

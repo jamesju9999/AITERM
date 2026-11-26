@@ -64,7 +64,12 @@ pub fn to_task(c: &BoardCard, project_dir: &str) -> TaskRow {
         agent_id: c.agent_id.clone(),
         start_sha: c.start_sha.clone(),
         end_sha: c.end_sha.clone(),
-        card_kind: if c.card_kind.is_empty() { "work".into() } else { c.card_kind.clone() },
+        // server 的 `vfix`（驗收退回的修正卡）在畫面上就是一張接在通過的審查後面的修正卡（桌面版驗收退回也是這種 `fix`）。
+        card_kind: match c.card_kind.as_str() {
+            "" => "work".into(),
+            "vfix" => "fix".into(),
+            other => other.to_string(),
+        },
         module_id: c.module_id.clone(),
         review_of: c.review_of.clone(),
         verdict: c.verdict.clone(),
@@ -341,6 +346,90 @@ pub async fn set_orchestration(api: &Api, server_pid: &str, enabled: bool) -> Re
     api.request(Method::PUT, &format!("/v1/board/projects/{}/orchestration", enc(server_pid)), Some(json!({"enabled": enabled}))).await.map(|_| ())
 }
 
+// ---- 驗收者（server 驗收）----
+
+/// 專案的驗收設定：有沒有開、畫布上有沒有驗收者。
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
+pub struct VerifySettings {
+    pub enabled: bool,
+    #[serde(default)]
+    pub has_verifier: bool,
+}
+
+pub async fn verify_settings(api: &Api, server_pid: &str) -> Result<VerifySettings, ClientError> {
+    api.get(&format!("/v1/board/projects/{}/verify", enc(server_pid))).await
+}
+
+/// 開關「由 server 執行驗收」（管理員限定；沒有驗收者或工作資料夾時 server 會拒絕並說明原因）。
+pub async fn set_verify_enabled(api: &Api, server_pid: &str, enabled: bool) -> Result<(), ClientError> {
+    api.request(Method::PUT, &format!("/v1/board/projects/{}/verify", enc(server_pid)), Some(json!({"enabled": enabled}))).await.map(|_| ())
+}
+
+/// 放行沒通過的驗收（管理員限定）。
+pub async fn verify_override(api: &Api, card_id: &str) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/board/cards/{}/verify/override", enc(card_id)), None).await.map(|_| ())
+}
+
+/// 重新驗收（管理員限定）。
+pub async fn verify_retry(api: &Api, card_id: &str) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/board/cards/{}/verify/retry", enc(card_id)), None).await.map(|_| ())
+}
+
+/// 圖片證據單張上限（與桌面版驗收報告一致）：再大就不放進報告。
+const EVIDENCE_IMAGE_MAX: usize = 5 * 1024 * 1024;
+
+/// 驗收報告（畫面用的形狀，與桌面版本機驗收一致，驗收報告對話框可以原樣使用）：解析後的報告，
+/// 加上圖片證據（證據路徑 → data URL）。證據在 server 上；這裡逐張下載（只收圖片、單張 5MB 內）。
+pub async fn verify_report_view(api: &Api, card_id: &str) -> Result<crate::commands::agents::VerifyReportView, ClientError> {
+    use base64::Engine;
+    let v: serde_json::Value = api.get(&format!("/v1/board/cards/{}/verify", enc(card_id))).await?;
+    let report: Option<crate::tasks::workflow::VerifyReport> = v.get("report").filter(|r| !r.is_null()).and_then(|r| serde_json::from_value(r.clone()).ok());
+    let available: Vec<String> = v["evidence"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let mut images = std::collections::HashMap::new();
+    for e in report.iter().flat_map(|r| r.items.iter()).flat_map(|i| i.evidence.iter()) {
+        let lower = e.to_ascii_lowercase();
+        let mime = if lower.ends_with(".png") {
+            "image/png"
+        } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+            "image/jpeg"
+        } else {
+            continue;
+        };
+        let name = e.strip_prefix("evidence/").unwrap_or(e);
+        if images.contains_key(e) || !available.iter().any(|a| a == name) {
+            continue;
+        }
+        let Ok(bytes) = api.download(&format!("/v1/board/cards/{}/verify/files/{}", enc(card_id), enc(name))).await else { continue };
+        if bytes.len() > EVIDENCE_IMAGE_MAX {
+            continue;
+        }
+        images.insert(e.clone(), format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)));
+    }
+    Ok(crate::commands::agents::VerifyReportView { report, images })
+}
+
+/// 驗收者的禁止清單（全域預設）。
+pub async fn deny_global(api: &Api) -> Result<serde_json::Value, ClientError> {
+    api.request(Method::GET, "/v1/verify/deny", None).await
+}
+
+pub async fn set_deny_global(api: &Api, rules: serde_json::Value) -> Result<serde_json::Value, ClientError> {
+    api.request(Method::PUT, "/v1/verify/deny", Some(json!({"rules": rules}))).await
+}
+
+pub async fn reset_deny_global(api: &Api) -> Result<serde_json::Value, ClientError> {
+    api.request(Method::POST, "/v1/verify/deny/reset", None).await
+}
+
+/// 專案的禁止清單：全域、專案覆寫、這個專案實際生效的規則。
+pub async fn deny_project(api: &Api, server_pid: &str) -> Result<serde_json::Value, ClientError> {
+    api.request(Method::GET, &format!("/v1/board/projects/{}/verify/deny", enc(server_pid)), None).await
+}
+
+pub async fn set_deny_project(api: &Api, server_pid: &str, overrides: serde_json::Value) -> Result<serde_json::Value, ClientError> {
+    api.request(Method::PUT, &format!("/v1/board/projects/{}/verify/deny", enc(server_pid)), Some(json!({"overrides": overrides}))).await
+}
+
 /// 核准合併：server 把各 Coder 的分支合併進專案資料夾，回傳結果說明（管理員限定）。
 pub async fn approve_merge(api: &Api, card_id: &str) -> Result<String, ClientError> {
     api.request(Method::POST, &format!("/v1/board/cards/{}/merge", enc(card_id)), None).await.map(|v| v.as_str().unwrap_or_default().to_string())
@@ -462,6 +551,78 @@ mod tests {
 
     fn fields<'a>(title: &'a str) -> CardFields<'a> {
         CardFields { title, body: "內容", parallel_ok: true, interactive: false, label: None }
+    }
+
+    /// 直接在 server 上建一張驗收卡並結案成指定狀態（不跑 Claude）。
+    async fn server_verify_card(r: &Rig, outcome: &str, verdict: Option<&str>) -> aiterm_intake_core::board_store::BoardCard {
+        use aiterm_intake_core::board_store as bs;
+        let pool = &r.srv.state().pools.intake;
+        let c = bs::create_workflow_card(pool, bs::NewWorkflowCard { project_id: &r.pid, title: "驗收", body: "", kind: "verify", agent_id: None, module_id: None, review_of: None, status: "queued", depends_on: None, from_spec: None }).await.unwrap();
+        bs::set_verify_meta(pool, &c.id, "base#0", &[4001, 4002, 4003]).await.unwrap();
+        bs::complete_card(pool, &c.id, outcome, "x").await.unwrap();
+        if let Some(v) = verdict {
+            bs::set_verdict(pool, &c.id, v, &[]).await.unwrap();
+        }
+        bs::get_card(pool, &c.id).await.unwrap().unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_server_verification_report_comes_back_in_the_local_shape_with_only_real_screenshots_inlined() {
+        use aiterm_intake_core::board_store as bs;
+        let r = rig().await;
+        let c = server_verify_card(&r, "success", Some("fail")).await;
+        let report = serde_json::json!({"verdict": "fail", "project_type": "web", "items": [
+            {"criterion": "按開始", "status": "fail", "module_id": "m1", "evidence": ["evidence/start.png", "npm test: 12 passed", "evidence/../../secret.png", "evidence/log.txt"], "steps": "按開始", "expected": "25:00", "actual": "24:58"}
+        ]});
+        bs::save_verify_report(&r.srv.state().pools.intake, &c.id, &report.to_string(), &["git push origin main".to_string()], 0).await.unwrap();
+        let dir = aiterm_intake_server::verifier::card_dir(r.srv.state(), &c.id).join("evidence");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("start.png"), b"\x89PNG-fake").unwrap();
+        std::fs::write(dir.join("log.txt"), "輸出").unwrap();
+        let view = verify_report_view(&r.api, &c.id).await.unwrap();
+        let rep = view.report.expect("報告");
+        assert_eq!((rep.verdict.as_str(), rep.items.len(), rep.items[0].actual.as_deref()), ("fail", 1, Some("24:58")));
+        assert_eq!(view.images.len(), 1, "只有真的在證據資料夾裡的圖片：{:?}", view.images.keys().collect::<Vec<_>>());
+        assert!(view.images["evidence/start.png"].starts_with("data:image/png;base64,"));
+        // 還沒寫報告的驗收卡：report 是 None，不會出錯。
+        let pending = server_verify_card(&r, "failed", None).await;
+        assert!(verify_report_view(&r.api, &pending.id).await.unwrap().report.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn verification_fix_cards_look_like_ordinary_fix_cards_and_admin_actions_reach_the_server() {
+        use aiterm_intake_core::board_store as bs;
+        let r = rig().await;
+        let pool = &r.srv.state().pools.intake;
+        bs::create_workflow_card(pool, bs::NewWorkflowCard { project_id: &r.pid, title: "驗收退回（第 1 輪）：計時器", body: "", kind: "vfix", agent_id: None, module_id: None, review_of: None, status: "queued", depends_on: None, from_spec: None }).await.unwrap();
+        let cards = list(&r.api, &RemoteState::default(), &r.pid, false).await.unwrap();
+        assert!(cards.iter().any(|c| c.task.card_kind == "fix" && c.task.title.contains("驗收退回")), "vfix 在畫面上是 fix：{:?}", cards.iter().map(|c| &c.task.card_kind).collect::<Vec<_>>());
+
+        // 成員不能開關、放行、重新驗收；管理員可以。
+        let admin = r.srv.paired("管理員", Role::Admin).await;
+        sqlx::query("UPDATE projects SET work_dir = ? WHERE id = ?").bind(r.srv.dir.path().to_string_lossy().to_string()).bind(&r.pid).execute(&r.srv.state().pools.server).await.unwrap();
+        bs::create_agent(pool, bs::NewAgent { project_id: &r.pid, kind: "verifier", name: "驗收者", role: "", prompt_prefix: "", canvas_x: 0.0, canvas_y: 0.0, produces_spec: false, model: None, cli: "claude", created_by: "t" }).await.unwrap().unwrap();
+        assert_eq!(verify_settings(&r.api, &r.pid).await.unwrap(), VerifySettings { enabled: false, has_verifier: true });
+        assert!(set_verify_enabled(&r.api, &r.pid, true).await.is_err());
+        set_verify_enabled(&admin, &r.pid, true).await.unwrap();
+        assert!(verify_settings(&r.other, &r.pid).await.unwrap().enabled);
+        let stuck = server_verify_card(&r, "success", Some("attention")).await;
+        assert!(verify_override(&r.api, &stuck.id).await.is_err());
+        assert!(verify_retry(&r.api, &stuck.id).await.is_err());
+        verify_retry(&admin, &stuck.id).await.unwrap();
+        verify_override(&admin, &stuck.id).await.unwrap();
+        assert_eq!(bs::get_card(pool, &stuck.id).await.unwrap().unwrap().verdict.as_deref(), Some("pass"));
+        // 禁止清單往返。
+        assert!(deny_global(&r.api).await.is_err(), "成員看不到");
+        let rules = deny_global(&admin).await.unwrap();
+        assert!(rules.as_array().unwrap().iter().any(|x| x["rule"] == "Bash(git push:*)"));
+        let after = set_deny_global(&admin, serde_json::json!([{"rule": "Bash(sudo:*)", "note": "提權", "enabled": true}])).await.unwrap();
+        assert_eq!(after.as_array().unwrap().len(), 1);
+        assert!(set_deny_global(&admin, serde_json::json!([{"rule": "oops", "note": "x", "enabled": true}])).await.is_err());
+        let p = set_deny_project(&admin, &r.pid, serde_json::json!([{"rule": "Bash(make deploy:*)", "kind": "add"}])).await.unwrap();
+        assert_eq!(p["effective"], serde_json::json!(["Bash(sudo:*)", "Bash(make deploy:*)"]));
+        assert_eq!(deny_project(&admin, &r.pid).await.unwrap()["overrides"].as_array().unwrap().len(), 1);
+        assert!(reset_deny_global(&admin).await.unwrap().as_array().unwrap().len() > 10);
     }
 
     #[test]

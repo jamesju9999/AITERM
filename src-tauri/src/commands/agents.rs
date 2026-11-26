@@ -475,7 +475,13 @@ pub async fn agents_verify_report(
     project_id: String,
     task_id: String,
     reg: State<'_, ProjectRegistry>,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
 ) -> Result<VerifyReportView, String> {
+    // 共用看板專案：報告與證據在 server 上。
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        return crate::intake::board_remote::verify_report_view(&api, &task_id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e));
+    }
     let p = project(&reg, &project_id)?;
     let path = p.path.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -498,8 +504,15 @@ pub async fn agents_accept_verification(
     project_id: String,
     task_id: String,
     reg: State<'_, ProjectRegistry>,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if crate::intake::board_remote::parse(&project_id).is_some() {
+        let api = crate::intake::board_remote::require(&rs)?;
+        crate::intake::board_remote::verify_override(&api, &task_id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+        emit_updated(&app);
+        return Ok(());
+    }
     let p = project(&reg, &project_id)?;
     crate::tasks::workflow::accept_verification(&p.pool, &p.path, &task_id).await.map_err(|e| e.to_string())?;
     emit_updated(&app);
