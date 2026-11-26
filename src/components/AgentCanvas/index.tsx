@@ -325,10 +325,8 @@ export function AgentCanvasView({
   const [serverSkills, setServerSkills] = useState<ServerSkill[]>([]);
   const agentSkillsKey = agents.map((a) => a.custom_skills ?? "").join("|");
   useEffect(() => {
-    if (!isShared || !agentSkillsKey.replace(/\|/g, "")) {
-      setServerSkills([]);
-      return;
-    }
+    // 沒有共用專案或沒人裝技能就不用查；舊的清單留著無妨（只在共用專案、用 id 查名稱時才會用到）。
+    if (!isShared || !agentSkillsKey.replace(/\|/g, "")) return;
     let alive = true;
     listServerSkills()
       .then((s) => alive && setServerSkills(s))
