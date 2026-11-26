@@ -25,3 +25,4 @@ pub mod ops;
 pub mod api;
 pub mod pipeline;
 pub mod verify;
+pub mod verifier;
