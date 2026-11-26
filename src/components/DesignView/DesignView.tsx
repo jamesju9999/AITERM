@@ -374,7 +374,7 @@ export function DesignView({ isActive, tabId, remoteOwner, onRemoteOwnerChange }
     } catch (err) {
       let errMsg = String(err);
       if (err && typeof err === 'object') {
-        errMsg = (err as any).reason || (err as any).message || JSON.stringify(err);
+        errMsg = (err as { reason?: string }).reason || (err as { message?: string }).message || JSON.stringify(err);
       }
       setMessages(prev => [...prev, { role: 'assistant', content: t.design_error(errMsg) }]);
     } finally {

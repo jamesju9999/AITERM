@@ -48,7 +48,7 @@ export function McpMarketplaceTab({ onInstalled }: Props) {
       const jsonStr = await invoke("npm_mcp_search", { query: q, offset }) as string;
       if (!mountedRef.current) return;
       const raw = JSON.parse(jsonStr);
-      const mapped: NpmMcpServer[] = (raw.results || []).map((r: any) => ({
+      const mapped: NpmMcpServer[] = (raw.results || []).map((r: Record<string, string | undefined>) => ({
         qualifiedName: r.qualified_name ?? "",
         displayName: r.display_name ?? "",
         description: r.description ?? "",

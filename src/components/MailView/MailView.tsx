@@ -160,7 +160,9 @@ export function MailView({ isActive, onMessageRead }: MailViewProps) {
     return () => {
       active = false;
       if (unlisten) {
-        try { Promise.resolve(unlisten()).catch(() => {}); } catch {}
+        try { Promise.resolve(unlisten()).catch(() => {}); } catch {
+          // 已經解除訂閱就算了
+        }
       }
     };
   }, [selectedAccountId]);

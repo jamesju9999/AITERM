@@ -62,7 +62,7 @@ function extractCrossDbSql(text: string): { alias: string | null; sql: string } 
   if (match) return { alias: match[1].trim(), sql: match[2].trim() };
 
   // 2. ```sql DB-Name\nSQL\n```  (without square brackets — gemma omits them)
-  const nobrack = text.match(/```sql\s+([^\[\n]+?)\s*\n([\s\S]*?)```/i);
+  const nobrack = text.match(/```sql\s+([^[\n]+?)\s*\n([\s\S]*?)```/i);
   if (nobrack) {
     const sql = nobrack[2].trim();
     if (/^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|WITH)\b/i.test(sql)) {
@@ -595,7 +595,7 @@ function CrossDbAiChatInner({ databases, sendRemoteResponse }: Props) {
                 )}
                 {m.text && m.agentRunning && (
                   <div className="crossdb-chat__answer">
-                    <MarkdownText text={extractResponseText(unescapeNewlines(m.text)).replace(/<cmd>([\/\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``)} />
+                    <MarkdownText text={extractResponseText(unescapeNewlines(m.text)).replace(/<cmd>([/\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``)} />
                   </div>
                 )}
               </div>
@@ -659,7 +659,7 @@ function CrossDbAiChatInner({ databases, sendRemoteResponse }: Props) {
 function CrossDbAssistantAnswer({ text }: { text: string }) {
   const { t } = useLocale();
   const [copied, setCopied] = useState(false);
-  const cleaned = extractResponseText(unescapeNewlines(text)).replace(/<cmd>([\/\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``);
+  const cleaned = extractResponseText(unescapeNewlines(text)).replace(/<cmd>([/\s\S]*?)<\/cmd>/gi, (_m, c) => `\`\`\`\n${c.trim()}\n\`\`\``);
   const handleCopy = () => {
     void navigator.clipboard.writeText(cleaned).then(() => {
       setCopied(true);

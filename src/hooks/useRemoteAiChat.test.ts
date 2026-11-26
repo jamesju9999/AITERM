@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 
 const invokeChatCtx = vi.fn();
-vi.mock("../ipc/ai", async (imp) => ({ ...(await imp<any>()), invokeAiChatCtx: (...a: unknown[]) => invokeChatCtx(...a) }));
+vi.mock("../ipc/ai", async (imp) => ({ ...(await imp<Record<string, unknown>>()), invokeAiChatCtx: (...a: unknown[]) => invokeChatCtx(...a) }));
 
 const listeners: Array<(e: unknown) => void> = [];
 vi.mock("@tauri-apps/api/event", () => ({

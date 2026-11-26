@@ -11,6 +11,7 @@ import { toModelHistory } from "../lib/chatHistory";
 import { buildContentParts, contentToDisplayString } from "../types/attachment";
 import type { Attachment } from "../types/attachment";
 import { useLocale } from "../contexts/LocaleContext";
+import type { Translations } from "../lib/i18n";
 import { intentNudge, looksLikeUnfulfilledIntent } from "../lib/unfulfilledIntent";
 import type { McpChatMessage, McpChatSession } from "../types/chat";
 export type { McpChatMessage, McpChatSession }; // re-export：既有 import { McpChatMessage } from "../hooks/useMcpChat" 不用改
@@ -46,7 +47,7 @@ function saveAllSessions(sessions: McpChatSession[]): void {
   } catch { /* ignore */ }
 }
 
-function formatSessionTitle(messages: McpChatMessage[], t: any): string {
+function formatSessionTitle(messages: McpChatMessage[], t: Translations): string {
   const first = messages.find((m) => m.role === "user");
   return first ? contentToDisplayString(first.content).slice(0, 30) : t.chat_empty;
 }

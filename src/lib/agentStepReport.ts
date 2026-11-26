@@ -24,6 +24,7 @@ export function describeExit(block: { exitCode?: number; exitUnknown?: boolean }
 export function formatAgentStepForRemote(info: AgentStepInfo): string {
   // xterm's translateToString already returns plain text, but defend
   // against stray escape codes from copy-pasted prompts etc.
+  // eslint-disable-next-line no-control-regex -- 刻意比對 ESC（ANSI 色碼）
   const cleaned = info.output.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").trim();
   const exitTag = info.exitCode === 0 ? "" : ` ⚠️ exit ${info.exitCode}`;
   const header = `[${info.stepIndex}/${info.maxSteps}] $ ${info.command}${exitTag}`;

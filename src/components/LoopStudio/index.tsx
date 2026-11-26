@@ -37,7 +37,9 @@ function loadRoster(): RosterState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw) as RosterState;
-  } catch {}
+  } catch {
+    // 讀不到就維持預設值
+  }
   return {
     orchestratorProvider: "",
     verifierProvider: "",
@@ -57,7 +59,9 @@ function loadRoster(): RosterState {
 function saveRoster(state: RosterState) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {}
+  } catch {
+    // 讀不到就維持預設值
+  }
 }
 
 interface LoopStudioViewProps {

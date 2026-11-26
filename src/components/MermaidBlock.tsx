@@ -51,7 +51,7 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
       // Both passes failed — show error with the Pass 1 source for readability
       if (!isCancelled) {
         try { await mermaid.parse(pass1); }
-        catch (err: any) { setError(err.message || "Mermaid parse error"); }
+        catch (err) { setError((err as { message?: string }).message || "Mermaid parse error"); }
       }
     }
 

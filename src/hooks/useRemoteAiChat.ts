@@ -5,6 +5,7 @@ import { unlistenOnCleanup } from "../lib/eventSubscription";
 import { invokeAiChatCtx, formatAiError, type AiError, type RemoteCtx } from "../ipc/ai";
 import { toModelHistory } from "../lib/chatHistory";
 import { useLocale } from "../contexts/LocaleContext";
+import type { Translations } from "../lib/i18n";
 import type { McpChatMessage, McpChatSession } from "../types/chat";
 
 const SESSIONS_STORAGE_KEY = "aiterm-remote-chat-sessions";
@@ -24,7 +25,7 @@ function saveAllSessions(sessions: McpChatSession[]): void {
   } catch { /* ignore */ }
 }
 
-function formatSessionTitle(messages: McpChatMessage[], t: any): string {
+function formatSessionTitle(messages: McpChatMessage[], t: Translations): string {
   const first = messages.find((m) => m.role === "user");
   if (!first) return t.chat_empty;
   return typeof first.content === "string" ? first.content.slice(0, 30) : t.chat_empty;

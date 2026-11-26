@@ -10,6 +10,7 @@ import {
 } from "../ipc/ai";
 import { truncateHistory } from "../lib/chatHistory";
 import { useLocale } from "../contexts/LocaleContext";
+import type { Translations } from "../lib/i18n";
 
 const HISTORY_LIMIT = 20;
 const SESSIONS_STORAGE_KEY = "aiterm-ai-chat-sessions";
@@ -45,7 +46,7 @@ function contentToString(content: ChatMessage["content"]): string {
     .join(" ");
 }
 
-function formatSessionTitle(messages: ChatMessage[], t: any): string {
+function formatSessionTitle(messages: ChatMessage[], t: Translations): string {
   const first = messages.find((m) => m.role === "user");
   return first ? contentToString(first.content).slice(0, 30) : t.chat_empty;
 }
