@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { INTAKE_UNREACHABLE_PREFIX, intakeRemoteForget, intakeRemoteSwitch, type IntakeRemoteStatus } from "../../ipc/intake";
+import { INTAKE_UNREACHABLE_PREFIX, intakeRemoteDisconnect, intakeRemoteForget, intakeRemoteSwitch, type IntakeRemoteStatus } from "../../ipc/intake";
 import { useIntakeConnections } from "../../hooks/useIntakeRemote";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ConnectForm } from "./ConnectionCard";
@@ -56,6 +56,15 @@ export function SavedServers({ status }: { status: IntakeRemoteStatus }) {
     }
   };
 
+  async function disconnect() {
+    setError(null);
+    try {
+      await intakeRemoteDisconnect();
+    } catch (e) {
+      setError(errText(e));
+    }
+  }
+
   const forget = async (id: string, label: string) => {
     // 要用 plugin-dialog 的非同步 confirm；Tauri 的 webview 沒有真正實作 window.confirm。
     if (!(await confirm(t.intake_conn_forget_confirm.replace("{name}", label)))) return;
@@ -94,7 +103,9 @@ export function SavedServers({ status }: { status: IntakeRemoteStatus }) {
                 </span>
               </span>
               {c.active ? (
-                <span className="intake__conn-state intake__conn-state--on" role="status">{t.intake_conn_current}</span>
+                <span className={`intake__conn-state ${status.online ? "intake__conn-state--on" : "intake__conn-state--off"}`} role="status">
+                  {status.online ? t.intake_conn_current : t.intake_conn_current_offline}
+                </span>
               ) : (
                 <button className="aiterm-btn aiterm-btn--secondary" disabled={busyId !== null} onClick={() => void switchTo(c)}>
                   {t.intake_conn_switch}
@@ -103,6 +114,16 @@ export function SavedServers({ status }: { status: IntakeRemoteStatus }) {
               <button className="aiterm-btn aiterm-btn--ghost" disabled={busyId !== null} onClick={() => void forget(c.id, label)}>
                 {t.intake_conn_forget}
               </button>
+              {c.active && (
+                <div className="intake__saved-detail">
+                  {!status.online && <p className="intake__meta intake__warn">{t.intake_conn_offline}</p>}
+                  {status.error && <div className="intake__error" role="alert">{status.error}</div>}
+                  <p className="intake__meta intake__hint">{t.intake_conn_local_stopped}</p>
+                  <button className="aiterm-btn aiterm-btn--secondary" onClick={() => void disconnect()}>
+                    {t.intake_conn_disconnect}
+                  </button>
+                </div>
+              )}
             </li>
           );
         })}

@@ -12,6 +12,7 @@ vi.mock("../../ipc/intake", async (orig) => ({
   intakeRemoteConnections: vi.fn(),
   intakeRemoteSwitch: vi.fn(() => Promise.resolve({})),
   intakeRemoteForget: vi.fn(() => Promise.resolve()),
+  intakeRemoteDisconnect: vi.fn(() => Promise.resolve()),
   intakeRemotePair: vi.fn(),
   onIntakeRemote: vi.fn(() => Promise.resolve(() => {})),
 }));
@@ -45,9 +46,21 @@ describe("SavedServers（已記錄的 server）", () => {
     const rowA = await screen.findByTestId("saved-server-a");
     const rowB = screen.getByTestId("saved-server-b");
     expect(rowA.textContent).toContain(t.intake_conn_current);
-    expect(Array.from(rowA.querySelectorAll("button")).map((b) => b.textContent)).toEqual([t.intake_conn_forget]);
+    expect(Array.from(rowA.querySelectorAll("button")).map((b) => b.textContent)).toEqual([t.intake_conn_forget, t.intake_conn_disconnect]);
     expect(rowB.textContent).toContain("10.0.0.2:8443");
     expect(rowB.textContent).toContain(t.intake_conn_switch);
+  });
+
+  it("目前連線那一列自帶狀態與「中斷連線」；離線時狀態字改成離線", async () => {
+    vi.mocked(ipc.intakeRemoteDisconnect).mockResolvedValue(undefined as never);
+    show({ ...CONNECTED, online: false, error: "你已被移除，請向管理員重新取得邀請" }, [A, B]);
+    const rowA = await screen.findByTestId("saved-server-a");
+    expect(rowA.textContent).toContain(t.intake_conn_current_offline);
+    expect(rowA.textContent).toContain(t.intake_conn_offline);
+    expect(rowA.textContent).toContain("你已被移除");
+    expect(screen.getByTestId("saved-server-b").textContent).not.toContain(t.intake_conn_disconnect);
+    fireEvent.click(screen.getByRole("button", { name: t.intake_conn_disconnect }));
+    await waitFor(() => expect(ipc.intakeRemoteDisconnect).toHaveBeenCalledTimes(1));
   });
 
   it("按「連線」就切換到那一組，不問邀請碼", async () => {
