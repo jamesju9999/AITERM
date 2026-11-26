@@ -405,7 +405,9 @@ pub async fn verify_report_view(api: &Api, card_id: &str) -> Result<crate::comma
         }
         images.insert(e.clone(), format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)));
     }
-    Ok(crate::commands::agents::VerifyReportView { report, images })
+    let denied: Vec<String> = v["denied"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let error = v["error_message"].as_str().filter(|e| !e.trim().is_empty()).map(str::to_string);
+    Ok(crate::commands::agents::VerifyReportView { report, images, denied, error })
 }
 
 /// 驗收者的禁止清單（全域預設）。
@@ -582,6 +584,7 @@ mod tests {
         let view = verify_report_view(&r.api, &c.id).await.unwrap();
         let rep = view.report.expect("報告");
         assert_eq!((rep.verdict.as_str(), rep.items.len(), rep.items[0].actual.as_deref()), ("fail", 1, Some("24:58")));
+        assert_eq!(view.denied, vec!["git push origin main".to_string()], "被禁止清單擋下的命令跟著報告");
         assert_eq!(view.images.len(), 1, "只有真的在證據資料夾裡的圖片：{:?}", view.images.keys().collect::<Vec<_>>());
         assert!(view.images["evidence/start.png"].starts_with("data:image/png;base64,"));
         // 還沒寫報告的驗收卡：report 是 None，不會出錯。

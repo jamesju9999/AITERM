@@ -17,6 +17,7 @@ export function VerifyReportDialog({
   taskId,
   canAccept,
   onAccept,
+  onRetry,
   onClose,
 }: {
   projectId: string;
@@ -26,6 +27,8 @@ export function VerifyReportDialog({
   /** 驗收卡判定是 attention（要你決定）時顯示「放行」。 */
   canAccept: boolean;
   onAccept: () => void;
+  /** 共用看板（server 驗收）才有：重新驗收。 */
+  onRetry?: () => void;
   onClose: () => void;
 }) {
   const { t } = useLocale();
@@ -94,7 +97,25 @@ export function VerifyReportDialog({
       <div className="task-dialog" role="dialog" aria-label={t.ac_verify_title}>
         <h3 className="task-dialog-title">{t.ac_verify_title}</h3>
         {error && <p className="ac-bad-text">{error}</p>}
+        {view?.error && (
+          <p className="ac-bad-text" data-testid="verify-error">
+            <b>{t.ac_verify_error}</b>：{view.error}
+          </p>
+        )}
         {view && !view.report && <p className="ac-dialog-desc">{t.ac_verify_none}</p>}
+        {view && (view.denied?.length ?? 0) > 0 && (
+          <div className="ac-verify-notes" data-testid="verify-denied">
+            <b>{t.ac_verify_denied}</b>
+            <ul>
+              {view.denied!.map((d) => (
+                <li key={d}>
+                  <code>{d}</code>
+                </li>
+              ))}
+            </ul>
+            <span>{t.ac_verify_denied_hint}</span>
+          </div>
+        )}
         {view?.report && (
           <>
             <p className="ac-dialog-desc" data-testid="verify-summary">
@@ -167,6 +188,11 @@ export function VerifyReportDialog({
           {view?.report && (
             <button className="aiterm-btn aiterm-btn--secondary" onClick={() => void doExport()}>
               {t.ac_verify_export}
+            </button>
+          )}
+          {onRetry && (
+            <button className="aiterm-btn aiterm-btn--secondary" data-testid="verify-retry" onClick={onRetry}>
+              {t.ac_verify_retry}
             </button>
           )}
           {canAccept && (

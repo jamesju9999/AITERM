@@ -1042,3 +1042,15 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-sched-addtime { align-self: flex-start; }
 .ac-sched-node { cursor: grab; user-select: none; -webkit-user-select: none; }
 .ac-sched-node--dragging { cursor: grabbing; z-index: 5; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4); }
+
+/* ── 驗收禁止清單 ── */
+.ac-deny-dialog { max-width: 640px; }
+.ac-deny-tabs { display: flex; gap: 6px; margin: 4px 0 8px; }
+.ac-deny-list { list-style: none; margin: 0 0 8px; padding: 0; max-height: 320px; overflow-y: auto; }
+.ac-deny-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; }
+.ac-deny-list label { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.ac-deny-list code { font-size: 12px; }
+.ac-deny-note { color: var(--text-muted, #888); font-size: 12px; }
+.ac-deny-off { opacity: 0.55; }
+.ac-deny-add { display: flex; gap: 8px; margin: 6px 0; }
+.ac-deny-add input { flex: 1; }

@@ -468,6 +468,10 @@ pub async fn agents_override_module(
 pub struct VerifyReportView {
     pub report: Option<crate::tasks::workflow::VerifyReport>,
     pub images: std::collections::HashMap<String, String>,
+    /// 被禁止清單擋下的命令（只有 server 驗收有）。
+    pub denied: Vec<String>,
+    /// 驗收卡自己失敗的原因（只有 server 驗收有；本機為 `None`）。
+    pub error: Option<String>,
 }
 
 #[tauri::command]
@@ -492,7 +496,7 @@ pub async fn agents_verify_report(
             .as_ref()
             .map(|r| crate::tasks::workflow::evidence_images(&crate::tasks::task_dir(&path, &task_id), r))
             .unwrap_or_default();
-        VerifyReportView { report, images }
+        VerifyReportView { report, images, denied: Vec::new(), error: None }
     })
     .await
     .map_err(|e| e.to_string())

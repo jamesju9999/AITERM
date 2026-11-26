@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { KindIcon } from "./KindIcon";
 import { ServerMergeBanner } from "./ServerMergeBanner";
 import { ServerRunBar } from "./ServerRunBar";
+import { ServerVerifyBar } from "./ServerVerifyBar";
+import { retryVerification } from "../../ipc/serverVerify";
 import { OpenSettingsButton } from "../OpenSettingsButton";
 import { useIntakeRemote } from "../../hooks/useIntakeRemote";
 import { autoLayout } from "./autoLayout";
@@ -1617,6 +1619,7 @@ export function AgentCanvasView({
           </>
         )}
         {projectId && <ServerRunBar projectId={projectId} onError={(e) => setToast(errText(e))} />}
+        {projectId && <ServerVerifyBar projectId={projectId} onError={(e) => setToast(errText(e))} />}
         {projectId && agents.length > 0 && (manualPause.all || !allFinished) && (
           <>
             <span className="ac-top-sep" aria-hidden />
@@ -2367,11 +2370,19 @@ export function AgentCanvasView({
           projectId={projectId}
           projectName={projects?.find((x) => x.id === projectId)?.name ?? ""}
           taskId={verifyCard.id}
-          canAccept={verifyCard.verdict === "attention" || verifyCard.verdict === "fail"}
+          canAccept={verifyCard.verdict === "attention" || verifyCard.verdict === "fail" || (projectId.startsWith("remote:") && verifyCard.outcome === "failed")}
           onAccept={() => {
             setVerifyFor(null);
             void run(() => acceptVerification(projectId, verifyCard.id));
           }}
+          onRetry={
+            projectId.startsWith("remote:") && verifyCard.status === "done" && !(verifyCard.outcome === "success" && verifyCard.verdict === "pass")
+              ? () => {
+                  setVerifyFor(null);
+                  void run(() => retryVerification(verifyCard.id));
+                }
+              : undefined
+          }
           onClose={() => setVerifyFor(null)}
         />
       )}

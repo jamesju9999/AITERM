@@ -165,6 +165,10 @@ export interface VerifyReportView {
   report: VerifyReport | null;
   /** 證據路徑 → data URL（只有圖片）。 */
   images: Record<string, string>;
+  /** 被禁止清單擋下的命令（只有 server 驗收有）。 */
+  denied?: string[];
+  /** 驗收卡自己失敗的原因（只有 server 驗收有）。 */
+  error?: string | null;
 }
 
 export const verifyReport = (projectId: string, taskId: string): Promise<VerifyReportView> =>
