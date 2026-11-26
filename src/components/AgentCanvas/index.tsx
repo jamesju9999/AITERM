@@ -77,6 +77,8 @@ import { ResourceLayer } from "./ResourceLayer";
 import { accessLinks, folderLinks, folderResources, resourcesOf } from "./resources";
 import { ReferencesDialog } from "./ReferencesDialog";
 import { CustomSkillsDialog } from "./CustomSkillsDialog";
+import { ServerSkillsDialog } from "./ServerSkillsDialog";
+import { listServerSkills, setAgentServerSkills, type ServerSkill } from "../../ipc/serverSkills";
 import { RoleIcon } from "./RoleIcon";
 import { parseDbSkill, parseSkillPaths, skillActivity, SKILL_LINGER_SECS, sqlPreview } from "./dbSkill";
 import { ToolsBanner } from "./ToolsBanner";
@@ -318,8 +320,25 @@ export function AgentCanvasView({
   const [refReadsOf, setRefReadsOf] = useState<{ projectId: string; rows: ReferenceReadRow[] } | null>(null);
   // 檔案系統的事不會推送過來，所以在技能清單（或儲存後的畫面）變動時重查一次。
   const allSkillPathsKey = agents.flatMap((a) => parseSkillPaths(a.custom_skills)).join("\n");
+  // 共用專案的 custom_skills 存的是 server 技能 id，不是本機路徑：不做本機路徑檢查，名稱改用 server 技能庫對照。
+  const isShared = !!projectId?.startsWith("remote:");
+  const [serverSkills, setServerSkills] = useState<ServerSkill[]>([]);
+  const agentSkillsKey = agents.map((a) => a.custom_skills ?? "").join("|");
   useEffect(() => {
-    if (!allSkillPathsKey) return;
+    if (!isShared || !agentSkillsKey.replace(/\|/g, "")) {
+      setServerSkills([]);
+      return;
+    }
+    let alive = true;
+    listServerSkills()
+      .then((s) => alive && setServerSkills(s))
+      .catch(() => alive && setServerSkills([]));
+    return () => {
+      alive = false;
+    };
+  }, [isShared, agentSkillsKey]);
+  useEffect(() => {
+    if (!allSkillPathsKey || isShared) return;
     let alive = true;
     missingSkills(allSkillPathsKey.split("\n"))
       .then((m) => alive && setLostSkills(m))
@@ -327,7 +346,7 @@ export function AgentCanvasView({
     return () => {
       alive = false;
     };
-  }, [allSkillPathsKey]);
+  }, [allSkillPathsKey, isShared]);
   const messages = useMemo(() => (messagesOf?.projectId === projectId ? messagesOf.rows : []), [messagesOf, projectId]);
   const fixChoices = useMemo(() => (fixChoicesOf?.projectId === projectId ? fixChoicesOf.rows : []), [fixChoicesOf, projectId]);
   const fixChoiceModules = useMemo(() => new Set(fixChoices.map((f) => f.module_id)), [fixChoices]);
@@ -1710,17 +1729,19 @@ export function AgentCanvasView({
         <span className="ac-pool-hint">{t.ac_pool_hint}</span>
         <span className="ac-pool-sep" aria-hidden />
         <span className="ac-pool-label">{t.ac_skills}</span>
-        <div
-          className="ac-pool-item ac-pool-item--skill"
-          data-testid="skill-db"
-          title={t.ac_skill_hint}
-          onMouseDown={(e) => beginDrag(e, "skill", "db")}
-        >
-          <span className="ac-agent-ico" aria-hidden>
-            <RoleIcon name="database" />
-          </span>
-          <span className="ac-pool-name">{t.ac_skill_db}</span>
-        </div>
+        {!isShared && (
+          <div
+            className="ac-pool-item ac-pool-item--skill"
+            data-testid="skill-db"
+            title={t.ac_skill_hint}
+            onMouseDown={(e) => beginDrag(e, "skill", "db")}
+          >
+            <span className="ac-agent-ico" aria-hidden>
+              <RoleIcon name="database" />
+            </span>
+            <span className="ac-pool-name">{t.ac_skill_db}</span>
+          </div>
+        )}
         <div
           className="ac-pool-item ac-pool-item--skill"
           data-testid="skill-custom"
@@ -1732,17 +1753,19 @@ export function AgentCanvasView({
           </span>
           <span className="ac-pool-name">{t.ac_skill_custom}</span>
         </div>
-        <div
-          className="ac-pool-item ac-pool-item--skill"
-          data-testid="skill-systems"
-          title={t.ac_skill_hint}
-          onMouseDown={(e) => beginDrag(e, "skill", "systems")}
-        >
-          <span className="ac-agent-ico" aria-hidden>
-            <RoleIcon name="globe" />
-          </span>
-          <span className="ac-pool-name">{t.ac_skill_systems}</span>
-        </div>
+        {!isShared && (
+          <div
+            className="ac-pool-item ac-pool-item--skill"
+            data-testid="skill-systems"
+            title={t.ac_skill_hint}
+            onMouseDown={(e) => beginDrag(e, "skill", "systems")}
+          >
+            <span className="ac-agent-ico" aria-hidden>
+              <RoleIcon name="globe" />
+            </span>
+            <span className="ac-pool-name">{t.ac_skill_systems}</span>
+          </div>
+        )}
       </div>
 
       <div className={`ac-main${layout.libCollapsed ? " ac-main--lib-collapsed" : ""}`}>
@@ -1960,6 +1983,11 @@ export function AgentCanvasView({
                       customSkills={(() => {
                         const paths = parseSkillPaths(a.custom_skills);
                         if (paths.length === 0) return null;
+                        if (isShared) {
+                          // 共用專案：id → 名稱；技能庫裡已被刪掉的 id 不顯示。
+                          const names = paths.map((id) => serverSkills.find((s) => s.id === id)?.name).filter((n): n is string => !!n);
+                          return names.length === 0 ? null : { names, missing: [], active: null };
+                        }
                         const names = paths.map((p) => p.split(/[\\/]/).filter(Boolean).pop() ?? p);
                         const used = (skillUsesOf?.projectId === projectId ? skillUsesOf.rows : [])
                           .filter((u) => u.agent_id === a.id && nowSecs - u.at <= SKILL_LINGER_SECS)
@@ -2231,7 +2259,18 @@ export function AgentCanvasView({
           document.body,
         )}
 
-      {customSkillsFor && projectId && (
+      {customSkillsFor && projectId && isShared && (
+        <ServerSkillsDialog
+          agentName={customSkillsFor.name}
+          current={parseSkillPaths(customSkillsFor.custom_skills)}
+          onClose={() => setCustomSkillsFor(null)}
+          onSave={async (ids) => {
+            await setAgentServerSkills(customSkillsFor.id, ids);
+            await refresh();
+          }}
+        />
+      )}
+      {customSkillsFor && projectId && !isShared && (
         <CustomSkillsDialog
           agentName={customSkillsFor.name}
           repoDir={customSkillsFor.project_dir}

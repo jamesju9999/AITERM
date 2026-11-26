@@ -245,7 +245,7 @@ pub fn to_agent(a: &BoardAgent, project_dir: &str) -> crate::tasks::agents::Agen
         model: a.model.clone(),
         cli: a.cli.clone(),
         db_skill: None,
-        custom_skills: None,
+        custom_skills: a.custom_skills.clone(),
         systems: None,
     }
 }
@@ -524,6 +524,85 @@ pub fn require(rs: &RemoteState) -> Result<Api, String> {
 
 pub fn fail(rs: &RemoteState, e: ClientError) -> String {
     remote::fail(rs, e)
+}
+
+// ---- 技能庫（server 上的自訂技能） ----
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ServerSkill {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub files: i64,
+    pub bytes: i64,
+    pub uploaded_by: String,
+    pub updated_at: i64,
+}
+
+pub async fn skills_list(api: &Api) -> Result<Vec<ServerSkill>, ClientError> {
+    api.get("/v1/skills").await
+}
+
+pub async fn skill_delete(api: &Api, id: &str) -> Result<(), ClientError> {
+    api.request(Method::DELETE, &format!("/v1/skills/{}", enc(id)), None).await.map(|_| ())
+}
+
+/// 設定共用專案裡某位 Agent 的自訂技能（server 技能 id，整份取代；管理員限定）。
+pub async fn agent_set_skills(api: &Api, agent_id: &str, ids: &[String]) -> Result<(), ClientError> {
+    api.request(Method::PUT, &format!("/v1/board/agents/{}/skills", enc(agent_id)), Some(json!({ "ids": ids }))).await.map(|_| ())
+}
+
+/// 讀一個本機技能資料夾（遞迴、不跟隨符號連結、略過 .git／node_modules 等），套用跟 server 同一組上限。
+/// 回傳（資料夾名稱, [(相對路徑, 內容)]）。
+pub fn read_skill_folder(dir: &std::path::Path) -> Result<(String, Vec<(String, Vec<u8>)>), String> {
+    use aiterm_intake_core::skills as rules;
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, std::path::PathBuf, usize)>) -> Result<(), String> {
+        for e in std::fs::read_dir(dir).map_err(|e| format!("讀不了資料夾 {}：{e}", dir.display()))? {
+            let e = e.map_err(|e| e.to_string())?;
+            let path = e.path();
+            let rel = path.strip_prefix(root).map_err(|e| e.to_string())?.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+            if rules::skippable(&rel) {
+                continue;
+            }
+            let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                walk(root, &path, out)?;
+            } else if meta.is_file() {
+                out.push((rel, path, meta.len() as usize));
+                if out.len() > rules::MAX_FILES {
+                    return Err(format!("檔案太多（上限 {} 個）", rules::MAX_FILES));
+                }
+            }
+        }
+        Ok(())
+    }
+    if !dir.join(rules::SKILL_FILE).is_file() {
+        return Err(format!("這個資料夾裡沒有 {}：{}", rules::SKILL_FILE, dir.display()));
+    }
+    let mut found = Vec::new();
+    walk(dir, dir, &mut found)?;
+    let sizes: Vec<(String, usize)> = found.iter().map(|(rel, _, n)| (rel.clone(), *n)).collect();
+    rules::check_files(&sizes)?;
+    let mut files = Vec::with_capacity(found.len());
+    for (rel, path, _) in found {
+        files.push((rel, std::fs::read(&path).map_err(|e| format!("讀不了 {}：{e}", path.display()))?));
+    }
+    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    Ok((name, files))
+}
+
+/// 把一個本機技能資料夾上傳到 server 的技能庫（管理員限定；同名取代）。
+pub async fn skill_upload(api: &Api, dir: &std::path::Path) -> Result<ServerSkill, String> {
+    use base64::Engine;
+    // 遞迴讀檔是阻塞的工作（最多約 10 MB），放到背景執行緒。
+    let dir = dir.to_path_buf();
+    let (name, files) = tokio::task::spawn_blocking(move || read_skill_folder(&dir)).await.map_err(|e| e.to_string())??;
+    let files: Vec<serde_json::Value> = files.into_iter().map(|(path, data)| json!({ "path": path, "data": base64::engine::general_purpose::STANDARD.encode(data) })).collect();
+    let v = api.request(Method::POST, "/v1/skills", Some(json!({ "folder_name": name, "files": files }))).await.map_err(|e| e.to_string())?;
+    serde_json::from_value(v).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -832,5 +911,57 @@ mod tests {
         assert!(e.to_string().contains("沒有權限"), "server 的拒絕原因要原樣回來：{e}");
         delete_schedule(&admin, &id).await.unwrap();
         assert!(schedules(&admin, &r.pid).await.unwrap().is_empty());
+    }
+
+    fn skill_dir(root: &std::path::Path, name: &str, extra: &[(&str, &str)]) -> std::path::PathBuf {
+        let d = root.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SKILL.md"), format!("---\nname: {name}\ndescription: 說明\n---\n內文")).unwrap();
+        for (p, c) in extra {
+            let f = d.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, c).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn reading_a_skill_folder_skips_noise_and_symlinks_and_enforces_the_server_limits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = skill_dir(tmp.path(), "寫測試", &[("scripts/run.sh", "echo"), (".git/config", "x"), ("node_modules/a/b.js", "x"), (".DS_Store", "x")]);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/etc/hosts", d.join("link.txt")).unwrap();
+        let (name, files) = read_skill_folder(&d).unwrap();
+        let mut paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+        paths.sort();
+        assert_eq!((name.as_str(), paths), ("寫測試", vec!["SKILL.md", "scripts/run.sh"]));
+        let empty = tmp.path().join("空的");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(read_skill_folder(&empty).unwrap_err().contains("SKILL.md"));
+        let big = skill_dir(tmp.path(), "太大", &[]);
+        std::fs::write(big.join("big.bin"), vec![0u8; aiterm_intake_core::skills::MAX_FILE_BYTES + 1]).unwrap();
+        assert!(read_skill_folder(&big).unwrap_err().contains("單檔上限"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_admin_uploads_a_local_skill_folder_lists_it_assigns_it_to_an_agent_and_deletes_it() {
+        use aiterm_intake_core::board_store as bs;
+        let srv = TestServer::start().await;
+        let (admin, member) = (srv.paired("小華", Role::Admin).await, srv.paired("小明", Role::Member).await);
+        let pid = srv.project("範例科技").await;
+        let tmp = tempfile::tempdir().unwrap();
+        let d = skill_dir(tmp.path(), "寫測試", &[("scripts/run.sh", "echo ok")]);
+        assert!(skill_upload(&member, &d).await.is_err(), "成員不能上傳");
+        let s = skill_upload(&admin, &d).await.unwrap();
+        assert_eq!((s.name.as_str(), s.description.as_str(), s.files, s.uploaded_by.as_str()), ("寫測試", "說明", 2, "小華"));
+        assert_eq!(skills_list(&member).await.unwrap(), vec![s.clone()], "成員看得到清單");
+        let agent = bs::create_agent(&srv.state().pools.intake, bs::NewAgent { project_id: &pid, kind: "coder", name: "工程師1", role: "", prompt_prefix: "", canvas_x: 0.0, canvas_y: 0.0, produces_spec: false, model: None, cli: "claude", created_by: "t" }).await.unwrap().unwrap();
+        agent_set_skills(&admin, &agent.id, &[s.id.clone()]).await.unwrap();
+        let rs = RemoteState::default();
+        let listed = agents(&admin, &rs, &pid).await.unwrap();
+        assert!(listed[0].custom_skills.as_deref().unwrap().contains(&s.id), "Agent 帶著技能 id");
+        assert!(to_agent(&listed[0], "/x").custom_skills.unwrap().contains(&s.id), "桌面版的 Agent 也帶著");
+        skill_delete(&admin, &s.id).await.unwrap();
+        assert!(skills_list(&admin).await.unwrap().is_empty());
     }
 }

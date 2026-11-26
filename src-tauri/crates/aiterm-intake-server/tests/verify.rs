@@ -56,6 +56,7 @@ case "$ALLOWED" in
     cp "$D/last_prompt.txt" "$D/coder_prompt_$n.txt"
     ls > "$D/files_$n.txt"
     printf '%s\n' "$@" > "$D/coder_args_$n.txt"
+    prev=''; for a in "$@"; do if [ "$prev" = "--add-dir" ]; then cp "$a/SKILL.md" "$D/skill_seen_$n.txt" 2>/dev/null; echo tampered >> "$a/SKILL.md"; fi; prev="$a"; done
     sleep @SECS@
     echo "change $n" >> "work-$n.txt"
     echo "change $n" > shared.txt
@@ -89,6 +90,7 @@ case "$ALLOWED" in
     echo "reviewer $m $(pwd) $ALLOWED" >> "$D/log.txt"
     cp "$D/last_prompt.txt" "$D/review_prompt_$m.txt"
     printf '%s\n' "$@" > "$D/review_args_$m.txt"
+    prev=''; for a in "$@"; do if [ "$prev" = "--add-dir" ]; then cp "$a/SKILL.md" "$D/skill_seen_review_$m.txt" 2>/dev/null; fi; prev="$a"; done
     v=$(head -1 "$D/verdicts"); sed -i.bak 1d "$D/verdicts"
     printf '{"type":"result","is_error":false,"result":"{\\"verdict\\":\\"%s\\",\\"reasons\\":[\\"缺測試\\"]}"}' "$v"
     ;;
@@ -544,3 +546,51 @@ async fn without_verification_enabled_or_without_a_verifier_the_flow_is_unchange
     r2.pump("合併待核准的卡出現", |c| c.iter().any(|x| x.card_kind == "merge")).await;
     assert!(r2.verify_cards().await.is_empty());
 }
+
+// ---- 技能 ----
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agents_skills_reach_claude_as_a_throwaway_copy_and_never_touch_the_shared_library() {
+    use base64::Engine;
+    let fake = Fake::new(&["pass"], "0");
+    let r = rig(&fake).await;
+    r.enable().await;
+    let b64 = |t: &str| base64::engine::general_purpose::STANDARD.encode(t.as_bytes());
+    let skill = r.admin.request(Method::POST, "/v1/skills", Some(json!({"folder_name": "x", "files": [
+        {"path": "SKILL.md", "data": b64("---\nname: 寫測試\ndescription: 先寫紅燈再實作\n---\n暗號：香蕉")},
+        {"path": "scripts/check.sh", "data": b64("echo ok")}
+    ]}))).await.unwrap();
+    let ids = json!({"ids": [skill["id"]]});
+    r.admin.request(Method::PUT, &format!("/v1/board/agents/{}/skills", r.coder.id), Some(ids.clone())).await.unwrap();
+    r.admin.request(Method::PUT, &format!("/v1/board/agents/{}/skills", r.reviewer.id), Some(ids)).await.unwrap();
+    r.module("登入頁", "做一個登入頁").await;
+    r.pump("審查結案", |c| done(c, "review", 1)).await;
+
+    // 工程師（work 卡）：--add-dir 指到一次性副本，提示詞附清單，Claude 看得到技能內容。
+    let args: Vec<String> = fake.read("coder_args_1.txt").lines().map(str::to_string).collect();
+    let dir = args.iter().position(|a| a == "--add-dir").map(|i| args[i + 1].clone()).expect("要有 --add-dir");
+    assert!(dir.contains("/run/") && dir.ends_with("/skills/寫測試"), "{dir}");
+    let prompt = fake.read("coder_prompt_1.txt");
+    assert!(prompt.contains("寫測試") && prompt.contains("先寫紅燈再實作") && prompt.contains(&format!("{dir}/SKILL.md")), "{prompt}");
+    assert!(fake.read("skill_seen_1.txt").contains("暗號：香蕉"), "Claude 讀得到技能內容");
+    // 審查者（唯讀卡）也一樣。
+    assert!(fake.read("review_prompt_1.txt").contains("寫測試"), "審查提示詞也有清單");
+    assert!(fake.read("skill_seen_review_1.txt").contains("暗號：香蕉"));
+    // Agent 改了副本（假 claude 故意亂寫）：共用技能庫的檔案不受影響；卡結束後副本整個刪掉。
+    let lib = r.srv.dir.path().join("skills").join(skill["id"].as_str().unwrap()).join("SKILL.md");
+    let text = std::fs::read_to_string(&lib).unwrap();
+    assert!(text.contains("暗號：香蕉") && !text.contains("tampered"), "{text}");
+    assert!(!r.srv.dir.path().join("run").exists() || std::fs::read_dir(r.srv.dir.path().join("run")).unwrap().next().is_none(), "副本要刪掉");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_without_skills_gets_no_add_dir_and_no_skill_note() {
+    let fake = Fake::new(&["pass"], "0");
+    let r = rig(&fake).await;
+    r.enable().await;
+    r.module("登入頁", "做一個登入頁").await;
+    r.pump("審查結案", |c| done(c, "review", 1)).await;
+    assert!(!fake.read("coder_args_1.txt").lines().any(|a| a == "--add-dir"));
+    assert!(!fake.read("coder_prompt_1.txt").contains("你有這些技能可以用"));
+}
+

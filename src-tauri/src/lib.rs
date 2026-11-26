@@ -135,7 +135,7 @@ use commands::{
     schedules::{schedules_delete, schedules_list, schedules_run_now, schedules_save, schedules_set_enabled},
     agents::{
         agents_list, agents_create, agents_update, agents_delete, agents_delete_all, agents_resolve, agents_manual_pause_state, agents_set_manual_pause,
-        agents_merge, agents_ask, agents_abort_merge, agents_verify_report, agents_accept_verification, tasks_assign_agent, agents_override_module, agents_retry_module, agents_check_repo, agents_relocate_repo, agents_check_tools, agents_add_claude_to_path, agents_set_db_skill, agents_set_systems, agents_db_queries, agents_get_references, agents_method_discussion_start, agents_method_discussion_read, agents_set_references, agents_list_skills, agents_read_skill, agents_missing_skills, agents_set_custom_skills, agents_skill_uses, agents_reference_reads, agents_project_repo, agents_set_project_repo, agents_init_repo,
+        agents_merge, agents_ask, agents_abort_merge, agents_verify_report, agents_accept_verification, tasks_assign_agent, agents_override_module, agents_retry_module, agents_check_repo, agents_relocate_repo, agents_check_tools, agents_add_claude_to_path, agents_set_db_skill, agents_set_systems, agents_db_queries, agents_get_references, agents_method_discussion_start, agents_method_discussion_read, agents_set_references, agents_list_skills, agents_read_skill, agents_missing_skills, agents_set_custom_skills, server_skills_list, server_skills_upload, server_skills_delete, agents_set_server_skills, agents_skill_uses, agents_reference_reads, agents_project_repo, agents_set_project_repo, agents_init_repo,
         agents_open_repo,
     },
     formations::{
@@ -1021,6 +1021,10 @@ pub fn run() {
             agents_read_skill,
             agents_missing_skills,
             agents_set_custom_skills,
+            server_skills_list,
+            server_skills_upload,
+            server_skills_delete,
+            agents_set_server_skills,
             agents_skill_uses,
             agents_reference_reads,
             agents_project_repo,

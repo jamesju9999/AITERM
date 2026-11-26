@@ -104,6 +104,8 @@ pub struct BoardAgent {
     pub cli: String,
     /// 非 `None`＝暫停中，指向造成暫停的那張卡。
     pub paused_card_id: Option<String>,
+    /// 這位 Agent 裝的自訂技能（server 技能庫的 id，JSON 陣列）；`None`＝沒裝。
+    pub custom_skills: Option<String>,
     pub created_by: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -208,9 +210,13 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "CREATE TABLE IF NOT EXISTS board_agents (
             id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT '',
             prompt_prefix TEXT NOT NULL DEFAULT '', canvas_x REAL NOT NULL DEFAULT 0, canvas_y REAL NOT NULL DEFAULT 0,
-            produces_spec INTEGER NOT NULL DEFAULT 0, model TEXT, cli TEXT NOT NULL DEFAULT 'claude', paused_card_id TEXT,
+            produces_spec INTEGER NOT NULL DEFAULT 0, model TEXT, cli TEXT NOT NULL DEFAULT 'claude', paused_card_id TEXT, custom_skills TEXT,
             created_by TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL DEFAULT 1)",
         "CREATE INDEX IF NOT EXISTS board_agents_project ON board_agents(project_id)",
+        // server 的技能庫：整台 server 共用；檔案在資料夾 `skills/<id>/`，這裡只記 metadata。
+        "CREATE TABLE IF NOT EXISTS board_skills (
+            id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT '', files INTEGER NOT NULL DEFAULT 0,
+            bytes INTEGER NOT NULL DEFAULT 0, uploaded_by TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
         "CREATE TABLE IF NOT EXISTS board_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, created_at INTEGER NOT NULL)",
         "CREATE TABLE IF NOT EXISTS board_schedules (
@@ -232,6 +238,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ] {
         sqlx::query(sql).execute(pool).await?;
     }
+    // 舊資料庫的 Agent 表沒有技能欄位（新建的已經有；已存在就略過）。之後的資料庫、系統連線技能也加在這裡。
+    let _ = sqlx::query("ALTER TABLE board_agents ADD COLUMN custom_skills TEXT").execute(pool).await;
     Ok(())
 }
 
@@ -1038,6 +1046,89 @@ pub async fn delete_note(pool: &SqlitePool, id: i64) -> Result<bool, sqlx::Error
     Ok(sqlx::query("DELETE FROM board_notes WHERE id = ?").bind(id).execute(pool).await?.rows_affected() == 1)
 }
 
+
+// ── 技能庫 ──────────────────────────────────────────────────────────────
+
+/// 一位 Agent 最多幾個自訂技能（同桌面版）。
+pub const MAX_AGENT_SKILLS: usize = 12;
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq, Eq)]
+pub struct BoardSkill {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub files: i64,
+    pub bytes: i64,
+    pub uploaded_by: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// 新增技能；同名就取代內容資訊但**保留 id**（已裝這個技能的 Agent 不會掉）。
+pub async fn upsert_skill(pool: &SqlitePool, name: &str, description: &str, files: i64, bytes: i64, uploaded_by: &str) -> Result<BoardSkill, sqlx::Error> {
+    let t = now();
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO board_skills (id, name, description, files, bytes, uploaded_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)
+         ON CONFLICT(name) DO UPDATE SET description = excluded.description, files = excluded.files, bytes = excluded.bytes, uploaded_by = excluded.uploaded_by, updated_at = excluded.updated_at",
+    )
+    .bind(&id).bind(name).bind(description).bind(files).bind(bytes).bind(uploaded_by).bind(t).bind(t)
+    .execute(pool).await?;
+    Ok(skill_by_name(pool, name).await?.expect("剛寫入的技能"))
+}
+
+pub async fn skill_by_name(pool: &SqlitePool, name: &str) -> Result<Option<BoardSkill>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_skills WHERE name = ?").bind(name).fetch_optional(pool).await
+}
+
+pub async fn get_skill(pool: &SqlitePool, id: &str) -> Result<Option<BoardSkill>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_skills WHERE id = ?").bind(id).fetch_optional(pool).await
+}
+
+pub async fn list_skills(pool: &SqlitePool) -> Result<Vec<BoardSkill>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_skills ORDER BY name").fetch_all(pool).await
+}
+
+pub async fn delete_skill(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query("DELETE FROM board_skills WHERE id = ?").bind(id).execute(pool).await?.rows_affected() > 0)
+}
+
+/// 整份取代這位 Agent 的技能。不存在的 id、重複、超過上限都拒絕（回說明）；空清單＝移除全部。
+pub async fn set_agent_skills(pool: &SqlitePool, agent_id: &str, ids: &[String]) -> Result<Result<BoardAgent, String>, sqlx::Error> {
+    let mut clean: Vec<&String> = Vec::new();
+    for id in ids {
+        if !clean.contains(&id) {
+            clean.push(id);
+        }
+    }
+    if clean.len() > MAX_AGENT_SKILLS {
+        return Ok(Err(format!("一位 Agent 最多 {MAX_AGENT_SKILLS} 個自訂技能")));
+    }
+    for id in &clean {
+        if get_skill(pool, id).await?.is_none() {
+            return Ok(Err(format!("技能庫裡沒有這個技能：{id}")));
+        }
+    }
+    let raw = (!clean.is_empty()).then(|| serde_json::to_string(&clean).unwrap_or_default());
+    let r = sqlx::query("UPDATE board_agents SET custom_skills = ?, updated_at = ?, version = version + 1 WHERE id = ?").bind(raw).bind(now()).bind(agent_id).execute(pool).await?;
+    if r.rows_affected() == 0 {
+        return Ok(Err("找不到這個 Agent".into()));
+    }
+    Ok(Ok(get_agent(pool, agent_id).await?.expect("剛更新的 Agent")))
+}
+
+/// 這位 Agent 目前有效的技能（技能庫裡還在的，依 Agent 設定的順序）。被刪掉的 id 在這裡自然被濾掉。
+pub async fn agent_skills(pool: &SqlitePool, agent: &BoardAgent) -> Result<Vec<BoardSkill>, sqlx::Error> {
+    let ids: Vec<String> = agent.custom_skills.as_deref().and_then(|r| serde_json::from_str(r).ok()).unwrap_or_default();
+    let mut out = Vec::new();
+    for id in ids {
+        if let Some(s) = get_skill(pool, &id).await? {
+            out.push(s);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1343,5 +1434,61 @@ mod tests {
         assert_eq!(list_notes(&p, "P").await.unwrap(), vec![n1.clone()]);
         assert_eq!(n1.text, "先做登入");
         assert!(delete_note(&p, n1.id).await.unwrap() && !delete_note(&p, n1.id).await.unwrap());
+    }
+
+    async fn skill_agent(p: &SqlitePool) -> BoardAgent {
+        create_agent(p, agent("coder", "工程師1")).await.unwrap().unwrap()
+    }
+
+    #[tokio::test]
+    async fn uploading_a_skill_with_the_same_name_replaces_it_and_keeps_the_id() {
+        let p = pool().await;
+        let a = upsert_skill(&p, "寫測試", "舊說明", 2, 100, "甲").await.unwrap();
+        let b = upsert_skill(&p, "寫測試", "新說明", 5, 900, "乙").await.unwrap();
+        assert_eq!(a.id, b.id, "同名取代要保留 id，已裝的 Agent 才不會掉");
+        assert_eq!((b.description.as_str(), b.files, b.bytes, b.uploaded_by.as_str()), ("新說明", 5, 900, "乙"));
+        assert_eq!(list_skills(&p).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn setting_agent_skills_validates_and_deleted_skills_drop_out() {
+        let p = pool().await;
+        let ag = skill_agent(&p).await;
+        let s1 = upsert_skill(&p, "甲", "", 1, 1, "x").await.unwrap();
+        let s2 = upsert_skill(&p, "乙", "", 1, 1, "x").await.unwrap();
+        let v1 = ag.version;
+        let ag = set_agent_skills(&p, &ag.id, &[s2.id.clone(), s1.id.clone(), s2.id.clone()]).await.unwrap().unwrap();
+        assert_eq!(ag.version, v1 + 1, "改技能要 bump 版本，前端才會更新");
+        assert_eq!(agent_skills(&p, &ag).await.unwrap().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["乙", "甲"], "重複的 id 只留一個，順序照設定");
+        let err = set_agent_skills(&p, &ag.id, &["不存在".into()]).await.unwrap().unwrap_err();
+        assert!(err.contains("沒有這個技能"), "{err}");
+        assert!(delete_skill(&p, &s2.id).await.unwrap());
+        let ag = get_agent(&p, &ag.id).await.unwrap().unwrap();
+        assert_eq!(agent_skills(&p, &ag).await.unwrap().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["甲"], "技能庫刪掉後 Agent 讀到的清單自動濾掉");
+        let cleared = set_agent_skills(&p, &ag.id, &[]).await.unwrap().unwrap();
+        assert_eq!(cleared.custom_skills, None);
+    }
+
+    #[tokio::test]
+    async fn an_agent_can_hold_at_most_twelve_skills() {
+        let p = pool().await;
+        let ag = skill_agent(&p).await;
+        let mut ids = Vec::new();
+        for i in 0..13 {
+            ids.push(upsert_skill(&p, &format!("技能{i}"), "", 1, 1, "x").await.unwrap().id);
+        }
+        assert!(set_agent_skills(&p, &ag.id, &ids).await.unwrap().is_err());
+        assert!(set_agent_skills(&p, &ag.id, &ids[..12]).await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_old_agents_table_without_the_skills_column_is_upgraded() {
+        let p = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        // 舊版的 board_agents：沒有 custom_skills 欄位。
+        sqlx::query("CREATE TABLE board_agents (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT '', prompt_prefix TEXT NOT NULL DEFAULT '', canvas_x REAL NOT NULL DEFAULT 0, canvas_y REAL NOT NULL DEFAULT 0, produces_spec INTEGER NOT NULL DEFAULT 0, model TEXT, cli TEXT NOT NULL DEFAULT 'claude', paused_card_id TEXT, created_by TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL DEFAULT 1)").execute(&p).await.unwrap();
+        sqlx::query("INSERT INTO board_agents (id, project_id, kind, name, created_at, updated_at) VALUES ('a','P','coder','舊的',1,1)").execute(&p).await.unwrap();
+        init_schema(&p).await.unwrap();
+        let a = get_agent(&p, "a").await.unwrap().expect("舊資料還在");
+        assert_eq!((a.name.as_str(), a.custom_skills), ("舊的", None));
     }
 }

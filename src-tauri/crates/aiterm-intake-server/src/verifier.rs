@@ -242,7 +242,8 @@ async fn run_in_worktree(st: &AppState, settings: &RunnerSettings, work_dir: &Pa
             spec.push_str(&crate::orchestrator::spec_text(work_dir, m.start_sha.as_deref(), end).await);
         }
     }
-    let prompt = vcore::verify_prompt(&module_list, &spec, &json_path.to_string_lossy(), &evidence.to_string_lossy(), ports, has_browser);
+    let skills = crate::skills::SkillCtx::prepare(st, agent, &card.id).await;
+    let prompt = format!("{}{}", vcore::verify_prompt(&module_list, &spec, &json_path.to_string_lossy(), &evidence.to_string_lossy(), ports, has_browser), skills.note());
 
     // 3. 瀏覽器設定與禁止清單。
     let mcp_config = if has_browser {
@@ -261,7 +262,7 @@ async fn run_in_worktree(st: &AppState, settings: &RunnerSettings, work_dir: &Pa
     let mut s = settings.clone();
     s.timeout_secs = s.timeout_secs.max(VERIFY_MIN_TIMEOUT_SECS);
     s.max_turns = s.max_turns.max(VERIFY_MIN_TURNS);
-    let run = runner::exec_claude_full(&s, wt, &mode, &[], &prompt, agent.model.as_deref(), &SessionUse::New(sid)).await?;
+    let run = runner::exec_claude_full(&s, wt, &mode, skills.dirs(), &prompt, agent.model.as_deref(), &SessionUse::New(sid)).await?;
 
     // 5. 讀結論。沒寫、讀不懂、品質不合格都算失敗，不會當成通過。
     // 失敗時也把被禁止清單擋下的命令記起來，管理員才看得出是不是誤擋造成驗收做不完。

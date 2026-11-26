@@ -26,3 +26,4 @@ pub mod api;
 pub mod pipeline;
 pub mod verify;
 pub mod verifier;
+pub mod skills;

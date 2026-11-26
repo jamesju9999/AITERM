@@ -13,6 +13,7 @@ pub mod secrets;
 pub mod pairing;
 pub mod reply;
 pub mod runner;
+pub mod skills;
 pub mod orchestrator;
 pub mod scheduler;
 pub mod state;
@@ -24,6 +25,7 @@ pub mod routes;
 pub mod routes_data;
 pub mod routes_board;
 pub mod routes_verify;
+pub mod routes_skills;
 pub mod server;
 #[doc(hidden)]
 pub mod testkit;

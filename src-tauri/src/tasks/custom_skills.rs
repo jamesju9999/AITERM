@@ -24,42 +24,8 @@ pub struct SkillInfo {
     pub source: String,
 }
 
-/// 讀 SKILL.md 開頭的 frontmatter（`---` 之間）裡的 name 與 description。沒有就用資料夾名稱與空說明。
-/// description 支援 YAML 的多行寫法（`>`、`>-`、`|`、`|-` 後面接縮排的行，接成一行）。
-pub fn parse_frontmatter(text: &str, fallback_name: &str) -> (String, String) {
-    let mut name = None;
-    let mut description: Option<String> = None;
-    let mut lines = text.trim_start_matches('\u{feff}').lines().peekable();
-    if lines.next().map(str::trim) == Some("---") {
-        let unquote = |v: &str| v.trim().trim_matches('"').trim_matches('\'').to_string();
-        while let Some(raw) = lines.next() {
-            let line = raw.trim();
-            if line == "---" {
-                break;
-            }
-            if let Some(v) = line.strip_prefix("name:") {
-                name = Some(unquote(v));
-            } else if let Some(v) = line.strip_prefix("description:") {
-                let v = v.trim();
-                if matches!(v, ">" | ">-" | ">+" | "|" | "|-" | "|+") {
-                    let mut parts = Vec::new();
-                    while let Some(next) = lines.peek() {
-                        if next.starts_with(' ') || next.starts_with('\t') || next.trim().is_empty() && !next.is_empty() {
-                            parts.push(next.trim().to_string());
-                            lines.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    description = Some(parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" "));
-                } else {
-                    description = Some(unquote(v));
-                }
-            }
-        }
-    }
-    (name.filter(|n| !n.is_empty()).unwrap_or_else(|| fallback_name.to_string()), description.unwrap_or_default())
-}
+/// frontmatter 解析與 server 技能庫共用同一份（core）。
+pub use aiterm_intake_core::skills::parse_frontmatter;
 
 /// 讀一個技能資料夾。沒有 SKILL.md 就是 `None`。
 pub fn read_skill(dir: &Path, source: &str) -> Option<SkillInfo> {

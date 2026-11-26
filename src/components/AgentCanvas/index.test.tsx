@@ -151,6 +151,12 @@ vi.mock("../../ipc/questions", async () => {
 vi.mock("../../ipc/bridge", () => ({
   bridgeStatus: vi.fn().mockResolvedValue({ running: false, port: null, token: null, error: null }),
 }));
+vi.mock("../../ipc/serverSkills", () => ({
+  listServerSkills: vi.fn().mockResolvedValue([]),
+  uploadServerSkill: vi.fn(),
+  deleteServerSkill: vi.fn(),
+  setAgentServerSkills: vi.fn(),
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
 const serverConn = vi.hoisted(() => ({ connected: false }));
 vi.mock("../../hooks/useIntakeRemote", () => ({
@@ -1404,6 +1410,30 @@ describe("AgentCanvasView", () => {
     expect(await screen.findByTestId("ac-server-run")).toHaveAttribute("aria-pressed", "true");
     expect(await screen.findAllByTestId("ac-merge-approve")).toHaveLength(1);
     expect(getOrchestration).toHaveBeenCalledWith("remote:srv");
+  });
+
+  it("共用專案的技能：只有自訂技能可拖、Agent 節點顯示 server 技能名稱，且不做本機路徑檢查", async () => {
+    const { listServerSkills } = await import("../../ipc/serverSkills");
+    const proj = (id: string, name: string) => ({
+      id, name, description: "", path: `/${id}`, status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null,
+    });
+    vi.mocked(listProjects).mockResolvedValue([proj("remote:srv", "🌐 範例科技")]);
+    vi.mocked(listAgents).mockResolvedValue([agent({ id: "a1", custom_skills: JSON.stringify(["s1", "已刪掉的"]) })]);
+    vi.mocked(listTasks).mockResolvedValue([]);
+    vi.mocked(listServerSkills).mockResolvedValue([{ id: "s1", name: "寫測試", description: "", files: 1, bytes: 10, uploaded_by: "小華", updated_at: 1 }]);
+    vi.mocked(missingSkills).mockClear();
+    render(
+      <LocaleProvider>
+        <AgentCanvasView isActive initialProjectId="remote:srv" />
+      </LocaleProvider>,
+    );
+    const node = await screen.findByTestId("agent-a1");
+    expect(await within(node).findByText(/寫測試/)).toBeTruthy();
+    expect(within(node).queryByText(/已刪掉的/)).toBeNull();
+    expect(screen.getByTestId("skill-custom")).toBeTruthy();
+    expect(screen.queryByTestId("skill-db")).toBeNull();
+    expect(screen.queryByTestId("skill-systems")).toBeNull();
+    expect(missingSkills).not.toHaveBeenCalled();
   });
 
   it("專案下拉選單：有共用專案時分成「本機」「共用」兩組；沒有時維持單純清單", async () => {

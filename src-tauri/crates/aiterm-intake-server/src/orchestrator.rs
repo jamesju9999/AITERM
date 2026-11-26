@@ -290,11 +290,13 @@ async fn run_inner(st: &Arc<AppState>, card_id: &str) -> Result<String, String> 
         }
     };
     let mode = Mode::Edit { verify_command: cfg.verify_command.clone() };
-    let prompt = format!("{}{}", orch::work_prompt(&agent, &card), orch::verify_note(&cfg.verify_command));
+    // Agent 裝了技能：給一份一次性的副本（結束就刪），提示詞附清單。
+    let skills = crate::skills::SkillCtx::prepare(st, &agent, card_id).await;
+    let prompt = format!("{}{}{}", orch::work_prompt(&agent, &card), orch::verify_note(&cfg.verify_command), skills.note());
     let before = if prior.is_some() { Some(start.clone()) } else { verify::snapshot(&wt).await };
     let mut resumed: Option<Result<String, String>> = None;
     if let Some(p) = &prior {
-        match runner::exec_claude_session(&settings, &wt, &mode, &[], &orch::resume_prompt(&prompt), agent.model.as_deref(), &runner::SessionUse::Resume(p.session_id.clone())).await {
+        match runner::exec_claude_session(&settings, &wt, &mode, skills.dirs(), &orch::resume_prompt(&prompt), agent.model.as_deref(), &runner::SessionUse::Resume(p.session_id.clone())).await {
             // 對話檔不見了：不是任務的問題，改開新的（工作資料夾裡的進度還在，新的對話會自己看）。
             Err(e) if runner::is_session_missing(&e) => {}
             r => resumed = Some(r),
@@ -306,7 +308,7 @@ async fn run_inner(st: &Arc<AppState>, card_id: &str) -> Result<String, String> 
             let sid = uuid::Uuid::new_v4().to_string();
             bs::set_session(pool, card_id, &sid, Some(&start)).await.map_err(|e| e.to_string())?;
             let first = if prior.is_some() { orch::resume_prompt(&prompt) } else { prompt.clone() };
-            runner::exec_claude_session(&settings, &wt, &mode, &[], &first, agent.model.as_deref(), &runner::SessionUse::New(sid)).await?
+            runner::exec_claude_session(&settings, &wt, &mode, skills.dirs(), &first, agent.model.as_deref(), &runner::SessionUse::New(sid)).await?
         }
     };
     // 專案設了驗證指令：Coder 做完由 server 在 worktree 裡實際跑一次（Coder 自己多半沒權限跑），結果交給審查。
@@ -351,12 +353,13 @@ async fn run_review(st: &Arc<AppState>, settings: &runner::RunnerSettings, work_
     // 上一輪的理由：被審的是修正卡時，它指向上一張審查卡。
     let previous = if reviewed.card_kind == "fix" { bs::get_card(pool, reviewed.review_of.as_deref().unwrap_or("")).await.ok().flatten().map(|r| reasons_of(&r)).unwrap_or_default() } else { vec![] };
     let verification = bs::get_verification(pool, &reviewed.id).await.ok().flatten();
-    let prompt = orch::review_prompt(agent, &module, &reviewed, &diff, &previous, verification.as_ref().map(|(r, p)| (r.as_str(), *p)));
+    let skills = crate::skills::SkillCtx::prepare(st, agent, &card.id).await;
+    let prompt = format!("{}{}", orch::review_prompt(agent, &module, &reviewed, &diff, &previous, verification.as_ref().map(|(r, p)| (r.as_str(), *p))), skills.note());
     // 在被審那版的一次性 worktree 裡唯讀審查。
     let wt = review_worktree(st, &card.id);
     std::fs::create_dir_all(wt.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
     runner::git(work_dir, &["worktree", "add", "--detach", &wt.to_string_lossy(), &end]).await?;
-    let out = runner::exec_claude_as(settings, &wt, &Mode::ReadOnly, &[], &prompt, agent.model.as_deref()).await;
+    let out = runner::exec_claude_as(settings, &wt, &Mode::ReadOnly, skills.dirs(), &prompt, agent.model.as_deref()).await;
     let _ = runner::git(work_dir, &["worktree", "remove", "--force", &wt.to_string_lossy()]).await;
     let _ = std::fs::remove_dir_all(&wt);
     let verdict = orch::parse_review(&out?)?;
@@ -439,12 +442,13 @@ async fn run_plan(st: &Arc<AppState>, settings: &runner::RunnerSettings, work_di
     }
     let spec = spec_text(work_dir, card.start_sha.as_deref(), &end).await;
     let implementers: Vec<(String, String)> = candidates.iter().map(|a| (a.name.clone(), a.role.clone())).collect();
-    let prompt = orch::plan_prompt(agent, &module, &implementers, &spec);
+    let skills = crate::skills::SkillCtx::prepare(st, agent, &card.id).await;
+    let prompt = format!("{}{}", orch::plan_prompt(agent, &module, &implementers, &spec), skills.note());
     // 在規格那一版的一次性 worktree 裡唯讀拆解（它可以自己讀專案裡的其他檔案）。
     let wt = review_worktree(st, &card.id);
     std::fs::create_dir_all(wt.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
     runner::git(work_dir, &["worktree", "add", "--detach", &wt.to_string_lossy(), &end]).await?;
-    let out = runner::exec_claude_as(settings, &wt, &Mode::ReadOnly, &[], &prompt, agent.model.as_deref()).await;
+    let out = runner::exec_claude_as(settings, &wt, &Mode::ReadOnly, skills.dirs(), &prompt, agent.model.as_deref()).await;
     let _ = runner::git(work_dir, &["worktree", "remove", "--force", &wt.to_string_lossy()]).await;
     let _ = std::fs::remove_dir_all(&wt);
     let plan = orch::parse_plan(&out?)?;

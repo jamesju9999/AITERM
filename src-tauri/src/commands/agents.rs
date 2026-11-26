@@ -835,3 +835,35 @@ pub async fn agents_init_repo(
     let board = project_id.and_then(|id| project(&reg, &id).ok()).map(|p| p.path.clone());
     crate::tasks::repo_check::init_repo(&path, board.as_deref()).await
 }
+
+// ---- server 技能庫（共用看板專案的自訂技能） ----
+
+/// server 技能庫的清單（所有成員可讀）。
+#[tauri::command]
+pub async fn server_skills_list(rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<Vec<crate::intake::board_remote::ServerSkill>, String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::skills_list(&api).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 把本機的技能資料夾上傳到 server 的技能庫（管理員限定；同名取代）。
+#[tauri::command]
+pub async fn server_skills_upload(path: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<crate::intake::board_remote::ServerSkill, String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::skill_upload(&api, std::path::Path::new(&path)).await
+}
+
+/// 刪除 server 技能庫裡的一個技能（管理員限定）。
+#[tauri::command]
+pub async fn server_skills_delete(id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::skill_delete(&api, &id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 設定共用看板專案裡某位 Agent 的自訂技能（server 技能 id，整份取代；管理員限定）。
+#[tauri::command]
+pub async fn agents_set_server_skills(agent_id: String, ids: Vec<String>, rs: State<'_, Arc<crate::intake::remote::RemoteState>>, app: AppHandle) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::agent_set_skills(&api, &agent_id, &ids).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+    emit_updated(&app);
+    Ok(())
+}
