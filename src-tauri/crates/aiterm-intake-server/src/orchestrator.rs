@@ -296,7 +296,7 @@ async fn run_inner(st: &Arc<AppState>, card_id: &str) -> Result<String, String> 
     let before = if prior.is_some() { Some(start.clone()) } else { verify::snapshot(&wt).await };
     let mut resumed: Option<Result<String, String>> = None;
     if let Some(p) = &prior {
-        match runner::exec_claude_session(&settings, &wt, &mode, skills.dirs(), &orch::resume_prompt(&prompt), agent.model.as_deref(), &runner::SessionUse::Resume(p.session_id.clone())).await {
+        match runner::exec_claude_attached(&settings, &wt, &mode, &skills.attach(), &orch::resume_prompt(&prompt), agent.model.as_deref(), &runner::SessionUse::Resume(p.session_id.clone())).await.map(|r| r.text) {
             // 對話檔不見了：不是任務的問題，改開新的（工作資料夾裡的進度還在，新的對話會自己看）。
             Err(e) if runner::is_session_missing(&e) => {}
             r => resumed = Some(r),
@@ -308,7 +308,7 @@ async fn run_inner(st: &Arc<AppState>, card_id: &str) -> Result<String, String> 
             let sid = uuid::Uuid::new_v4().to_string();
             bs::set_session(pool, card_id, &sid, Some(&start)).await.map_err(|e| e.to_string())?;
             let first = if prior.is_some() { orch::resume_prompt(&prompt) } else { prompt.clone() };
-            runner::exec_claude_session(&settings, &wt, &mode, skills.dirs(), &first, agent.model.as_deref(), &runner::SessionUse::New(sid)).await?
+            runner::exec_claude_attached(&settings, &wt, &mode, &skills.attach(), &first, agent.model.as_deref(), &runner::SessionUse::New(sid)).await?.text
         }
     };
     // 專案設了驗證指令：Coder 做完由 server 在 worktree 裡實際跑一次（Coder 自己多半沒權限跑），結果交給審查。
@@ -359,7 +359,7 @@ async fn run_review(st: &Arc<AppState>, settings: &runner::RunnerSettings, work_
     let wt = review_worktree(st, &card.id);
     std::fs::create_dir_all(wt.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
     runner::git(work_dir, &["worktree", "add", "--detach", &wt.to_string_lossy(), &end]).await?;
-    let out = runner::exec_claude_as(settings, &wt, &Mode::ReadOnly, skills.dirs(), &prompt, agent.model.as_deref()).await;
+    let out = runner::exec_claude_attached(settings, &wt, &Mode::ReadOnly, &skills.attach(), &prompt, agent.model.as_deref(), &runner::SessionUse::None).await.map(|r| r.text);
     let _ = runner::git(work_dir, &["worktree", "remove", "--force", &wt.to_string_lossy()]).await;
     let _ = std::fs::remove_dir_all(&wt);
     let verdict = orch::parse_review(&out?)?;
@@ -448,7 +448,7 @@ async fn run_plan(st: &Arc<AppState>, settings: &runner::RunnerSettings, work_di
     let wt = review_worktree(st, &card.id);
     std::fs::create_dir_all(wt.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
     runner::git(work_dir, &["worktree", "add", "--detach", &wt.to_string_lossy(), &end]).await?;
-    let out = runner::exec_claude_as(settings, &wt, &Mode::ReadOnly, skills.dirs(), &prompt, agent.model.as_deref()).await;
+    let out = runner::exec_claude_attached(settings, &wt, &Mode::ReadOnly, &skills.attach(), &prompt, agent.model.as_deref(), &runner::SessionUse::None).await.map(|r| r.text);
     let _ = runner::git(work_dir, &["worktree", "remove", "--force", &wt.to_string_lossy()]).await;
     let _ = std::fs::remove_dir_all(&wt);
     let plan = orch::parse_plan(&out?)?;

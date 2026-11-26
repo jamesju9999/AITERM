@@ -4,6 +4,7 @@
 //! 副本在 `<data>/run/<card id>/skills/`，卡結束（或這個值被丟掉）就刪。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use aiterm_intake_core::board_store::{self as bs, BoardAgent, BoardSkill};
 use aiterm_intake_core::skills as rules;
@@ -125,6 +126,8 @@ pub struct SkillCtx {
     dirs: Vec<String>,
     note: String,
     run_root: Option<PathBuf>,
+    /// 資料庫技能的 MCP 註冊：被丟掉時 token 作廢。
+    db: Option<crate::dbmcp::McpGuard>,
 }
 
 impl SkillCtx {
@@ -137,13 +140,40 @@ impl SkillCtx {
         &self.dirs
     }
 
+    /// 給 `exec_claude_attached` 的附掛：技能資料夾，加上資料庫技能的 MCP 設定、允許的工具與逾時環境變數。
+    pub fn attach(&self) -> crate::runner::Attach {
+        let mut a = crate::runner::Attach::dirs(&self.dirs);
+        if let Some(g) = &self.db {
+            a.mcp_configs.push(g.config_path.to_string_lossy().into_owned());
+            a.allow.push(format!("mcp__{}", crate::dbmcp::SERVER_NAME));
+            a.env.push((crate::dbmcp::TOOL_TIMEOUT_ENV.0.to_string(), crate::dbmcp::TOOL_TIMEOUT_ENV.1.to_string()));
+        }
+        a
+    }
+
     /// 要接在提示詞後面的說明；沒有技能就是空字串。
     pub fn note(&self) -> &str {
         &self.note
     }
 
     /// 依 Agent 的設定準備副本。技能庫裡讀不到的技能不會讓卡失敗，只在附註裡明講讀不到。
-    pub async fn prepare(st: &AppState, agent: &BoardAgent, card_id: &str) -> Self {
+    pub async fn prepare(st: &Arc<AppState>, agent: &BoardAgent, card_id: &str) -> Self {
+        let mut ctx = Self::prepare_custom(st, agent, card_id).await;
+        // 資料庫技能：發一個只屬於這張卡的 token，工具由 server 內建的 MCP 端點提供。
+        if let Some(skill) = aiterm_db::skill::parse(agent.db_skill.as_deref()) {
+            let run = st.data_dir.join("run").join(card_id);
+            let mctx = crate::dbmcp::McpCtx { card_id: card_id.to_string(), agent_id: Some(agent.id.clone()), project_id: agent.project_id.clone(), skill: skill.clone() };
+            if let Some(guard) = crate::dbmcp::register(st, mctx, &run) {
+                ctx.note.push_str(&crate::dbmcp::prompt_note(st, &skill).await);
+                ctx.db = Some(guard);
+                // 就算沒有自訂技能，副本資料夾（`run/<卡>`）也要在結束時清掉。
+                ctx.run_root.get_or_insert_with(|| run.join("skills"));
+            }
+        }
+        ctx
+    }
+
+    async fn prepare_custom(st: &AppState, agent: &BoardAgent, card_id: &str) -> Self {
         let skills = match bs::agent_skills(&st.pools.intake, agent).await {
             Ok(s) if !s.is_empty() => s,
             _ => return Self::none(),
@@ -162,7 +192,7 @@ impl SkillCtx {
         })
         .await
         .unwrap_or_default();
-        let mut ctx = Self { dirs: Vec::new(), note: String::new(), run_root: Some(run_root) };
+        let mut ctx = Self { dirs: Vec::new(), note: String::new(), run_root: Some(run_root), db: None };
         ctx.note.push_str("\n\n你有這些技能可以用。需要時先用 Read 讀那個 SKILL.md 的全文並照做（不需要就不用讀）：\n");
         for (s, r) in &copied {
             match r {

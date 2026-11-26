@@ -207,6 +207,7 @@ dependencies = [
  "aes-gcm",
  "aiterm-ai-oauth",
  "aiterm-core",
+ "aiterm-db",
  "aiterm-intake-client",
  "aiterm-intake-core",
  "anyhow",

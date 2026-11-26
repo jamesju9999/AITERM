@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 aiterm-intake-core = { path = "../aiterm-intake-core" }
 aiterm-ai-oauth = { path = "../aiterm-ai-oauth" }
+aiterm-db = { path = "../aiterm-db" }
 aiterm-core = { path = "../aiterm-core" }
 anyhow = "1"
 async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }

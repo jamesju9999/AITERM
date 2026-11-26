@@ -57,6 +57,8 @@ case "$ALLOWED" in
     ls > "$D/files_$n.txt"
     printf '%s\n' "$@" > "$D/coder_args_$n.txt"
     prev=''; for a in "$@"; do if [ "$prev" = "--add-dir" ]; then cp "$a/SKILL.md" "$D/skill_seen_$n.txt" 2>/dev/null; echo tampered >> "$a/SKILL.md"; fi; prev="$a"; done
+    prev=''; for a in "$@"; do if [ "$prev" = "--mcp-config" ]; then cp "$a" "$D/mcp_seen_$n.json" 2>/dev/null; fi; prev="$a"; done
+    echo "$MCP_TOOL_TIMEOUT" > "$D/mcp_env_$n.txt"
     sleep @SECS@
     echo "change $n" >> "work-$n.txt"
     echo "change $n" > shared.txt
@@ -592,5 +594,36 @@ async fn an_agent_without_skills_gets_no_add_dir_and_no_skill_note() {
     r.pump("審查結案", |c| done(c, "review", 1)).await;
     assert!(!fake.read("coder_args_1.txt").lines().any(|a| a == "--add-dir"));
     assert!(!fake.read("coder_prompt_1.txt").contains("你有這些技能可以用"));
+    assert!(!fake.read("coder_args_1.txt").lines().any(|a| a == "--mcp-config" || a == "--strict-mcp-config"), "沒裝資料庫技能就沒有 MCP 設定");
+    assert!(!fake.read("coder_args_1.txt").contains("mcp__aiterm-db"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_db_skill_gives_claude_a_per_card_mcp_endpoint_that_dies_with_the_card() {
+    let fake = Fake::new(&["pass"], "0");
+    let r = rig(&fake).await;
+    r.enable().await;
+    let db = r.srv.dir.path().join("app.db").to_string_lossy().to_string();
+    std::fs::File::create(&db).unwrap();
+    let conn = r.admin.request(Method::POST, "/v1/db/connections", Some(json!({"name": "正式機", "db_type": "sqlite", "host": db}))).await.unwrap();
+    r.admin.request(Method::PUT, &format!("/v1/board/agents/{}/db-skill", r.coder.id), Some(json!({"skill": {"connections": [conn["id"]], "mode": "approve"}}))).await.unwrap();
+    r.module("登入頁", "做一個登入頁").await;
+    r.pump("審查結案", |c| done(c, "review", 1)).await;
+
+    let args: Vec<String> = fake.read("coder_args_1.txt").lines().map(str::to_string).collect();
+    let after = |f: &str| args.iter().position(|a| a == f).map(|i| args[i + 1].clone()).unwrap_or_default();
+    assert!(after("--allowedTools").contains("mcp__aiterm-db") && after("--allowedTools").starts_with("Read,Grep,Glob,Edit"), "{args:?}");
+    assert!(args.iter().any(|a| a == "--strict-mcp-config"), "不載入使用者自己的 MCP 設定：{args:?}");
+    assert_eq!(fake.read("mcp_env_1.txt").trim(), "86400000", "等核准時工具呼叫才不會逾時");
+    // 設定檔指向本機的 MCP 端點；提示詞說明可用的連線與權限。
+    let cfg: serde_json::Value = serde_json::from_str(&fake.read("mcp_seen_1.json")).unwrap();
+    let url = cfg["mcpServers"]["aiterm-db"]["url"].as_str().unwrap().to_string();
+    assert!(url.starts_with("http://127.0.0.1:") && url.contains("/mcp/"), "{url}");
+    let prompt = fake.read("coder_prompt_1.txt");
+    assert!(prompt.contains("db_query") && prompt.contains("正式機") && prompt.contains("核准"), "{prompt}");
+    // 卡結束後 token 作廢；設定檔隨一次性資料夾刪除。
+    let resp = reqwest::Client::new().post(&url).json(&json!({"jsonrpc": "2.0", "id": 1, "method": "ping"})).send().await.unwrap();
+    assert_eq!(resp.status(), 401);
+    assert!(!r.srv.dir.path().join("run").exists() || std::fs::read_dir(r.srv.dir.path().join("run")).unwrap().next().is_none());
 }
 

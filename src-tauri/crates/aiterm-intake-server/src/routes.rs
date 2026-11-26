@@ -50,7 +50,7 @@ async fn me(Extension(me): Extension<Me>) -> Json<Me> {
 
 /// 已登入的路由（各功能模組在這裡掛上去）。
 fn protected() -> Router<Arc<AppState>> {
-    Router::new().route("/v1/me", get(me)).route("/v1/events", get(crate::events::events)).merge(crate::routes_data::routes()).merge(crate::routes_board::routes()).merge(crate::routes_verify::routes()).merge(crate::routes_skills::routes())
+    Router::new().route("/v1/me", get(me)).route("/v1/events", get(crate::events::events)).merge(crate::routes_data::routes()).merge(crate::routes_board::routes()).merge(crate::routes_verify::routes()).merge(crate::routes_skills::routes()).merge(crate::routes_db::routes())
 }
 
 pub fn build(state: Arc<AppState>) -> Router {

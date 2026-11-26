@@ -17,6 +17,7 @@ impl Running {
         crate::runner::stop(&self.state);
         crate::orchestrator::stop(&self.state);
         crate::scheduler::stop(&self.state);
+        self.state.mcp.shutdown();
         if let Some(tx) = self.shutdown.take() {
             let _ = tx.send(());
         }
@@ -40,6 +41,12 @@ pub async fn start(bind: SocketAddr, state: Arc<AppState>, identity: Identity) -
     // 驗收被強制結束時留下的伺服器（佔著驗收用的埠）也收掉。
     crate::verifier::cleanup_stale(&state).await;
     crate::skills::cleanup_stale(&state.data_dir);
+    // 上一個行程留下的資料庫查詢：等核准的沒執行過，記成拒絕；其餘標成中斷。
+    aiterm_intake_core::board_store::close_dangling_db_queries(&state.pools.intake).await.ok();
+    // 給 Claude Code 的資料庫工具：只聽本機的純 HTTP 端點。
+    if let Err(e) = crate::dbmcp::start(&state) {
+        log::warn!("無法啟動資料庫工具端點（資料庫技能不可用）：{e}");
+    }
     // 先把上一個行程留下的孤兒 Claude 殺掉：它還在改同一個 worktree，接續的對話不能和它同時寫。
     if let Ok(ids) = aiterm_intake_core::board_store::all_session_ids(&state.pools.intake).await {
         let n = crate::runner::kill_orphans(&ids);

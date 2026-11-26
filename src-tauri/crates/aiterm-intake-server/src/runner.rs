@@ -215,8 +215,29 @@ pub fn claude_args(s: &RunnerSettings, mode: &Mode, extra_dirs: &[String]) -> Ve
     claude_args_with(s, mode, extra_dirs, &SessionUse::None)
 }
 
+/// 一次執行額外附掛的東西：技能資料夾、MCP 設定、額外允許的工具、環境變數（資料庫技能用）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Attach {
+    pub dirs: Vec<String>,
+    pub mcp_configs: Vec<String>,
+    /// 追加到 `--allowedTools` 的項目（例如 `mcp__aiterm-db`）。
+    pub allow: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+impl Attach {
+    pub fn dirs(dirs: &[String]) -> Self {
+        Self { dirs: dirs.to_vec(), ..Self::default() }
+    }
+}
+
 pub fn claude_args_with(s: &RunnerSettings, mode: &Mode, extra_dirs: &[String], session: &SessionUse) -> Vec<String> {
-    let (allowed, disallowed) = match mode {
+    claude_args_attached(s, mode, &Attach::dirs(extra_dirs), session)
+}
+
+pub fn claude_args_attached(s: &RunnerSettings, mode: &Mode, attach: &Attach, session: &SessionUse) -> Vec<String> {
+    let extra_dirs = &attach.dirs;
+    let (mut allowed, disallowed) = match mode {
         Mode::ReadOnly => ("Read,Grep,Glob".to_string(), "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task".to_string()),
         Mode::Edit { verify_command } => {
             let mut a = "Read,Grep,Glob,Edit,Write,MultiEdit".to_string();
@@ -239,12 +260,24 @@ pub fn claude_args_with(s: &RunnerSettings, mode: &Mode, extra_dirs: &[String], 
         SessionUse::Resume(id) => args.extend(["--resume".into(), id.clone()]),
     }
     args.extend(["--permission-mode".into(), "dontAsk".into()]);
+    for a in &attach.allow {
+        allowed.push(',');
+        allowed.push_str(a);
+    }
     args.extend(["--max-turns".into(), s.max_turns.to_string(), "--allowedTools".into(), allowed, "--disallowedTools".into(), disallowed]);
     for d in extra_dirs {
         args.extend(["--add-dir".into(), d.clone()]);
     }
+    let mut mcp: Vec<String> = Vec::new();
     if let Mode::Verify { mcp_config: Some(path), .. } = mode {
-        args.extend(["--mcp-config".into(), path.clone(), "--strict-mcp-config".into()]);
+        mcp.push(path.clone());
+    }
+    mcp.extend(attach.mcp_configs.iter().cloned());
+    for path in &mcp {
+        args.extend(["--mcp-config".into(), path.clone()]);
+    }
+    if !mcp.is_empty() {
+        args.push("--strict-mcp-config".into());
     }
     args
 }
@@ -287,12 +320,17 @@ pub fn denied_commands(stdout: &str) -> Vec<String> {
 }
 
 pub async fn exec_claude_full(s: &RunnerSettings, cwd: &Path, mode: &Mode, extra_dirs: &[String], prompt: &str, model: Option<&str>, session: &SessionUse) -> Result<ClaudeRun, String> {
-    let mut args = claude_args_with(s, mode, extra_dirs, session);
+    exec_claude_attached(s, cwd, mode, &Attach::dirs(extra_dirs), prompt, model, session).await
+}
+
+/// 同 `exec_claude_full`，另外附掛 MCP 設定、額外允許的工具與環境變數。
+pub async fn exec_claude_attached(s: &RunnerSettings, cwd: &Path, mode: &Mode, attach: &Attach, prompt: &str, model: Option<&str>, session: &SessionUse) -> Result<ClaudeRun, String> {
+    let mut args = claude_args_attached(s, mode, attach, session);
     if let Some(m) = model.map(str::trim).filter(|m| valid_model(m)) {
         args.extend(["--model".to_string(), m.to_string()]);
     }
     let mut cmd = Command::new(&s.claude_path);
-    cmd.args(args).current_dir(cwd).env_clear().envs(minimal_env()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.args(args).current_dir(cwd).env_clear().envs(minimal_env()).envs(attach.env.iter().map(|(k, v)| (k.as_str(), v.as_str()))).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let mut child = cmd.spawn().map_err(|e| format!("無法啟動 {}：{e}", s.claude_path))?;
     let mut stdin = child.stdin.take().ok_or("無法開啟標準輸入")?;
     let prompt = prompt.to_string();

@@ -106,6 +106,8 @@ pub struct BoardAgent {
     pub paused_card_id: Option<String>,
     /// 這位 Agent 裝的自訂技能（server 技能庫的 id，JSON 陣列）；`None`＝沒裝。
     pub custom_skills: Option<String>,
+    /// 這位 Agent 的資料庫技能（JSON：`{"connections":[server 連線 id],"mode":"read|approve|write"}`）；`None`＝沒裝。
+    pub db_skill: Option<String>,
     pub created_by: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -210,9 +212,20 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "CREATE TABLE IF NOT EXISTS board_agents (
             id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT '',
             prompt_prefix TEXT NOT NULL DEFAULT '', canvas_x REAL NOT NULL DEFAULT 0, canvas_y REAL NOT NULL DEFAULT 0,
-            produces_spec INTEGER NOT NULL DEFAULT 0, model TEXT, cli TEXT NOT NULL DEFAULT 'claude', paused_card_id TEXT, custom_skills TEXT,
+            produces_spec INTEGER NOT NULL DEFAULT 0, model TEXT, cli TEXT NOT NULL DEFAULT 'claude', paused_card_id TEXT, custom_skills TEXT, db_skill TEXT,
             created_by TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL DEFAULT 1)",
         "CREATE INDEX IF NOT EXISTS board_agents_project ON board_agents(project_id)",
+        // 分享到 server 的資料庫連線（密碼不在這裡，存 server 的加密金鑰檔）。
+        "CREATE TABLE IF NOT EXISTS board_db_connections (
+            id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL UNIQUE, db_type TEXT NOT NULL, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 0,
+            database TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '', default_schema TEXT, created_by TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+        // Agent 的資料庫查詢記錄；decision：allowed｜pending（等管理員核准）｜approved｜denied。
+        "CREATE TABLE IF NOT EXISTS board_db_queries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, card_id TEXT NOT NULL, agent_id TEXT, connection_id TEXT NOT NULL,
+            connection_name TEXT NOT NULL, sql TEXT NOT NULL, decision TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER,
+            rows INTEGER, ms INTEGER, error TEXT, decided_by TEXT)",
+        "CREATE INDEX IF NOT EXISTS board_db_queries_project ON board_db_queries(project_id, started_at)",
         // server 的技能庫：整台 server 共用；檔案在資料夾 `skills/<id>/`，這裡只記 metadata。
         "CREATE TABLE IF NOT EXISTS board_skills (
             id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT '', files INTEGER NOT NULL DEFAULT 0,
@@ -240,6 +253,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     }
     // 舊資料庫的 Agent 表沒有技能欄位（新建的已經有；已存在就略過）。之後的資料庫、系統連線技能也加在這裡。
     let _ = sqlx::query("ALTER TABLE board_agents ADD COLUMN custom_skills TEXT").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE board_agents ADD COLUMN db_skill TEXT").execute(pool).await;
     Ok(())
 }
 
@@ -1129,6 +1143,152 @@ pub async fn agent_skills(pool: &SqlitePool, agent: &BoardAgent) -> Result<Vec<B
     Ok(out)
 }
 
+
+// ── 資料庫連線與查詢記錄 ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq, Eq)]
+pub struct BoardDbConn {
+    pub id: String,
+    pub name: String,
+    /// `postgresql`｜`mysql`｜`sqlite`。
+    pub db_type: String,
+    /// 主機；SQLite 是 **server 主機上的**檔案路徑。
+    pub host: String,
+    pub port: i64,
+    pub database: String,
+    pub username: String,
+    pub default_schema: Option<String>,
+    pub created_by: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+pub struct NewDbConn<'a> {
+    pub name: &'a str,
+    pub db_type: &'a str,
+    pub host: &'a str,
+    pub port: i64,
+    pub database: &'a str,
+    pub username: &'a str,
+    pub default_schema: Option<&'a str>,
+    pub created_by: &'a str,
+}
+
+/// 新增連線；同名就取代設定但**保留 id**（已選這個連線的 Agent 不會掉）。
+pub async fn upsert_db_conn(pool: &SqlitePool, c: NewDbConn<'_>) -> Result<BoardDbConn, sqlx::Error> {
+    let t = now();
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO board_db_connections (id, name, db_type, host, port, database, username, default_schema, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(name) DO UPDATE SET db_type = excluded.db_type, host = excluded.host, port = excluded.port, database = excluded.database, username = excluded.username,
+             default_schema = excluded.default_schema, created_by = excluded.created_by, updated_at = excluded.updated_at",
+    )
+    .bind(&id).bind(c.name).bind(c.db_type).bind(c.host).bind(c.port).bind(c.database).bind(c.username).bind(c.default_schema).bind(c.created_by).bind(t).bind(t)
+    .execute(pool).await?;
+    Ok(sqlx::query_as("SELECT * FROM board_db_connections WHERE name = ?").bind(c.name).fetch_one(pool).await?)
+}
+
+pub async fn get_db_conn(pool: &SqlitePool, id: &str) -> Result<Option<BoardDbConn>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_db_connections WHERE id = ?").bind(id).fetch_optional(pool).await
+}
+
+pub async fn list_db_conns(pool: &SqlitePool) -> Result<Vec<BoardDbConn>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_db_connections ORDER BY name").fetch_all(pool).await
+}
+
+/// 刪除連線；還在等核准的查詢一併標成拒絕（沒有東西可以執行了）。
+pub async fn delete_db_conn(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query("UPDATE board_db_queries SET decision = 'denied', finished_at = ?, error = '連線已被刪除' WHERE connection_id = ? AND decision = 'pending'").bind(now()).bind(id).execute(pool).await?;
+    Ok(sqlx::query("DELETE FROM board_db_connections WHERE id = ?").bind(id).execute(pool).await?.rows_affected() > 0)
+}
+
+/// 設定（或用 `None` 移除）一位 Agent 的資料庫技能。`raw` 是技能的 JSON，`connections` 是裡面用到的連線 id：每個都要存在。
+pub async fn set_agent_db_skill(pool: &SqlitePool, agent_id: &str, raw: Option<&str>, connections: &[String]) -> Result<Result<BoardAgent, String>, sqlx::Error> {
+    for id in connections {
+        if get_db_conn(pool, id).await?.is_none() {
+            return Ok(Err(format!("server 上沒有這個資料庫連線：{id}")));
+        }
+    }
+    let r = sqlx::query("UPDATE board_agents SET db_skill = ?, updated_at = ?, version = version + 1 WHERE id = ?").bind(raw).bind(now()).bind(agent_id).execute(pool).await?;
+    if r.rows_affected() == 0 {
+        return Ok(Err("找不到這個 Agent".into()));
+    }
+    Ok(Ok(get_agent(pool, agent_id).await?.expect("剛更新的 Agent")))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq, Eq)]
+pub struct BoardDbQuery {
+    pub id: i64,
+    pub project_id: String,
+    pub card_id: String,
+    pub agent_id: Option<String>,
+    pub connection_id: String,
+    pub connection_name: String,
+    pub sql: String,
+    /// `allowed`｜`pending`（等管理員核准）｜`approved`｜`denied`。
+    pub decision: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub rows: Option<i64>,
+    pub ms: Option<i64>,
+    pub error: Option<String>,
+    pub decided_by: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+pub struct NewDbQuery<'a> {
+    pub project_id: &'a str,
+    pub card_id: &'a str,
+    pub agent_id: Option<&'a str>,
+    pub connection_id: &'a str,
+    pub connection_name: &'a str,
+    pub sql: &'a str,
+    pub decision: &'a str,
+}
+
+pub async fn start_db_query(pool: &SqlitePool, q: &NewDbQuery<'_>) -> Result<i64, sqlx::Error> {
+    Ok(sqlx::query("INSERT INTO board_db_queries (project_id, card_id, agent_id, connection_id, connection_name, sql, decision, started_at) VALUES (?,?,?,?,?,?,?,?)")
+        .bind(q.project_id).bind(q.card_id).bind(q.agent_id).bind(q.connection_id).bind(q.connection_name).bind(q.sql).bind(q.decision).bind(now())
+        .execute(pool).await?.last_insert_rowid())
+}
+
+pub async fn finish_db_query(pool: &SqlitePool, id: i64, rows: Option<i64>, ms: i64, error: Option<&str>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE board_db_queries SET finished_at = ?, rows = ?, ms = ?, error = ? WHERE id = ?").bind(now()).bind(rows).bind(ms).bind(error).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+/// 被擋下的查詢：一次記完（沒有執行）。
+pub async fn record_denied_db_query(pool: &SqlitePool, q: &NewDbQuery<'_>, reason: &str) -> Result<(), sqlx::Error> {
+    let id = start_db_query(pool, &NewDbQuery { decision: "denied", ..*q }).await?;
+    finish_db_query(pool, id, None, 0, Some(reason)).await
+}
+
+pub async fn get_db_query(pool: &SqlitePool, id: i64) -> Result<Option<BoardDbQuery>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_db_queries WHERE id = ?").bind(id).fetch_optional(pool).await
+}
+
+/// 管理員決定一筆等核准的查詢。只有還在 `pending` 的能決定；已決定（或不存在）回 `false`，不會被改寫。
+pub async fn decide_db_query(pool: &SqlitePool, id: i64, approve: bool, by: &str) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("UPDATE board_db_queries SET decision = ?, decided_by = ? WHERE id = ? AND decision = 'pending'")
+        .bind(if approve { "approved" } else { "denied" }).bind(by).bind(id).execute(pool).await?;
+    Ok(r.rows_affected() > 0)
+}
+
+pub async fn pending_db_queries(pool: &SqlitePool, project_id: &str) -> Result<Vec<BoardDbQuery>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_db_queries WHERE project_id = ? AND decision = 'pending' ORDER BY id").bind(project_id).fetch_all(pool).await
+}
+
+pub async fn recent_db_queries(pool: &SqlitePool, project_id: &str, limit: i64) -> Result<Vec<BoardDbQuery>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_db_queries WHERE project_id = ? ORDER BY id DESC LIMIT ?").bind(project_id).bind(limit.clamp(1, 500)).fetch_all(pool).await
+}
+
+/// server 重啟：還沒結束的查詢已不會結束了。等核准的那句沒執行過，記成拒絕；其餘標成中斷。
+pub async fn close_dangling_db_queries(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE board_db_queries SET finished_at = started_at, error = 'server 重新啟動，查詢中斷', decision = CASE WHEN decision = 'pending' THEN 'denied' ELSE decision END WHERE finished_at IS NULL")
+        .execute(pool).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1490,5 +1650,78 @@ mod tests {
         init_schema(&p).await.unwrap();
         let a = get_agent(&p, "a").await.unwrap().expect("舊資料還在");
         assert_eq!((a.name.as_str(), a.custom_skills), ("舊的", None));
+    }
+
+    fn conn<'a>(name: &'a str, host: &'a str) -> NewDbConn<'a> {
+        NewDbConn { name, db_type: "postgresql", host, port: 5432, database: "app", username: "u", default_schema: Some("public"), created_by: "甲" }
+    }
+
+    fn dq<'a>(sql: &'a str, decision: &'a str) -> NewDbQuery<'a> {
+        NewDbQuery { project_id: "P", card_id: "c1", agent_id: Some("a1"), connection_id: "k1", connection_name: "正式機", sql, decision }
+    }
+
+    #[tokio::test]
+    async fn a_shared_db_connection_with_the_same_name_is_replaced_keeping_its_id() {
+        let p = pool().await;
+        let a = upsert_db_conn(&p, conn("正式機", "10.0.0.1")).await.unwrap();
+        let b = upsert_db_conn(&p, conn("正式機", "10.0.0.2")).await.unwrap();
+        assert_eq!((a.id.clone(), b.host.as_str(), b.port), (b.id.clone(), "10.0.0.2", 5432), "同名取代、id 不變");
+        assert_eq!(list_db_conns(&p).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_agents_db_skill_needs_existing_connections_and_can_be_removed() {
+        let p = pool().await;
+        let ag = skill_agent(&p).await;
+        let c = upsert_db_conn(&p, conn("正式機", "h")).await.unwrap();
+        let raw = format!(r#"{{"connections":["{}"],"mode":"read"}}"#, c.id);
+        let err = set_agent_db_skill(&p, &ag.id, Some(r#"{"connections":["不存在"],"mode":"read"}"#), &["不存在".into()]).await.unwrap().unwrap_err();
+        assert!(err.contains("沒有這個資料庫連線"), "{err}");
+        let ag = set_agent_db_skill(&p, &ag.id, Some(&raw), &[c.id.clone()]).await.unwrap().unwrap();
+        assert_eq!(ag.db_skill.as_deref(), Some(raw.as_str()));
+        assert_eq!(ag.version, 2, "改技能要 bump 版本");
+        assert_eq!(set_agent_db_skill(&p, &ag.id, None, &[]).await.unwrap().unwrap().db_skill, None);
+        assert!(set_agent_db_skill(&p, "沒有這位", None, &[]).await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_pending_query_is_decided_once_and_only_while_pending() {
+        let p = pool().await;
+        let id = start_db_query(&p, &dq("UPDATE t SET x = 1", "pending")).await.unwrap();
+        assert_eq!(pending_db_queries(&p, "P").await.unwrap().len(), 1);
+        assert!(pending_db_queries(&p, "別的專案").await.unwrap().is_empty());
+        assert!(decide_db_query(&p, id, true, "管理員").await.unwrap());
+        assert!(!decide_db_query(&p, id, false, "別人").await.unwrap(), "已決定的不能再改");
+        let q = get_db_query(&p, id).await.unwrap().unwrap();
+        assert_eq!((q.decision.as_str(), q.decided_by.as_deref()), ("approved", Some("管理員")));
+        assert!(pending_db_queries(&p, "P").await.unwrap().is_empty());
+        let allowed = start_db_query(&p, &dq("SELECT 1", "allowed")).await.unwrap();
+        assert!(!decide_db_query(&p, allowed, false, "x").await.unwrap(), "不是等核准的查詢不能被「決定」");
+    }
+
+    #[tokio::test]
+    async fn queries_are_logged_and_restart_closes_dangling_ones_and_deletion_denies_waiting_ones() {
+        let p = pool().await;
+        let done = start_db_query(&p, &dq("SELECT 1", "allowed")).await.unwrap();
+        finish_db_query(&p, done, Some(3), 12, None).await.unwrap();
+        record_denied_db_query(&p, &dq("DROP TABLE t", "allowed"), "唯讀").await.unwrap();
+        let running = start_db_query(&p, &dq("SELECT 2", "allowed")).await.unwrap();
+        let waiting = start_db_query(&p, &dq("UPDATE t", "pending")).await.unwrap();
+        let rows = recent_db_queries(&p, "P", 10).await.unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].id, waiting, "新的在前");
+        let d = rows.iter().find(|r| r.sql == "DROP TABLE t").unwrap();
+        assert_eq!((d.decision.as_str(), d.error.as_deref()), ("denied", Some("唯讀")));
+        close_dangling_db_queries(&p).await.unwrap();
+        let rows = recent_db_queries(&p, "P", 10).await.unwrap();
+        assert!(rows.iter().all(|r| r.finished_at.is_some()));
+        assert_eq!(rows.iter().find(|r| r.id == waiting).unwrap().decision, "denied", "沒執行過的等核准記成拒絕");
+        assert_eq!(rows.iter().find(|r| r.id == running).unwrap().decision, "allowed");
+        // 刪除連線：還在等的標成拒絕。
+        let c = upsert_db_conn(&p, conn("正式機", "h")).await.unwrap();
+        let q = start_db_query(&p, &NewDbQuery { connection_id: &c.id, ..dq("UPDATE t", "pending") }).await.unwrap();
+        assert!(delete_db_conn(&p, &c.id).await.unwrap());
+        assert_eq!(get_db_query(&p, q).await.unwrap().unwrap().decision, "denied");
+        assert!(!delete_db_conn(&p, &c.id).await.unwrap());
     }
 }

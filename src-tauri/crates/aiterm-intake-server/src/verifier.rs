@@ -169,7 +169,7 @@ async fn open_fix_cards(st: &AppState, pid: &str, verify_card_id: &str, round: u
 }
 
 /// 處理一張驗收卡。成功回傳摘要（驗收通過／退回）；任何無法完成驗收的情況回傳 `Err`（驗收卡失敗，可由管理員重新驗收）。
-pub async fn run_verify(st: &AppState, settings: &RunnerSettings, work_dir: &Path, agent: &BoardAgent, card: &BoardCard) -> Result<String, String> {
+pub async fn run_verify(st: &std::sync::Arc<AppState>, settings: &RunnerSettings, work_dir: &Path, agent: &BoardAgent, card: &BoardCard) -> Result<String, String> {
     let pool = &st.pools.intake;
     let meta = bs::get_verify(pool, &card.id).await.map_err(|e| e.to_string())?.ok_or("這張驗收卡沒有簽章與埠的記錄")?;
     let ports = if meta.ports.is_empty() { verify_env::pick_free_ports(3) } else { meta.ports.clone() };
@@ -208,7 +208,7 @@ async fn cleanup_worktree(work_dir: &Path, wt: &Path) {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_in_worktree(st: &AppState, settings: &RunnerSettings, work_dir: &Path, agent: &BoardAgent, card: &BoardCard, wt: &Path, dir: &Path, evidence: &Path, json_path: &Path, ports: &[u16]) -> Result<String, String> {
+async fn run_in_worktree(st: &std::sync::Arc<AppState>, settings: &RunnerSettings, work_dir: &Path, agent: &BoardAgent, card: &BoardCard, wt: &Path, dir: &Path, evidence: &Path, json_path: &Path, ports: &[u16]) -> Result<String, String> {
     let pool = &st.pools.intake;
     let agents = bs::list_agents(pool, &card.project_id).await.map_err(|e| e.to_string())?;
     let cards = bs::project_cards(pool, &card.project_id).await.map_err(|e| e.to_string())?;
@@ -262,7 +262,7 @@ async fn run_in_worktree(st: &AppState, settings: &RunnerSettings, work_dir: &Pa
     let mut s = settings.clone();
     s.timeout_secs = s.timeout_secs.max(VERIFY_MIN_TIMEOUT_SECS);
     s.max_turns = s.max_turns.max(VERIFY_MIN_TURNS);
-    let run = runner::exec_claude_full(&s, wt, &mode, skills.dirs(), &prompt, agent.model.as_deref(), &SessionUse::New(sid)).await?;
+    let run = runner::exec_claude_attached(&s, wt, &mode, &skills.attach(), &prompt, agent.model.as_deref(), &SessionUse::New(sid)).await?;
 
     // 5. 讀結論。沒寫、讀不懂、品質不合格都算失敗，不會當成通過。
     // 失敗時也把被禁止清單擋下的命令記起來，管理員才看得出是不是誤擋造成驗收做不完。
