@@ -161,6 +161,36 @@ async fn daily_and_weekly_fire_at_their_clock_times_in_the_servers_local_time() 
     assert_eq!(scheduler::tick_at(r.srv.state(), at(10, 30, 0)).await, 0, "今天不是勾選的星期");
 }
 
+/// 定時器可以指定時區：時間點是那個時區的牆上時間，跟 server 主機放在哪個時區無關。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_schedule_with_a_time_zone_fires_at_that_zones_clock_time_whatever_the_servers_own_zone_is() {
+    use aiterm_intake_core::schedule::from_ts;
+    let r = rig().await;
+    let ts = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp();
+    // `tick_at` 收的是 server 本地時間；用同一個時刻換出來，測試在任何時區的機器上都成立。
+    let tick = |s: &str| scheduler::tick_at(r.srv.state(), from_ts(ts(s)));
+    let v = r.admin.request(Method::POST, &format!("/v1/board/projects/{}/schedules", r.pid), Some(r.body("台北早班", "daily", json!({"times": ["09:00"], "tz": "Asia/Taipei"})))).await.unwrap();
+    let id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(r.schedule(&id).await.spec().unwrap().tz.as_deref(), Some("Asia/Taipei"), "時區跟著設定存起來");
+    // 台北 11/25 09:00 剛觸發過；下一個是台北 11/26 09:00＝UTC 11/26 01:00。
+    sqlx::query("UPDATE board_schedules SET last_fired_at = ? WHERE id = ?").bind(ts("2026-11-25T01:00:00Z")).bind(&id).execute(r.pool()).await.unwrap();
+    assert_eq!(tick("2026-11-26T00:59:00Z").await, 0, "台北 08:59 還沒到");
+    assert_eq!(tick("2026-11-26T01:00:00Z").await, 1, "台北 09:00 到了");
+    assert_eq!(tick("2026-11-26T01:30:00Z").await, 0, "同一個時間點不會再觸發");
+
+    // 同一組「09:00」換成紐約，是另一個時刻：UTC 01:00 在紐約還是前一天晚上，要到 UTC 14:00（冬令）。
+    let ny = r.admin.request(Method::POST, &format!("/v1/board/projects/{}/schedules", r.pid), Some(r.body("紐約早班", "daily", json!({"times": ["09:00"], "tz": "America/New_York"})))).await.unwrap();
+    let ny_id = ny["id"].as_str().unwrap().to_string();
+    sqlx::query("UPDATE board_schedules SET last_fired_at = ? WHERE id = ?").bind(ts("2026-11-26T00:30:00Z")).bind(&ny_id).execute(r.pool()).await.unwrap();
+    assert_eq!(tick("2026-11-26T13:59:00Z").await, 0, "紐約 08:59");
+    assert_eq!(tick("2026-11-26T14:00:00Z").await, 1, "紐約 09:00");
+
+    // 不認得的時區在建立時就被擋下，並說明原因。
+    let url = format!("/v1/board/projects/{}/schedules", r.pid);
+    let e = r.admin.request(Method::POST, &url, Some(r.body("壞時區", "daily", json!({"times": ["09:00"], "tz": "Mars/Base"})))).await.unwrap_err().to_string();
+    assert!(e.contains("不認得的時區") && e.contains("Mars/Base"), "{e}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_admins_manage_schedules_and_bad_input_is_refused_with_the_reason() {
     let r = rig().await;

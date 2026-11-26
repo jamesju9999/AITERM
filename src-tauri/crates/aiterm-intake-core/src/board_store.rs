@@ -220,6 +220,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             skip_streak INTEGER NOT NULL DEFAULT 0, disabled_reason TEXT, created_by TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
         "CREATE INDEX IF NOT EXISTS board_schedules_project ON board_schedules(project_id)",
         "CREATE TABLE IF NOT EXISTS board_card_wait (card_id TEXT PRIMARY KEY NOT NULL, until INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 1, reason TEXT NOT NULL DEFAULT '')",
+        // 卡片處理到一半被打斷（server 重啟、額度用完）後要接著做：記 Claude Code 的對話 id 與起始版本。
+        "CREATE TABLE IF NOT EXISTS board_card_session (card_id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL, start_sha TEXT)",
         "CREATE TABLE IF NOT EXISTS board_card_verification (card_id TEXT PRIMARY KEY NOT NULL, report TEXT NOT NULL, passed INTEGER NOT NULL, created_at INTEGER NOT NULL)",
         "CREATE TABLE IF NOT EXISTS board_schedule_runs (schedule_id TEXT NOT NULL, fired_at INTEGER NOT NULL, card_id TEXT, result TEXT NOT NULL)",
         "CREATE INDEX IF NOT EXISTS board_schedule_runs_idx ON board_schedule_runs(schedule_id, fired_at)",
@@ -658,6 +660,40 @@ pub async fn clear_card_wait(pool: &SqlitePool, card_id: &str) -> Result<(), sql
     Ok(())
 }
 
+// ---- 中途接續：處理到一半的對話 ----
+
+/// 一張卡上次處理留下的 Claude Code 對話（接續用）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CardSession {
+    pub session_id: String,
+    /// 第一次開工時 worktree 的 HEAD；接續時沿用，審查的 diff 才不會漏掉上次已 commit 的部分。
+    pub start_sha: Option<String>,
+}
+
+pub async fn get_session(pool: &SqlitePool, card_id: &str) -> Result<Option<CardSession>, sqlx::Error> {
+    let row: Option<(String, Option<String>)> = sqlx::query_as("SELECT session_id, start_sha FROM board_card_session WHERE card_id = ?").bind(card_id).fetch_optional(pool).await?;
+    Ok(row.map(|(session_id, start_sha)| CardSession { session_id, start_sha }))
+}
+
+/// 記下（或換掉）這張卡現在用的對話。
+pub async fn set_session(pool: &SqlitePool, card_id: &str, session_id: &str, start_sha: Option<&str>) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO board_card_session (card_id, session_id, start_sha) VALUES (?,?,?) ON CONFLICT(card_id) DO UPDATE SET session_id = excluded.session_id, start_sha = excluded.start_sha")
+        .bind(card_id).bind(session_id).bind(start_sha).execute(pool).await?;
+    Ok(())
+}
+
+/// 所有還記著的對話 id（server 啟動時用來找出上一個行程留下的孤兒 Claude）。
+pub async fn all_session_ids(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT session_id FROM board_card_session").fetch_all(pool).await
+}
+
+/// 卡片做完（成功或失敗）就不再接續；回傳被清掉的對話 id，呼叫端順便刪掉磁碟上的對話檔。
+pub async fn clear_session(pool: &SqlitePool, card_id: &str) -> Result<Option<String>, sqlx::Error> {
+    let prev = get_session(pool, card_id).await?.map(|s| s.session_id);
+    sqlx::query("DELETE FROM board_card_session WHERE card_id = ?").bind(card_id).execute(pool).await?;
+    Ok(prev)
+}
+
 /// 放回待派送並留下原因（給人看：為什麼這張卡又排隊了）。只有處理中的才放。
 pub async fn requeue_with_note(pool: &SqlitePool, id: &str, who: &str, note: &str, now: i64) -> Result<bool, sqlx::Error> {
     let r = sqlx::query("UPDATE board_cards SET status = ?, claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL, error_message = ?, updated_at = ?, version = version + 1 WHERE id = ? AND status = ? AND claimed_by = ?")
@@ -1011,6 +1047,20 @@ mod tests {
         assert!(finish_claim(&p, &c.id, "小華", "failed", None, Some("Claude Code 結束了"), 500).await.unwrap());
         let f = get_card(&p, &c.id).await.unwrap().unwrap();
         assert_eq!((f.outcome.as_deref(), f.error_message.as_deref()), (Some("failed"), Some("Claude Code 結束了")));
+    }
+
+    #[tokio::test]
+    async fn a_cards_interrupted_conversation_is_remembered_replaced_and_cleared_when_it_finishes() {
+        let p = pool().await;
+        let c = card(&p, "x").await;
+        assert_eq!(get_session(&p, &c.id).await.unwrap(), None);
+        set_session(&p, &c.id, "sid-1", Some("abc123")).await.unwrap();
+        assert_eq!(get_session(&p, &c.id).await.unwrap(), Some(CardSession { session_id: "sid-1".into(), start_sha: Some("abc123".into()) }));
+        set_session(&p, &c.id, "sid-2", None).await.unwrap();
+        assert_eq!(get_session(&p, &c.id).await.unwrap().unwrap().session_id, "sid-2", "同一張卡只有一筆，新的取代舊的");
+        assert_eq!(clear_session(&p, &c.id).await.unwrap().as_deref(), Some("sid-2"));
+        assert_eq!(get_session(&p, &c.id).await.unwrap(), None);
+        assert_eq!(clear_session(&p, &c.id).await.unwrap(), None, "沒有可清的不報錯");
     }
 
     #[tokio::test]

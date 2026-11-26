@@ -145,8 +145,74 @@ fn minimal_env() -> Vec<(String, String)> {
         .collect()
 }
 
+/// 這次呼叫要不要保留對話：預設不留（`--no-session-persistence`）；
+/// 要能中途接續的長任務（Coder 做卡片）用固定的對話 id，被打斷後下一次用 `--resume` 接回去。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SessionUse {
+    #[default]
+    None,
+    /// 開一段新的對話並指定 id（`--session-id`；id 已經用過會被 Claude Code 拒絕）。
+    New(String),
+    /// 接續上次的對話（`--resume`）；找不到會失敗，見 `is_session_missing`。
+    Resume(String),
+}
+
+/// `--resume` 找不到那段對話（對話檔被刪、換了機器）：這種失敗不是任務本身的問題，改開新的就好。
+pub fn is_session_missing(err: &str) -> bool {
+    err.contains("No conversation found")
+}
+
+/// 對話 id 要能安全當檔名與參數：只收 UUID 的字元與長度。
+pub fn valid_session_id(id: &str) -> bool {
+    id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// 刪掉磁碟上那段對話的檔案（`<Claude 設定資料夾>/projects/*/<id>.jsonl`）。
+/// server 通常裝在使用者自己的桌面電腦上、用同一個帳號，不清的話每張卡都會在使用者平常的對話清單裡多一筆。
+pub fn remove_session_file(id: &str) {
+    if !valid_session_id(id) {
+        return;
+    }
+    let base = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".claude")));
+    let Some(projects) = base.map(|b| b.join("projects")) else { return };
+    let Ok(dirs) = std::fs::read_dir(projects) else { return };
+    for d in dirs.flatten() {
+        let file = d.path().join(format!("{id}.jsonl"));
+        if file.is_file() && std::fs::remove_file(&file).is_ok() {
+            // 這張卡的 worktree 專屬的資料夾，空了就一起收掉（非空刪不掉，不會動到別的東西）。
+            let _ = std::fs::remove_dir(d.path());
+        }
+    }
+}
+
+/// 殺掉上一個 server 行程留下的孤兒 Claude Code：server 被強制結束（當機、斷電、`kill -9`）時，
+/// 它啟動的 `claude` 子行程不會跟著結束，還在改同一個 worktree；這時接續（`--resume`）會和它同時寫同一批檔案。
+/// 靠命令列裡的對話 id（`--session-id <id>` 或 `--resume <id>`）認人，只動我們自己記過的對話；回傳殺掉幾個。
+pub fn kill_orphans(session_ids: &[String]) -> usize {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    if session_ids.is_empty() {
+        return 0;
+    }
+    let mut sys = System::new();
+    // 預設不抓命令列；認人要靠它。
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+    let mut killed = 0;
+    for p in sys.processes().values() {
+        let cmd: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        let ours = cmd.windows(2).any(|w| matches!(w[0].as_str(), "--session-id" | "--resume") && session_ids.iter().any(|id| *id == w[1]));
+        if ours && p.pid().as_u32() != std::process::id() && p.kill() {
+            killed += 1;
+        }
+    }
+    killed
+}
+
 /// 組出 `claude -p` 的參數（提示詞走標準輸入，不放在參數裡）。
 pub fn claude_args(s: &RunnerSettings, mode: &Mode, extra_dirs: &[String]) -> Vec<String> {
+    claude_args_with(s, mode, extra_dirs, &SessionUse::None)
+}
+
+pub fn claude_args_with(s: &RunnerSettings, mode: &Mode, extra_dirs: &[String], session: &SessionUse) -> Vec<String> {
     let (allowed, disallowed) = match mode {
         Mode::ReadOnly => ("Read,Grep,Glob".to_string(), "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task".to_string()),
         Mode::Edit { verify_command } => {
@@ -157,7 +223,13 @@ pub fn claude_args(s: &RunnerSettings, mode: &Mode, extra_dirs: &[String]) -> Ve
             (a, "WebFetch,WebSearch,NotebookEdit".to_string())
         }
     };
-    let mut args: Vec<String> = ["-p", "--output-format", "json", "--no-session-persistence", "--permission-mode", "dontAsk"].iter().map(|x| x.to_string()).collect();
+    let mut args: Vec<String> = ["-p", "--output-format", "json"].iter().map(|x| x.to_string()).collect();
+    match session {
+        SessionUse::None => args.push("--no-session-persistence".into()),
+        SessionUse::New(id) => args.extend(["--session-id".into(), id.clone()]),
+        SessionUse::Resume(id) => args.extend(["--resume".into(), id.clone()]),
+    }
+    args.extend(["--permission-mode".into(), "dontAsk".into()]);
     args.extend(["--max-turns".into(), s.max_turns.to_string(), "--allowedTools".into(), allowed, "--disallowedTools".into(), disallowed]);
     for d in extra_dirs {
         args.extend(["--add-dir".into(), d.clone()]);
@@ -177,7 +249,12 @@ pub fn valid_model(m: &str) -> bool {
 
 /// 同 `exec_claude`，可指定這次用的模型（Agent 設定的 `model`；空白或不合法就沿用預設）。
 pub async fn exec_claude_as(s: &RunnerSettings, cwd: &Path, mode: &Mode, extra_dirs: &[String], prompt: &str, model: Option<&str>) -> Result<String, String> {
-    let mut args = claude_args(s, mode, extra_dirs);
+    exec_claude_session(s, cwd, mode, extra_dirs, prompt, model, &SessionUse::None).await
+}
+
+/// 同 `exec_claude_as`，另外可指定這次對話要不要保留、或接續上一段。
+pub async fn exec_claude_session(s: &RunnerSettings, cwd: &Path, mode: &Mode, extra_dirs: &[String], prompt: &str, model: Option<&str>, session: &SessionUse) -> Result<String, String> {
+    let mut args = claude_args_with(s, mode, extra_dirs, session);
     if let Some(m) = model.map(str::trim).filter(|m| valid_model(m)) {
         args.extend(["--model".to_string(), m.to_string()]);
     }
@@ -202,7 +279,9 @@ pub async fn exec_claude_as(s: &RunnerSettings, cwd: &Path, mode: &Mode, extra_d
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let parsed = parse_output(&stdout);
     if !out.status.success() {
-        let why = parsed.err().or_else(|| Some(String::from_utf8_lossy(&out.stderr).trim().chars().take(300).collect::<String>())).unwrap_or_default();
+        // 標準輸出是空的時候，真正的原因在標準錯誤（例如 `--resume` 找不到對話只寫在 stderr）；不能只回「輸出不是預期的格式」把它吞掉。
+        let stderr: String = String::from_utf8_lossy(&out.stderr).trim().chars().take(300).collect();
+        let why = if stdout.trim().is_empty() && !stderr.is_empty() { stderr } else { parsed.err().unwrap_or(stderr) };
         return Err(format!("Claude Code 失敗（{}）：{why}", out.status));
     }
     parsed

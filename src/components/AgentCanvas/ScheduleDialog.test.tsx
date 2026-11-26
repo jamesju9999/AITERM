@@ -36,7 +36,46 @@ function mount(props: Partial<React.ComponentProps<typeof ScheduleDialog>> = {})
 describe("ScheduleDialog server time hint", () => {
   it("shows the server-time-zone hint only for shared boards", () => {
     mount({ serverTime: true });
-    expect(screen.getByTestId("sched-server-time-hint")).toHaveTextContent("server 主機的時區");
+    expect(screen.getByTestId("sched-server-time-hint")).toHaveTextContent("server 主機的本地時間");
+  });
+
+  it("共用看板：時區是下拉選單，預設選這台電腦的時區（排在最前面）；選別的就存別的", async () => {
+    const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const { onSave } = mount({ serverTime: true });
+    const sel = screen.getByTestId("sched-tz") as HTMLSelectElement;
+    expect(sel.tagName).toBe("SELECT");
+    expect(sel.value).toBe(local);
+    expect(Array.from(sel.options).map((o) => o.value).slice(0, 2)).toEqual(["", local]);
+    expect(Array.from(sel.options).some((o) => o.value === "Asia/Tokyo")).toBe(true);
+    await fillBasics();
+    await userEvent.selectOptions(sel, "Asia/Tokyo");
+    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0].spec.tz).toBe("Asia/Tokyo");
+  });
+
+  it("共用看板：選「server 主機的本地時間」就不寫時區", async () => {
+    const shared = mount({ serverTime: true });
+    await fillBasics();
+    await userEvent.selectOptions(screen.getByTestId("sched-tz"), "");
+    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+    await waitFor(() => expect(shared.onSave).toHaveBeenCalled());
+    expect(shared.onSave.mock.calls[0][0].spec.tz).toBeUndefined();
+  });
+
+  it("共用看板：已存的定時器要選回它原本的時區，即使清單裡沒有這個名稱也看得到", () => {
+    mount({ serverTime: true, initial: { ...existing, schedule_json: '{"times":["09:00"],"tz":"Etc/Custom-Zone"}' } });
+    const sel = screen.getByTestId("sched-tz") as HTMLSelectElement;
+    expect(sel.value).toBe("Etc/Custom-Zone");
+  });
+
+  it("本機專案沒有時區欄位，存的規格也沒有 tz", async () => {
+    const { onSave } = mount();
+    expect(screen.queryByTestId("sched-tz")).toBeNull();
+    await fillBasics();
+    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0].spec.tz).toBeUndefined();
   });
   it("does not show it for local projects", () => {
     mount();

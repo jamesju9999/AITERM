@@ -1,6 +1,8 @@
-//! 定時器的週期規則（桌面版與 server 共用）：每天／每週／間隔，全是本地時間。
+//! 定時器的週期規則（桌面版與 server 共用）：每天／每週／間隔。
+//! 時間點預設是執行那台機器的本地時間；`Spec.tz` 指定 IANA 時區（例如 `Asia/Taipei`）時，改用那個時區的牆上時間。
 //! 這裡只有純函式；觸發、結算與資料存取各自在桌面版與 server。
 use chrono::{Datelike, Duration, Local, NaiveDateTime, NaiveTime, TimeZone};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 pub const KIND_DAILY: &str = "daily";
@@ -27,6 +29,25 @@ pub struct Spec {
     pub every_minutes: u32,
     #[serde(default)]
     pub window: Option<Window>,
+    /// IANA 時區名稱；沒填（或空白）＝這台機器的本地時間。共用看板的定時器由 server 觸發，
+    /// 讓使用者用自己的時區設定「每天 09:00」，不必去換算 server 主機的時區。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tz: Option<String>,
+}
+
+/// 解析時區名稱；空白當作沒指定。不認得回 `Err`。
+pub fn parse_tz(name: &str) -> Result<Option<Tz>, String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Ok(None);
+    }
+    n.parse::<Tz>().map(Some).map_err(|_| format!("不認得的時區：{n}（要 IANA 名稱，例如 Asia/Taipei）"))
+}
+
+impl Spec {
+    fn zone(&self) -> Option<Tz> {
+        self.tz.as_deref().and_then(|n| parse_tz(n).ok().flatten())
+    }
 }
 
 fn parse_time(s: &str) -> Option<NaiveTime> {
@@ -46,6 +67,9 @@ pub fn validate(kind: &str, spec: &Spec) -> Result<(), String> {
         }
         Ok(())
     };
+    if let Some(tz) = &spec.tz {
+        parse_tz(tz)?;
+    }
     match kind {
         KIND_DAILY => check_times(spec),
         KIND_WEEKLY => {
@@ -115,6 +139,19 @@ pub fn due(kind: &str, spec: &Spec, last: NaiveDateTime, now: NaiveDateTime) -> 
 }
 
 
+/// 某個時間點（unix 秒）在這個週期設定的時區裡的牆上時間；沒指定時區就是這台機器的本地時間。
+pub fn wall(spec: &Spec, ts: i64) -> NaiveDateTime {
+    match spec.zone() {
+        Some(tz) => tz.timestamp_opt(ts, 0).earliest().map(|d| d.naive_local()).unwrap_or_default(),
+        None => from_ts(ts),
+    }
+}
+
+/// 以 unix 秒判斷到點了沒：把 `last`、`now` 都換成週期設定的時區的牆上時間，再走 `due`。
+pub fn due_at(kind: &str, spec: &Spec, last_ts: i64, now_ts: i64) -> bool {
+    due(kind, spec, wall(spec, last_ts), wall(spec, now_ts))
+}
+
 pub fn local_ts(dt: NaiveDateTime) -> i64 {
     Local.from_local_datetime(&dt).earliest().map(|d| d.timestamp()).unwrap_or_else(|| dt.and_utc().timestamp())
 }
@@ -133,6 +170,60 @@ mod tests {
     }
     fn daily(times: &[&str]) -> Spec {
         Spec { times: times.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+    }
+
+    fn ts(s: &str) -> i64 {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp()
+    }
+
+    #[test]
+    fn a_time_zone_makes_the_same_instant_a_different_wall_time() {
+        let taipei = Spec { tz: Some("Asia/Taipei".into()), ..daily(&["09:00"]) };
+        let ny = Spec { tz: Some("America/New_York".into()), ..daily(&["09:00"]) };
+        let t = ts("2026-11-26T01:00:00Z"); // 台北 09:00、紐約 前一天 20:00
+        assert_eq!(wall(&taipei, t), dt("2026-11-26 09:00"));
+        assert_eq!(wall(&ny, t), dt("2026-11-25 20:00"));
+    }
+
+    #[test]
+    fn daily_fires_at_the_slot_in_the_chosen_zone_not_the_machines() {
+        let taipei = Spec { tz: Some("Asia/Taipei".into()), ..daily(&["09:00"]) };
+        let last = ts("2026-11-25T01:00:00Z"); // 台北 11/25 09:00 剛觸發過
+        assert!(!due_at(KIND_DAILY, &taipei, last, ts("2026-11-26T00:59:00Z")), "台北 08:59 還沒到");
+        assert!(due_at(KIND_DAILY, &taipei, last, ts("2026-11-26T01:00:00Z")), "台北 09:00 到了");
+        // 同一組時間點在紐約是另一個時刻：UTC 01:00 對紐約來說是前一天晚上，不會觸發。
+        let ny = Spec { tz: Some("America/New_York".into()), ..daily(&["09:00"]) };
+        let ny_last = ts("2026-11-26T00:30:00Z"); // 紐約 11/25 19:30，下一個 09:00 是 11/26
+        assert!(!due_at(KIND_DAILY, &ny, ny_last, ts("2026-11-26T01:00:00Z")), "同一個時刻在紐約是前一天晚上");
+        assert!(!due_at(KIND_DAILY, &ny, ny_last, ts("2026-11-26T13:59:00Z")), "紐約 08:59");
+        assert!(due_at(KIND_DAILY, &ny, ny_last, ts("2026-11-26T14:00:00Z")), "紐約 09:00（冬令時間 UTC-5）到了");
+    }
+
+    #[test]
+    fn daylight_saving_shifts_the_utc_instant_but_not_the_wall_time() {
+        let ny = Spec { tz: Some("America/New_York".into()), ..daily(&["09:00"]) };
+        // 夏令時間 UTC-4：UTC 13:00＝紐約 09:00；冬令 UTC-5：UTC 14:00＝紐約 09:00。
+        assert_eq!(wall(&ny, ts("2026-07-01T13:00:00Z")), dt("2026-07-01 09:00"));
+        assert_eq!(wall(&ny, ts("2026-12-01T14:00:00Z")), dt("2026-12-01 09:00"));
+    }
+
+    #[test]
+    fn no_zone_keeps_using_the_machines_local_time_and_validate_rejects_unknown_zones() {
+        let plain = daily(&["09:00"]);
+        assert_eq!(wall(&plain, 1_800_000_000), from_ts(1_800_000_000));
+        assert!(validate(KIND_DAILY, &Spec { tz: Some("Asia/Taipei".into()), ..plain.clone() }).is_ok());
+        assert!(validate(KIND_DAILY, &Spec { tz: Some("  ".into()), ..plain.clone() }).is_ok(), "空白＝沒指定");
+        let err = validate(KIND_DAILY, &Spec { tz: Some("Mars/Base".into()), ..plain }).unwrap_err();
+        assert!(err.contains("不認得的時區") && err.contains("Mars/Base"), "{err}");
+    }
+
+    #[test]
+    fn the_zone_is_part_of_schedule_json_and_absent_when_not_set() {
+        let with = serde_json::to_string(&Spec { tz: Some("Asia/Taipei".into()), ..daily(&["09:00"]) }).unwrap();
+        assert!(with.contains("\"tz\":\"Asia/Taipei\""));
+        assert!(!serde_json::to_string(&daily(&["09:00"])).unwrap().contains("tz"), "沒設時區就不寫，舊資料與桌面版的 JSON 不變");
+        let old: Spec = serde_json::from_str(r#"{"times":["09:00"]}"#).unwrap();
+        assert_eq!(old.tz, None, "舊的 schedule_json 照樣讀得進來");
     }
 
     #[test]

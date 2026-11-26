@@ -298,6 +298,17 @@ pub fn parse_review(text: &str) -> Result<Verdict, String> {
 
 // ---- 提示詞 ----
 
+/// 上次處理到一半被打斷（server 重啟、額度用完）後，接續同一段對話時給 Coder 的提示詞。
+/// 工作資料夾還留著上次的進度；附上原本的任務是為了對話被清掉時也看得懂（對話還在時是重複，無害）。
+pub fn resume_prompt(original: &str) -> String {
+    format!(
+        "上次處理到一半被中斷了（server 重啟或額度用完）。你的工作資料夾還留著上次做到的進度。\n\
+         請先看目前的檔案狀態（例如 git status、git diff、讀已經改過的檔案），確認哪些已經做完，\n\
+         然後接著完成原本的任務，不要重做已經做好的部分。\n\n\
+         原本的任務如下，供對照：\n\n{original}"
+    )
+}
+
 /// 附在 Coder 提示詞後面，說明這個環境能不能跑測試：沒設驗證指令時 Coder 沒有執行指令的權限，
 /// 不講清楚它會一直嘗試被拒絕；設了就告訴它做完後 server 會跑，它自己也可以先跑。
 pub fn verify_note(verify_command: &str) -> String {
@@ -599,6 +610,13 @@ mod tests {
         }
         let many = format!("{{\"tasks\":[{}]}}", (0..=MAX_PLAN_TASKS).map(|i| format!("{{\"title\":\"t{i}\"}}")).collect::<Vec<_>>().join(","));
         assert!(parse_plan(&many).unwrap_err().contains("最多"));
+    }
+
+    #[test]
+    fn the_resume_prompt_tells_the_coder_to_continue_and_keeps_the_original_task_for_reference() {
+        let p = resume_prompt("# 做登入頁\n要有記住我");
+        assert!(p.contains("被中斷") && p.contains("不要重做"), "{p}");
+        assert!(p.ends_with("# 做登入頁\n要有記住我"), "原本的任務附在最後");
     }
 
     #[test]

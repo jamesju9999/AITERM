@@ -5,6 +5,11 @@ type T = Pick<Translations, "sched_weekdays" | "sched_sum_daily" | "sched_sum_ev
 
 /** 節點上的一行週期摘要，例如「每天 08:00」「週一、週二 09:00」「每 2 小時（09:00–18:00）」。 */
 export function summarizeSchedule(t: T, kind: ScheduleKind, spec: ScheduleSpec): string {
+  const base = summarizeBase(t, kind, spec);
+  return spec.tz ? `${base}（${spec.tz}）` : base;
+}
+
+function summarizeBase(t: T, kind: ScheduleKind, spec: ScheduleSpec): string {
   const times = (spec.times ?? []).join("、");
   if (kind === "daily") return t.sched_sum_daily(times);
   if (kind === "weekly") {

@@ -46,6 +46,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 webpki-roots = "0.26"
 aes-gcm = "0.10"
 dirs = "6"
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 tempfile = "3"
 aiterm-intake-client = { path = "../aiterm-intake-client" }
 

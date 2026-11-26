@@ -14,6 +14,45 @@ const MAX_TIMES = 12;
 const REFINE_PROVIDER_KEY = "aiterm_refine_provider";
 
 /** 新增／編輯一個定時器。純表單：儲存、刪除、啟停、立即執行都由呼叫端決定怎麼做。 */
+/** 這台電腦的 IANA 時區（取不到就空字串，後端會當成 server 本地時間）。 */
+function localTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** 瀏覽器認得的時區名稱，給輸入框的建議清單；舊環境沒有這個 API 就不給建議，照樣可以手打。 */
+function timeZoneNames(): string[] {
+  const f = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
+  try {
+    return f ? f("timeZone") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 下拉選單的選項：這台電腦的時區排最前面，其餘依字母排；已存的時區不在清單裡（舊環境）也要列出，不然會顯示成空白。 */
+function timeZoneOptions(current: string, local: string): string[] {
+  const all = timeZoneNames();
+  const base = all.length ? all : ["UTC", "Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai", "Asia/Hong_Kong", "Asia/Singapore", "Europe/London", "Europe/Berlin", "America/New_York", "America/Chicago", "America/Los_Angeles"];
+  const out = new Set<string>();
+  if (local) out.add(local);
+  for (const z of base) out.add(z);
+  if (current) out.add(current);
+  return [...out];
+}
+
+function validTimeZone(name: string): boolean {
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: name });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function ScheduleDialog({
   agents,
   initial,
@@ -50,6 +89,8 @@ export function ScheduleDialog({
   const [useWindow, setUseWindow] = useState<boolean>(!!init.window);
   const [from, setFrom] = useState(init.window?.from ?? "09:00");
   const [to, setTo] = useState(init.window?.to ?? "18:00");
+  // 共用看板：時間點用哪個時區。新的預設是你這台電腦的時區，「每天 09:00」就是你的 09:00，不用去換算 server 在哪。
+  const [tz, setTz] = useState<string>(init.tz ?? (serverTime ? localTimeZone() : ""));
   const [failuresFail, setFailuresFail] = useState(initial?.failures_count_as_failed ?? false);
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [busy, setBusy] = useState(false);
@@ -109,18 +150,21 @@ export function ScheduleDialog({
 
   /** 回傳規格，或一段說明哪裡不對的文字。 */
   const buildSpec = (): ScheduleSpec | string => {
+    const zone = serverTime ? tz.trim() : "";
+    if (zone && !validTimeZone(zone)) return `${t.sched_tz}: ${t.sched_tz_bad}`;
+    const withZone = <S extends ScheduleSpec>(s: S): S => (zone ? { ...s, tz: zone } : s);
     if (kind === "interval") {
       const n = Number(every);
       if (!Number.isFinite(n) || n < MIN_INTERVAL) return `${t.sched_every} ≥ ${MIN_INTERVAL} ${t.sched_minutes}`;
       if (useWindow && !(from < to)) return `${from} – ${to}`;
-      return { every_minutes: n, window: useWindow ? { from, to } : null };
+      return withZone({ every_minutes: n, window: useWindow ? { from, to } : null });
     }
     if (times.length === 0 || times.some((x) => !/^\d{2}:\d{2}$/.test(x))) return `${t.sched_times}: HH:MM`;
     if (kind === "weekly") {
       if (days.length === 0) return t.sched_days;
-      return { times, days };
+      return withZone({ times, days });
     }
-    return { times };
+    return withZone({ times });
   };
 
   const save = async () => {
@@ -228,6 +272,20 @@ export function ScheduleDialog({
           </select>
           {serverTime && <span className="task-field-hint" data-testid="sched-server-time-hint">{t.sched_server_time_hint}</span>}
         </label>
+
+        {serverTime && (
+          <label className="task-field">
+            <span className="task-field-label">{t.sched_tz}</span>
+            <select className="task-field-input" aria-label={t.sched_tz} data-testid="sched-tz" value={tz} onChange={(e) => setTz(e.target.value)}>
+              <option value="">{t.sched_tz_server}</option>
+              {timeZoneOptions(tz, localTimeZone()).map((z) => (
+                <option key={z} value={z}>
+                  {z === localTimeZone() ? `${z}（${t.sched_tz_this_computer}）` : z}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
 
         {kind === "weekly" && (
           <div className="task-field">

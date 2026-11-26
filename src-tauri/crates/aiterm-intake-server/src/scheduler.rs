@@ -2,13 +2,13 @@
 //!
 //! 每次掃描：先結算上一輪（成功歸零連續失敗並把完成的卡歸檔、失敗加一、連續 3 輪失敗自動停用），
 //! 再依週期規則判斷到點了沒。上一輪還沒結案就跳過（記一筆 skipped），不會堆積。
-//! 週期用 server 主機的本地時間；卡片建好後，專案開了「由 server 執行」就由 server 的編排做，
+//! 週期的時間點預設是 server 主機的本地時間；定時器設了時區（`tz`）就用那個時區的牆上時間。卡片建好後，專案開了「由 server 執行」就由 server 的編排做，
 //! 沒開就留在待派送，由成員領取。
 use crate::state::AppState;
 use aiterm_intake_core::board_store::{self as bs, BoardSchedule, NewWorkflowCard, QUEUED};
 use aiterm_intake_core::host::Notifier;
 use aiterm_intake_core::orchestration::{self as orch, ModuleState};
-use aiterm_intake_core::schedule::{due, from_ts, local_ts};
+use aiterm_intake_core::schedule::{due_at, local_ts};
 use chrono::NaiveDateTime;
 use std::sync::Arc;
 use std::time::Duration;
@@ -138,7 +138,8 @@ pub async fn tick_at(st: &Arc<AppState>, now: NaiveDateTime) -> usize {
             continue;
         }
         let Ok(spec) = s.spec() else { continue };
-        if !due(&s.schedule_kind, &spec, from_ts(s.last_fired_at), now) {
+        // 時間點是設定的時區（`spec.tz`）的牆上時間；沒設就是 server 主機的本地時間。
+        if !due_at(&s.schedule_kind, &spec, s.last_fired_at, now_ts) {
             continue;
         }
         match fire(st, &s, now_ts).await {

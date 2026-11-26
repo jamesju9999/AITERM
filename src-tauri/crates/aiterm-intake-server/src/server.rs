@@ -37,6 +37,13 @@ pub async fn start(bind: SocketAddr, state: Arc<AppState>, identity: Identity) -
     crate::channels::start_email(&state);
     crate::channels::start_telegram(&state);
     // 行程重啟後，上一個行程領的卡片／題目已經沒人在做：立刻放回，不必等租約逾期。
+    // 先把上一個行程留下的孤兒 Claude 殺掉：它還在改同一個 worktree，接續的對話不能和它同時寫。
+    if let Ok(ids) = aiterm_intake_core::board_store::all_session_ids(&state.pools.intake).await {
+        let n = crate::runner::kill_orphans(&ids);
+        if n > 0 {
+            log::warn!("上一個行程留下 {n} 個還在跑的 Claude Code，已結束");
+        }
+    }
     let now = crate::db::now();
     aiterm_intake_core::board_store::release_claims_by(&state.pools.intake, crate::runner::WHO, now).await.ok();
     aiterm_intake_core::store::release_claims_by(&state.pools.intake, crate::runner::WHO, now).await.ok();

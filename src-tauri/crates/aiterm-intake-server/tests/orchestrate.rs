@@ -41,6 +41,12 @@ ALLOWED=''; prev=''; for a in "$@"; do if [ "$prev" = "--allowedTools" ]; then A
 cat > "$D/last_prompt.txt"
 case "$ALLOWED" in
   *Edit*)
+    k=$(cat "$D/k" 2>/dev/null || echo 0); k=$((k+1)); echo $k > "$D/k"
+    printf '%s\n' "$@" > "$D/call_args_$k.txt"; cp "$D/last_prompt.txt" "$D/call_prompt_$k.txt"
+    if [ -s "$D/lost" ] && printf '%s\n' "$@" | grep -qx -- '--resume'; then
+      rm "$D/lost"; echo "lost-session" >> "$D/log.txt"
+      echo "No conversation found with session ID: gone" >&2; exit 1
+    fi
     if [ -s "$D/quota" ]; then
       rm "$D/quota"; echo "quota-hit" >> "$D/log.txt"
       printf '{"type":"result","is_error":true,"result":"Claude AI usage limit reached|%s"}' "$(( $(date +%s) + 2 ))"; exit 1
@@ -83,6 +89,14 @@ esac
     }
     fn read(&self, f: &str) -> String {
         std::fs::read_to_string(self.dir.path().join(f)).unwrap_or_default()
+    }
+    /// 讓下一次「接續（--resume）」的 Coder 呼叫回「找不到那段對話」（真實 Claude Code 只寫在 stderr、stdout 是空的）。
+    fn lose_session_once(&self) {
+        std::fs::write(self.dir.path().join("lost"), "1").unwrap();
+    }
+    /// 第 k 次 Coder 呼叫（含失敗的）收到的參數。
+    fn coder_call_args(&self, k: usize) -> Vec<String> {
+        self.read(&format!("call_args_{k}.txt")).lines().map(str::to_string).collect()
     }
     /// 讓下一次 Coder 呼叫回「額度用完」（重置時間 2 秒後）。
     fn hit_quota_once(&self) {
@@ -588,6 +602,126 @@ async fn a_quota_limit_puts_the_card_back_to_wait_and_it_resumes_by_itself_after
     r.pump("續跑後合併待核准", |c| c.iter().any(|k| k.card_kind == "merge")).await;
     assert_eq!(bs::get_card(r.pool(), &m.id).await.unwrap().unwrap().outcome.as_deref(), Some("success"));
     assert_eq!(bs::card_wait_attempts(r.pool(), &m.id).await.unwrap(), 0, "成功後等待紀錄清掉");
+}
+
+fn arg_after(args: &[String], flag: &str) -> Option<String> {
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
+}
+
+/// 一張卡被打斷（這裡用額度用完代表；server 重啟放回走的是同一條路）後：
+/// 第一次開了有 id 的對話並記下來，第二次用 `--resume` 接同一段、提示詞說明是接續；做完後記錄清掉。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_interrupted_card_resumes_the_same_conversation_and_forgets_it_once_finished() {
+    let fake = Fake::new(&["pass"], "0");
+    fake.hit_quota_once();
+    let r = rig(&fake).await;
+    r.enable().await;
+    let m = r.module("登入頁", "做一個登入頁").await;
+    for _ in 0..200 {
+        orchestrator::tick_once(r.srv.state()).await;
+        if fake.log().iter().any(|l| l == "quota-hit") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    for _ in 0..100 {
+        if bs::get_session(r.pool(), &m.id).await.unwrap().is_some() && bs::get_card(r.pool(), &m.id).await.unwrap().unwrap().status == "queued" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let first = fake.coder_call_args(1);
+    let sid = arg_after(&first, "--session-id").expect("第一次要開一段有 id 的對話");
+    assert!(!first.iter().any(|a| a == "--no-session-persistence"), "要接續就得保留對話：{first:?}");
+    let saved = bs::get_session(r.pool(), &m.id).await.unwrap().expect("被打斷後記錄還在");
+    assert_eq!(saved.session_id, sid);
+    assert!(saved.start_sha.is_some(), "起始版本一起記下，接續時審查的 diff 才準");
+
+    tokio::time::sleep(Duration::from_millis(2600)).await;
+    r.pump("續跑後合併待核准", |c| c.iter().any(|k| k.card_kind == "merge")).await;
+    let second = fake.coder_call_args(2);
+    assert_eq!(arg_after(&second, "--resume").as_deref(), Some(sid.as_str()), "第二次接回同一段對話：{second:?}");
+    assert!(!second.iter().any(|a| a == "--session-id"), "接續時不能再用 --session-id（Claude Code 會說 id 已在使用）");
+    let prompt = fake.read("call_prompt_2.txt");
+    assert!(prompt.contains("被中斷") && prompt.contains("做一個登入頁"), "提示詞說明是接續並附上原本任務：{prompt}");
+    assert_eq!(bs::get_card(r.pool(), &m.id).await.unwrap().unwrap().outcome.as_deref(), Some("success"));
+    assert_eq!(bs::get_session(r.pool(), &m.id).await.unwrap(), None, "做完就不再接續，記錄清掉");
+    // 審查是唯讀的短任務，不留對話。
+    assert!(fake.read("review_args_1.txt").contains("--no-session-persistence"));
+}
+
+/// 對話檔不見了（被刪、換了機器）：不算失敗，改開一段新的對話、照樣做完。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn when_the_old_conversation_is_gone_it_starts_a_fresh_one_instead_of_failing() {
+    let fake = Fake::new(&["pass"], "0");
+    fake.hit_quota_once();
+    fake.lose_session_once();
+    let r = rig(&fake).await;
+    r.enable().await;
+    let m = r.module("登入頁", "做一個登入頁").await;
+    for _ in 0..200 {
+        orchestrator::tick_once(r.srv.state()).await;
+        if fake.log().iter().any(|l| l == "quota-hit") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(2600)).await;
+    r.pump("續跑後合併待核准", |c| c.iter().any(|k| k.card_kind == "merge")).await;
+    assert!(fake.log().iter().any(|l| l == "lost-session"), "有嘗試過接續，而且被告知找不到");
+    let old = arg_after(&fake.coder_call_args(1), "--session-id").unwrap();
+    assert_eq!(arg_after(&fake.coder_call_args(2), "--resume").as_deref(), Some(old.as_str()));
+    let third = fake.coder_call_args(3);
+    let fresh = arg_after(&third, "--session-id").expect("接不回去就開新的");
+    assert_ne!(fresh, old, "新的對話要換一個 id");
+    assert!(fake.read("call_prompt_3.txt").contains("被中斷"), "新的對話看不到舊記憶，提示詞要說明是接續");
+    let c = bs::get_card(r.pool(), &m.id).await.unwrap().unwrap();
+    assert_eq!((c.outcome.as_deref(), c.error_message.as_deref().unwrap_or("").contains("No conversation")), (Some("success"), false), "不是失敗");
+}
+
+/// server 被強制結束後，它啟動的 claude 變成孤兒、還在改同一個 worktree：重啟時要先結束它，接續的對話才不會和它同時寫。
+/// 只認命令列裡我們記過的對話 id，別人的行程不能動。
+#[test]
+fn leftover_claude_processes_of_a_remembered_conversation_are_killed_and_others_are_left_alone() {
+    let (ours, theirs) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+    let mut a = Command::new("sh").args(["-c", "sleep 60; true", "x", "--session-id", &ours]).spawn().unwrap();
+    let mut b = Command::new("sh").args(["-c", "sleep 60; true", "x", "--resume", &theirs]).spawn().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(aiterm_intake_server::runner::kill_orphans(&[]), 0, "沒有記過的對話就什麼都不動");
+    assert_eq!(aiterm_intake_server::runner::kill_orphans(&[ours.clone()]), 1);
+    let mut gone = false;
+    for _ in 0..40 {
+        if a.try_wait().unwrap().is_some() {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(gone, "記過的那個被結束了");
+    assert!(b.try_wait().unwrap().is_none(), "別的對話的行程還活著");
+    b.kill().ok();
+    b.wait().ok();
+}
+
+/// 做完後把 Claude Code 留在磁碟上的對話檔刪掉（只刪那一個 id；專屬資料夾空了才一起收）。
+#[test]
+fn a_finished_conversations_file_is_removed_and_nothing_else_is_touched() {
+    let cfg = tempfile::tempdir().unwrap();
+    let (mine, other) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+    let alone = cfg.path().join("projects/-wt-alone");
+    let shared = cfg.path().join("projects/-wt-shared");
+    std::fs::create_dir_all(&alone).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(alone.join(format!("{mine}.jsonl")), "x").unwrap();
+    std::fs::write(shared.join(format!("{other}.jsonl")), "x").unwrap();
+    std::fs::write(shared.join("memory.md"), "x").unwrap();
+    std::env::set_var("CLAUDE_CONFIG_DIR", cfg.path());
+    aiterm_intake_server::runner::remove_session_file(&mine);
+    aiterm_intake_server::runner::remove_session_file("../../etc/passwd");
+    aiterm_intake_server::runner::remove_session_file(&other.replace('-', "x")); // 長度對但不是 UUID 格式的 id 不會被當成檔名
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
+    assert!(!alone.exists(), "那個 worktree 專屬的資料夾空了，一起收掉");
+    assert!(shared.join(format!("{other}.jsonl")).exists() && shared.join("memory.md").exists(), "別人的對話與其他檔案不動");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

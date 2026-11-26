@@ -8,6 +8,8 @@ export interface ScheduleSpec {
   days?: number[];
   every_minutes?: number;
   window?: { from: string; to: string } | null;
+  /** IANA 時區（例如 Asia/Taipei）；只有共用看板（由 server 觸發）用到，沒填＝執行那台機器的本地時間。 */
+  tz?: string | null;
 }
 
 export interface ScheduleRun {

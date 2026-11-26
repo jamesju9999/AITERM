@@ -6,6 +6,10 @@ import { summarizeSchedule } from "./scheduleSummary";
 const t = translations["zh-TW"];
 
 describe("summarizeSchedule", () => {
+  it("有設時區就寫在後面，沒設就不寫", () => {
+    expect(summarizeSchedule(t, "daily", { times: ["09:00"], tz: "Asia/Taipei" })).toBe("每天 09:00（Asia/Taipei）");
+    expect(summarizeSchedule(t, "daily", { times: ["09:00"], tz: null })).toBe("每天 09:00");
+  });
   it("每天多個時間點", () => {
     expect(summarizeSchedule(t, "daily", { times: ["08:00", "18:30"] })).toBe("每天 08:00、18:30");
   });

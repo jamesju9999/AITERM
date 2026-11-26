@@ -6,7 +6,8 @@
 //! - **審查在一次性的 detached worktree 裡唯讀進行**，看的是被審那版（`end_sha`），不受 Coder 手上的新改動影響。
 //! - **永不自動合併**：全部通過後只建一張「合併待核准」卡，管理員核准才合併（`merge_approved`）。
 //! - 狀態全在卡片上，每個 tick 重新算一次（`aiterm_intake_core::orchestration`），server 重啟不會漏步驟；
-//!   重啟時處理中的卡片由租約逾期放回待派送，不做中途接續。
+//!   重啟時處理中的卡片會放回待派送；Coder 的卡用固定的 Claude Code 對話 id 做，被打斷（重啟、額度用完）後用 `--resume` 接著做，
+//!   對話檔不見了就改開新的。做完（成功或失敗）才清掉對話記錄與磁碟上的對話檔。
 use crate::runner::{self, Mode, WHO};
 use crate::state::AppState;
 use aiterm_intake_core::board_store::{self as bs, BoardAgent, BoardCard, NewWorkflowCard, QUEUED};
@@ -183,6 +184,7 @@ async fn run_card(st: Arc<AppState>, card_id: String) {
         Ok(summary) => {
             bs::finish_claim(pool, &card_id, WHO, "success", Some(&summary), None, now).await.ok();
             bs::clear_card_wait(pool, &card_id).await.ok();
+            drop_session(pool, &card_id).await;
             crate::audit::record(&st.pools.server, WHO, "board.orchestrate", &card_id).await;
         }
         Err(e) => {
@@ -201,12 +203,21 @@ async fn run_card(st: Arc<AppState>, card_id: String) {
                 crate::audit::record(&st.pools.server, WHO, "board.orchestrate_wait", &card_id).await;
             } else {
                 bs::finish_claim(pool, &card_id, WHO, "failed", None, Some(&e), now).await.ok();
+                drop_session(pool, &card_id).await;
                 crate::audit::record(&st.pools.server, WHO, "board.orchestrate_fail", &card_id).await;
             }
         }
     }
     st.runner.running.fetch_sub(1, Ordering::SeqCst);
     st.events.changed();
+}
+
+/// 卡片做完（成功或失敗）就不再接續：清掉記錄，並刪掉 Claude Code 留在磁碟上的對話檔。
+/// （額度用完放回等待時不清，下一次要用它接著做。）
+async fn drop_session(pool: &sqlx::SqlitePool, card_id: &str) {
+    if let Ok(Some(sid)) = bs::clear_session(pool, card_id).await {
+        runner::remove_session_file(&sid);
+    }
 }
 
 async fn work_dir_of(st: &AppState, project_id: &str) -> Result<PathBuf, String> {
@@ -236,13 +247,37 @@ async fn run_inner(st: &Arc<AppState>, card_id: &str) -> Result<String, String> 
     }
     // work／fix：在這個 Coder 專屬的 worktree 裡改。
     let wt = ensure_agent_worktree(st, &work_dir, &agent).await?;
-    // 先把別位工程師已通過審查的前置合併進來；起始版本要在這之後才記，審查的 diff 才不會把前置的程式碼算成這張卡的。
-    premerge_dependencies(st, &wt, &card).await?;
-    let start = runner::git(&wt, &["rev-parse", "HEAD"]).await?.trim().to_string();
+    // 上次被打斷（server 重啟、額度用完）留下的對話：接得回去就接著做，不重頭開始。
+    let prior = bs::get_session(pool, card_id).await.ok().flatten().filter(|p| runner::valid_session_id(&p.session_id) && p.start_sha.is_some());
+    let start = match prior.as_ref().and_then(|p| p.start_sha.clone()) {
+        // 接續：前置早就合併過、起始版本也是第一次開工時記下的（上次可能已經 commit，現在的 HEAD 不能當起點）。
+        Some(sha) => sha,
+        None => {
+            // 先把別位工程師已通過審查的前置合併進來；起始版本要在這之後才記，審查的 diff 才不會把前置的程式碼算成這張卡的。
+            premerge_dependencies(st, &wt, &card).await?;
+            runner::git(&wt, &["rev-parse", "HEAD"]).await?.trim().to_string()
+        }
+    };
     let mode = Mode::Edit { verify_command: cfg.verify_command.clone() };
     let prompt = format!("{}{}", orch::work_prompt(&agent, &card), orch::verify_note(&cfg.verify_command));
-    let before = verify::snapshot(&wt).await;
-    let text = runner::exec_claude_as(&settings, &wt, &mode, &[], &prompt, agent.model.as_deref()).await?;
+    let before = if prior.is_some() { Some(start.clone()) } else { verify::snapshot(&wt).await };
+    let mut resumed: Option<Result<String, String>> = None;
+    if let Some(p) = &prior {
+        match runner::exec_claude_session(&settings, &wt, &mode, &[], &orch::resume_prompt(&prompt), agent.model.as_deref(), &runner::SessionUse::Resume(p.session_id.clone())).await {
+            // 對話檔不見了：不是任務的問題，改開新的（工作資料夾裡的進度還在，新的對話會自己看）。
+            Err(e) if runner::is_session_missing(&e) => {}
+            r => resumed = Some(r),
+        }
+    }
+    let text = match resumed {
+        Some(r) => r?,
+        None => {
+            let sid = uuid::Uuid::new_v4().to_string();
+            bs::set_session(pool, card_id, &sid, Some(&start)).await.map_err(|e| e.to_string())?;
+            let first = if prior.is_some() { orch::resume_prompt(&prompt) } else { prompt.clone() };
+            runner::exec_claude_session(&settings, &wt, &mode, &[], &first, agent.model.as_deref(), &runner::SessionUse::New(sid)).await?
+        }
+    };
     // 專案設了驗證指令：Coder 做完由 server 在 worktree 裡實際跑一次（Coder 自己多半沒權限跑），結果交給審查。
     if !cfg.verify_command.trim().is_empty() {
         let report = verify::verify(&wt, before.as_deref(), &cfg.verify_command, Duration::from_secs(cfg.verify_timeout_secs.clamp(1, 600))).await;
