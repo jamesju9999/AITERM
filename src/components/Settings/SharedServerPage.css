@@ -1,5 +1,6 @@
-.shared-server-page { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
-.shared-server-page h2 { margin: 0; font-size: 20px; }
+/* 外距與標題字級對齊其他設定頁（GeneralPage／OpenAiServerPage：padding 24px 32px、標題 18px）。 */
+.shared-server-page { display: flex; flex-direction: column; gap: 12px; max-width: 640px; padding: 24px 32px; color: #e6e6e6; }
+.shared-server-page h2 { margin: 0; color: #e6e6e6; font-size: 18px; font-weight: 600; }
 .shared-server-intro { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-secondary, #888); }
 .shared-server-page .intake__settings .intake__meta,
 .shared-server-page .intake__settings .intake__error { margin-left: 0; }
