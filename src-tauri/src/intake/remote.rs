@@ -331,13 +331,33 @@ fn token_for(secrets: &crate::secret::SecretStore, id: &str) -> Result<Option<St
     Ok(Some(t))
 }
 
-/// 切換到已記錄的另一組 server（不需要再輸入邀請碼）。換之前有領來的工作就擋下。
-pub async fn switch<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<RemoteStatus, String> {
+/// 連不上對方時的錯誤前綴：畫面看到它就問使用者「還是要切換嗎」，確認後帶 `force` 再切一次。
+pub const UNREACHABLE_PREFIX: &str = "UNREACHABLE:";
+
+/// 切換前先確認對方在不在（`/v1/hello` 是公開端點，不需要 token）。
+/// 只有「連不上」可以用 `force` 放行（server 暫時關機、換網路都很常見）；憑證變了、版本不相容這類不是等一下就會好的，一律擋下。
+async fn probe(api: &Api, force: bool) -> Result<(), String> {
+    let detail = match tokio::time::timeout(Duration::from_secs(5), api.check_version()).await {
+        Ok(Ok(_)) => return Ok(()),
+        Ok(Err(ClientError::Offline(m))) => m,
+        Err(_) => "等了 5 秒沒有回應".to_string(),
+        Ok(Err(e)) => return Err(e.to_string()),
+    };
+    if force {
+        Ok(())
+    } else {
+        Err(format!("{UNREACHABLE_PREFIX}{detail}"))
+    }
+}
+
+/// 切換到已記錄的另一組 server（不需要再輸入邀請碼）。換之前有領來的工作就擋下；對方連不上時先回 `UNREACHABLE:`，`force` 才硬切。
+pub async fn switch<R: Runtime>(app: &AppHandle<R>, id: &str, force: bool) -> Result<RemoteStatus, String> {
     guard_idle(app)?;
     let (db, secrets) = parts(app)?;
     let entry = conn_store::get(&db.pool, id).await.ok_or("找不到這筆 server 記錄")?;
     let token = token_for(&secrets, id)?.ok_or("這筆記錄的登入資訊不見了，請刪除後重新用邀請碼連線")?;
     let api = Api::new(&entry.saved.addr, &token, entry.saved.fingerprint.clone()).map_err(|e| e.to_string())?;
+    probe(&api, force).await?;
     conn_store::set_active(&db.pool, Some(id)).await?;
     activate(app, entry.id, entry.saved, api).await;
     Ok(app.state::<Arc<RemoteState>>().status())
@@ -826,6 +846,19 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn probing_before_a_switch_lets_a_down_server_through_only_when_forced() {
+        let srv = TestServer::start().await;
+        let up = srv.paired("小華", Role::Member).await;
+        probe(&up, false).await.expect("連得上就放行");
+
+        // 沒有人在聽的埠：連不上。
+        let down = Api::new("127.0.0.1:1", "token", None).unwrap();
+        let e = probe(&down, false).await.unwrap_err();
+        assert!(e.starts_with(UNREACHABLE_PREFIX), "連不上要回可辨識的前綴，畫面才知道要問使用者：{e}");
+        probe(&down, true).await.expect("使用者確認後可以硬切");
     }
 
     #[test]

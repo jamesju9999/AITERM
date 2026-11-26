@@ -267,7 +267,9 @@ export interface IntakeRemoteConnection {
 }
 export const intakeRemoteConnections = () => invoke<IntakeRemoteConnection[]>("intake_remote_connections");
 /** 切換到已記錄的另一組；有領來的工作在處理時後端會拒絕。 */
-export const intakeRemoteSwitch = (id: string) => invoke<IntakeRemoteStatus>("intake_remote_switch", { id });
+export const intakeRemoteSwitch = (id: string, force = false) => invoke<IntakeRemoteStatus>("intake_remote_switch", { id, force });
+/** 後端發現對方連不上時，錯誤字串以這個前綴開頭（後面是原因）；畫面問過使用者再帶 force 重切。 */
+export const INTAKE_UNREACHABLE_PREFIX = "UNREACHABLE:";
 /** 從記錄刪掉一組（連同它的登入資訊）。 */
 export const intakeRemoteForget = (id: string) => invoke<void>("intake_remote_forget", { id });
 export function onIntakeRemote(cb: (s: IntakeRemoteStatus) => void): Promise<UnlistenFn> {

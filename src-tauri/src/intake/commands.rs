@@ -595,10 +595,10 @@ pub async fn intake_remote_connections(app: AppHandle) -> Vec<super::conn_store:
     super::remote::connections(&app).await
 }
 
-/// 切換到已記錄的另一組 server，不用再輸入邀請碼；有領來的工作在處理時會被擋下。
+/// 切換到已記錄的另一組 server，不用再輸入邀請碼；有領來的工作在處理時會被擋下。對方連不上時回傳 `UNREACHABLE:原因`，`force` 為真才硬切。
 #[tauri::command]
-pub async fn intake_remote_switch(app: AppHandle, id: String) -> Result<super::remote::RemoteStatus, String> {
-    super::remote::switch(&app, &id).await
+pub async fn intake_remote_switch(app: AppHandle, id: String, force: Option<bool>) -> Result<super::remote::RemoteStatus, String> {
+    super::remote::switch(&app, &id, force.unwrap_or(false)).await
 }
 
 /// 從記錄刪掉一組（連同它的 token）。

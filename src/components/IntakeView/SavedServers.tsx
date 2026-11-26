@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { intakeRemoteForget, intakeRemoteSwitch, type IntakeRemoteStatus } from "../../ipc/intake";
+import { INTAKE_UNREACHABLE_PREFIX, intakeRemoteForget, intakeRemoteSwitch, type IntakeRemoteStatus } from "../../ipc/intake";
 import { useIntakeConnections } from "../../hooks/useIntakeRemote";
 import { useLocale } from "../../contexts/LocaleContext";
 import { ConnectForm } from "./ConnectionCard";
@@ -34,6 +34,27 @@ export function SavedServers({ status }: { status: IntakeRemoteStatus }) {
       setBusyId(null);
     }
   }
+
+  /** 切換：對方連不上時先問使用者，確認才硬切（server 暫時關機、換網路都很常見）。 */
+  const switchTo = async (c: { id: string; name: string; addr: string }) => {
+    setBusyId(c.id);
+    setError(null);
+    try {
+      try {
+        await intakeRemoteSwitch(c.id);
+      } catch (e) {
+        const msg = errText(e);
+        if (!msg.startsWith(INTAKE_UNREACHABLE_PREFIX)) throw e;
+        const detail = msg.slice(INTAKE_UNREACHABLE_PREFIX.length);
+        const ok = await confirm(t.intake_conn_unreachable_confirm.replace("{name}", `${c.name} · ${c.addr}`).replace("{detail}", detail));
+        if (ok) await intakeRemoteSwitch(c.id, true);
+      }
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   const forget = async (id: string, label: string) => {
     // 要用 plugin-dialog 的非同步 confirm；Tauri 的 webview 沒有真正實作 window.confirm。
@@ -75,7 +96,7 @@ export function SavedServers({ status }: { status: IntakeRemoteStatus }) {
               {c.active ? (
                 <span className="intake__conn-state intake__conn-state--on" role="status">{t.intake_conn_current}</span>
               ) : (
-                <button className="aiterm-btn aiterm-btn--secondary" disabled={busyId !== null} onClick={() => void run(c.id, () => intakeRemoteSwitch(c.id))}>
+                <button className="aiterm-btn aiterm-btn--secondary" disabled={busyId !== null} onClick={() => void switchTo(c)}>
                   {t.intake_conn_switch}
                 </button>
               )}

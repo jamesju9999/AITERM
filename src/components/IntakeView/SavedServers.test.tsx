@@ -55,6 +55,7 @@ describe("SavedServers（已記錄的 server）", () => {
     const rowB = await screen.findByTestId("saved-server-b");
     fireEvent.click(rowB.querySelector("button")!);
     await waitFor(() => expect(ipc.intakeRemoteSwitch).toHaveBeenCalledWith("b"));
+    expect(confirmMock).not.toHaveBeenCalled();
     expect(ipc.intakeRemotePair).not.toHaveBeenCalled();
   });
 
@@ -64,6 +65,35 @@ describe("SavedServers（已記錄的 server）", () => {
     const rowB = await screen.findByTestId("saved-server-b");
     fireEvent.click(rowB.querySelector("button")!);
     expect((await screen.findByRole("alert")).textContent).toContain("正在處理從 server 領來的工作");
+  });
+
+  it("切換時對方連不上：先問使用者，取消就不切，確定才帶 force 硬切", async () => {
+    vi.mocked(ipc.intakeRemoteSwitch).mockImplementation((_id: string, force?: boolean) =>
+      force ? Promise.resolve({} as never) : Promise.reject("UNREACHABLE:error sending request for url (https://10.0.0.2:8443/v1/hello)"),
+    );
+    show(CONNECTED, [A, B]);
+    const rowB = await screen.findByTestId("saved-server-b");
+    const sw = rowB.querySelector("button")!;
+
+    confirmMock.mockResolvedValueOnce(false);
+    fireEvent.click(sw);
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    expect(confirmMock.mock.calls[0][0]).toContain("小華 · 10.0.0.2:8443");
+    expect(confirmMock.mock.calls[0][0]).toContain("error sending request");
+    expect(ipc.intakeRemoteSwitch).toHaveBeenCalledTimes(1);
+    expect(ipc.intakeRemoteSwitch).not.toHaveBeenCalledWith("b", true);
+
+    fireEvent.click(sw);
+    await waitFor(() => expect(ipc.intakeRemoteSwitch).toHaveBeenCalledWith("b", true));
+  });
+
+  it("切換失敗的其他原因（例如憑證變了）直接顯示，不問要不要硬切", async () => {
+    vi.mocked(ipc.intakeRemoteSwitch).mockRejectedValue("server 憑證與上次不同，可能被中間人攔截");
+    show(CONNECTED, [A, B]);
+    const rowB = await screen.findByTestId("saved-server-b");
+    fireEvent.click(rowB.querySelector("button")!);
+    expect((await screen.findByRole("alert")).textContent).toContain("憑證與上次不同");
+    expect(confirmMock).not.toHaveBeenCalled();
   });
 
   it("刪除要先確認；取消就不刪，確定才呼叫後端", async () => {
