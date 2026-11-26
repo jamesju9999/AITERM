@@ -427,6 +427,32 @@ mod tests {
         assert_eq!(module_state(&m, &[r1, f1, r2, f2, r3], true), ModuleState::Exhausted, "第二輪修正之後還不過，不再退回");
     }
 
+    /// 驗收退回的修正卡（vfix）接在通過的審查後面：模組不能還是 Passed，修好後要重新審查；
+    /// 而且 vfix 不計入審查的退回輪數（兩種輪數各自算）。
+    #[test]
+    fn a_verify_fix_after_a_passed_review_puts_the_module_back_in_progress_and_does_not_use_up_review_rounds() {
+        let m = module();
+        let r1 = review("r1", "m", "pass");
+        let mut v1 = card("v1", "vfix", Some("r1"));
+        v1.status = "queued".into();
+        v1.outcome = None;
+        assert_eq!(module_state(&m, &[r1.clone(), v1.clone()], true), ModuleState::Waiting, "vfix 還沒做完＝修正中，不是 Passed");
+        v1.status = DONE.into();
+        v1.outcome = Some("success".into());
+        assert_eq!(module_state(&m, &[r1.clone(), v1.clone()], true), ModuleState::NeedsReview { target: "v1".into() });
+        let r2 = review("r2", "v1", "pass");
+        assert_eq!(module_state(&m, &[r1, v1.clone(), r2], true), ModuleState::Passed { sha: Some("sha-v1".into()) });
+        assert_eq!(module_state(&m, &[review("r1", "m", "pass"), v1], false), ModuleState::Passed { sha: Some("sha-v1".into()) }, "沒有 Reviewer：vfix 做完就算通過");
+
+        // 一次審查退回的 fix ＋ 一次驗收退回的 vfix，再被審查退回：審查退回輪數只算 fix 的 1 次，還有一次修正機會。
+        let f1 = review("f1", "m", "fail");
+        let x1 = card("x1", "fix", Some("f1"));
+        let p1 = review("p1", "x1", "pass");
+        let vf = card("vf", "vfix", Some("p1"));
+        let f2 = review("f2", "vf", "fail");
+        assert_eq!(module_state(&m, &[f1, x1, p1, vf, f2], true), ModuleState::NeedsFix { review: "f2".into(), round: 2 }, "vfix 不算審查退回輪數");
+    }
+
     #[test]
     fn a_pass_reports_the_sha_that_was_reviewed_and_order_of_the_chain_does_not_matter() {
         let m = module();
