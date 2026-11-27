@@ -108,6 +108,8 @@ pub struct BoardAgent {
     pub custom_skills: Option<String>,
     /// 這位 Agent 的資料庫技能（JSON：`{"connections":[server 連線 id],"mode":"read|approve|write"}`）；`None`＝沒裝。
     pub db_skill: Option<String>,
+    /// 這位 Agent 能用的系統連線（server 系統 id，JSON 陣列）；`None`＝沒裝。
+    pub systems: Option<String>,
     pub created_by: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -212,9 +214,15 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "CREATE TABLE IF NOT EXISTS board_agents (
             id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT '',
             prompt_prefix TEXT NOT NULL DEFAULT '', canvas_x REAL NOT NULL DEFAULT 0, canvas_y REAL NOT NULL DEFAULT 0,
-            produces_spec INTEGER NOT NULL DEFAULT 0, model TEXT, cli TEXT NOT NULL DEFAULT 'claude', paused_card_id TEXT, custom_skills TEXT, db_skill TEXT,
+            produces_spec INTEGER NOT NULL DEFAULT 0, model TEXT, cli TEXT NOT NULL DEFAULT 'claude', paused_card_id TEXT, custom_skills TEXT, db_skill TEXT, systems TEXT,
             created_by TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL DEFAULT 1)",
         "CREATE INDEX IF NOT EXISTS board_agents_project ON board_agents(project_id)",
+        // server 上的系統連線（網頁系統）。登入 session 的 cookie 不在這裡（加密存在 server 的金鑰檔），這裡只記是誰、何時分享的。
+        "CREATE TABLE IF NOT EXISTS board_systems (
+            id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL UNIQUE, start_url TEXT NOT NULL, allowed_hosts TEXT NOT NULL DEFAULT '[]',
+            mode TEXT NOT NULL DEFAULT 'read_only', enabled INTEGER NOT NULL DEFAULT 1, created_by TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS board_system_sessions (system_id TEXT PRIMARY KEY NOT NULL, exported_by TEXT NOT NULL, exported_at INTEGER NOT NULL, cookie_count INTEGER NOT NULL)",
         // 分享到 server 的資料庫連線（密碼不在這裡，存 server 的加密金鑰檔）。
         "CREATE TABLE IF NOT EXISTS board_db_connections (
             id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL UNIQUE, db_type TEXT NOT NULL, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 0,
@@ -254,6 +262,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // 舊資料庫的 Agent 表沒有技能欄位（新建的已經有；已存在就略過）。之後的資料庫、系統連線技能也加在這裡。
     let _ = sqlx::query("ALTER TABLE board_agents ADD COLUMN custom_skills TEXT").execute(pool).await;
     let _ = sqlx::query("ALTER TABLE board_agents ADD COLUMN db_skill TEXT").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE board_agents ADD COLUMN systems TEXT").execute(pool).await;
     Ok(())
 }
 
@@ -1289,6 +1298,132 @@ pub async fn close_dangling_db_queries(pool: &SqlitePool) -> Result<(), sqlx::Er
     Ok(())
 }
 
+
+// ── 系統連線 ────────────────────────────────────────────────────────────
+
+/// 一位 Agent 最多幾個系統連線。
+pub const MAX_AGENT_SYSTEMS: usize = 12;
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq, Eq)]
+pub struct BoardSystem {
+    pub id: String,
+    pub name: String,
+    pub start_url: String,
+    /// JSON 字串陣列：允許頂層導覽的網域。
+    pub allowed_hosts: String,
+    /// `read_only`｜`approve_each`｜`autonomous`。
+    pub mode: String,
+    pub enabled: bool,
+    pub created_by: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl BoardSystem {
+    pub fn hosts(&self) -> Vec<String> {
+        serde_json::from_str(&self.allowed_hosts).unwrap_or_default()
+    }
+}
+
+pub struct NewSystem<'a> {
+    pub name: &'a str,
+    pub start_url: &'a str,
+    pub allowed_hosts: &'a [String],
+    pub mode: &'a str,
+    pub enabled: bool,
+    pub created_by: &'a str,
+}
+
+/// 新增系統；同名就取代設定但**保留 id**（已勾選它的 Agent 與已分享的 session 都不會掉）。
+pub async fn upsert_system(pool: &SqlitePool, c: NewSystem<'_>) -> Result<BoardSystem, sqlx::Error> {
+    let t = now();
+    let id = uuid::Uuid::new_v4().to_string();
+    let hosts = serde_json::to_string(c.allowed_hosts).unwrap_or_else(|_| "[]".into());
+    sqlx::query(
+        "INSERT INTO board_systems (id, name, start_url, allowed_hosts, mode, enabled, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(name) DO UPDATE SET start_url = excluded.start_url, allowed_hosts = excluded.allowed_hosts, mode = excluded.mode, enabled = excluded.enabled, updated_at = excluded.updated_at",
+    )
+    .bind(&id).bind(c.name).bind(c.start_url).bind(&hosts).bind(c.mode).bind(c.enabled).bind(c.created_by).bind(t).bind(t)
+    .execute(pool).await?;
+    sqlx::query_as("SELECT * FROM board_systems WHERE name = ?").bind(c.name).fetch_one(pool).await
+}
+
+pub async fn get_system(pool: &SqlitePool, id: &str) -> Result<Option<BoardSystem>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_systems WHERE id = ?").bind(id).fetch_optional(pool).await
+}
+
+pub async fn list_systems(pool: &SqlitePool) -> Result<Vec<BoardSystem>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_systems ORDER BY name").fetch_all(pool).await
+}
+
+/// 刪除系統與它的 session 記錄。
+pub async fn delete_system(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query("DELETE FROM board_system_sessions WHERE system_id = ?").bind(id).execute(pool).await?;
+    Ok(sqlx::query("DELETE FROM board_systems WHERE id = ?").bind(id).execute(pool).await?.rows_affected() > 0)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq, Eq)]
+pub struct SystemSessionMeta {
+    pub system_id: String,
+    pub exported_by: String,
+    pub exported_at: i64,
+    pub cookie_count: i64,
+}
+
+pub async fn put_system_session(pool: &SqlitePool, system_id: &str, by: &str, cookie_count: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO board_system_sessions (system_id, exported_by, exported_at, cookie_count) VALUES (?,?,?,?) ON CONFLICT(system_id) DO UPDATE SET exported_by = excluded.exported_by, exported_at = excluded.exported_at, cookie_count = excluded.cookie_count")
+        .bind(system_id).bind(by).bind(now()).bind(cookie_count).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn get_system_session(pool: &SqlitePool, system_id: &str) -> Result<Option<SystemSessionMeta>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_system_sessions WHERE system_id = ?").bind(system_id).fetch_optional(pool).await
+}
+
+pub async fn all_system_sessions(pool: &SqlitePool) -> Result<Vec<SystemSessionMeta>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM board_system_sessions").fetch_all(pool).await
+}
+
+pub async fn delete_system_session(pool: &SqlitePool, system_id: &str) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query("DELETE FROM board_system_sessions WHERE system_id = ?").bind(system_id).execute(pool).await?.rows_affected() > 0)
+}
+
+/// 整份取代這位 Agent 能用的系統。不存在、重複、超過上限都拒絕；空清單＝移除。
+pub async fn set_agent_systems(pool: &SqlitePool, agent_id: &str, ids: &[String]) -> Result<Result<BoardAgent, String>, sqlx::Error> {
+    let mut clean: Vec<&String> = Vec::new();
+    for id in ids {
+        if !clean.contains(&id) {
+            clean.push(id);
+        }
+    }
+    if clean.len() > MAX_AGENT_SYSTEMS {
+        return Ok(Err(format!("一位 Agent 最多 {MAX_AGENT_SYSTEMS} 個系統連線")));
+    }
+    for id in &clean {
+        if get_system(pool, id).await?.is_none() {
+            return Ok(Err(format!("server 上沒有這個系統連線：{id}")));
+        }
+    }
+    let raw = (!clean.is_empty()).then(|| serde_json::to_string(&clean).unwrap_or_default());
+    let r = sqlx::query("UPDATE board_agents SET systems = ?, updated_at = ?, version = version + 1 WHERE id = ?").bind(raw).bind(now()).bind(agent_id).execute(pool).await?;
+    if r.rows_affected() == 0 {
+        return Ok(Err("找不到這個 Agent".into()));
+    }
+    Ok(Ok(get_agent(pool, agent_id).await?.expect("剛更新的 Agent")))
+}
+
+/// 這位 Agent 目前有效的系統（還存在的，依設定順序）。被刪掉的 id 在這裡自然被濾掉。
+pub async fn agent_systems(pool: &SqlitePool, agent: &BoardAgent) -> Result<Vec<BoardSystem>, sqlx::Error> {
+    let ids: Vec<String> = agent.systems.as_deref().and_then(|r| serde_json::from_str(r).ok()).unwrap_or_default();
+    let mut out = Vec::new();
+    for id in ids {
+        if let Some(s) = get_system(pool, &id).await? {
+            out.push(s);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1723,5 +1858,48 @@ mod tests {
         assert!(delete_db_conn(&p, &c.id).await.unwrap());
         assert_eq!(get_db_query(&p, q).await.unwrap().unwrap().decision, "denied");
         assert!(!delete_db_conn(&p, &c.id).await.unwrap());
+    }
+
+    fn new_sys<'a>(name: &'a str, hosts: &'a [String]) -> NewSystem<'a> {
+        NewSystem { name, start_url: "https://erp.example.com/", allowed_hosts: hosts, mode: "read_only", enabled: true, created_by: "甲" }
+    }
+
+    #[tokio::test]
+    async fn a_system_with_the_same_name_is_replaced_keeping_its_id_and_session_and_deletion_removes_both() {
+        let p = pool().await;
+        let hosts = vec!["erp.example.com".to_string()];
+        let a = upsert_system(&p, new_sys("ERP", &hosts)).await.unwrap();
+        put_system_session(&p, &a.id, "小華", 12).await.unwrap();
+        let more = vec!["erp.example.com".to_string(), "sso.example.com".to_string()];
+        let b = upsert_system(&p, NewSystem { mode: "approve_each", ..new_sys("ERP", &more) }).await.unwrap();
+        assert_eq!((a.id.clone(), b.mode.as_str(), b.hosts()), (b.id.clone(), "approve_each", more), "同名取代、id 不變");
+        assert_eq!(get_system_session(&p, &a.id).await.unwrap().unwrap().cookie_count, 12, "取代設定不影響已分享的 session");
+        assert!(delete_system(&p, &a.id).await.unwrap());
+        assert_eq!(get_system_session(&p, &a.id).await.unwrap(), None, "刪除系統連同 session 記錄");
+        assert!(!delete_system(&p, &a.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_agents_systems_need_existing_ones_stay_within_the_limit_and_deleted_ones_drop_out() {
+        let p = pool().await;
+        let ag = skill_agent(&p).await;
+        let hosts = vec!["a.example.com".to_string()];
+        let s1 = upsert_system(&p, new_sys("甲", &hosts)).await.unwrap();
+        let s2 = upsert_system(&p, new_sys("乙", &hosts)).await.unwrap();
+        let err = set_agent_systems(&p, &ag.id, &["不存在".into()]).await.unwrap().unwrap_err();
+        assert!(err.contains("沒有這個系統連線"), "{err}");
+        let ag = set_agent_systems(&p, &ag.id, &[s2.id.clone(), s1.id.clone(), s2.id.clone()]).await.unwrap().unwrap();
+        assert_eq!(ag.version, 2, "改系統要 bump 版本");
+        assert_eq!(agent_systems(&p, &ag).await.unwrap().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["乙", "甲"]);
+        delete_system(&p, &s2.id).await.unwrap();
+        let ag = get_agent(&p, &ag.id).await.unwrap().unwrap();
+        assert_eq!(agent_systems(&p, &ag).await.unwrap().len(), 1, "刪掉的系統自動濾掉");
+        assert_eq!(set_agent_systems(&p, &ag.id, &[]).await.unwrap().unwrap().systems, None);
+        let mut ids = Vec::new();
+        for i in 0..13 {
+            ids.push(upsert_system(&p, new_sys(&format!("系統{i}"), &hosts)).await.unwrap().id);
+        }
+        assert!(set_agent_systems(&p, &ag.id, &ids).await.unwrap().is_err());
+        assert!(set_agent_systems(&p, &ag.id, &ids[..12]).await.unwrap().is_ok());
     }
 }

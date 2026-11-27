@@ -126,8 +126,10 @@ pub struct SkillCtx {
     dirs: Vec<String>,
     note: String,
     run_root: Option<PathBuf>,
-    /// 資料庫技能的 MCP 註冊：被丟掉時 token 作廢。
+    /// 資料庫與系統連線技能的 MCP 註冊：被丟掉時 token 作廢、瀏覽器收掉。
     db: Option<crate::dbmcp::McpGuard>,
+    has_db: bool,
+    has_sys: bool,
 }
 
 impl SkillCtx {
@@ -145,7 +147,12 @@ impl SkillCtx {
         let mut a = crate::runner::Attach::dirs(&self.dirs);
         if let Some(g) = &self.db {
             a.mcp_configs.push(g.config_path.to_string_lossy().into_owned());
-            a.allow.push(format!("mcp__{}", crate::dbmcp::SERVER_NAME));
+            if self.has_db {
+                a.allow.push(format!("mcp__{}", crate::dbmcp::SERVER_NAME));
+            }
+            if self.has_sys {
+                a.allow.push(format!("mcp__{}", crate::dbmcp::SYSTEMS_SERVER_NAME));
+            }
             a.env.push((crate::dbmcp::TOOL_TIMEOUT_ENV.0.to_string(), crate::dbmcp::TOOL_TIMEOUT_ENV.1.to_string()));
         }
         a
@@ -159,12 +166,21 @@ impl SkillCtx {
     /// 依 Agent 的設定準備副本。技能庫裡讀不到的技能不會讓卡失敗，只在附註裡明講讀不到。
     pub async fn prepare(st: &Arc<AppState>, agent: &BoardAgent, card_id: &str) -> Self {
         let mut ctx = Self::prepare_custom(st, agent, card_id).await;
-        // 資料庫技能：發一個只屬於這張卡的 token，工具由 server 內建的 MCP 端點提供。
-        if let Some(skill) = aiterm_db::skill::parse(agent.db_skill.as_deref()) {
+        // 資料庫與系統連線技能：發一個只屬於這張卡的 token，工具由 server 內建的 MCP 端點提供。
+        let skill = aiterm_db::skill::parse(agent.db_skill.as_deref());
+        let systems: Vec<aiterm_intake_core::board_store::BoardSystem> = bs::agent_systems(&st.pools.intake, agent).await.unwrap_or_default().into_iter().filter(|s| s.enabled).collect();
+        if skill.is_some() || !systems.is_empty() {
             let run = st.data_dir.join("run").join(card_id);
-            let mctx = crate::dbmcp::McpCtx { card_id: card_id.to_string(), agent_id: Some(agent.id.clone()), project_id: agent.project_id.clone(), skill: skill.clone() };
+            let mctx = crate::dbmcp::McpCtx { card_id: card_id.to_string(), agent_id: Some(agent.id.clone()), project_id: agent.project_id.clone(), skill: skill.clone(), systems: systems.iter().map(|s| s.id.clone()).collect() };
             if let Some(guard) = crate::dbmcp::register(st, mctx, &run) {
-                ctx.note.push_str(&crate::dbmcp::prompt_note(st, &skill).await);
+                if let Some(skill) = &skill {
+                    ctx.note.push_str(&crate::dbmcp::prompt_note(st, skill).await);
+                    ctx.has_db = true;
+                }
+                if !systems.is_empty() {
+                    ctx.note.push_str(&systems_note(&systems));
+                    ctx.has_sys = true;
+                }
                 ctx.db = Some(guard);
                 // 就算沒有自訂技能，副本資料夾（`run/<卡>`）也要在結束時清掉。
                 ctx.run_root.get_or_insert_with(|| run.join("skills"));
@@ -192,7 +208,7 @@ impl SkillCtx {
         })
         .await
         .unwrap_or_default();
-        let mut ctx = Self { dirs: Vec::new(), note: String::new(), run_root: Some(run_root), db: None };
+        let mut ctx = Self { dirs: Vec::new(), note: String::new(), run_root: Some(run_root), db: None, has_db: false, has_sys: false };
         ctx.note.push_str("\n\n你有這些技能可以用。需要時先用 Read 讀那個 SKILL.md 的全文並照做（不需要就不用讀）：\n");
         for (s, r) in &copied {
             match r {
@@ -211,6 +227,26 @@ impl SkillCtx {
         ctx.note.push_str("技能資料夾只能讀，不要修改裡面的檔案。");
         ctx
     }
+}
+
+/// 提示詞附註：有哪些系統可以操作、要遵守的規矩。
+fn systems_note(systems: &[aiterm_intake_core::board_store::BoardSystem]) -> String {
+    let list: Vec<String> = systems
+        .iter()
+        .map(|s| {
+            let mode = match s.mode.as_str() {
+                "approve_each" => "寫入要管理員核准",
+                "autonomous" => "可寫入",
+                _ => "只讀",
+            };
+            format!("{}（id：{}，{}）", s.name, s.id, mode)
+        })
+        .collect();
+    format!(
+        "\n\n系統連線：你可以用 sys_list 與其他 sys_* 工具操作這些網頁系統：{}。每個 sys_* 工具都要帶 system（系統 id）與 intent（一句話說明要做什麼，是讀還是寫）。\
+         只讀的系統不能送出任何修改；需要核准的寫入要等管理員決定，被拒絕就不要硬做。登入是管理員事先分享好的：如果頁面變成登入頁，請停下來回報「需要重新分享 session」，不要自己填帳號密碼。",
+        list.join("、")
+    )
 }
 
 impl Drop for SkillCtx {

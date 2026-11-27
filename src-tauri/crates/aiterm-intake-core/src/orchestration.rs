@@ -526,7 +526,7 @@ mod tests {
     fn prompts_carry_what_each_role_needs() {
         let agent = BoardAgent {
             id: "c1".into(), project_id: "p".into(), kind: "reviewer".into(), name: "審".into(), role: String::new(), prompt_prefix: "嚴格審查".into(),
-            canvas_x: 0.0, canvas_y: 0.0, produces_spec: false, model: None, cli: "claude".into(), paused_card_id: None, custom_skills: None, db_skill: None, created_by: String::new(),
+            canvas_x: 0.0, canvas_y: 0.0, produces_spec: false, model: None, cli: "claude".into(), paused_card_id: None, custom_skills: None, db_skill: None, systems: None, created_by: String::new(),
             created_at: 0, updated_at: 0, version: 1,
         };
         let mut m = module();
@@ -550,7 +550,7 @@ mod tests {
     fn only_non_archived_work_cards_of_coders_are_modules() {
         let mut coder = BoardAgent {
             id: "c1".into(), project_id: "p".into(), kind: "coder".into(), name: "c".into(), role: String::new(), prompt_prefix: String::new(),
-            canvas_x: 0.0, canvas_y: 0.0, produces_spec: false, model: None, cli: "claude".into(), paused_card_id: None, custom_skills: None, db_skill: None, created_by: String::new(),
+            canvas_x: 0.0, canvas_y: 0.0, produces_spec: false, model: None, cli: "claude".into(), paused_card_id: None, custom_skills: None, db_skill: None, systems: None, created_by: String::new(),
             created_at: 0, updated_at: 0, version: 1,
         };
         let m = module();
@@ -571,7 +571,7 @@ mod tests {
     fn coder_agent(id: &str) -> BoardAgent {
         BoardAgent {
             id: id.into(), project_id: "p".into(), kind: "coder".into(), name: "c".into(), role: String::new(), prompt_prefix: String::new(),
-            canvas_x: 0.0, canvas_y: 0.0, produces_spec: false, model: None, cli: "claude".into(), paused_card_id: None, custom_skills: None, db_skill: None, created_by: String::new(),
+            canvas_x: 0.0, canvas_y: 0.0, produces_spec: false, model: None, cli: "claude".into(), paused_card_id: None, custom_skills: None, db_skill: None, systems: None, created_by: String::new(),
             created_at: 0, updated_at: 0, version: 1,
         }
     }

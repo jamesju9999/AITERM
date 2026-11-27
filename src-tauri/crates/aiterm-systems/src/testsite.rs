@@ -29,7 +29,13 @@ pub async fn fake_site_with_bodies() -> (u16, Arc<AtomicUsize>, Arc<parking_lot:
                 let mut buf = vec![0u8; 8192];
                 let n = s.read(&mut buf).await.unwrap_or(0);
                 let head = String::from_utf8_lossy(&buf[..n]).to_string();
-                let body = if head.starts_with("POST") {
+                let echo;
+                let body = if head.starts_with("GET /whoami") {
+                    // 回報瀏覽器送來的 Cookie 標頭（驗證 session 有沒有載進去）。
+                    let cookie = head.lines().find(|l| l.to_ascii_lowercase().starts_with("cookie:")).map(|l| l[7..].trim().to_string()).unwrap_or_default();
+                    echo = format!("<h1>cookie={cookie}</h1>");
+                    echo.as_str()
+                } else if head.starts_with("POST") {
                     p.fetch_add(1, Ordering::SeqCst);
                     b.lock().push(head.split("\r\n\r\n").nth(1).unwrap_or("").to_string());
                     "<h1>saved</h1>"

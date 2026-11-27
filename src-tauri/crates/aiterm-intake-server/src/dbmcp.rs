@@ -24,6 +24,8 @@ use crate::state::AppState;
 
 /// MCP 伺服器在 Claude 設定裡的名字（`--allowedTools` 用 `mcp__aiterm-db`）。
 pub const SERVER_NAME: &str = "aiterm-db";
+/// 系統連線工具的 MCP 伺服器名字（`--allowedTools` 用 `mcp__aiterm-systems`）。
+pub const SYSTEMS_SERVER_NAME: &str = "aiterm-systems";
 /// 等管理員核准最久多久；超過就當作拒絕。
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(24 * 3600);
 const APPROVAL_POLL: Duration = Duration::from_millis(500);
@@ -38,7 +40,10 @@ pub struct McpCtx {
     pub card_id: String,
     pub agent_id: Option<String>,
     pub project_id: String,
-    pub skill: DbSkill,
+    /// 資料庫技能（沒裝就是 `None`）。
+    pub skill: Option<DbSkill>,
+    /// 這張卡能用的系統連線 id（server 系統）。
+    pub systems: Vec<String>,
 }
 
 #[derive(Default)]
@@ -74,7 +79,7 @@ pub fn start(st: &Arc<AppState>) -> std::io::Result<SocketAddr> {
     std_listener.set_nonblocking(true)?;
     let addr = std_listener.local_addr()?;
     let listener = tokio::net::TcpListener::from_std(std_listener)?;
-    let app = Router::new().route("/mcp/{token}", post(handle)).with_state(st.clone());
+    let app = Router::new().route("/mcp/{token}", post(handle)).route("/mcp/{token}/systems", post(handle_sys)).with_state(st.clone());
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -106,6 +111,7 @@ impl Drop for McpGuard {
         let card = self.card_id.clone();
         if let Ok(h) = tokio::runtime::Handle::try_current() {
             h.spawn(async move {
+                crate::syscore::close_card(&st, &card).await;
                 let _ = sqlx::query("UPDATE board_db_queries SET decision = 'denied', finished_at = ?, error = '卡片已結束，沒有人在等這個查詢' WHERE card_id = ? AND decision = 'pending'")
                     .bind(crate::db::now())
                     .bind(&card)
@@ -121,7 +127,14 @@ impl Drop for McpGuard {
 pub fn register(st: &Arc<AppState>, ctx: McpCtx, dir: &std::path::Path) -> Option<McpGuard> {
     let addr = st.mcp.addr()?;
     let token = uuid::Uuid::new_v4().simple().to_string();
-    let config = json!({"mcpServers": {SERVER_NAME: {"type": "http", "url": format!("http://{addr}/mcp/{token}")}}});
+    let mut servers = serde_json::Map::new();
+    if ctx.skill.is_some() {
+        servers.insert(SERVER_NAME.into(), json!({"type": "http", "url": format!("http://{addr}/mcp/{token}")}));
+    }
+    if !ctx.systems.is_empty() {
+        servers.insert(SYSTEMS_SERVER_NAME.into(), json!({"type": "http", "url": format!("http://{addr}/mcp/{token}/systems")}));
+    }
+    let config = json!({"mcpServers": servers});
     std::fs::create_dir_all(dir).ok()?;
     let config_path = dir.join("db-mcp.json");
     std::fs::write(&config_path, config.to_string()).ok()?;
@@ -155,8 +168,18 @@ fn tools() -> Value {
     ])
 }
 
+/// 資料庫工具端點（`/mcp/<token>`）。
 async fn handle(State(st): State<Arc<AppState>>, Path(token): Path<String>, Json(msg): Json<Value>) -> Response {
-    let Some(ctx) = st.mcp.get(&token) else { return (StatusCode::UNAUTHORIZED, "token 無效或已作廢").into_response() };
+    serve(&st, &token, msg, false).await
+}
+
+/// 系統連線工具端點（`/mcp/<token>/systems`）。
+async fn handle_sys(State(st): State<Arc<AppState>>, Path(token): Path<String>, Json(msg): Json<Value>) -> Response {
+    serve(&st, &token, msg, true).await
+}
+
+async fn serve(st: &Arc<AppState>, token: &str, msg: Value, systems: bool) -> Response {
+    let Some(ctx) = st.mcp.get(token) else { return (StatusCode::UNAUTHORIZED, "token 無效或已作廢").into_response() };
     let id = msg.get("id").cloned();
     let method = msg["method"].as_str().unwrap_or("");
     // 沒有 id 的是通知（例如 notifications/initialized）：不回內容。
@@ -167,19 +190,56 @@ async fn handle(State(st): State<Arc<AppState>>, Path(token): Path<String>, Json
             json!({
                 "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": SERVER_NAME, "version": st.version.clone()}
+                "serverInfo": {"name": if systems { SYSTEMS_SERVER_NAME } else { SERVER_NAME }, "version": st.version.clone()}
             }),
         ),
         "ping" => rpc_result(&id, json!({})),
+        "tools/list" if systems => match sys_tools(st, &ctx).await {
+            Ok(t) => rpc_result(&id, json!({"tools": t})),
+            Err(e) => rpc_error(&id, -32603, &e),
+        },
         "tools/list" => rpc_result(&id, json!({"tools": tools()})),
         "tools/call" => {
             let name = msg["params"]["name"].as_str().unwrap_or("").to_string();
             let args = msg["params"]["arguments"].clone();
-            rpc_result(&id, call_tool(&st, &token, &ctx, &name, &args).await)
+            if systems {
+                rpc_result(&id, call_sys_tool(st, &ctx, &name, args).await)
+            } else {
+                rpc_result(&id, call_tool(st, token, &ctx, &name, &args).await)
+            }
         }
         _ => rpc_error(&id, -32601, "不支援的方法"),
     };
     Json(reply).into_response()
+}
+
+/// `sys_list` ＋ Playwright 的 `sys_*` 工具目錄。
+async fn sys_tools(st: &Arc<AppState>, ctx: &McpCtx) -> Result<Value, String> {
+    if ctx.systems.is_empty() {
+        return Ok(json!([]));
+    }
+    let mut tools = vec![json!({"name": "sys_list", "description": "列出你可以操作的外部系統（id、名稱、起始網址、權限模式）。其他 sys_* 工具的 system 參數要填這裡的 id。", "inputSchema": {"type": "object", "properties": {}}})];
+    tools.extend(crate::syscore::catalog(st).await?);
+    Ok(Value::Array(tools))
+}
+
+async fn call_sys_tool(st: &Arc<AppState>, ctx: &McpCtx, name: &str, args: Value) -> Value {
+    if ctx.systems.is_empty() {
+        return tool_text("這位 Agent 沒有系統連線技能".into(), true);
+    }
+    if name == "sys_list" {
+        return match crate::syscore::list(st, ctx).await {
+            Ok(t) => tool_text(t, false),
+            Err(e) => tool_text(e, true),
+        };
+    }
+    if !name.starts_with("sys_") {
+        return tool_text(format!("沒有這個工具：{name}"), true);
+    }
+    match crate::syscore::call(st, ctx, name, args).await {
+        Ok(v) => v,
+        Err(e) => tool_text(e, true),
+    }
 }
 
 fn arg<'a>(args: &'a Value, k: &str) -> &'a str {
@@ -199,8 +259,12 @@ async fn call_tool(st: &Arc<AppState>, token: &str, ctx: &McpCtx, name: &str, ar
     }
 }
 
+fn skill_of(ctx: &McpCtx) -> Result<&DbSkill, String> {
+    ctx.skill.as_ref().ok_or_else(|| "這位 Agent 沒有資料庫技能".to_string())
+}
+
 fn allowed(ctx: &McpCtx, conn_id: &str) -> Result<(), String> {
-    if ctx.skill.connections.iter().any(|c| c == conn_id) {
+    if skill_of(ctx)?.connections.iter().any(|c| c == conn_id) {
         Ok(())
     } else {
         Err("這個連線沒有開放給你，先用 db_list_connections 看可以用哪些。".into())
@@ -209,7 +273,7 @@ fn allowed(ctx: &McpCtx, conn_id: &str) -> Result<(), String> {
 
 async fn list_connections(st: &AppState, ctx: &McpCtx) -> Result<String, String> {
     let mut out = Vec::new();
-    for id in &ctx.skill.connections {
+    for id in &skill_of(ctx)?.connections {
         if let Some(c) = bs::get_db_conn(&st.pools.intake, id).await.map_err(|e| e.to_string())? {
             out.push(json!({"id": c.id, "name": c.name, "db_type": c.db_type, "database": c.database}));
         }
@@ -262,10 +326,11 @@ async fn query(st: &Arc<AppState>, token: &str, ctx: &McpCtx, conn_id: &str, sql
     let conn = bs::get_db_conn(&st.pools.intake, conn_id).await.map_err(|e| e.to_string())?;
     let conn_name = conn.as_ref().map(|c| c.name.clone()).unwrap_or_else(|| conn_id.to_string());
     let q = NewDbQuery { project_id: &ctx.project_id, card_id: &ctx.card_id, agent_id: ctx.agent_id.as_deref(), connection_id: conn_id, connection_name: &conn_name, sql, decision: "allowed" };
-    if conn.is_none() && ctx.skill.connections.iter().any(|c| c == conn_id) {
+    let skill = skill_of(ctx)?;
+    if conn.is_none() && skill.connections.iter().any(|c| c == conn_id) {
         return Err("這個連線已經不存在（管理員可能刪掉了）。".into());
     }
-    match authorize(&ctx.skill, conn_id, sql) {
+    match authorize(skill, conn_id, sql) {
         Decision::Deny(why) => {
             bs::record_denied_db_query(&st.pools.intake, &q, &why).await.ok();
             st.events.changed();

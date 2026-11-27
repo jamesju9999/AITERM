@@ -8,6 +8,23 @@ pub fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+/// 頁面看起來被導去登入頁（登入失效）：網址不在白名單，或路徑像登入頁。
+pub fn looks_logged_out(conn: &SystemConnection, tool_text: &str) -> bool {
+    let Some(url) = tool_text.split("Page URL: ").nth(1).and_then(|s| s.split_whitespace().next()) else {
+        return false;
+    };
+    let on_allowed = conn.allowed_hosts.iter().any(|a| {
+        let a = a.trim().trim_start_matches("*.").to_ascii_lowercase();
+        host_of(url).is_some_and(|h| h == a || h.ends_with(&format!(".{a}")))
+    });
+    if !on_allowed {
+        return true;
+    }
+    let path = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let path = path.split_once('/').map(|(_, p)| p).unwrap_or("").to_ascii_lowercase();
+    ["login", "signin", "sign-in", "sso", "oauth"].iter().any(|k| path.contains(k))
+}
+
 fn host_allowed(allowed: &[String], url: &str) -> bool {
     let Some(host) = host_of(url) else { return false };
     allowed.iter().any(|a| {

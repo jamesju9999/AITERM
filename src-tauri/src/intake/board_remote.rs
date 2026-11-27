@@ -246,7 +246,7 @@ pub fn to_agent(a: &BoardAgent, project_dir: &str) -> crate::tasks::agents::Agen
         cli: a.cli.clone(),
         custom_skills: a.custom_skills.clone(),
         db_skill: a.db_skill.clone(),
-        systems: None,
+        systems: a.systems.clone(),
     }
 }
 

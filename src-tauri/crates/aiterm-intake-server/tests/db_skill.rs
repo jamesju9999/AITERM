@@ -41,7 +41,7 @@ impl R {
     /// 為一張假想的卡註冊 MCP token，回傳（MCP 網址, guard）。
     fn mcp(&self, conn_id: &str, mode: &str) -> (String, dbmcp::McpGuard) {
         let skill = serde_json::from_value(json!({"connections": [conn_id], "mode": mode})).unwrap();
-        let ctx = McpCtx { card_id: "card1".into(), agent_id: Some("a1".into()), project_id: self.pid.clone(), skill };
+        let ctx = McpCtx { card_id: "card1".into(), agent_id: Some("a1".into()), project_id: self.pid.clone(), skill: Some(skill), systems: vec![] };
         let guard = dbmcp::register(self.srv.state(), ctx, &self.srv.dir.path().join("run/card1")).expect("MCP 端點要已啟動");
         let cfg: Value = serde_json::from_str(&std::fs::read_to_string(&guard.config_path).unwrap()).unwrap();
         (cfg["mcpServers"]["aiterm-db"]["url"].as_str().unwrap().to_string(), guard)

@@ -10,14 +10,23 @@ pub fn profile_dir(base: &Path, system_id: &str) -> PathBuf {
 }
 
 pub fn chrome_args(profile: &Path, port: u16, start_url: &str) -> Vec<String> {
-    vec![
+    chrome_args_with(profile, port, start_url, false)
+}
+
+/// `headless`：server 上沒有人看畫面，用無頭模式（`--headless=new`，行為與有頭一致）。
+pub fn chrome_args_with(profile: &Path, port: u16, start_url: &str, headless: bool) -> Vec<String> {
+    let mut args = vec![
         "--no-first-run".into(),
         "--no-default-browser-check".into(),
         "--remote-debugging-address=127.0.0.1".into(),
         format!("--remote-debugging-port={port}"),
         format!("--user-data-dir={}", profile.display()),
-        start_url.into(),
-    ]
+    ];
+    if headless {
+        args.push("--headless=new".into());
+    }
+    args.push(start_url.into());
+    args
 }
 
 /// 綁 127.0.0.1:0 取得一個空閒埠，再放掉交給 Chrome。
@@ -108,7 +117,7 @@ async fn adopt_existing(profile: &Path) -> Option<RunningBrowser> {
 
 /// 接手舊的 Chrome 時它不會自己開起始網址（可能停在空白頁，視窗也可能在背景）：
 /// 沒有網頁分頁或只有空白頁就開起始網址，並把有內容的分頁（或新開的）帶到前景。
-async fn show_start_page(ws_url: &str, start_url: &str) {
+pub async fn show_start_page(ws_url: &str, start_url: &str) {
     use serde_json::json;
     let Ok((cdp, _ev)) = crate::cdp::Cdp::connect(ws_url).await else { return };
     let Ok(res) = cdp.call("Target.getTargets", json!({}), None).await else { return };
@@ -136,6 +145,11 @@ async fn show_start_page(ws_url: &str, start_url: &str) {
 }
 
 pub async fn launch(base: &Path, system_id: &str, start_url: &str) -> Result<RunningBrowser, String> {
+    launch_with(base, system_id, start_url, false).await
+}
+
+/// 同 `launch`；`headless` 為真時用無頭模式（server 用）。
+pub async fn launch_with(base: &Path, system_id: &str, start_url: &str, headless: bool) -> Result<RunningBrowser, String> {
     let profile = profile_dir(base, system_id);
     if let Some(existing) = adopt_existing(&profile).await {
         show_start_page(&existing.ws_url, start_url).await;
@@ -150,7 +164,7 @@ pub async fn launch(base: &Path, system_id: &str, start_url: &str) -> Result<Run
     }
     let port = pick_free_port().map_err(|e| e.to_string())?;
     let child = tokio::process::Command::new(&exe)
-        .args(chrome_args(&profile, port, start_url))
+        .args(chrome_args_with(&profile, port, start_url, headless))
         .kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -196,6 +210,13 @@ mod tests {
         assert!(args.iter().any(|a| a == "--user-data-dir=/p"));
         assert_eq!(args.last().unwrap(), "https://x/");
         assert!(!args.iter().any(|a| a.contains("headless")), "要有頭：使用者看得到、能接手");
+    }
+
+    #[test]
+    fn headless_mode_adds_the_flag_and_keeps_the_start_url_last() {
+        let args = chrome_args_with(Path::new("/p"), 1, "https://x/", true);
+        assert!(args.contains(&"--headless=new".to_string()));
+        assert_eq!(args.last().unwrap(), "https://x/");
     }
 
     #[test]

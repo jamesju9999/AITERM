@@ -64,22 +64,8 @@ pub struct SystemsState {
     desktop: Mutex<Option<Arc<DesktopRunner>>>,
 }
 
-/// 頁面看起來被導去登入頁（登入失效）：網址不在白名單，或路徑像登入頁。
-pub fn looks_logged_out(conn: &SystemConnection, tool_text: &str) -> bool {
-    let Some(url) = tool_text.split("Page URL: ").nth(1).and_then(|s| s.split_whitespace().next()) else {
-        return false;
-    };
-    let on_allowed = conn.allowed_hosts.iter().any(|a| {
-        let a = a.trim().trim_start_matches("*.").to_ascii_lowercase();
-        host_of(url).is_some_and(|h| h == a || h.ends_with(&format!(".{a}")))
-    });
-    if !on_allowed {
-        return true;
-    }
-    let path = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    let path = path.split_once('/').map(|(_, p)| p).unwrap_or("").to_ascii_lowercase();
-    ["login", "signin", "sign-in", "sso", "oauth"].iter().any(|k| path.contains(k))
-}
+// 登入失效的判斷搬到共用的 aiterm-systems（server 也用）。
+pub use aiterm_systems::gate::looks_logged_out;
 
 impl SystemsState {
     pub fn new(config: Arc<ConfigStore>) -> Self {
