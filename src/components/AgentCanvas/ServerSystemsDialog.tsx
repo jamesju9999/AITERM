@@ -173,6 +173,7 @@ export function ServerSystemsDialog({
         {isAdmin && unshared.length > 0 && (
           <div data-testid="server-systems-share">
             <div className="ac-db-section">{t.ac_ssys_share_title}</div>
+            <div className="ac-db-conns">
             {unshared.map((l) => {
               const ok = l.mode !== "rules";
               return (
@@ -186,6 +187,7 @@ export function ServerSystemsDialog({
                 </div>
               );
             })}
+            </div>
             <p className="task-field-hint">{t.ac_ssys_share_hint}</p>
           </div>
         )}

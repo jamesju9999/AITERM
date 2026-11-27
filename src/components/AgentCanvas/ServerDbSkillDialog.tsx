@@ -155,6 +155,7 @@ export function ServerDbSkillDialog({
         {isAdmin && unshared.length > 0 && (
           <div data-testid="server-db-share">
             <div className="ac-db-section">{t.ac_sdb_share_title}</div>
+            <div className="ac-db-conns">
             {unshared.map((l) => {
               const ok = SUPPORTED.includes(l.db_type);
               return (
@@ -175,6 +176,7 @@ export function ServerDbSkillDialog({
                 </div>
               );
             })}
+            </div>
             <p className="task-field-hint">{t.ac_sdb_share_hint}</p>
           </div>
         )}
