@@ -93,7 +93,7 @@ describe("LiveViewDialog：Agent 執行中", () => {
     const img = await sizeFrame();
     expect(screen.getByTestId("live-status")).toHaveTextContent("唯讀");
     expect(screen.queryByRole("button", { name: "接手" })).toBeNull();
-    fireEvent.pointerDown(img, { clientX: 200, clientY: 100, button: 0 });
+    fireEvent.mouseDown(img, { clientX: 200, clientY: 100, button: 0 });
     fireEvent.keyDown(img.parentElement!, { key: "a", code: "KeyA", keyCode: 65 });
     expect(live.sent).toEqual([]);
   });
@@ -104,7 +104,7 @@ describe("LiveViewDialog：Agent 執行中", () => {
     await push(frame);
     const img = await sizeFrame();
     expect(screen.getByTestId("live-status")).toHaveTextContent("按「接手」後才能操作");
-    fireEvent.pointerDown(img, { clientX: 200, clientY: 100, button: 0 });
+    fireEvent.mouseDown(img, { clientX: 200, clientY: 100, button: 0 });
     expect(live.sent).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "接手" }));
     expect(live.sent).toEqual([{ t: "takeover", on: true }]);
@@ -113,8 +113,8 @@ describe("LiveViewDialog：Agent 執行中", () => {
     expect(screen.getByTestId("live-status")).toHaveTextContent("你接手中");
     expect(screen.getByRole("button", { name: "交還給 Agent" })).toBeInTheDocument();
     live.sent = [];
-    fireEvent.pointerDown(img, { clientX: 200, clientY: 100, button: 0 });
-    fireEvent.pointerUp(img, { clientX: 200, clientY: 100, button: 2 });
+    fireEvent.mouseDown(img, { clientX: 200, clientY: 100, button: 0 });
+    fireEvent.mouseUp(img, { clientX: 200, clientY: 100, button: 2 });
     expect(live.sent).toEqual([
       { t: "mouse", type: "down", x: 0.25, y: 0.25, button: "left" },
       { t: "mouse", type: "up", x: 0.25, y: 0.25, button: "right" },
@@ -152,7 +152,7 @@ describe("LiveViewDialog：Agent 執行中", () => {
     await push({ t: "closed", why: "這張卡已經結束" });
     expect(screen.getByTestId("live-status")).toHaveTextContent("這張卡已經結束");
     live.sent = [];
-    fireEvent.pointerDown(img, { clientX: 200, clientY: 100, button: 0 });
+    fireEvent.mouseDown(img, { clientX: 200, clientY: 100, button: 0 });
     expect(live.sent).toEqual([]);
     expect(screen.queryByRole("button", { name: "交還給 Agent" })).toBeNull();
   });
@@ -179,7 +179,7 @@ describe("LiveViewDialog：遠端登入", () => {
     expect(screen.getByTestId("live-status")).toHaveTextContent("請在畫面上登入");
     expect(screen.queryByRole("button", { name: "接手" }), "登入不需要接手").toBeNull();
     const img = await sizeFrame();
-    fireEvent.pointerDown(img, { clientX: 300, clientY: 150, button: 0 });
+    fireEvent.mouseDown(img, { clientX: 300, clientY: 150, button: 0 });
     expect(live.sent).toEqual([{ t: "mouse", type: "down", x: 0.5, y: 0.5, button: "left" }]);
     live.sent = [];
     fireEvent.click(screen.getByRole("button", { name: "上一頁" }));

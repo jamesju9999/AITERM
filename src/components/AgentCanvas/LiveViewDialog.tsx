@@ -139,19 +139,20 @@ export function LiveViewDialog({ target, onClose, onLoginDone }: { target: LiveT
               draggable={false}
               className={canInput ? "ac-live-img ac-live-img--active" : "ac-live-img"}
               data-testid="live-frame"
-              onPointerMove={(e) => {
+              // 用滑鼠事件而不是指標事件：這個視窗（WKWebView）對某些輸入（例如自動化操作）只送滑鼠事件。
+              onMouseMove={(e) => {
                 if (!canInput) return;
                 const now = Date.now();
                 if (now - lastMove.current < MOVE_THROTTLE_MS) return;
                 lastMove.current = now;
                 send({ t: "mouse", type: "move", ...pos(e) });
               }}
-              onPointerDown={(e) => {
+              onMouseDown={(e) => {
                 if (!canInput) return;
                 (e.currentTarget.parentElement as HTMLElement | null)?.focus();
                 send({ t: "mouse", type: "down", ...pos(e), button: BUTTONS[e.button] ?? "left" });
               }}
-              onPointerUp={(e) => canInput && send({ t: "mouse", type: "up", ...pos(e), button: BUTTONS[e.button] ?? "left" })}
+              onMouseUp={(e) => canInput && send({ t: "mouse", type: "up", ...pos(e), button: BUTTONS[e.button] ?? "left" })}
             />
           ) : (
             <div className="ac-live-placeholder">{ended ?? t.ac_live_connecting}</div>
