@@ -1244,4 +1244,55 @@ mod tests {
         skill_delete(&admin, &s.id).await.unwrap();
         assert!(skills_list(&admin).await.unwrap().is_empty());
     }
+
+    /// 桌面版的編制與問人指令打到真的 server：建立、另存、切換、被擋、做完再換、問題的回答與取消。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn formations_and_questions_commands_work_against_a_real_server() {
+        use aiterm_intake_core::board_store as bs;
+        let srv = TestServer::start().await;
+        let pid = srv.project("範例科技").await;
+        let admin = srv.paired("小華", Role::Admin).await;
+        let member = srv.paired("小明", Role::Member).await;
+        let pool = srv.state().pools.intake.clone();
+        let agent = |name: &str| serde_json::json!([{"kind": "coder", "name": name, "role": "", "dx": 1.0, "dy": 2.0}]);
+        let a = formations_create(&admin, &pid, "盤點", &agent("盤點工程師")).await.unwrap();
+        let b = formations_create(&admin, &pid, "轉換", &agent("轉換工程師")).await.unwrap();
+        assert!(formations_create(&member, &pid, "x", &agent("y")).await.is_err(), "成員不能建立");
+        assert_eq!(formations_switch(&admin, &pid, &a).await.unwrap()["status"], "switched");
+        let st = formations_state(&member, &pid, "預設").await.unwrap();
+        assert_eq!((st["active"].as_str(), st["formations"].as_array().unwrap().len()), (Some(a.as_str()), 2));
+        // 有卡在執行：被擋，改成做完再換。
+        let agent_row = bs::list_agents(&pool, &pid).await.unwrap().remove(0);
+        let card = bs::create_card(&pool, bs::NewCard { project_id: &pid, title: "工作", body: "", parallel_ok: true, interactive: false, label: None, created_by: "t" }).await.unwrap();
+        sqlx::query("UPDATE board_cards SET agent_id = ?, status = 'running' WHERE id = ?").bind(&agent_row.id).bind(&card.id).execute(&pool).await.unwrap();
+        let busy = formations_switch(&admin, &pid, &b).await.unwrap();
+        assert_eq!((busy["status"].as_str(), busy["names"][0].as_str()), (Some("busy"), Some("盤點工程師")));
+        formations_request_switch(&admin, &pid, &b).await.unwrap();
+        assert_eq!(formations_state(&admin, &pid, "").await.unwrap()["pending"], serde_json::json!(b));
+        formations_cancel_switch(&admin, &pid).await.unwrap();
+        assert_eq!(formations_state(&admin, &pid, "").await.unwrap()["pending"], serde_json::Value::Null);
+        sqlx::query("UPDATE board_cards SET status = 'done' WHERE id = ?").bind(&card.id).execute(&pool).await.unwrap();
+        assert_eq!(formations_switch(&admin, &pid, &b).await.unwrap()["status"], "switched");
+        assert_eq!(formations_retired(&member, &pid).await.unwrap()[0]["name"], "盤點工程師");
+        let c = formations_save_as(&admin, &pid, "另存").await.unwrap();
+        formations_rename(&admin, &pid, &c, "實測").await.unwrap();
+        formations_delete(&admin, &pid, &a).await.unwrap();
+        assert!(formations_delete(&admin, &pid, &c).await.is_err(), "目前的編制不能刪");
+
+        // 問人：server 上有未答的問題 → 桌面端列出、成員回答、管理員取消另一個。
+        let q1 = aiterm_intake_core::board_questions::ask(&pool, &aiterm_intake_core::board_questions::NewQuestion { project_id: &pid, card_id: "c1", agent_id: None, question: "用哪個？", options: &["甲".into(), "乙".into()], recommended: Some("甲"), context: None }).await.unwrap().unwrap();
+        let q2 = aiterm_intake_core::board_questions::ask(&pool, &aiterm_intake_core::board_questions::NewQuestion { project_id: &pid, card_id: "c2", agent_id: None, question: "還要嗎？", options: &[], recommended: None, context: None }).await.unwrap().unwrap();
+        let qs = questions(&member, &pid).await.unwrap();
+        assert_eq!(qs.open.iter().map(|q| q.id).collect::<Vec<_>>(), vec![q1, q2]);
+        question_answer(&member, q1, "乙").await.unwrap();
+        assert!(question_answer(&admin, q1, "甲").await.is_err(), "已回答的不能再答");
+        assert!(question_cancel(&member, q2).await.is_err(), "成員不能取消");
+        question_cancel(&admin, q2).await.unwrap();
+        let qs = questions(&member, &pid).await.unwrap();
+        assert!(qs.open.is_empty());
+        assert_eq!(qs.closed.iter().map(|q| (q.id, q.status.as_str())).collect::<Vec<_>>(), vec![(q2, "cancelled"), (q1, "answered")]);
+        assert_eq!(ask_settings(&admin).await.unwrap()["notify_email"], "");
+        ask_settings_set(&admin, "boss@example.com").await.unwrap();
+        assert_eq!(ask_settings(&admin).await.unwrap()["notify_email"], "boss@example.com");
+    }
 }
