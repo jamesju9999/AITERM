@@ -148,13 +148,14 @@ pub async fn ensure_running(st: &Arc<AppState>, ctx: &crate::dbmcp::McpCtx, syst
         }
     });
     tokio::time::sleep(Duration::from_millis(600)).await;
+    // 先整理好分頁（關掉空白頁、開起始頁）再讓 Playwright 連上：它連上之後分頁就不能再被關掉，不然第一次導覽會遇到「瀏覽器已關閉」。
+    browser::show_start_page(&browser.ws_url, &system.start_url).await;
 
     let out = dir.join("output");
     std::fs::create_dir_all(&out).ok();
     let upstream = Upstream::spawn_with(Some(&browser.cdp_http()), &out, false).await?;
     let proxy = Proxy::start(system_id, upstream, st.sys.approvals.clone(), gctx.intent.clone(), gctx.manual.clone(), last_denied).await?;
     proxy.warm_up().await;
-    browser::show_start_page(&browser.ws_url, &system.start_url).await;
     let run = Arc::new(SysRun { browser: tokio::sync::Mutex::new(browser), gate, proxy: Arc::new(proxy), ctx: gctx, needs_login: AtomicBool::new(false), dir, system_id: system_id.to_string() });
     runs.insert(key, run.clone());
     Ok(run)

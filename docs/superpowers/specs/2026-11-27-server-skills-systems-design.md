@@ -22,8 +22,8 @@
 - `board_systems(id, name, start_url, allowed_hosts JSON, mode, enabled, created_by, created_at, updated_at)`。
 - `board_agents.systems TEXT`：被勾選的系統 id（JSON 陣列）。
 - `board_system_sessions(system_id, cookies_sealed, exported_by, exported_at)`：cookie 用 `FileSecrets` 的加密保存（鍵 `syssession:<id>`），資料表只記是誰、何時匯出，**不含 cookie**。
-- 待核准的寫入請求與審計存 `board_sys_events(id, project_id, card_id, agent_id, system_id, system_name, intent, method, url, verdict, decided_by, started_at, decided_at)`；
-  `verdict`：`allowed｜pending｜approved｜denied｜timeout`。待核准清單是 `pending` 的列。
+- 審計用共用 crate 的 `system_audit` 表（建在 intake.db）；**待核准的請求只存在記憶體**（`Approvals`），並記下屬於哪個專案／卡片／Agent。
+  server 重啟時等核准的請求本來就會消失（Agent 也已被結束），等同拒絕，所以不另存資料表。（原先規劃的 `board_sys_events` 沒有做。）
 
 ### 登入（匯出 session）
 
