@@ -79,6 +79,8 @@ import { ReferencesDialog } from "./ReferencesDialog";
 import { CustomSkillsDialog } from "./CustomSkillsDialog";
 import { ServerSkillsDialog } from "./ServerSkillsDialog";
 import { ServerDbSkillDialog } from "./ServerDbSkillDialog";
+import { ServerSystemsDialog } from "./ServerSystemsDialog";
+import { listServerSystems, setAgentServerSystems } from "../../ipc/serverSystems";
 import { ServerDbApprovalsBar } from "./ServerDbApprovalsBar";
 import { listServerDbConns, setAgentServerDbSkill } from "../../ipc/serverDb";
 import { listServerSkills, setAgentServerSkills, type ServerSkill } from "../../ipc/serverSkills";
@@ -691,13 +693,14 @@ export function AgentCanvasView({
   useEffect(() => {
     if (!isActive || systemsSkillFor) return;
     let alive = true;
-    systemsList()
+    // 共用專案的系統在 server 上（id 是 server 的），本機專案用這台電腦上的。
+    (isShared ? listServerSystems() : systemsList())
       .then((l) => alive && setSystemNames(Object.fromEntries(l.map((x) => [x.id, x.name]))))
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [isActive, systemsSkillFor]);
+  }, [isActive, systemsSkillFor, isShared]);
   const dbQueries = useMemo(() => (dbQueriesOf?.projectId === projectId ? dbQueriesOf.rows : []), [dbQueriesOf, projectId]);
   const references = useMemo(() => (refsOf?.projectId === projectId ? refsOf.list : []), [refsOf, projectId]);
   const schedules = useMemo(() => (schedulesOf?.projectId === projectId ? schedulesOf.rows : []), [schedulesOf, projectId]);
@@ -1754,19 +1757,17 @@ export function AgentCanvasView({
           </span>
           <span className="ac-pool-name">{t.ac_skill_custom}</span>
         </div>
-        {!isShared && (
-          <div
-            className="ac-pool-item ac-pool-item--skill"
-            data-testid="skill-systems"
-            title={t.ac_skill_hint}
-            onMouseDown={(e) => beginDrag(e, "skill", "systems")}
-          >
-            <span className="ac-agent-ico" aria-hidden>
-              <RoleIcon name="globe" />
-            </span>
-            <span className="ac-pool-name">{t.ac_skill_systems}</span>
-          </div>
-        )}
+        <div
+          className="ac-pool-item ac-pool-item--skill"
+          data-testid="skill-systems"
+          title={t.ac_skill_hint}
+          onMouseDown={(e) => beginDrag(e, "skill", "systems")}
+        >
+          <span className="ac-agent-ico" aria-hidden>
+            <RoleIcon name="globe" />
+          </span>
+          <span className="ac-pool-name">{t.ac_skill_systems}</span>
+        </div>
       </div>
 
       <div className={`ac-main${layout.libCollapsed ? " ac-main--lib-collapsed" : ""}`}>
@@ -2331,7 +2332,18 @@ export function AgentCanvasView({
         />
       )}
 
-      {systemsSkillFor && projectId && (
+      {systemsSkillFor && projectId && isShared && (
+        <ServerSystemsDialog
+          agentName={systemsSkillFor.name}
+          current={parseSkillPaths(systemsSkillFor.systems)}
+          onClose={() => setSystemsSkillFor(null)}
+          onSave={async (ids) => {
+            await setAgentServerSystems(systemsSkillFor.id, ids);
+            await refresh();
+          }}
+        />
+      )}
+      {systemsSkillFor && projectId && !isShared && (
         <SystemsSkillDialog
           agentName={systemsSkillFor.name}
           current={parseSkillPaths(systemsSkillFor.systems)}

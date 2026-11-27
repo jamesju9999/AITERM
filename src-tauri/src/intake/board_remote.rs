@@ -601,6 +601,83 @@ pub async fn db_decide(api: &Api, id: i64, approve: bool) -> Result<(), ClientEr
     api.request(Method::POST, &format!("/v1/board/db/approvals/{id}/decide"), Some(json!({"approve": approve}))).await.map(|_| ())
 }
 
+// ---- 系統連線（server 上的網頁系統與登入 session） ----
+
+/// server 上的系統連線。成員拿不到 `allowed_hosts`。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ServerSystem {
+    pub id: String,
+    pub name: String,
+    pub start_url: String,
+    pub mode: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub allowed_hosts: Option<Vec<String>>,
+    /// 已分享的登入 session：誰、何時、幾個 cookie（cookie 本身不回傳）。
+    #[serde(default)]
+    pub session: Option<ServerSystemSession>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ServerSystemSession {
+    pub exported_by: String,
+    pub exported_at: i64,
+    pub cookie_count: i64,
+}
+
+/// 共用專案裡等管理員核准的系統請求。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ServerSysApproval {
+    pub id: String,
+    pub system_id: String,
+    pub system_name: String,
+    pub card_id: String,
+    pub agent_id: Option<String>,
+    pub intent: String,
+    pub method: String,
+    pub url: String,
+    #[serde(default)]
+    pub declared_read: bool,
+    pub ts_ms: i64,
+}
+
+pub async fn systems_list(api: &Api) -> Result<Vec<ServerSystem>, ClientError> {
+    api.get("/v1/systems").await
+}
+
+/// 把一個系統的設定（名稱、起始網址、白名單、權限模式）分享到 server（管理員限定；同名取代）。
+pub async fn system_share(api: &Api, name: &str, start_url: &str, allowed_hosts: &[String], mode: &str, enabled: bool) -> Result<ServerSystem, ClientError> {
+    let v = api.request(Method::POST, "/v1/systems", Some(json!({"name": name, "start_url": start_url, "allowed_hosts": allowed_hosts, "mode": mode, "enabled": enabled}))).await?;
+    serde_json::from_value(v).map_err(|e| ClientError::Server(e.to_string()))
+}
+
+pub async fn system_delete(api: &Api, id: &str) -> Result<(), ClientError> {
+    api.request(Method::DELETE, &format!("/v1/systems/{}", enc(id)), None).await.map(|_| ())
+}
+
+/// 把登入後的 cookie 分享給 server（管理員限定）。回傳 server 實際保存的 cookie 數。
+pub async fn system_put_session(api: &Api, id: &str, cookies: &[serde_json::Value]) -> Result<i64, ClientError> {
+    let v = api.request(Method::PUT, &format!("/v1/systems/{}/session", enc(id)), Some(json!({"cookies": cookies}))).await?;
+    Ok(v["cookie_count"].as_i64().unwrap_or(0))
+}
+
+pub async fn system_delete_session(api: &Api, id: &str) -> Result<(), ClientError> {
+    api.request(Method::DELETE, &format!("/v1/systems/{}/session", enc(id)), None).await.map(|_| ())
+}
+
+/// 設定共用專案裡某位 Agent 能用的系統（server 系統 id，整份取代；管理員限定）。
+pub async fn agent_set_systems(api: &Api, agent_id: &str, ids: &[String]) -> Result<(), ClientError> {
+    api.request(Method::PUT, &format!("/v1/board/agents/{}/systems", enc(agent_id)), Some(json!({ "ids": ids }))).await.map(|_| ())
+}
+
+pub async fn sys_approvals(api: &Api, server_pid: &str) -> Result<Vec<ServerSysApproval>, ClientError> {
+    api.get(&format!("/v1/board/projects/{}/sys/approvals", enc(server_pid))).await
+}
+
+pub async fn sys_decide(api: &Api, id: &str, approve: bool) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/board/sys/approvals/{}/decide", enc(id)), Some(json!({"approve": approve}))).await.map(|_| ())
+}
+
 // ---- 技能庫（server 上的自訂技能） ----
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

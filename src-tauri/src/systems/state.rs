@@ -374,6 +374,16 @@ impl SystemsState {
     }
 
     /// 目前的操作日誌（成功的動作）。系統沒開就是空的。
+    /// 把這個系統的瀏覽器裡目前的 cookie 全部取出（分享 session 給 server 用）。
+    /// 瀏覽器沒開就先開（用這個系統的設定檔，上次登入的狀態還在）；登入要先在那個視窗完成。
+    pub async fn export_cookies(self: &Arc<Self>, id: &str) -> Result<Vec<Value>, String> {
+        let run = self.ensure_running(id).await?;
+        let ws = run.browser.lock().await.ws_url.clone();
+        let (cdp, _events) = super::cdp::Cdp::connect(&ws).await?;
+        let v = cdp.call("Storage.getCookies", json!({}), None).await?;
+        Ok(v["cookies"].as_array().cloned().unwrap_or_default())
+    }
+
     pub async fn journal_steps(&self, system: &str) -> Vec<Step> {
         match self.running.lock().await.get(system) {
             Some(r) => r.journal.lock().clone(),

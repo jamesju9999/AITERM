@@ -946,3 +946,91 @@ pub async fn server_db_decide(id: i64, approve: bool, rs: State<'_, Arc<crate::i
     emit_updated(&app);
     Ok(())
 }
+
+// ---- 系統連線技能（共用看板專案） ----
+
+#[tauri::command]
+pub async fn server_systems_list(rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<Vec<crate::intake::board_remote::ServerSystem>, String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::systems_list(&api).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 把這台電腦上設定好的網頁系統（名稱、起始網址、白名單、權限模式）分享到 server（管理員限定）。
+/// 只分享設定；登入 session 另外用「分享 session」。server 支援唯讀、每次核准、直接放行；規則模式與桌面 App 型連線不支援。
+#[tauri::command]
+pub async fn server_system_share(
+    system_id: String,
+    config: State<'_, Arc<crate::config::ConfigStore>>,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
+) -> Result<crate::intake::board_remote::ServerSystem, String> {
+    use crate::systems::types::Mode;
+    let conn = config.get().system_connections.into_iter().find(|c| c.id == system_id).ok_or("找不到這個系統連線")?;
+    if conn.is_desktop() {
+        return Err("桌面 App 型的系統連線只能在桌面版使用，不能分享到 server".into());
+    }
+    let mode = match conn.mode {
+        Mode::ReadOnly => "read_only",
+        Mode::ApproveEach => "approve_each",
+        Mode::Autonomous => "autonomous",
+        Mode::Rules => return Err("server 不支援規則模式，請先把這個系統改成唯讀、每次核准或直接放行".into()),
+    };
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::system_share(&api, &conn.name, &conn.start_url, &conn.allowed_hosts, mode, conn.enabled).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 把這個系統目前登入的 session（cookie）分享給 server（管理員限定）：要先在這個系統的瀏覽器視窗登入完成。
+/// 只送屬於白名單網域的 cookie，server 加密保存；帳號密碼不會經過 server。
+#[tauri::command]
+pub async fn server_system_share_session(
+    system_id: String,
+    config: State<'_, Arc<crate::config::ConfigStore>>,
+    systems: State<'_, Arc<crate::systems::state::SystemsState>>,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
+) -> Result<i64, String> {
+    let conn = config.get().system_connections.into_iter().find(|c| c.id == system_id).ok_or("找不到這個系統連線")?;
+    let api = crate::intake::board_remote::require(&rs)?;
+    let remote = crate::intake::board_remote::systems_list(&api).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+    let target = remote.iter().find(|s| s.name == conn.name).ok_or("這個系統還沒有分享到 server，請先分享設定")?;
+    let cookies = systems.export_cookies(&system_id).await?;
+    if cookies.is_empty() {
+        return Err("這個系統的瀏覽器裡沒有任何 cookie，請先在它的瀏覽器視窗登入再分享".into());
+    }
+    crate::intake::board_remote::system_put_session(&api, &target.id, &cookies).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+#[tauri::command]
+pub async fn server_system_delete(id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::system_delete(&api, &id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+#[tauri::command]
+pub async fn server_system_session_delete(id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::system_delete_session(&api, &id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 設定共用專案裡某位 Agent 能用的系統（server 系統 id；管理員限定）。
+#[tauri::command]
+pub async fn agents_set_server_systems(agent_id: String, ids: Vec<String>, rs: State<'_, Arc<crate::intake::remote::RemoteState>>, app: AppHandle) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::agent_set_systems(&api, &agent_id, &ids).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+    emit_updated(&app);
+    Ok(())
+}
+
+/// 共用專案裡等管理員核准的系統請求。
+#[tauri::command]
+pub async fn server_sys_approvals(project_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<Vec<crate::intake::board_remote::ServerSysApproval>, String> {
+    let Some(pid) = crate::intake::board_remote::parse(&project_id) else { return Ok(Vec::new()) };
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::sys_approvals(&api, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+#[tauri::command]
+pub async fn server_sys_decide(id: String, approve: bool, rs: State<'_, Arc<crate::intake::remote::RemoteState>>, app: AppHandle) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::sys_decide(&api, &id, approve).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+    emit_updated(&app);
+    Ok(())
+}
