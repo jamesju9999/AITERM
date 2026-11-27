@@ -12,6 +12,7 @@ pub mod line_store;
 pub mod dispatcher;
 pub mod smtp;
 pub mod store;
+pub mod board_formations;
 pub mod board_questions;
 pub mod board_store;
 pub mod orchestration;

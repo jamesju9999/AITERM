@@ -594,8 +594,10 @@ async fn an_agent_without_skills_gets_no_add_dir_and_no_skill_note() {
     r.pump("審查結案", |c| done(c, "review", 1)).await;
     assert!(!fake.read("coder_args_1.txt").lines().any(|a| a == "--add-dir"));
     assert!(!fake.read("coder_prompt_1.txt").contains("你有這些技能可以用"));
-    assert!(!fake.read("coder_args_1.txt").lines().any(|a| a == "--mcp-config" || a == "--strict-mcp-config"), "沒裝資料庫技能就沒有 MCP 設定");
-    assert!(!fake.read("coder_args_1.txt").contains("mcp__aiterm-db"));
+    // 沒裝任何技能：只有「問人」這一個 MCP 端點，沒有資料庫或系統連線。
+    assert!(fake.read("coder_args_1.txt").lines().any(|a| a == "--strict-mcp-config"), "每張卡都有問人端點");
+    assert!(fake.read("coder_args_1.txt").contains("mcp__aiterm-ask"));
+    assert!(!fake.read("coder_args_1.txt").contains("mcp__aiterm-db") && !fake.read("coder_args_1.txt").contains("mcp__aiterm-systems"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

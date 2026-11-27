@@ -265,6 +265,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ] {
         sqlx::query(sql).execute(pool).await?;
     }
+    crate::board_formations::init_schema(pool).await?;
     // 舊資料庫的 Agent 表沒有技能欄位（新建的已經有；已存在就略過）。之後的資料庫、系統連線技能也加在這裡。
     let _ = sqlx::query("ALTER TABLE board_agents ADD COLUMN custom_skills TEXT").execute(pool).await;
     let _ = sqlx::query("ALTER TABLE board_agents ADD COLUMN db_skill TEXT").execute(pool).await;

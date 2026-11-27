@@ -133,6 +133,8 @@ pub struct SkillCtx {
     db: Option<crate::dbmcp::McpGuard>,
     has_db: bool,
     has_sys: bool,
+    /// 這張卡能不能用 `ask_human`（驗收卡不能：驗收是自動閘門，不該停下來等人）。
+    has_ask: bool,
 }
 
 impl SkillCtx {
@@ -150,7 +152,9 @@ impl SkillCtx {
         let mut a = crate::runner::Attach::dirs(&self.dirs);
         if let Some(g) = &self.db {
             a.mcp_configs.push(g.config_path.to_string_lossy().into_owned());
-            a.allow.push(format!("mcp__{}", crate::dbmcp::ASK_SERVER_NAME));
+            if self.has_ask {
+                a.allow.push(format!("mcp__{}", crate::dbmcp::ASK_SERVER_NAME));
+            }
             if self.has_db {
                 a.allow.push(format!("mcp__{}", crate::dbmcp::SERVER_NAME));
             }
@@ -169,6 +173,11 @@ impl SkillCtx {
 
     /// 依 Agent 的設定準備副本。技能庫裡讀不到的技能不會讓卡失敗，只在附註裡明講讀不到。
     pub async fn prepare(st: &Arc<AppState>, agent: &BoardAgent, card_id: &str) -> Self {
+        Self::prepare_with(st, agent, card_id, true).await
+    }
+
+    /// 同 `prepare`；`ask` 為假時不開放（也不提）`ask_human`。
+    pub async fn prepare_with(st: &Arc<AppState>, agent: &BoardAgent, card_id: &str, ask: bool) -> Self {
         let mut ctx = Self::prepare_custom(st, agent, card_id).await;
         // 資料庫與系統連線技能：發一個只屬於這張卡的 token，工具由 server 內建的 MCP 端點提供。
         let skill = aiterm_db::skill::parse(agent.db_skill.as_deref());
@@ -185,7 +194,10 @@ impl SkillCtx {
                     ctx.note.push_str(&systems_note(&systems));
                     ctx.has_sys = true;
                 }
-                ctx.note.push_str(ASK_NOTE);
+                if ask {
+                    ctx.note.push_str(ASK_NOTE);
+                    ctx.has_ask = true;
+                }
                 ctx.db = Some(guard);
                 // 就算沒有自訂技能，副本資料夾（`run/<卡>`）也要在結束時清掉。
                 ctx.run_root.get_or_insert_with(|| run.join("skills"));
@@ -213,7 +225,7 @@ impl SkillCtx {
         })
         .await
         .unwrap_or_default();
-        let mut ctx = Self { dirs: Vec::new(), note: String::new(), run_root: Some(run_root), db: None, has_db: false, has_sys: false };
+        let mut ctx = Self { dirs: Vec::new(), note: String::new(), run_root: Some(run_root), db: None, has_db: false, has_sys: false, has_ask: false };
         ctx.note.push_str("\n\n你有這些技能可以用。需要時先用 Read 讀那個 SKILL.md 的全文並照做（不需要就不用讀）：\n");
         for (s, r) in &copied {
             match r {

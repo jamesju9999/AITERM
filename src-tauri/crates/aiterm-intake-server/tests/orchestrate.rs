@@ -209,7 +209,7 @@ async fn a_module_is_built_in_the_coders_own_worktree_reviewed_read_only_and_wai
     // 模型設定要真的傳給 claude：Coder 沒設就不帶 --model，Reviewer 設了 sonnet 就帶。
     assert!(!fake.read("coder_args_1.txt").contains("--model"), "沒設模型就沿用預設");
     assert!(fake.read("review_args_1.txt").lines().collect::<Vec<_>>().windows(2).any(|w| w == ["--model", "sonnet"]), "{}", fake.read("review_args_1.txt"));
-    assert!(rv.ends_with("Read,Grep,Glob") && !rv.contains("Edit"), "審查只給讀檔工具：{rv}");
+    assert!(rv.ends_with("Read,Grep,Glob,mcp__aiterm-ask") && !rv.contains("Edit"), "審查只給讀檔工具（加上問人）：{rv}");
     assert!(rv.contains("worktrees/review-") && !rv.contains("agent-"), "{rv}");
     let rp = fake.read("review_prompt_1.txt");
     assert!(rp.starts_with("嚴格審查") && rp.contains("做一個登入頁") && rp.contains("+change 1"), "{rp}");

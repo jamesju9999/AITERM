@@ -601,6 +601,51 @@ pub async fn db_decide(api: &Api, id: i64, approve: bool) -> Result<(), ClientEr
     api.request(Method::POST, &format!("/v1/board/db/approvals/{id}/decide"), Some(json!({"approve": approve}))).await.map(|_| ())
 }
 
+// ---- 團隊編制（共用專案；規則在 server 的 `board_formations`） ----
+
+fn formations_path(server_pid: &str, tail: &str) -> String {
+    format!("/v1/board/projects/{}/formations{tail}", enc(server_pid))
+}
+
+pub async fn formations_state(api: &Api, server_pid: &str, default_name: &str) -> Result<serde_json::Value, ClientError> {
+    api.get(&format!("{}?default_name={}", formations_path(server_pid, ""), enc(default_name))).await
+}
+
+pub async fn formations_create(api: &Api, server_pid: &str, name: &str, agents: &serde_json::Value) -> Result<String, ClientError> {
+    let v = api.request(Method::POST, &formations_path(server_pid, ""), Some(json!({"name": name, "agents": agents}))).await?;
+    Ok(v["id"].as_str().unwrap_or_default().to_string())
+}
+
+pub async fn formations_save_as(api: &Api, server_pid: &str, name: &str) -> Result<String, ClientError> {
+    let v = api.request(Method::POST, &formations_path(server_pid, "/save-as"), Some(json!({"name": name}))).await?;
+    Ok(v["id"].as_str().unwrap_or_default().to_string())
+}
+
+pub async fn formations_rename(api: &Api, server_pid: &str, id: &str, name: &str) -> Result<(), ClientError> {
+    api.request(Method::PUT, &formations_path(server_pid, &format!("/{}", enc(id))), Some(json!({"name": name}))).await.map(|_| ())
+}
+
+pub async fn formations_delete(api: &Api, server_pid: &str, id: &str) -> Result<(), ClientError> {
+    api.request(Method::DELETE, &formations_path(server_pid, &format!("/{}", enc(id))), None).await.map(|_| ())
+}
+
+/// 切換；回 server 的結果（`{"status":"switched"}` 或 `{"status":"busy","names":[…]}`）。
+pub async fn formations_switch(api: &Api, server_pid: &str, id: &str) -> Result<serde_json::Value, ClientError> {
+    api.request(Method::POST, &formations_path(server_pid, &format!("/{}/switch", enc(id))), None).await
+}
+
+pub async fn formations_request_switch(api: &Api, server_pid: &str, id: &str) -> Result<(), ClientError> {
+    api.request(Method::POST, &formations_path(server_pid, &format!("/{}/request-switch", enc(id))), None).await.map(|_| ())
+}
+
+pub async fn formations_cancel_switch(api: &Api, server_pid: &str) -> Result<(), ClientError> {
+    api.request(Method::POST, &formations_path(server_pid, "/cancel-switch"), None).await.map(|_| ())
+}
+
+pub async fn formations_retired(api: &Api, server_pid: &str) -> Result<serde_json::Value, ClientError> {
+    api.get(&formations_path(server_pid, "/retired")).await
+}
+
 // ---- 中途問人（Agent 在 server 上提問，等人回答） ----
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

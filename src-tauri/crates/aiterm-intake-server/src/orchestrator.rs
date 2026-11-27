@@ -143,6 +143,12 @@ pub(crate) async fn create_merge_card(pool: &sqlx::SqlitePool, pid: &str, agents
 /// 掃一次：推進每個開了編排的專案，再在並行上限內把待派送的卡派給閒置的 Agent。回傳這次開始處理的卡數。
 pub async fn tick_once(st: &Arc<AppState>) -> usize {
     let _one_at_a_time = TICK.lock().await;
+    // 等工作做完再切換的編制：沒人在工作了就換（不論 claude 能不能用）。
+    for pid in aiterm_intake_core::board_formations::projects_with_pending(&st.pools.intake).await.unwrap_or_default() {
+        if matches!(aiterm_intake_core::board_formations::try_complete_pending(&st.pools.intake, &pid).await, Ok(true)) {
+            st.events.changed();
+        }
+    }
     let settings = runner::load(&st.pools.intake).await;
     if settings.validate().is_err() {
         return 0;

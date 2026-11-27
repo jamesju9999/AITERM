@@ -242,7 +242,7 @@ async fn run_in_worktree(st: &std::sync::Arc<AppState>, settings: &RunnerSetting
             spec.push_str(&crate::orchestrator::spec_text(work_dir, m.start_sha.as_deref(), end).await);
         }
     }
-    let skills = crate::skills::SkillCtx::prepare(st, agent, &card.id).await;
+    let skills = crate::skills::SkillCtx::prepare_with(st, agent, &card.id, false).await;
     let prompt = format!("{}{}", vcore::verify_prompt(&module_list, &spec, &json_path.to_string_lossy(), &evidence.to_string_lossy(), ports, has_browser), skills.note());
 
     // 3. 瀏覽器設定與禁止清單。

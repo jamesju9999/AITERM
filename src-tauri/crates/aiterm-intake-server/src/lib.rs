@@ -19,6 +19,7 @@ pub mod dbmcp;
 pub mod askmcp;
 pub mod asknotify;
 pub mod routes_ask;
+pub mod routes_formations;
 pub mod sysconf;
 pub mod syscore;
 pub mod syslive;
