@@ -867,3 +867,82 @@ pub async fn agents_set_server_skills(agent_id: String, ids: Vec<String>, rs: St
     emit_updated(&app);
     Ok(())
 }
+
+// ---- 資料庫技能（共用看板專案） ----
+
+/// server 上分享的資料庫連線清單（所有成員可讀）。
+#[tauri::command]
+pub async fn server_db_conns_list(rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<Vec<crate::intake::board_remote::ServerDbConn>, String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::db_conns_list(&api).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 把這台電腦上設定好的資料庫連線分享到 server（管理員限定）：帳密由 server 加密保存。
+/// server 支援 PostgreSQL、MySQL、SQLite；SQL Server、DB2 只在桌面版。SQLite 的檔案路徑是 **server 主機上的**路徑。
+#[tauri::command]
+pub async fn server_db_conn_share(
+    connection_id: String,
+    config: State<'_, Arc<crate::config::ConfigStore>>,
+    secrets: State<'_, Arc<crate::secret::SecretStore>>,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
+) -> Result<crate::intake::board_remote::ServerDbConn, String> {
+    use crate::config::types::DbType;
+    let conn = config.get().db_connections.into_iter().find(|c| c.id == connection_id).ok_or("找不到這個資料庫連線")?;
+    let db_type = match conn.db_type {
+        DbType::Postgresql => "postgresql",
+        DbType::Mysql => "mysql",
+        DbType::Sqlite => "sqlite",
+        _ => return Err("server 只支援 PostgreSQL、MySQL、SQLite（SQL Server、DB2 只在桌面版）".into()),
+    };
+    let password = secrets.get(&super::db::secret_key(&connection_id)).ok().flatten();
+    let api = crate::intake::board_remote::require(&rs)?;
+    let shared = crate::intake::board_remote::ServerDbConn { id: String::new(), name: conn.name.clone(), db_type: db_type.into(), database: conn.database.clone(), host: conn.host.clone(), port: conn.port as i64, username: conn.username.clone() };
+    crate::intake::board_remote::db_conn_share(&api, &shared, conn.default_schema.as_deref(), password.as_deref()).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+#[tauri::command]
+pub async fn server_db_conn_delete(id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::db_conn_delete(&api, &id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 讓 server 實際連一次這個連線（管理員限定），回傳成功或原因。
+#[tauri::command]
+pub async fn server_db_conn_test(id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::db_conn_test(&api, &id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 設定共用專案裡某位 Agent 的資料庫技能（`None`＝移除；管理員限定）。
+#[tauri::command]
+pub async fn agents_set_server_db_skill(agent_id: String, skill: Option<serde_json::Value>, rs: State<'_, Arc<crate::intake::remote::RemoteState>>, app: AppHandle) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::agent_set_db_skill(&api, &agent_id, skill.as_ref()).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+    emit_updated(&app);
+    Ok(())
+}
+
+/// 共用專案裡等管理員核准的寫入。
+#[tauri::command]
+pub async fn server_db_approvals(project_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<Vec<crate::intake::board_remote::ServerDbQuery>, String> {
+    let Some(pid) = crate::intake::board_remote::parse(&project_id) else { return Ok(Vec::new()) };
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::db_approvals(&api, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 共用專案的資料庫查詢記錄（新的在前）。
+#[tauri::command]
+pub async fn server_db_queries(project_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<Vec<crate::intake::board_remote::ServerDbQuery>, String> {
+    let Some(pid) = crate::intake::board_remote::parse(&project_id) else { return Ok(Vec::new()) };
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::db_queries(&api, pid, 100).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 核准或拒絕一筆等核准的寫入（管理員限定）。
+#[tauri::command]
+pub async fn server_db_decide(id: i64, approve: bool, rs: State<'_, Arc<crate::intake::remote::RemoteState>>, app: AppHandle) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::db_decide(&api, id, approve).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+    emit_updated(&app);
+    Ok(())
+}

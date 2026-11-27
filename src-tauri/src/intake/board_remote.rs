@@ -244,8 +244,8 @@ pub fn to_agent(a: &BoardAgent, project_dir: &str) -> crate::tasks::agents::Agen
         produces_spec: a.produces_spec,
         model: a.model.clone(),
         cli: a.cli.clone(),
-        db_skill: None,
         custom_skills: a.custom_skills.clone(),
+        db_skill: a.db_skill.clone(),
         systems: None,
     }
 }
@@ -524,6 +524,81 @@ pub fn require(rs: &RemoteState) -> Result<Api, String> {
 
 pub fn fail(rs: &RemoteState, e: ClientError) -> String {
     remote::fail(rs, e)
+}
+
+// ---- 資料庫技能（server 上的資料庫連線與核准） ----
+
+/// server 上分享的資料庫連線。成員只拿得到 id／名稱／類型／資料庫；主機與帳號只有管理員有。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ServerDbConn {
+    pub id: String,
+    pub name: String,
+    pub db_type: String,
+    #[serde(default)]
+    pub database: String,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub port: i64,
+    #[serde(default)]
+    pub username: String,
+}
+
+/// server 上的一筆資料庫查詢記錄（待核准清單也是這個形狀）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ServerDbQuery {
+    pub id: i64,
+    pub card_id: String,
+    pub agent_id: Option<String>,
+    pub connection_id: String,
+    pub connection_name: String,
+    pub sql: String,
+    pub decision: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub rows: Option<i64>,
+    pub error: Option<String>,
+    pub decided_by: Option<String>,
+}
+
+pub async fn db_conns_list(api: &Api) -> Result<Vec<ServerDbConn>, ClientError> {
+    api.get("/v1/db/connections").await
+}
+
+pub async fn db_conn_delete(api: &Api, id: &str) -> Result<(), ClientError> {
+    api.request(Method::DELETE, &format!("/v1/db/connections/{}", enc(id)), None).await.map(|_| ())
+}
+
+pub async fn db_conn_test(api: &Api, id: &str) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/db/connections/{}/test", enc(id)), None).await.map(|_| ())
+}
+
+/// 把一個連線分享到 server（管理員限定；同名取代）。`password` 為 `None` 表示沿用 server 上已存的。
+pub async fn db_conn_share(api: &Api, c: &ServerDbConn, default_schema: Option<&str>, password: Option<&str>) -> Result<ServerDbConn, ClientError> {
+    let mut body = json!({"name": c.name, "db_type": c.db_type, "host": c.host, "port": c.port, "database": c.database, "username": c.username, "default_schema": default_schema});
+    if let Some(p) = password {
+        body["password"] = json!(p);
+    }
+    let v = api.request(Method::POST, "/v1/db/connections", Some(body)).await?;
+    serde_json::from_value(v).map_err(|e| ClientError::Server(e.to_string()))
+}
+
+/// 設定（`None`＝移除）共用專案裡某位 Agent 的資料庫技能（管理員限定）。
+pub async fn agent_set_db_skill(api: &Api, agent_id: &str, skill: Option<&serde_json::Value>) -> Result<(), ClientError> {
+    api.request(Method::PUT, &format!("/v1/board/agents/{}/db-skill", enc(agent_id)), Some(json!({ "skill": skill }))).await.map(|_| ())
+}
+
+pub async fn db_approvals(api: &Api, server_pid: &str) -> Result<Vec<ServerDbQuery>, ClientError> {
+    api.get(&format!("/v1/board/projects/{}/db/approvals", enc(server_pid))).await
+}
+
+pub async fn db_queries(api: &Api, server_pid: &str, limit: i64) -> Result<Vec<ServerDbQuery>, ClientError> {
+    api.get(&format!("/v1/board/projects/{}/db/queries?limit={limit}", enc(server_pid))).await
+}
+
+/// 核准或拒絕一筆等核准的寫入（管理員限定）。
+pub async fn db_decide(api: &Api, id: i64, approve: bool) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/board/db/approvals/{id}/decide"), Some(json!({"approve": approve}))).await.map(|_| ())
 }
 
 // ---- 技能庫（server 上的自訂技能） ----

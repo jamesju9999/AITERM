@@ -1054,3 +1054,12 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-deny-off { opacity: 0.55; }
 .ac-deny-add { display: flex; gap: 8px; margin: 6px 0; }
 .ac-deny-add input { flex: 1; }
+
+/* 共用專案：server 技能庫／資料庫連線對話框的列、待核准清單 */
+.ac-ss-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ac-ss-label { display: flex; align-items: flex-start; gap: 8px; flex: 1; min-width: 0; }
+.ac-ss-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.ac-db-approval { border: 1px solid var(--border-color, #333); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.ac-db-approval-sql { margin: 4px 0 8px; padding: 8px; background: rgba(255, 255, 255, 0.04); border-radius: 6px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.ac-db-approval-actions { display: flex; gap: 8px; }
+.ac-db-approvals-btn { white-space: nowrap; }

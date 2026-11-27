@@ -78,6 +78,9 @@ import { accessLinks, folderLinks, folderResources, resourcesOf } from "./resour
 import { ReferencesDialog } from "./ReferencesDialog";
 import { CustomSkillsDialog } from "./CustomSkillsDialog";
 import { ServerSkillsDialog } from "./ServerSkillsDialog";
+import { ServerDbSkillDialog } from "./ServerDbSkillDialog";
+import { ServerDbApprovalsBar } from "./ServerDbApprovalsBar";
+import { listServerDbConns, setAgentServerDbSkill } from "../../ipc/serverDb";
 import { listServerSkills, setAgentServerSkills, type ServerSkill } from "../../ipc/serverSkills";
 import { RoleIcon } from "./RoleIcon";
 import { parseDbSkill, parseSkillPaths, skillActivity, SKILL_LINGER_SECS, sqlPreview } from "./dbSkill";
@@ -670,7 +673,8 @@ export function AgentCanvasView({
   useEffect(() => {
     if (!isActive || dbSkillFor) return;
     let alive = true;
-    dbListConnections()
+    // 共用專案的連線在 server 上（id 是 server 的），本機專案用這台電腦上的。
+    (isShared ? listServerDbConns() : dbListConnections())
       .then(
         (c) =>
           alive &&
@@ -682,7 +686,7 @@ export function AgentCanvasView({
     return () => {
       alive = false;
     };
-  }, [isActive, dbSkillFor]);
+  }, [isActive, dbSkillFor, isShared]);
   // 系統連線技能的標籤顯示系統名稱；設定框關掉後再讀一次。
   useEffect(() => {
     if (!isActive || systemsSkillFor) return;
@@ -1638,6 +1642,7 @@ export function AgentCanvasView({
         )}
         {projectId && <ServerRunBar projectId={projectId} onError={(e) => setToast(errText(e))} />}
         {projectId && <ServerVerifyBar projectId={projectId} onError={(e) => setToast(errText(e))} />}
+        {projectId && isShared && <ServerDbApprovalsBar projectId={projectId} agentName={agentName} active={isActive} />}
         {projectId && agents.length > 0 && (manualPause.all || !allFinished) && (
           <>
             <span className="ac-top-sep" aria-hidden />
@@ -1727,19 +1732,17 @@ export function AgentCanvasView({
         <span className="ac-pool-hint">{t.ac_pool_hint}</span>
         <span className="ac-pool-sep" aria-hidden />
         <span className="ac-pool-label">{t.ac_skills}</span>
-        {!isShared && (
-          <div
-            className="ac-pool-item ac-pool-item--skill"
-            data-testid="skill-db"
-            title={t.ac_skill_hint}
-            onMouseDown={(e) => beginDrag(e, "skill", "db")}
-          >
-            <span className="ac-agent-ico" aria-hidden>
-              <RoleIcon name="database" />
-            </span>
-            <span className="ac-pool-name">{t.ac_skill_db}</span>
-          </div>
-        )}
+        <div
+          className="ac-pool-item ac-pool-item--skill"
+          data-testid="skill-db"
+          title={t.ac_skill_hint}
+          onMouseDown={(e) => beginDrag(e, "skill", "db")}
+        >
+          <span className="ac-agent-ico" aria-hidden>
+            <RoleIcon name="database" />
+          </span>
+          <span className="ac-pool-name">{t.ac_skill_db}</span>
+        </div>
         <div
           className="ac-pool-item ac-pool-item--skill"
           data-testid="skill-custom"
@@ -2340,7 +2343,18 @@ export function AgentCanvasView({
         />
       )}
 
-      {dbSkillFor && projectId && (
+      {dbSkillFor && projectId && isShared && (
+        <ServerDbSkillDialog
+          agentName={dbSkillFor.name}
+          current={parseDbSkill(dbSkillFor.db_skill)}
+          onClose={() => setDbSkillFor(null)}
+          onSave={async (skill) => {
+            await setAgentServerDbSkill(dbSkillFor.id, skill);
+            await refresh();
+          }}
+        />
+      )}
+      {dbSkillFor && projectId && !isShared && (
         <DbSkillDialog
           agentName={dbSkillFor.name}
           current={parseDbSkill(dbSkillFor.db_skill)}

@@ -151,6 +151,15 @@ vi.mock("../../ipc/questions", async () => {
 vi.mock("../../ipc/bridge", () => ({
   bridgeStatus: vi.fn().mockResolvedValue({ running: false, port: null, token: null, error: null }),
 }));
+vi.mock("../../ipc/serverDb", () => ({
+  listServerDbConns: vi.fn().mockResolvedValue([]),
+  listServerDbApprovals: vi.fn().mockResolvedValue([]),
+  setAgentServerDbSkill: vi.fn(),
+  deleteServerDbConn: vi.fn(),
+  shareDbConnection: vi.fn(),
+  testServerDbConn: vi.fn(),
+  decideServerDb: vi.fn(),
+}));
 vi.mock("../../ipc/serverSkills", () => ({
   listServerSkills: vi.fn().mockResolvedValue([]),
   uploadServerSkill: vi.fn(),
@@ -1412,7 +1421,7 @@ describe("AgentCanvasView", () => {
     expect(getOrchestration).toHaveBeenCalledWith("remote:srv");
   });
 
-  it("共用專案的技能：只有自訂技能可拖、Agent 節點顯示 server 技能名稱，且不做本機路徑檢查", async () => {
+  it("共用專案的技能：可拖自訂與資料庫技能（系統連線還不行）、Agent 節點顯示 server 技能名稱，且不做本機路徑檢查", async () => {
     const { listServerSkills } = await import("../../ipc/serverSkills");
     const proj = (id: string, name: string) => ({
       id, name, description: "", path: `/${id}`, status: "ok" as const, counts: { planning: 0, queued: 0, running: 0, done: 0 }, error: null,
@@ -1431,8 +1440,8 @@ describe("AgentCanvasView", () => {
     expect(await within(node).findByText(/寫測試/)).toBeTruthy();
     expect(within(node).queryByText(/已刪掉的/)).toBeNull();
     expect(screen.getByTestId("skill-custom")).toBeTruthy();
-    expect(screen.queryByTestId("skill-db")).toBeNull();
-    expect(screen.queryByTestId("skill-systems")).toBeNull();
+    expect(screen.getByTestId("skill-db")).toBeTruthy(); // 資料庫技能在 server 上也支援
+    expect(screen.queryByTestId("skill-systems")).toBeNull(); // 系統連線技能還不支援
     expect(missingSkills).not.toHaveBeenCalled();
   });
 
