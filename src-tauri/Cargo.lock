@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "aiterm-intake-server"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aes-gcm",
  "aiterm-ai-oauth",
