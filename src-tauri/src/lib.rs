@@ -135,7 +135,7 @@ use commands::{
     schedules::{schedules_delete, schedules_list, schedules_run_now, schedules_save, schedules_set_enabled},
     agents::{
         agents_list, agents_create, agents_update, agents_delete, agents_delete_all, agents_resolve, agents_manual_pause_state, agents_set_manual_pause,
-        agents_merge, agents_ask, agents_abort_merge, agents_verify_report, agents_accept_verification, tasks_assign_agent, agents_override_module, agents_retry_module, agents_check_repo, agents_relocate_repo, agents_check_tools, agents_add_claude_to_path, agents_set_db_skill, agents_set_systems, agents_db_queries, agents_get_references, agents_method_discussion_start, agents_method_discussion_read, agents_set_references, agents_list_skills, agents_read_skill, agents_missing_skills, agents_set_custom_skills, server_skills_list, server_skills_upload, server_skills_delete, agents_set_server_skills, server_db_conns_list, server_db_conn_share, server_db_conn_delete, server_db_conn_test, agents_set_server_db_skill, server_db_approvals, server_db_queries, server_db_decide, server_systems_list, server_system_share, server_system_share_session, server_system_delete, server_system_session_delete, agents_set_server_systems, server_sys_approvals, server_sys_decide, agents_skill_uses, agents_reference_reads, agents_project_repo, agents_set_project_repo, agents_init_repo,
+        agents_merge, agents_ask, agents_abort_merge, agents_verify_report, agents_accept_verification, tasks_assign_agent, agents_override_module, agents_retry_module, agents_check_repo, agents_relocate_repo, agents_check_tools, agents_add_claude_to_path, agents_set_db_skill, agents_set_systems, agents_db_queries, agents_get_references, agents_method_discussion_start, agents_method_discussion_read, agents_set_references, agents_list_skills, agents_read_skill, agents_missing_skills, agents_set_custom_skills, server_skills_list, server_skills_upload, server_skills_delete, agents_set_server_skills, server_db_conns_list, server_db_conn_share, server_db_conn_delete, server_db_conn_test, agents_set_server_db_skill, server_db_approvals, server_db_queries, server_db_decide, server_systems_list, server_system_share, server_system_share_session, server_system_delete, server_system_session_delete, agents_set_server_systems, server_sys_approvals, server_sys_decide, server_live_runs, server_live_login_start, server_live_login_cancel, server_live_open, server_live_send, server_live_start, server_live_close, agents_skill_uses, agents_reference_reads, agents_project_repo, agents_set_project_repo, agents_init_repo,
         agents_open_repo,
     },
     formations::{
@@ -291,6 +291,7 @@ pub fn run() {
         // 必須在 Builder 上 manage、不能放進 .setup：single-instance 的 callback
         // 可能在 setup 跑完之前就被呼叫，那時 state 不存在會直接 panic。
         .manage(launch::LaunchQueue::default())
+        .manage(intake::live::LiveState::default())
         .manage(resident::TrayState::default())
         .manage(resident::TrayMenu::default())
         .manage(Arc::new(PtyManager::new()))
@@ -1043,6 +1044,13 @@ pub fn run() {
             agents_set_server_systems,
             server_sys_approvals,
             server_sys_decide,
+            server_live_runs,
+            server_live_login_start,
+            server_live_login_cancel,
+            server_live_open,
+            server_live_send,
+            server_live_start,
+            server_live_close,
             agents_skill_uses,
             agents_reference_reads,
             agents_project_repo,

@@ -6,6 +6,7 @@ pub use aiterm_intake_core::classify;
 pub mod ai_adapter;
 pub mod ai_login;
 pub mod board_remote;
+pub mod live;
 pub mod board_work;
 pub use aiterm_intake_core::pipeline;
 pub mod commands;

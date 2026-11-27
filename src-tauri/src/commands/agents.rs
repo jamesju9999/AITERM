@@ -1034,3 +1034,59 @@ pub async fn server_sys_decide(id: String, approve: bool, rs: State<'_, Arc<crat
     emit_updated(&app);
     Ok(())
 }
+
+// ---- 即時預覽、接手與遠端登入 ----
+
+/// 目前有瀏覽器在跑、可以觀看的系統（共用專案）。
+#[tauri::command]
+pub async fn server_live_runs(project_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<Vec<crate::intake::board_remote::LiveRun>, String> {
+    let Some(pid) = crate::intake::board_remote::parse(&project_id) else { return Ok(Vec::new()) };
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::live_runs(&api, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 開始遠端登入（管理員限定）：在 server 開一個瀏覽器。已經有人在登入時回「已經有人在遠端登入」。
+#[tauri::command]
+pub async fn server_live_login_start(system_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::login_start(&api, &system_id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+#[tauri::command]
+pub async fn server_live_login_cancel(system_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::login_cancel(&api, &system_id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 連上一個瀏覽器的畫面串流。`kind`：`agent`（要帶 card_id）或 `login`。回傳 handle；
+/// server 的訊息以 `live://msg/<handle>` 事件送給前端，連線結束送 `live://end/<handle>`。
+#[tauri::command]
+pub async fn server_live_open(
+    kind: String,
+    system_id: String,
+    card_id: Option<String>,
+    rs: State<'_, Arc<crate::intake::remote::RemoteState>>,
+    live: State<'_, crate::intake::live::LiveState>,
+    app: AppHandle,
+) -> Result<u64, String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    let path = crate::intake::board_remote::live_path(&kind, card_id.as_deref(), &system_id)?;
+    live.open(&api, &path, app).await
+}
+
+/// 把前端的輸入訊息（JSON 字串）轉給 server。
+#[tauri::command]
+pub fn server_live_send(handle: u64, message: String, live: State<'_, crate::intake::live::LiveState>) -> Result<(), String> {
+    live.send(handle, message)
+}
+
+/// 前端註冊好 `live://msg/<handle>` 的監聽之後呼叫：server 的訊息這時才開始轉送。
+#[tauri::command]
+pub fn server_live_start(handle: u64, live: State<'_, crate::intake::live::LiveState>) {
+    live.start(handle);
+}
+
+#[tauri::command]
+pub fn server_live_close(handle: u64, live: State<'_, crate::intake::live::LiveState>) {
+    live.close(handle);
+}

@@ -151,6 +151,7 @@ vi.mock("../../ipc/questions", async () => {
 vi.mock("../../ipc/bridge", () => ({
   bridgeStatus: vi.fn().mockResolvedValue({ running: false, port: null, token: null, error: null }),
 }));
+vi.mock("../../ipc/serverLive", () => ({ listLiveRuns: vi.fn().mockResolvedValue([]), openLive: vi.fn(), startRemoteLogin: vi.fn(), cancelRemoteLogin: vi.fn() }));
 vi.mock("../../ipc/serverSystems", () => ({
   listServerSystems: vi.fn().mockResolvedValue([]),
   listServerSysApprovals: vi.fn().mockResolvedValue([]),

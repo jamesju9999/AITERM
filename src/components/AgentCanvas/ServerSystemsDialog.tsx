@@ -5,6 +5,8 @@ import { useLocale } from "../../contexts/LocaleContext";
 import { useIntakeRemote } from "../../hooks/useIntakeRemote";
 import { systemsList, type SystemConnection } from "../../ipc/systems";
 import { deleteServerSystem, deleteServerSystemSession, listServerSystems, shareSystem, shareSystemSession, type ServerSystem } from "../../ipc/serverSystems";
+import { startRemoteLogin } from "../../ipc/serverLive";
+import { LiveViewDialog, type LiveTarget } from "./LiveViewDialog";
 import { RoleIcon } from "./RoleIcon";
 
 const MAX_PICKED = 12;
@@ -36,6 +38,7 @@ export function ServerSystemsDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [live, setLive] = useState<LiveTarget | null>(null);
 
   const reload = async () => setSystems(await listServerSystems());
 
@@ -86,6 +89,17 @@ export function ServerSystemsDialog({
       const n = await shareSystemSession(l.id);
       await reload();
       setNotice(t.ac_ssys_session_shared(s.name, n));
+    });
+
+  /** 在 server 上遠端登入：開一個瀏覽器、看它的畫面。已經有人在登入就直接去看那個畫面。 */
+  const remoteLogin = (s: ServerSystem) =>
+    run(async () => {
+      try {
+        await startRemoteLogin(s.id);
+      } catch (e) {
+        if (!errText(e).includes("已經有人在遠端登入")) throw e;
+      }
+      setLive({ kind: "login", systemId: s.id, systemName: s.name });
     });
 
   const dropSession = (s: ServerSystem) =>
@@ -152,6 +166,9 @@ export function ServerSystemsDialog({
                 </label>
                 {isAdmin && (
                   <span className="ac-ss-actions">
+                    <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy} onClick={() => void remoteLogin(s)} aria-label={`${t.ac_live_open} ${s.name}`}>
+                      {t.ac_live_open}
+                    </button>
                     <button type="button" className="aiterm-btn aiterm-btn--secondary aiterm-btn--sm" disabled={busy} onClick={() => void shareSession(s)} aria-label={`${t.ac_ssys_share_session} ${s.name}`}>
                       {t.ac_ssys_share_session}
                     </button>
@@ -191,6 +208,7 @@ export function ServerSystemsDialog({
             <p className="task-field-hint">{t.ac_ssys_share_hint}</p>
           </div>
         )}
+        {isAdmin && !!systems?.length && <p className="task-field-hint">{t.ac_live_open_hint}</p>}
         {!isAdmin && <p className="task-field-hint">{t.ac_ssys_readonly}</p>}
         {isAdmin && noSession && <p className="task-field-hint ac-bad-text">{t.ac_ssys_picked_no_session}</p>}
 
@@ -199,6 +217,16 @@ export function ServerSystemsDialog({
           <p className="ac-bad-text" role="alert">
             {error}
           </p>
+        )}
+        {live && (
+          <LiveViewDialog
+            target={live}
+            onClose={() => {
+              setLive(null);
+              void reload();
+            }}
+            onLoginDone={() => void reload()}
+          />
         )}
         <div className="task-dialog-actions">
           {isAdmin && current.length > 0 && (

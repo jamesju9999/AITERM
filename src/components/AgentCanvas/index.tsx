@@ -80,6 +80,7 @@ import { CustomSkillsDialog } from "./CustomSkillsDialog";
 import { ServerSkillsDialog } from "./ServerSkillsDialog";
 import { ServerDbSkillDialog } from "./ServerDbSkillDialog";
 import { ServerSystemsDialog } from "./ServerSystemsDialog";
+import { ServerLiveBar } from "./ServerLiveBar";
 import { listServerSystems, setAgentServerSystems } from "../../ipc/serverSystems";
 import { ServerDbApprovalsBar } from "./ServerDbApprovalsBar";
 import { listServerDbConns, setAgentServerDbSkill } from "../../ipc/serverDb";
@@ -1646,6 +1647,7 @@ export function AgentCanvasView({
         {projectId && <ServerRunBar projectId={projectId} onError={(e) => setToast(errText(e))} />}
         {projectId && <ServerVerifyBar projectId={projectId} onError={(e) => setToast(errText(e))} />}
         {projectId && isShared && <ServerDbApprovalsBar projectId={projectId} agentName={agentName} active={isActive} />}
+        {projectId && isShared && <ServerLiveBar projectId={projectId} agentName={agentName} active={isActive} />}
         {projectId && agents.length > 0 && (manualPause.all || !allFinished) && (
           <>
             <span className="ac-top-sep" aria-hidden />

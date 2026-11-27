@@ -7,10 +7,12 @@ const role = vi.hoisted(() => ({ value: "admin" as "admin" | "member" }));
 vi.mock("../../hooks/useIntakeRemote", () => ({ useIntakeRemote: () => ({ connected: true, online: true, addr: "x", name: "我", role: role.value, error: null }) }));
 vi.mock("../../ipc/serverSystems", () => ({ listServerSystems: vi.fn(), shareSystem: vi.fn(), shareSystemSession: vi.fn(), deleteServerSystem: vi.fn(), deleteServerSystemSession: vi.fn() }));
 vi.mock("../../ipc/systems", () => ({ systemsList: vi.fn() }));
+vi.mock("../../ipc/serverLive", () => ({ startRemoteLogin: vi.fn(), cancelRemoteLogin: vi.fn(), openLive: vi.fn(async () => ({ send: vi.fn(), close: vi.fn() })) }));
 const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => dialog);
 
 import { deleteServerSystem, deleteServerSystemSession, listServerSystems, shareSystem, shareSystemSession, type ServerSystem } from "../../ipc/serverSystems";
+import { startRemoteLogin } from "../../ipc/serverLive";
 import { systemsList, type SystemConnection } from "../../ipc/systems";
 import { ServerSystemsDialog } from "./ServerSystemsDialog";
 
@@ -130,5 +132,33 @@ describe("ServerSystemsDialog", () => {
     fireEvent.click(last);
     expect(last).not.toBeChecked();
     expect(screen.getByRole("alert")).toHaveTextContent("最多 12 個");
+  });
+
+  it("在 server 上登入：先開瀏覽器再顯示畫面；已經有人在登入就直接去看；成員沒有這個按鈕", async () => {
+    vi.mocked(startRemoteLogin).mockResolvedValue(undefined);
+    mount();
+    await screen.findByLabelText("ERP");
+    fireEvent.click(screen.getByRole("button", { name: "在 server 上登入 ERP" }));
+    expect(await screen.findByTestId("live-view-dialog")).toBeInTheDocument();
+    expect(startRemoteLogin).toHaveBeenCalledWith("erp");
+    expect(screen.getAllByText(/帳號密碼會經過 server 的記憶體/).length).toBeGreaterThan(0);
+    cleanup();
+    vi.mocked(startRemoteLogin).mockRejectedValue("這個系統已經有人在遠端登入了");
+    mount();
+    await screen.findByLabelText("CRM");
+    fireEvent.click(screen.getByRole("button", { name: "在 server 上登入 CRM" }));
+    expect(await screen.findByTestId("live-view-dialog")).toBeInTheDocument();
+    cleanup();
+    vi.mocked(startRemoteLogin).mockRejectedValue("這個系統連線已停用");
+    mount();
+    await screen.findByLabelText("ERP");
+    fireEvent.click(screen.getByRole("button", { name: "在 server 上登入 ERP" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("已停用");
+    expect(screen.queryByTestId("live-view-dialog")).toBeNull();
+    cleanup();
+    role.value = "member";
+    mount();
+    await screen.findByLabelText("ERP");
+    expect(screen.queryByRole("button", { name: /在 server 上登入/ })).toBeNull();
   });
 });

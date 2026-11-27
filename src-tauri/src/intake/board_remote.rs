@@ -678,6 +678,42 @@ pub async fn sys_decide(api: &Api, id: &str, approve: bool) -> Result<(), Client
     api.request(Method::POST, &format!("/v1/board/sys/approvals/{}/decide", enc(id)), Some(json!({"approve": approve}))).await.map(|_| ())
 }
 
+// ---- 即時預覽、接手與遠端登入 ----
+
+/// 執行中、可以觀看的一個瀏覽器（Agent 的某張卡＋系統）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct LiveRun {
+    pub card_id: String,
+    pub system_id: String,
+    pub system_name: String,
+    pub agent_id: Option<String>,
+    pub manual: bool,
+    pub viewers: usize,
+}
+
+pub async fn live_runs(api: &Api, server_pid: &str) -> Result<Vec<LiveRun>, ClientError> {
+    api.get(&format!("/v1/board/projects/{}/sys/live", enc(server_pid))).await
+}
+
+/// 開始遠端登入（管理員限定）。已經有人在登入時 server 會回錯誤，呼叫端可以直接去看那個畫面。
+pub async fn login_start(api: &Api, system_id: &str) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/systems/{}/login/start", enc(system_id)), None).await.map(|_| ())
+}
+
+pub async fn login_cancel(api: &Api, system_id: &str) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/systems/{}/login/cancel", enc(system_id)), None).await.map(|_| ())
+}
+
+/// 串流的 WebSocket 路徑。
+pub fn live_path(kind: &str, card_id: Option<&str>, system_id: &str) -> Result<String, String> {
+    match (kind, card_id) {
+        ("login", _) => Ok(format!("/v1/systems/{}/login/live", enc(system_id))),
+        ("agent", Some(card)) => Ok(format!("/v1/board/sys/live/{}/{}", enc(card), enc(system_id))),
+        ("agent", None) => Err("缺少卡片".into()),
+        _ => Err("不認得的種類".into()),
+    }
+}
+
 // ---- 技能庫（server 上的自訂技能） ----
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
