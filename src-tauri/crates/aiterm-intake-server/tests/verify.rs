@@ -61,7 +61,7 @@ case "$ALLOWED" in
     echo "$MCP_TOOL_TIMEOUT" > "$D/mcp_env_$n.txt"
     sleep @SECS@
     echo "change $n" >> "work-$n.txt"
-    echo "change $n" > shared.txt
+    echo "change $n pid $$" > shared.txt
     echo "coder $n end" >> "$D/log.txt"
     printf '{"type":"result","is_error":false,"result":"做完了"}'
     ;;
