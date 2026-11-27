@@ -238,6 +238,12 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "CREATE TABLE IF NOT EXISTS board_skills (
             id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT '', files INTEGER NOT NULL DEFAULT 0,
             bytes INTEGER NOT NULL DEFAULT 0, uploaded_by TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+        // Agent 中途問人（`ask_human`）：status open｜answered｜cancelled。
+        "CREATE TABLE IF NOT EXISTS board_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, card_id TEXT NOT NULL, agent_id TEXT, question TEXT NOT NULL,
+            options TEXT NOT NULL DEFAULT '[]', recommended TEXT, context TEXT, status TEXT NOT NULL DEFAULT 'open', answer TEXT, answered_by TEXT,
+            answered_via TEXT, telegram_message_id INTEGER, reminders INTEGER NOT NULL DEFAULT 0, last_reminded_at INTEGER, created_at INTEGER NOT NULL, answered_at INTEGER)",
+        "CREATE INDEX IF NOT EXISTS board_questions_project ON board_questions(project_id, status)",
         "CREATE TABLE IF NOT EXISTS board_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, created_at INTEGER NOT NULL)",
         "CREATE TABLE IF NOT EXISTS board_schedules (

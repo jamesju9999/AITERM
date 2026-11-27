@@ -59,6 +59,8 @@ struct UpdatesResponse {
 struct Update {
     update_id: i64,
     message: Option<Message>,
+    /// 按了問題訊息上的選項按鈕。
+    callback_query: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,8 +70,14 @@ struct Message {
     from: Option<User>,
     text: Option<String>,
     caption: Option<String>,
+    reply_to_message: Option<ReplyTo>,
     photo: Option<Vec<Photo>>,
     document: Option<Document>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplyTo {
+    message_id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -196,13 +204,14 @@ async fn handle(st: &Arc<AppState>, client: &reqwest::Client, base: &str, token_
 pub async fn poll_once(st: &Arc<AppState>, offset: &mut i64) -> Result<usize, String> {
     let Some(token_value) = token(st) else { return Ok(0) };
     let cands = candidates(st).await;
-    if cands.is_empty() {
+    let owner = load(&st.pools.intake).await.owner_chat_id.trim().parse::<i64>().ok();
+    // 沒有專案啟用 Telegram、也沒有主人聊天室（Agent 提問的通知與回答用）：不必輪詢。
+    if cands.is_empty() && owner.is_none() {
         return Ok(0);
     }
-    let owner = load(&st.pools.intake).await.owner_chat_id.trim().parse::<i64>().ok();
     let base = st.telegram_api_base.lock().clone();
     let client = reqwest::Client::builder().timeout(Duration::from_secs(POLL_TIMEOUT_SECS + 15)).build().map_err(|e| e.to_string())?;
-    let url = format!("{base}/bot{token_value}/getUpdates?offset={offset}&timeout={POLL_TIMEOUT_SECS}&allowed_updates=%5B%22message%22%5D");
+    let url = format!("{base}/bot{token_value}/getUpdates?offset={offset}&timeout={POLL_TIMEOUT_SECS}&allowed_updates=%5B%22message%22%2C%22callback_query%22%5D");
     let resp = client.get(&url).send().await.map_err(|e| format!("連線失敗：{e}"))?;
     let status = resp.status();
     if status == reqwest::StatusCode::CONFLICT {
@@ -218,7 +227,18 @@ pub async fn poll_once(st: &Arc<AppState>, offset: &mut i64) -> Result<usize, St
     let mut opened = 0;
     for update in data.result {
         *offset = (*offset).max(update.update_id + 1);
+        if let Some(cb) = &update.callback_query {
+            crate::asknotify::handle_callback(st, &base, &token_value, owner, cb).await;
+        }
         if let Some(msg) = update.message {
+            // 主人「回覆」Agent 的問題：回覆文字就是答案，不當成新題目。
+            let reply_to = msg.reply_to_message.as_ref().map(|r| r.message_id);
+            if crate::asknotify::handle_reply(st, owner, msg.chat.id, reply_to, msg.body_text().unwrap_or("")).await {
+                continue;
+            }
+            if cands.is_empty() {
+                continue;
+            }
             if handle(st, &client, &base, &token_value, &cands, owner, msg).await {
                 opened += 1;
             }

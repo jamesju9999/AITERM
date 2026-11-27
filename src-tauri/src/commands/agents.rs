@@ -947,6 +947,48 @@ pub async fn server_db_decide(id: i64, approve: bool, rs: State<'_, Arc<crate::i
     Ok(())
 }
 
+// ---- 中途問人（共用看板專案） ----
+
+/// 共用專案裡 Agent 提出、還沒人回答的問題（加上最近結束的）。
+#[tauri::command]
+pub async fn server_questions(project_id: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<crate::intake::board_remote::ServerQuestions, String> {
+    let Some(pid) = crate::intake::board_remote::parse(&project_id) else { return Ok(Default::default()) };
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::questions(&api, pid).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
+/// 回答一個問題（任何成員）。
+#[tauri::command]
+pub async fn server_question_answer(id: i64, answer: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>, app: AppHandle) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::question_answer(&api, id, &answer).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+    emit_updated(&app);
+    Ok(())
+}
+
+/// 取消一個問題（管理員限定）。
+#[tauri::command]
+pub async fn server_question_cancel(id: i64, rs: State<'_, Arc<crate::intake::remote::RemoteState>>, app: AppHandle) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::question_cancel(&api, id).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+    emit_updated(&app);
+    Ok(())
+}
+
+/// 問題的通知設定（管理員限定）：目前只有通知信箱。
+#[tauri::command]
+pub async fn server_ask_settings(rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<String, String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    let v = crate::intake::board_remote::ask_settings(&api).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))?;
+    Ok(v["notify_email"].as_str().unwrap_or("").to_string())
+}
+
+#[tauri::command]
+pub async fn server_ask_settings_set(notify_email: String, rs: State<'_, Arc<crate::intake::remote::RemoteState>>) -> Result<(), String> {
+    let api = crate::intake::board_remote::require(&rs)?;
+    crate::intake::board_remote::ask_settings_set(&api, &notify_email).await.map_err(|e| crate::intake::board_remote::fail(&rs, e))
+}
+
 // ---- 系統連線技能（共用看板專案） ----
 
 #[tauri::command]

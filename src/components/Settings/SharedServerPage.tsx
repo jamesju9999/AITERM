@@ -3,6 +3,7 @@ import { useIntakeConnections, useIntakeRemote } from "../../hooks/useIntakeRemo
 import "./SharedServerPage.css";
 import { ConnectionCard } from "../IntakeView/ConnectionCard";
 import { SavedServers } from "../IntakeView/SavedServers";
+import { AskNotifySettings } from "./AskNotifySettings";
 
 /**
  * 共用 server 的連線設定。連線是整個 AITerm 共用的（問題收集、工作看板、Agent 協作都走同一條），
@@ -23,6 +24,7 @@ export function SharedServerPage() {
         {!merged && <ConnectionCard status={remote} />}
         <SavedServers status={remote} />
       </div>
+      <AskNotifySettings />
     </div>
   );
 }

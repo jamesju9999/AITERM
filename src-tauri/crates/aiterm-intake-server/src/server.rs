@@ -43,6 +43,8 @@ pub async fn start(bind: SocketAddr, state: Arc<AppState>, identity: Identity) -
     crate::skills::cleanup_stale(&state.data_dir);
     // 上一個行程留下的資料庫查詢：等核准的沒執行過，記成拒絕；其餘標成中斷。
     aiterm_intake_core::board_store::close_dangling_db_queries(&state.pools.intake).await.ok();
+    // 上一個行程留下的問題：沒有行程在等答案了。
+    aiterm_intake_core::board_questions::close_dangling(&state.pools.intake).await.ok();
     // 系統連線的審計表（跟其他資料同一個資料庫）。
     aiterm_systems::audit::init(&state.pools.intake).await.ok();
     // 給 Claude Code 的資料庫工具：只聽本機的純 HTTP 端點。
@@ -62,6 +64,7 @@ pub async fn start(bind: SocketAddr, state: Arc<AppState>, identity: Identity) -
     crate::runner::start(&state);
     crate::orchestrator::start(&state);
     crate::scheduler::start(&state);
+    crate::asknotify::start_reminders(&state);
     let (tx, rx) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(crate::tls::serve(listener, app, identity, rx));
     Ok(Running { addr, state, shutdown: Some(tx), task })

@@ -26,6 +26,8 @@ use crate::state::AppState;
 pub const SERVER_NAME: &str = "aiterm-db";
 /// 系統連線工具的 MCP 伺服器名字（`--allowedTools` 用 `mcp__aiterm-systems`）。
 pub const SYSTEMS_SERVER_NAME: &str = "aiterm-systems";
+/// 「中途問人」工具的 MCP 伺服器名字（`--allowedTools` 用 `mcp__aiterm-ask`）；每張卡都有。
+pub const ASK_SERVER_NAME: &str = "aiterm-ask";
 /// 等管理員核准最久多久；超過就當作拒絕。
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(24 * 3600);
 const APPROVAL_POLL: Duration = Duration::from_millis(500);
@@ -65,7 +67,7 @@ impl McpState {
     fn get(&self, token: &str) -> Option<McpCtx> {
         self.tokens.lock().get(token).cloned()
     }
-    fn alive(&self, token: &str) -> bool {
+    pub(crate) fn alive(&self, token: &str) -> bool {
         self.tokens.lock().contains_key(token)
     }
 }
@@ -79,7 +81,7 @@ pub fn start(st: &Arc<AppState>) -> std::io::Result<SocketAddr> {
     std_listener.set_nonblocking(true)?;
     let addr = std_listener.local_addr()?;
     let listener = tokio::net::TcpListener::from_std(std_listener)?;
-    let app = Router::new().route("/mcp/{token}", post(handle)).route("/mcp/{token}/systems", post(handle_sys)).with_state(st.clone());
+    let app = Router::new().route("/mcp/{token}", post(handle)).route("/mcp/{token}/systems", post(handle_sys)).route("/mcp/{token}/ask", post(handle_ask)).with_state(st.clone());
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -112,6 +114,10 @@ impl Drop for McpGuard {
         if let Ok(h) = tokio::runtime::Handle::try_current() {
             h.spawn(async move {
                 crate::syscore::close_card(&st, &card).await;
+                // 還在等人回答的問題：沒有行程在等了。
+                if aiterm_intake_core::board_questions::close_card(&st.pools.intake, &card).await.unwrap_or(0) > 0 {
+                    crate::asknotify::closed(&st, &card).await;
+                }
                 let _ = sqlx::query("UPDATE board_db_queries SET decision = 'denied', finished_at = ?, error = '卡片已結束，沒有人在等這個查詢' WHERE card_id = ? AND decision = 'pending'")
                     .bind(crate::db::now())
                     .bind(&card)
@@ -128,6 +134,7 @@ pub fn register(st: &Arc<AppState>, ctx: McpCtx, dir: &std::path::Path) -> Optio
     let addr = st.mcp.addr()?;
     let token = uuid::Uuid::new_v4().simple().to_string();
     let mut servers = serde_json::Map::new();
+    servers.insert(ASK_SERVER_NAME.into(), json!({"type": "http", "url": format!("http://{addr}/mcp/{token}/ask")}));
     if ctx.skill.is_some() {
         servers.insert(SERVER_NAME.into(), json!({"type": "http", "url": format!("http://{addr}/mcp/{token}")}));
     }
@@ -170,15 +177,28 @@ fn tools() -> Value {
 
 /// 資料庫工具端點（`/mcp/<token>`）。
 async fn handle(State(st): State<Arc<AppState>>, Path(token): Path<String>, Json(msg): Json<Value>) -> Response {
-    serve(&st, &token, msg, false).await
+    serve(&st, &token, msg, Kind::Db).await
+}
+
+/// 中途問人工具端點（`/mcp/<token>/ask`）。
+async fn handle_ask(State(st): State<Arc<AppState>>, Path(token): Path<String>, Json(msg): Json<Value>) -> Response {
+    serve(&st, &token, msg, Kind::Ask).await
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Db,
+    Sys,
+    Ask,
 }
 
 /// 系統連線工具端點（`/mcp/<token>/systems`）。
 async fn handle_sys(State(st): State<Arc<AppState>>, Path(token): Path<String>, Json(msg): Json<Value>) -> Response {
-    serve(&st, &token, msg, true).await
+    serve(&st, &token, msg, Kind::Sys).await
 }
 
-async fn serve(st: &Arc<AppState>, token: &str, msg: Value, systems: bool) -> Response {
+async fn serve(st: &Arc<AppState>, token: &str, msg: Value, kind: Kind) -> Response {
+    let systems = kind == Kind::Sys;
     let Some(ctx) = st.mcp.get(token) else { return (StatusCode::UNAUTHORIZED, "token 無效或已作廢").into_response() };
     let id = msg.get("id").cloned();
     let method = msg["method"].as_str().unwrap_or("");
@@ -190,7 +210,7 @@ async fn serve(st: &Arc<AppState>, token: &str, msg: Value, systems: bool) -> Re
             json!({
                 "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": if systems { SYSTEMS_SERVER_NAME } else { SERVER_NAME }, "version": st.version.clone()}
+                "serverInfo": {"name": match kind { Kind::Sys => SYSTEMS_SERVER_NAME, Kind::Ask => ASK_SERVER_NAME, Kind::Db => SERVER_NAME }, "version": st.version.clone()}
             }),
         ),
         "ping" => rpc_result(&id, json!({})),
@@ -198,11 +218,14 @@ async fn serve(st: &Arc<AppState>, token: &str, msg: Value, systems: bool) -> Re
             Ok(t) => rpc_result(&id, json!({"tools": t})),
             Err(e) => rpc_error(&id, -32603, &e),
         },
+        "tools/list" if kind == Kind::Ask => rpc_result(&id, json!({"tools": crate::askmcp::tools()})),
         "tools/list" => rpc_result(&id, json!({"tools": tools()})),
         "tools/call" => {
             let name = msg["params"]["name"].as_str().unwrap_or("").to_string();
             let args = msg["params"]["arguments"].clone();
-            if systems {
+            if kind == Kind::Ask {
+                rpc_result(&id, crate::askmcp::call(st, token, &ctx, &name, &args).await)
+            } else if systems {
                 rpc_result(&id, call_sys_tool(st, &ctx, &name, args).await)
             } else {
                 rpc_result(&id, call_tool(st, token, &ctx, &name, &args).await)

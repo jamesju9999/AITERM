@@ -83,6 +83,7 @@ import { ServerSystemsDialog } from "./ServerSystemsDialog";
 import { ServerLiveBar } from "./ServerLiveBar";
 import { listServerSystems, setAgentServerSystems } from "../../ipc/serverSystems";
 import { ServerDbApprovalsBar } from "./ServerDbApprovalsBar";
+import { ServerQuestionsBar } from "./ServerQuestionsBar";
 import { listServerDbConns, setAgentServerDbSkill } from "../../ipc/serverDb";
 import { listServerSkills, setAgentServerSkills, type ServerSkill } from "../../ipc/serverSkills";
 import { RoleIcon } from "./RoleIcon";
@@ -1647,6 +1648,7 @@ export function AgentCanvasView({
         {projectId && <ServerRunBar projectId={projectId} onError={(e) => setToast(errText(e))} />}
         {projectId && <ServerVerifyBar projectId={projectId} onError={(e) => setToast(errText(e))} />}
         {projectId && isShared && <ServerDbApprovalsBar projectId={projectId} agentName={agentName} active={isActive} />}
+        {projectId && isShared && <ServerQuestionsBar projectId={projectId} agentName={agentName} active={isActive} />}
         {projectId && isShared && <ServerLiveBar projectId={projectId} agentName={agentName} active={isActive} />}
         {projectId && agents.length > 0 && (manualPause.all || !allFinished) && (
           <>

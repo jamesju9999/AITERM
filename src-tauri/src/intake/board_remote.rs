@@ -601,6 +601,53 @@ pub async fn db_decide(api: &Api, id: i64, approve: bool) -> Result<(), ClientEr
     api.request(Method::POST, &format!("/v1/board/db/approvals/{id}/decide"), Some(json!({"approve": approve}))).await.map(|_| ())
 }
 
+// ---- 中途問人（Agent 在 server 上提問，等人回答） ----
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ServerQuestion {
+    pub id: i64,
+    pub project_id: String,
+    pub card_id: String,
+    pub agent_id: Option<String>,
+    pub question: String,
+    /// 選項的 JSON 陣列字串。
+    pub options: String,
+    pub recommended: Option<String>,
+    pub context: Option<String>,
+    pub status: String,
+    pub answer: Option<String>,
+    pub answered_by: Option<String>,
+    pub answered_via: Option<String>,
+    pub created_at: i64,
+    pub answered_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub struct ServerQuestions {
+    pub open: Vec<ServerQuestion>,
+    pub closed: Vec<ServerQuestion>,
+}
+
+pub async fn questions(api: &Api, server_pid: &str) -> Result<ServerQuestions, ClientError> {
+    api.get(&format!("/v1/board/projects/{}/questions", enc(server_pid))).await
+}
+
+pub async fn question_answer(api: &Api, id: i64, answer: &str) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/board/questions/{id}/answer"), Some(json!({"answer": answer}))).await.map(|_| ())
+}
+
+pub async fn question_cancel(api: &Api, id: i64) -> Result<(), ClientError> {
+    api.request(Method::POST, &format!("/v1/board/questions/{id}/cancel"), None).await.map(|_| ())
+}
+
+pub async fn ask_settings(api: &Api) -> Result<serde_json::Value, ClientError> {
+    api.get("/v1/ask/settings").await
+}
+
+pub async fn ask_settings_set(api: &Api, notify_email: &str) -> Result<(), ClientError> {
+    api.request(Method::PUT, "/v1/ask/settings", Some(json!({"notify_email": notify_email}))).await.map(|_| ())
+}
+
 // ---- 系統連線（server 上的網頁系統與登入 session） ----
 
 /// server 上的系統連線。成員拿不到 `allowed_hosts`。

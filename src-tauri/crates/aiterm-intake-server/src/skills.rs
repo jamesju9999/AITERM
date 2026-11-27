@@ -120,6 +120,9 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 每張卡都有的「中途問人」說明。
+const ASK_NOTE: &str = "\n\n遇到需要人決定的事（規格不清楚、有多種做法要選）時，可以用 ask_human 工具問人；它會等到有人回答才回來。能自己判斷的事不要問，一次只問一個問題。";
+
 /// 一張卡這次執行用的技能：副本資料夾（`--add-dir`）與提示詞附註。被丟掉時副本一併刪除。
 #[derive(Debug, Default)]
 pub struct SkillCtx {
@@ -147,6 +150,7 @@ impl SkillCtx {
         let mut a = crate::runner::Attach::dirs(&self.dirs);
         if let Some(g) = &self.db {
             a.mcp_configs.push(g.config_path.to_string_lossy().into_owned());
+            a.allow.push(format!("mcp__{}", crate::dbmcp::ASK_SERVER_NAME));
             if self.has_db {
                 a.allow.push(format!("mcp__{}", crate::dbmcp::SERVER_NAME));
             }
@@ -169,7 +173,7 @@ impl SkillCtx {
         // 資料庫與系統連線技能：發一個只屬於這張卡的 token，工具由 server 內建的 MCP 端點提供。
         let skill = aiterm_db::skill::parse(agent.db_skill.as_deref());
         let systems: Vec<aiterm_intake_core::board_store::BoardSystem> = bs::agent_systems(&st.pools.intake, agent).await.unwrap_or_default().into_iter().filter(|s| s.enabled).collect();
-        if skill.is_some() || !systems.is_empty() {
+        {
             let run = st.data_dir.join("run").join(card_id);
             let mctx = crate::dbmcp::McpCtx { card_id: card_id.to_string(), agent_id: Some(agent.id.clone()), project_id: agent.project_id.clone(), skill: skill.clone(), systems: systems.iter().map(|s| s.id.clone()).collect() };
             if let Some(guard) = crate::dbmcp::register(st, mctx, &run) {
@@ -181,6 +185,7 @@ impl SkillCtx {
                     ctx.note.push_str(&systems_note(&systems));
                     ctx.has_sys = true;
                 }
+                ctx.note.push_str(ASK_NOTE);
                 ctx.db = Some(guard);
                 // 就算沒有自訂技能，副本資料夾（`run/<卡>`）也要在結束時清掉。
                 ctx.run_root.get_or_insert_with(|| run.join("skills"));
