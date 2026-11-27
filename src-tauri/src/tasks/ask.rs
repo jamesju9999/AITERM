@@ -224,7 +224,7 @@ pub fn mcp_config_json(url: &str) -> String {
 
 /// 驗收者用的瀏覽器工具（Playwright MCP）。版本釘死：工具參數在版本之間會改
 /// （實測 `browser_click` 的參數已改名成 `target`），不釘的話某天會突然壞掉。
-pub const PLAYWRIGHT_MCP: &str = "@playwright/mcp@0.0.83";
+pub use aiterm_systems::PLAYWRIGHT_MCP;
 /// `--allowedTools` 裡代表整個 playwright 伺服器的工具。
 pub const BROWSER_TOOLS: &str = "mcp__playwright";
 

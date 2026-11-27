@@ -125,7 +125,7 @@ impl Upstream {
     /// `allow_files`：讓 Playwright 讀工作區以外的檔案（上傳用）。只有設了可上傳資料夾的系統才開；
     /// 能上傳哪些路徑由 AITerm 自己在 `sys_file_upload` 前檢查。
     pub async fn spawn_with(cdp_http: Option<&str>, output_dir: &std::path::Path, allow_files: bool) -> Result<Self, String> {
-        let mut args = vec!["-y".to_string(), crate::tasks::ask::PLAYWRIGHT_MCP.to_string()];
+        let mut args = vec!["-y".to_string(), crate::PLAYWRIGHT_MCP.to_string()];
         if allow_files {
             args.push("--allow-unrestricted-file-access".to_string());
         }
@@ -133,7 +133,7 @@ impl Upstream {
             args.extend(["--cdp-endpoint".to_string(), c.to_string()]);
         }
         args.extend(["--output-dir".to_string(), output_dir.to_string_lossy().into_owned()]);
-        let mut cmd = crate::mcp::transport::build_command("npx", &args, &HashMap::new());
+        let mut cmd = crate::launch::build_command("npx", &args);
         cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| format!("無法啟動 Playwright MCP：{e}"))?;
         let mut stdin = child.stdin.take().ok_or("沒有 stdin")?;
@@ -160,7 +160,7 @@ impl Upstream {
             }
         });
         let up = Self { tx, next_id: AtomicU64::new(1), waiters, child: tokio::sync::Mutex::new(child) };
-        up.request("initialize", crate::mcp::protocol::initialize_params(), Duration::from_secs(60)).await?;
+        up.request("initialize", crate::launch::initialize_params(), Duration::from_secs(60)).await?;
         let _ = up.tx.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string());
         Ok(up)
     }
@@ -348,10 +348,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn read_only_through_the_proxy_gives_the_ai_a_clear_refusal_and_the_server_sees_nothing() {
-        use crate::systems::browser;
-        use crate::systems::cdp::{run_gate, GateCtx, GateEvent};
-        use crate::systems::testsite::{conn, fake_site};
-        use crate::systems::types::Mode;
+        use crate::browser;
+        use crate::cdp::{run_gate, GateCtx, GateEvent};
+        use crate::testsite::{conn, fake_site};
+        use crate::types::Mode;
 
         let (port, posts) = fake_site().await;
         let dir = tempfile::tempdir().unwrap();
@@ -394,10 +394,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn a_file_can_be_uploaded_through_the_proxy() {
-        use crate::systems::browser;
-        use crate::systems::cdp::{run_gate, GateCtx, GateEvent};
-        use crate::systems::testsite::{conn, fake_site_with_bodies};
-        use crate::systems::types::Mode;
+        use crate::browser;
+        use crate::cdp::{run_gate, GateCtx, GateEvent};
+        use crate::testsite::{conn, fake_site_with_bodies};
+        use crate::types::Mode;
 
         let (port, posts, bodies) = fake_site_with_bodies().await;
         let dir = tempfile::tempdir().unwrap();
@@ -440,10 +440,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn a_file_can_be_dropped_onto_a_drop_zone() {
-        use crate::systems::browser;
-        use crate::systems::cdp::{run_gate, GateCtx, GateEvent};
-        use crate::systems::testsite::{conn, fake_site_with_bodies};
-        use crate::systems::types::Mode;
+        use crate::browser;
+        use crate::cdp::{run_gate, GateCtx, GateEvent};
+        use crate::testsite::{conn, fake_site_with_bodies};
+        use crate::types::Mode;
 
         let (port, posts, bodies) = fake_site_with_bodies().await;
         let dir = tempfile::tempdir().unwrap();
@@ -481,10 +481,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn a_click_waiting_for_approval_does_not_surface_playwrights_timeout() {
-        use crate::systems::browser;
-        use crate::systems::cdp::{run_gate, GateCtx, GateEvent};
-        use crate::systems::testsite::{conn, fake_site};
-        use crate::systems::types::Mode;
+        use crate::browser;
+        use crate::cdp::{run_gate, GateCtx, GateEvent};
+        use crate::testsite::{conn, fake_site};
+        use crate::types::Mode;
 
         let (port, posts) = fake_site().await;
         let dir = tempfile::tempdir().unwrap();

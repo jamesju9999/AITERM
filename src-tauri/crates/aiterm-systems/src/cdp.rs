@@ -277,9 +277,9 @@ async fn handle_paused(cdp: Arc<Cdp>, ctx: GateCtx, sid: String, top_frame: Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::systems::browser;
-    use crate::systems::types::Mode;
-    use crate::systems::testsite::{conn, fake_site};
+    use crate::browser;
+    use crate::types::Mode;
+    use crate::testsite::{conn, fake_site};
     use std::sync::atomic::AtomicUsize;
 
     /// 開真的 Chrome、跑閘門、導覽到假網站並送出表單；回傳（POST 次數，核准事件的 id 清單）。

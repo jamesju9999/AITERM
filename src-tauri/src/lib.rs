@@ -214,6 +214,8 @@ async fn load_projects(config: Arc<ConfigStore>) -> projects::ProjectRegistry {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 系統連線的 Playwright 代理要用桌面版自己的啟動方式（macOS 要經過登入 shell 才找得到使用者的 PATH）。
+    aiterm_systems::launch::set_builder(|command, args| mcp::transport::build_command(command, args, &std::collections::HashMap::new()));
     let config = Arc::new(ConfigStore::new());
     let secrets = Arc::new(SecretStore::new());
 

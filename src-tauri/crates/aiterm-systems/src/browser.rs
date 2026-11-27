@@ -77,7 +77,7 @@ impl RunningBrowser {
                 let _ = c.kill().await;
             }
             None => {
-                if let Ok((cdp, _ev)) = crate::systems::cdp::Cdp::connect(&self.ws_url).await {
+                if let Ok((cdp, _ev)) = crate::cdp::Cdp::connect(&self.ws_url).await {
                     let _ = cdp.call("Browser.close", serde_json::json!({}), None).await;
                 }
             }
@@ -110,7 +110,7 @@ async fn adopt_existing(profile: &Path) -> Option<RunningBrowser> {
 /// 沒有網頁分頁或只有空白頁就開起始網址，並把有內容的分頁（或新開的）帶到前景。
 async fn show_start_page(ws_url: &str, start_url: &str) {
     use serde_json::json;
-    let Ok((cdp, _ev)) = crate::systems::cdp::Cdp::connect(ws_url).await else { return };
+    let Ok((cdp, _ev)) = crate::cdp::Cdp::connect(ws_url).await else { return };
     let Ok(res) = cdp.call("Target.getTargets", json!({}), None).await else { return };
     let pages: Vec<&serde_json::Value> = res["targetInfos"].as_array().map(|a| a.iter().filter(|t| t["type"] == "page").collect()).unwrap_or_default();
     let is_blank = |t: &serde_json::Value| {
