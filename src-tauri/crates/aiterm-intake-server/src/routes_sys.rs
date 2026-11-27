@@ -6,6 +6,7 @@ use crate::state::AppState;
 use crate::sysconf::{self, SystemInput};
 use aiterm_intake_core::board_store as bs;
 use aiterm_intake_core::host::Notifier;
+use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -30,6 +31,11 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/board/agents/{id}/systems", put(set_agent_systems))
         .route("/v1/board/projects/{pid}/sys/approvals", get(approvals))
         .route("/v1/board/sys/approvals/{id}/decide", post(decide))
+        .route("/v1/board/projects/{pid}/sys/live", get(live_list))
+        .route("/v1/board/sys/live/{card}/{system}", get(live_ws))
+        .route("/v1/systems/{id}/login/start", post(login_start))
+        .route("/v1/systems/{id}/login/cancel", post(login_cancel))
+        .route("/v1/systems/{id}/login/live", get(login_ws))
 }
 
 /// 成員看得到有哪些系統、誰分享了 session；白名單網域只給管理員。cookie 本身永遠不回傳。
@@ -183,4 +189,43 @@ async fn decide(State(st): St, Admin(me): Admin, Path(id): Path<String>, Json(b)
     } else {
         conflict("這筆已經決定過了或已逾時")
     }
+}
+
+// ---- 即時預覽、接手與遠端登入 ----
+
+/// 某專案目前有瀏覽器在跑的系統（成員可讀）。
+async fn live_list(State(st): St, Path(pid): Path<String>) -> Response {
+    Json(crate::syscore::live_runs(&st, &pid).await).into_response()
+}
+
+/// 觀看 Agent 執行中的瀏覽器。成員唯讀，管理員要先接手才能操作。
+async fn live_ws(State(st): St, Extension(me): Extension<Me>, Path((card, system)): Path<(String, String)>, ws: WebSocketUpgrade) -> Response {
+    let Some((source, name)) = crate::syscore::live_source(&st, &card, &system).await else { return not_found() };
+    ws.on_upgrade(move |socket| crate::syslive::serve(st, me, socket, source, crate::syslive::Kind::Agent { card_id: card, system_id: system, system_name: name }))
+}
+
+async fn login_start(State(st): St, Admin(me): Admin, Path(id): Path<String>) -> Response {
+    let name = bs::get_system(&st.pools.intake, &id).await.ok().flatten().map(|s| s.name).unwrap_or_default();
+    match crate::syscore::start_login(&st, &id).await {
+        Ok(()) => {
+            crate::audit::record(&st.pools.server, &me.name, "system.login.start", &name).await;
+            st.events.changed();
+            Json(json!({"ok": true})).into_response()
+        }
+        Err(why) => bad(&why),
+    }
+}
+
+async fn login_cancel(State(st): St, Admin(me): Admin, Path(id): Path<String>) -> Response {
+    let name = bs::get_system(&st.pools.intake, &id).await.ok().flatten().map(|s| s.name).unwrap_or_default();
+    crate::syscore::cancel_login(&st, &id).await;
+    crate::audit::record(&st.pools.server, &me.name, "system.login.cancel", &name).await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// 遠端登入的畫面：畫面含帳密輸入，只給管理員。
+async fn login_ws(State(st): St, Admin(me): Admin, Path(id): Path<String>, ws: WebSocketUpgrade) -> Response {
+    let Some(source) = crate::syscore::login_source(&st, &id).await else { return not_found() };
+    let name = bs::get_system(&st.pools.intake, &id).await.ok().flatten().map(|s| s.name).unwrap_or_default();
+    ws.on_upgrade(move |socket| crate::syslive::serve(st, me, socket, source, crate::syslive::Kind::Login { system_id: id, system_name: name }))
 }

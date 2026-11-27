@@ -31,6 +31,10 @@ pub struct SysRun {
     needs_login: AtomicBool,
     dir: PathBuf,
     system_id: String,
+    system_name: String,
+    owner: Owner,
+    /// 即時預覽與接手的來源（第一位觀看者出現才真的開始串流）。
+    pub source: Arc<crate::syslive::LiveSource>,
 }
 
 /// 一筆待核准請求屬於哪張卡（核准清單依專案過濾、卡結束時把它的拒絕掉）。
@@ -47,6 +51,15 @@ pub struct SysState {
     pub approvals: Arc<Approvals>,
     owners: Mutex<HashMap<String, Owner>>,
     catalog: tokio::sync::OnceCell<Vec<Value>>,
+    /// 遠端登入中的瀏覽器（每個系統一個）。
+    logins: tokio::sync::Mutex<HashMap<String, Arc<LoginRun>>>,
+}
+
+/// 一個遠端登入：server 上的隔離瀏覽器，管理員透過串流在上面登入。
+pub struct LoginRun {
+    browser: tokio::sync::Mutex<RunningBrowser>,
+    dir: PathBuf,
+    pub source: Arc<crate::syslive::LiveSource>,
 }
 
 /// 待核准清單的一筆：核准內容加上是哪個專案、哪張卡、哪位 Agent。
@@ -156,7 +169,9 @@ pub async fn ensure_running(st: &Arc<AppState>, ctx: &crate::dbmcp::McpCtx, syst
     let upstream = Upstream::spawn_with(Some(&browser.cdp_http()), &out, false).await?;
     let proxy = Proxy::start(system_id, upstream, st.sys.approvals.clone(), gctx.intent.clone(), gctx.manual.clone(), last_denied).await?;
     proxy.warm_up().await;
-    let run = Arc::new(SysRun { browser: tokio::sync::Mutex::new(browser), gate, proxy: Arc::new(proxy), ctx: gctx, needs_login: AtomicBool::new(false), dir, system_id: system_id.to_string() });
+    let source = crate::syslive::LiveSource::new(browser.ws_url.clone(), None, "agent", Some(gctx.manual.clone()));
+    let owner = Owner { project_id: ctx.project_id.clone(), card_id: ctx.card_id.clone(), agent_id: ctx.agent_id.clone() };
+    let run = Arc::new(SysRun { browser: tokio::sync::Mutex::new(browser), gate, proxy: Arc::new(proxy), ctx: gctx, needs_login: AtomicBool::new(false), dir, system_id: system_id.to_string(), system_name: system.name.clone(), owner, source });
     runs.insert(key, run.clone());
     Ok(run)
 }
@@ -234,6 +249,7 @@ pub async fn needs_login(st: &AppState, project_id: &str) -> Vec<String> {
 }
 
 async fn shut(r: &Arc<SysRun>) {
+    r.source.shutdown("這張卡已經結束").await;
     r.proxy.close().await;
     r.gate.abort();
     r.browser.lock().await.close().await;
@@ -273,4 +289,105 @@ pub async fn close_system(st: &Arc<AppState>, system_id: &str) {
         st.sys.approvals.reject_all(system_id);
         shut(r).await;
     }
+    cancel_login(st, system_id).await;
+}
+
+// ---- 即時預覽（Agent 執行中） ----
+
+/// 執行中、可以觀看的一個（卡片, 系統）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LiveRunInfo {
+    pub card_id: String,
+    pub system_id: String,
+    pub system_name: String,
+    pub agent_id: Option<String>,
+    /// 是否被接手中。
+    pub manual: bool,
+    pub viewers: usize,
+}
+
+/// 某專案目前有瀏覽器在跑的系統。
+pub async fn live_runs(st: &AppState, project_id: &str) -> Vec<LiveRunInfo> {
+    st.sys
+        .runs
+        .lock()
+        .await
+        .iter()
+        .filter(|(_, r)| r.owner.project_id == project_id)
+        .map(|((card, _), r)| LiveRunInfo { card_id: card.clone(), system_id: r.system_id.clone(), system_name: r.system_name.clone(), agent_id: r.owner.agent_id.clone(), manual: r.source.is_manual(), viewers: r.source.viewers() })
+        .collect()
+}
+
+/// 某張卡的某個系統的觀看來源。
+pub async fn live_source(st: &AppState, card_id: &str, system_id: &str) -> Option<(Arc<crate::syslive::LiveSource>, String)> {
+    let runs = st.sys.runs.lock().await;
+    runs.get(&(card_id.to_string(), system_id.to_string())).map(|r| (r.source.clone(), r.system_name.clone()))
+}
+
+// ---- 遠端登入 ----
+
+/// 閒置多久自動關閉遠端登入。
+pub const LOGIN_IDLE: Duration = Duration::from_secs(15 * 60);
+
+/// 開始遠端登入：在 server 開一個全新的隔離瀏覽器（固定 1280×800）到起始網址。同一個系統同時只能有一個。
+pub async fn start_login(st: &Arc<AppState>, system_id: &str) -> Result<(), String> {
+    let system = bs::get_system(&st.pools.intake, system_id).await.map_err(|e| e.to_string())?.ok_or("找不到這個系統連線")?;
+    if !system.enabled {
+        return Err("這個系統連線已停用".into());
+    }
+    let mut logins = st.sys.logins.lock().await;
+    if logins.contains_key(system_id) {
+        return Err("這個系統已經有人在遠端登入了".into());
+    }
+    let dir = st.data_dir.join("run").join(format!("login-{system_id}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let browser = browser::launch_with(&dir, "profile", &system.start_url, true).await?;
+    let source = crate::syslive::LiveSource::new(browser.ws_url.clone(), Some((1280, 800)), "login", None);
+    let run = Arc::new(LoginRun { browser: tokio::sync::Mutex::new(browser), dir, source });
+    logins.insert(system_id.to_string(), run.clone());
+    // 閒置逾時：沒人完成也沒人取消就自動收掉（避免留著一個登入著的瀏覽器）。
+    let (st2, id) = (st.clone(), system_id.to_string());
+    tokio::spawn(async move {
+        tokio::time::sleep(LOGIN_IDLE).await;
+        let same = st2.sys.logins.lock().await.get(&id).is_some_and(|r| Arc::ptr_eq(r, &run));
+        if same {
+            cancel_login(&st2, &id).await;
+        }
+    });
+    Ok(())
+}
+
+/// 遠端登入的觀看來源。
+pub async fn login_source(st: &AppState, system_id: &str) -> Option<Arc<crate::syslive::LiveSource>> {
+    st.sys.logins.lock().await.get(system_id).map(|r| r.source.clone())
+}
+
+async fn close_login_run(run: &Arc<LoginRun>, why: &str) {
+    run.source.shutdown(why).await;
+    run.browser.lock().await.close().await;
+    let _ = std::fs::remove_dir_all(&run.dir);
+}
+
+/// 放棄遠端登入（或閒置逾時、系統被刪）。
+pub async fn cancel_login(st: &Arc<AppState>, system_id: &str) {
+    let run = st.sys.logins.lock().await.remove(system_id);
+    if let Some(r) = run {
+        close_login_run(&r, "遠端登入已結束").await;
+        st.events.changed();
+    }
+}
+
+/// 完成遠端登入：取出瀏覽器裡的 cookie、篩選白名單網域、加密保存成這個系統的 session，然後關掉瀏覽器。
+/// 沒有任何白名單網域的 cookie 時回錯誤並**保持登入開著**，讓管理員繼續登入。
+pub async fn finish_login(st: &Arc<AppState>, system_id: &str, by: &str) -> Result<(), String> {
+    let run = st.sys.logins.lock().await.get(system_id).cloned().ok_or("這個系統沒有進行中的遠端登入")?;
+    let live = run.source.live().await.ok_or("串流還沒就緒")?;
+    let cookies = live.cookies().await?;
+    let system = bs::get_system(&st.pools.intake, system_id).await.map_err(|e| e.to_string())?.ok_or("系統連線已經不存在")?;
+    crate::sysconf::store_session(st, &system, &cookies, by).await?;
+    st.sys.logins.lock().await.remove(system_id);
+    close_login_run(&run, "登入完成，session 已保存").await;
+    crate::audit::record(&st.pools.server, by, "system.login.finish", &system.name).await;
+    st.events.changed();
+    Ok(())
 }

@@ -18,6 +18,7 @@ pub mod dbconn;
 pub mod dbmcp;
 pub mod sysconf;
 pub mod syscore;
+pub mod syslive;
 pub mod routes_sys;
 pub mod routes_db;
 pub mod orchestrator;

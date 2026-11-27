@@ -2,7 +2,7 @@
 use crate::pin::{client_config, PinVerifier};
 use crate::ClientError;
 use aiterm_intake_core::api::{Event, Hello, PROTOCOL};
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::sync::Arc;
@@ -99,11 +99,16 @@ impl Api {
 
     /// 開 WebSocket 並回傳事件串流。連上後 server 會先送一則目前的 seq。
     pub async fn events(&self) -> Result<EventStream, ClientError> {
+        Ok(EventStream { ws: self.ws("/v1/events").await? })
+    }
+
+    /// 開一條 WebSocket（釘住憑證指紋、帶 Bearer token）到 `path`。即時預覽與遠端操作用它。
+    pub async fn ws(&self, path: &str) -> Result<WsConn, ClientError> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         use tokio_tungstenite::tungstenite::http::HeaderValue;
         let verifier = PinVerifier::new(self.fingerprint.clone());
         let cfg = client_config(verifier);
-        let mut req = format!("wss://{}/v1/events", self.host).into_client_request().map_err(|e| ClientError::Server(e.to_string()))?;
+        let mut req = format!("wss://{}{path}", self.host).into_client_request().map_err(|e| ClientError::Server(e.to_string()))?;
         req.headers_mut().insert("authorization", HeaderValue::from_str(&format!("Bearer {}", self.token)).map_err(|e| ClientError::Server(e.to_string()))?);
         let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
         let (host, port) = crate::pair::parse_addr(&self.host)?;
@@ -118,33 +123,60 @@ impl Api {
             }
         })?;
         let (ws, _) = tokio_tungstenite::client_async(req, tls).await.map_err(|e| {
-            if format!("{e:?}").contains("401") {
+            let s = format!("{e:?}");
+            if s.contains("401") {
                 ClientError::Revoked
+            } else if s.contains("404") {
+                ClientError::Server("找不到這個畫面（瀏覽器可能已經結束了）".into())
+            } else if s.contains("403") {
+                ClientError::Server("沒有權限".into())
             } else {
                 ClientError::Offline(e.to_string())
             }
         })?;
-        Ok(EventStream { ws })
+        Ok(WsConn { ws })
+    }
+}
+
+/// 一條文字訊息的 WebSocket 連線。
+pub struct WsConn {
+    ws: tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+}
+
+impl WsConn {
+    /// 下一則文字訊息；連線結束回 `None`。
+    pub async fn next_text(&mut self) -> Option<String> {
+        use tokio_tungstenite::tungstenite::Message;
+        loop {
+            match self.ws.next().await? {
+                Ok(Message::Text(t)) => return Some(t.to_string()),
+                Ok(Message::Close(_)) | Err(_) => return None,
+                Ok(_) => {}
+            }
+        }
+    }
+
+    pub async fn send_text(&mut self, text: &str) -> Result<(), ClientError> {
+        use tokio_tungstenite::tungstenite::Message;
+        self.ws.send(Message::text(text)).await.map_err(|e| ClientError::Offline(e.to_string()))
+    }
+
+    pub async fn close(&mut self) {
+        let _ = self.ws.close(None).await;
     }
 }
 
 pub struct EventStream {
-    ws: tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+    ws: WsConn,
 }
 
 impl EventStream {
     /// 下一則事件；連線結束回 `None`。
     pub async fn next(&mut self) -> Option<Event> {
-        use tokio_tungstenite::tungstenite::Message;
         loop {
-            match self.ws.next().await? {
-                Ok(Message::Text(t)) => {
-                    if let Ok(ev) = serde_json::from_str::<Event>(&t) {
-                        return Some(ev);
-                    }
-                }
-                Ok(Message::Close(_)) | Err(_) => return None,
-                Ok(_) => {}
+            let t = self.ws.next_text().await?;
+            if let Ok(ev) = serde_json::from_str::<Event>(&t) {
+                return Some(ev);
             }
         }
     }
