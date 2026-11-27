@@ -30,7 +30,14 @@ pub async fn fake_site_with_bodies() -> (u16, Arc<AtomicUsize>, Arc<parking_lot:
                 let n = s.read(&mut buf).await.unwrap_or(0);
                 let head = String::from_utf8_lossy(&buf[..n]).to_string();
                 let echo;
-                let body = if head.starts_with("GET /whoami") {
+                let mut extra = String::new();
+                let body = if head.starts_with("GET /live") {
+                    // 固定位置的兩個按鈕（遠端操作測試用）：(100,100) 200×60 送出 POST；(100,200) 200×60 登入。
+                    "<body style=\"margin:0\"><button style=\"position:absolute;left:100px;top:100px;width:200px;height:60px\" onclick=\"fetch('/submit',{method:'POST',body:'x'})\">Go</button><button style=\"position:absolute;left:100px;top:200px;width:200px;height:60px\" onclick=\"location='/signin'\">Signin</button><input id=\"t\" style=\"position:absolute;left:100px;top:300px;width:300px;height:40px\"></body>"
+                } else if head.starts_with("GET /signin") {
+                    extra = "set-cookie: sid=real-login; Path=/\r\n".to_string();
+                    "<h1>signed in</h1>"
+                } else if head.starts_with("GET /whoami") {
                     // 回報瀏覽器送來的 Cookie 標頭（驗證 session 有沒有載進去）。
                     let cookie = head.lines().find(|l| l.to_ascii_lowercase().starts_with("cookie:")).map(|l| l[7..].trim().to_string()).unwrap_or_default();
                     echo = format!("<h1>cookie={cookie}</h1>");
@@ -48,7 +55,7 @@ pub async fn fake_site_with_bodies() -> (u16, Arc<AtomicUsize>, Arc<parking_lot:
                     "<form method=\"POST\" action=\"/submit\"><input name=\"a\" value=\"1\"><button>Save</button></form>"
                 };
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\n{extra}content-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = s.write_all(resp.as_bytes()).await;

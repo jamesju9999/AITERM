@@ -8,6 +8,7 @@ pub mod browser;
 pub mod cdp;
 pub mod gate;
 pub mod launch;
+pub mod live;
 pub mod proxy;
 pub mod testsite;
 pub mod types;
