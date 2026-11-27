@@ -23,7 +23,8 @@ vi.mock("../../ipc/serverLive", () => ({
 }));
 
 import { cancelRemoteLogin } from "../../ipc/serverLive";
-import { LiveViewDialog, modifiers, normalized, type LiveTarget } from "./LiveViewDialog";
+import { LiveViewDialog, type LiveTarget } from "./LiveViewDialog";
+import { modifiers, normalized } from "./liveInput";
 
 const agent: LiveTarget = { kind: "agent", systemId: "s1", systemName: "ERP", cardId: "c1" };
 const login: LiveTarget = { kind: "login", systemId: "s1", systemName: "ERP" };

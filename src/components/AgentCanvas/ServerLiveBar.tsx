@@ -27,9 +27,13 @@ export function ServerLiveBar({ projectId, agentName, active }: { projectId: str
 
   useEffect(() => {
     if (!active) return;
-    void load();
+    // 第一次查詢排到下一個 tick（effect 裡不同步呼叫會設定 state 的函式）。
+    const first = setTimeout(() => void load(), 0);
     const id = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(first);
+      clearInterval(id);
+    };
   }, [active, load]);
 
   const runs = list.projectId === projectId ? list.runs : [];

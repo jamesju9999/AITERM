@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useLocale } from "../../contexts/LocaleContext";
 import { cancelRemoteLogin, openLive, type LiveClientMsg, type LiveConnection } from "../../ipc/serverLive";
+import { modifiers, normalized } from "./liveInput";
 
 export interface LiveTarget {
   kind: "agent" | "login";
@@ -14,15 +15,6 @@ export interface LiveTarget {
 const MOVE_THROTTLE_MS = 40;
 
 const BUTTONS = ["left", "middle", "right"] as const;
-
-/** 事件在影像上的位置，換成 0～1 的正規化座標（影像之外夾回邊界）。 */
-export function normalized(clientX: number, clientY: number, rect: { left: number; top: number; width: number; height: number }) {
-  const clamp = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
-  return { x: clamp((clientX - rect.left) / (rect.width || 1)), y: clamp((clientY - rect.top) / (rect.height || 1)) };
-}
-
-/** 修飾鍵位元（CDP 的定義）：Alt=1、Ctrl=2、Meta=4、Shift=8。 */
-export const modifiers = (e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
 
 /**
  * 即時看（並在管理員時操作）server 上的瀏覽器：Agent 執行中的畫面（要先「接手」才能操作），或遠端登入。
@@ -83,7 +75,7 @@ export function LiveViewDialog({ target, onClose, onLoginDone }: { target: LiveT
   const isAgent = (meta?.mode ?? target.kind) === "agent";
   const canInput = !!meta?.canOperate && (!isAgent || meta.manual) && !ended;
 
-  const pos = (e: { clientX: number; clientY: number }) => (imgRef.current ? normalized(e.clientX, e.clientY, imgRef.current.getBoundingClientRect()) : { x: 0, y: 0 });
+  const pos = (e: { clientX: number; clientY: number; currentTarget: HTMLElement }) => normalized(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect());
 
   // 滾輪要 preventDefault（不讓整個畫面跟著捲），React 的 onWheel 是被動的，所以直接掛原生事件。
   useEffect(() => {
@@ -99,7 +91,7 @@ export function LiveViewDialog({ target, onClose, onLoginDone }: { target: LiveT
     return () => el.removeEventListener("wheel", onWheel);
   }, [canInput, send, frame === null]);
 
-  const onKey = (type: "down" | "up") => (e: React.KeyboardEvent) => {
+  const onKey = (type: "down" | "up", e: React.KeyboardEvent) => {
     if (!canInput || composing.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
     // 貼上交給 onPaste（它拿得到剪貼簿文字）；其餘的鍵都轉過去，不讓視窗自己處理。
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") return;
@@ -124,8 +116,8 @@ export function LiveViewDialog({ target, onClose, onLoginDone }: { target: LiveT
         <div
           className="ac-live-screen"
           tabIndex={0}
-          onKeyDown={onKey("down")}
-          onKeyUp={onKey("up")}
+          onKeyDown={(e) => onKey("down", e)}
+          onKeyUp={(e) => onKey("up", e)}
           onPaste={(e) => {
             if (!canInput) return;
             e.preventDefault();

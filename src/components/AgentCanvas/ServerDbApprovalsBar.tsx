@@ -37,9 +37,13 @@ export function ServerDbApprovalsBar({ projectId, agentName, active }: { project
 
   useEffect(() => {
     if (!active) return;
-    void load();
+    // 第一次查詢排到下一個 tick（effect 裡不同步呼叫會設定 state 的函式）。
+    const first = setTimeout(() => void load(), 0);
     const timer = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(timer);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
   }, [active, load]);
 
   const dbRows = list.projectId === projectId ? list.db : [];
