@@ -10,6 +10,7 @@
   /* 分區靠底色深淺，不靠實線：工具區、模組庫、活動記錄比桌布亮一階，交界只留這條很淡的線。 */
   --ac-edge: rgba(255, 255, 255, 0.05);
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr) 120px;
   height: 100%;
   min-height: 0;
@@ -979,7 +980,9 @@ button.ac-log-title:hover { color: var(--text-primary); }
   .ac-ask-short { display: inline; }
 }
 /* 視窗窄時頂列與角色列的文字不換行（標題、標籤被擠成兩行很難看）；放不下的由狀態列自己縮短。 */
-.ac-top, .ac-pool { flex-wrap: nowrap; }
+.ac-pool { flex-wrap: nowrap; }
+/* 頂列放不下時換到第二列（欄寬已鎖在視窗內，右下角的縮放列、活動記錄不會再被擠出視窗）。 */
+.ac-top { flex-wrap: wrap; row-gap: 4px; }
 .ac-top > *, .ac-pool > .ac-pool-label, .ac-pool > .ac-pool-item { flex: none; white-space: nowrap; }
 /* 進度摘要是唯一可以被縮短（⋯）的，其餘都不換行也不被擠扁。 */
 .ac-top > .ac-summary { flex: 0 1 auto; min-width: 0; }
