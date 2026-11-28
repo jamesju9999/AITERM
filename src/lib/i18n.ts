@@ -1137,7 +1137,7 @@ const zhTW = {
     ac_md_back: "改回直接送出",
     ac_md_batch_note: "批次卡還在開發中，這個決定目前只記錄在需求卡與簡介裡，團隊與派工和一般一樣。",
     ac_md_error: (msg: string) => `討論失敗：${msg}`,
-    ac_cmd_placeholder: "丟任何事進來：需求、小修改、bug、問題　Enter 送出",
+    ac_cmd_placeholder: "丟任何事進來：需求、bug、問題　Enter 送出",
     ac_cmd_routing: "判斷中…",
     ac_cmd_plan_title: "我打算這樣處理",
     ac_cmd_no_ai_reason: "沒有 AI 判斷，先當成新需求；可以自己改類型",
