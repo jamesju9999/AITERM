@@ -57,8 +57,12 @@ async fn switching_rebuilds_agents_with_their_skills_and_old_agents_become_retir
     let out = r.admin.request(Method::POST, &r.path(&format!("/{b}/switch")), None).await.unwrap();
     assert_eq!(out["status"], "switched");
     let agents = r.agents().await;
-    assert_eq!(agents.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), vec!["新工程師", "新審核者"]);
-    assert_eq!((agents[0].systems.as_deref(), agents[0].model.as_deref()), (Some("[\"s1\"]"), Some("sonnet")));
+    // 同一秒建立的 Agent 順序不固定，所以依名字找。
+    let mut names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, vec!["新審核者", "新工程師"]);
+    let coder = agents.iter().find(|a| a.name == "新工程師").unwrap();
+    assert_eq!((coder.systems.as_deref(), coder.model.as_deref()), (Some("[\"s1\"]"), Some("sonnet")));
     let retired = r.member.request(Method::GET, &r.path("/retired"), None).await.unwrap();
     assert_eq!(retired[0]["name"], "舊工程師");
     let st = r.member.request(Method::GET, &r.path(""), None).await.unwrap();
