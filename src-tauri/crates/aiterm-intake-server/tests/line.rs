@@ -109,7 +109,8 @@ async fn when_the_ai_says_it_is_chit_chat_no_item_is_opened() {
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"choices":[{"message":{"content":"{\"new_problem\": false}"}}]})))
-        .expect(1)
+        // 伺服器背景排程與下面手動的 tick_once 可能各問一次 AI，所以是「至少一次」。
+        .expect(1..)
         .mount(&ai)
         .await;
     let (srv, admin, pid, port) = line_server(&[GROUP]).await;
