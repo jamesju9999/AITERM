@@ -25,8 +25,9 @@ pub fn project_id(server_project_id: &str) -> String {
     format!("{PREFIX}{server_project_id}")
 }
 
+/// 百分比編碼（逐個 UTF-8 位元組）。中文不能只取低位元組，不然伺服器收到的是亂碼。
 fn enc(s: &str) -> String {
-    s.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c.to_string() } else { format!("%{:02X}", c as u32 & 0xFF) }).collect()
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
 fn stamp(secs: i64) -> String {
@@ -1294,5 +1295,11 @@ mod tests {
         assert_eq!(ask_settings(&admin).await.unwrap()["notify_email"], "");
         ask_settings_set(&admin, "boss@example.com").await.unwrap();
         assert_eq!(ask_settings(&admin).await.unwrap()["notify_email"], "boss@example.com");
+    }
+
+    #[test]
+    fn percent_encoding_keeps_non_ascii_text_intact() {
+        assert_eq!(enc("預設 a/b"), "%E9%A0%90%E8%A8%AD%20a%2Fb");
+        assert_eq!(enc("abc-1_2.3"), "abc-1_2.3");
     }
 }

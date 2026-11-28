@@ -5,3 +5,10 @@
 .shared-server-page .intake__settings .intake__meta,
 .shared-server-page .intake__settings .intake__error { margin-left: 0; }
 .shared-server-page .intake__settings .intake__hint { margin-left: 0; }
+/* 提問通知信箱：自成一張卡片，標題、輸入框、說明、按鈕直排，不要擠成一行。 */
+.shared-server-ask { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border: 1px solid var(--border, #333); border-radius: 10px; }
+.shared-server-ask label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.shared-server-ask input { max-width: 320px; padding: 6px 10px; font: inherit; color: inherit; background: var(--bg-primary, #0a0b14); border: 1px solid var(--border, #333); border-radius: 6px; }
+.shared-server-ask input:focus { outline: none; border-color: var(--accent, #a855f7); }
+.shared-server-ask button { align-self: flex-start; }
+.shared-server-ask .ac-bad-text { margin: 0; font-size: 13px; }

@@ -1064,6 +1064,14 @@ button.ac-log-title:hover { color: var(--text-primary); }
 .ac-db-approval { border: 1px solid var(--border-color, #333); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
 .ac-db-approval-sql { margin: 4px 0 8px; padding: 8px; background: rgba(255, 255, 255, 0.04); border-radius: 6px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
 .ac-db-approval-actions { display: flex; gap: 8px; }
+/* Agent 的提問：直排＋間距（.ac-dialog-desc 的負上邊界是為這種版面設計的，區塊排版會讓說明疊到問題上）；選項多時換行。 */
+.ac-question { display: flex; flex-direction: column; gap: 8px; }
+.ac-question .ac-dialog-desc { margin: 0; }
+.ac-question-text { font-size: 14px; font-weight: 600; line-height: 1.5; white-space: pre-wrap; }
+.ac-question-options { flex-wrap: wrap; }
+.ac-question-answer { align-items: center; }
+.ac-question-answer .aiterm-input { min-width: 0; }
+.ac-questions-list { max-height: min(420px, 55vh); }
 .ac-db-approvals-btn { white-space: nowrap; }
 
 /* 即時預覽／遠端操作 */

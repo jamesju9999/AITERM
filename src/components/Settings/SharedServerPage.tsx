@@ -23,8 +23,8 @@ export function SharedServerPage() {
       <div className="intake__settings">
         {!merged && <ConnectionCard status={remote} />}
         <SavedServers status={remote} />
+        <AskNotifySettings />
       </div>
-      <AskNotifySettings />
     </div>
   );
 }

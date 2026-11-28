@@ -33,18 +33,19 @@ describe("AskNotifySettings", () => {
   it("管理員看到目前的信箱；改了才能存，存的是修剪後的值", async () => {
     mount();
     const input = await screen.findByDisplayValue("boss@example.com");
-    const save = screen.getByRole("button", { name: "送出" });
+    const save = screen.getByRole("button", { name: "儲存" });
     expect(save).toBeDisabled();
     fireEvent.change(input, { target: { value: " new@example.com " } });
     fireEvent.click(save);
     await waitFor(() => expect(setAskNotifyEmail).toHaveBeenCalledWith("new@example.com"));
+    expect(await screen.findByText("已儲存")).toBeInTheDocument();
   });
 
   it("server 拒絕時顯示原因", async () => {
     vi.mocked(setAskNotifyEmail).mockRejectedValue("Email 格式不對");
     mount();
     fireEvent.change(await screen.findByDisplayValue("boss@example.com"), { target: { value: "x" } });
-    fireEvent.click(screen.getByRole("button", { name: "送出" }));
+    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Email 格式不對");
   });
 });

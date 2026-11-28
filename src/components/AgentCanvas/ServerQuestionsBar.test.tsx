@@ -80,6 +80,21 @@ describe("ServerQuestionsBar", () => {
     await waitFor(() => expect(cancelServerQuestion).toHaveBeenCalledWith(7));
   });
 
+  it("問題都答完後對話框會收起來，之後來新問題不會自己彈出", async () => {
+    mount();
+    fireEvent.click(await screen.findByTestId("ac-questions"));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    vi.mocked(listServerQuestions).mockResolvedValue({ open: [], closed: [] });
+    fireEvent.click(screen.getByRole("button", { name: "A" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    vi.mocked(listServerQuestions).mockResolvedValue({ open: [q(9)], closed: [] });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 3100));
+    });
+    expect(await screen.findByTestId("ac-questions")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("回答失敗（例如已被別人答了）顯示原因", async () => {
     vi.mocked(answerServerQuestion).mockRejectedValue("這個問題已經有人回答了");
     mount();

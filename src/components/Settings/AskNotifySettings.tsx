@@ -14,6 +14,7 @@ export function AskNotifySettings() {
   const [value, setValue] = useState("");
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
 
   useEffect(() => {
     if (!enabled) return;
@@ -36,6 +37,7 @@ export function AskNotifySettings() {
     try {
       await setAskNotifyEmail(value.trim());
       setSaved(value.trim());
+      setJustSaved(true);
     } catch (e) {
       setError(errText(e));
     }
@@ -44,17 +46,22 @@ export function AskNotifySettings() {
     <div className="shared-server-ask" data-testid="ask-notify-settings">
       <label>
         <strong>{t.ac_ask_email}</strong>
-        <input className="aiterm-input" type="email" value={value} onChange={(e) => setValue(e.target.value)} placeholder="name@example.com" />
+        <input className="aiterm-input" type="email" value={value} onChange={(e) => {
+            setValue(e.target.value);
+            setError(null);
+            setJustSaved(false);
+          }} placeholder="name@example.com" />
       </label>
       <p className="shared-server-intro">{t.ac_ask_email_hint}</p>
-      <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={value.trim() === (saved ?? "")} onClick={() => void save()}>
-        {t.ac_ask_send}
-      </button>
       {error && (
         <p className="ac-bad-text" role="alert">
           {error}
         </p>
       )}
+      <button className="aiterm-btn aiterm-btn--primary aiterm-btn--sm" disabled={value.trim() === (saved ?? "")} onClick={() => void save()}>
+        {t.ac_ask_email_save}
+      </button>
+      {justSaved && <span className="shared-server-intro">{t.ac_ask_email_saved}</span>}
     </div>
   );
 }

@@ -26,6 +26,8 @@ export function ServerQuestionsBar({ projectId, agentName, active }: { projectId
     try {
       const r = await listServerQuestions(projectId);
       setList({ projectId, rows: r.open });
+      // 問題都答完了：把對話框收起來，免得下一個新問題一出現就自己彈出來蓋住畫面。
+      if (r.open.length === 0) setOpen(false);
     } catch {
       // 連不上或 server 較舊：保留上一次的清單，等下一輪。
     }
@@ -68,7 +70,7 @@ export function ServerQuestionsBar({ projectId, agentName, active }: { projectId
 
   return (
     <>
-      <button type="button" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm ac-db-approvals-btn" data-testid="ac-questions" onClick={() => setOpen(true)}>
+      <button type="button" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm ac-db-approvals-btn" data-testid="ac-questions" title={t.ac_ask_title} onClick={() => setOpen(true)}>
         💬 {t.ac_ask_pending(rows.length)}
       </button>
       {open && (
@@ -76,19 +78,19 @@ export function ServerQuestionsBar({ projectId, agentName, active }: { projectId
           <div className="task-dialog ac-db-dialog" role="dialog" aria-label={t.ac_ask_title} data-testid="ac-questions-dialog">
             <h3 className="task-dialog-title">{t.ac_ask_title}</h3>
             <p className="ac-dialog-desc">{t.ac_ask_desc}</p>
-            <div className="ac-db-conns">
+            <div className="ac-db-conns ac-questions-list">
               {rows.map((q) => {
                 const opts = questionOptions(q);
                 return (
-                  <div key={q.id} className="ac-db-approval" data-testid="ac-question">
+                  <div key={q.id} className="ac-db-approval ac-question" data-testid="ac-question">
                     <div className="ac-db-meta">
                       Q-{q.id} · {agentName(q.agent_id)}
                     </div>
-                    <div style={{ whiteSpace: "pre-wrap" }}>{q.question}</div>
+                    <div className="ac-question-text">{q.question}</div>
                     {q.context && <div className="ac-dialog-desc">{t.ac_ask_context(q.context)}</div>}
                     {q.recommended && <div className="ac-dialog-desc">{t.ac_ask_recommended(q.recommended)}</div>}
                     {opts.length > 0 && (
-                      <div className="ac-db-approval-actions">
+                      <div className="ac-db-approval-actions ac-question-options">
                         {opts.map((o) => (
                           <button key={o} className={`aiterm-btn aiterm-btn--sm ${o === q.recommended ? "aiterm-btn--primary" : "aiterm-btn--secondary"}`} disabled={busy} onClick={() => answer(q, o)}>
                             {o}
@@ -96,7 +98,7 @@ export function ServerQuestionsBar({ projectId, agentName, active }: { projectId
                         ))}
                       </div>
                     )}
-                    <div className="ac-db-approval-actions">
+                    <div className="ac-db-approval-actions ac-question-answer">
                       <input
                         className="aiterm-input"
                         style={{ flex: 1 }}
