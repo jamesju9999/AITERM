@@ -1257,7 +1257,9 @@ const zhTW = {
     ac_form_name_placeholder: "編制名稱（按 Enter）",
     ac_form_delete: (name: string) => `刪除編制「${name}」`,
     ac_form_delete_confirm: (name: string) => `刪除編制「${name}」？裡面的角色設定會一起刪除，卡片不受影響。`,
-    ac_form_pending: (to: string, busy: string) =>
+    // 頂列很擠：畫面上只放短版，誰還在工作放在 title（全文）。
+    ac_form_pending: (to: string, busy: string) => (busy ? `做完後切換到「${to}」` : `即將切換到「${to}」`),
+    ac_form_pending_full: (to: string, busy: string) =>
       busy ? `等 ${busy} 做完目前的工作後切換到「${to}」` : `即將切換到「${to}」`,
     ac_form_cancel_pending: "取消切換",
     ac_form_busy_confirm: (names: string) =>
@@ -4738,7 +4740,8 @@ const enRaw = {
     ac_form_name_placeholder: "Formation name (press Enter)",
     ac_form_delete: (name: string) => `Delete formation “${name}”`,
     ac_form_delete_confirm: (name: string) => `Delete formation “${name}”? Its role settings are deleted with it; cards are unaffected.`,
-    ac_form_pending: (to: string, busy: string) =>
+    ac_form_pending: (to: string, busy: string) => (busy ? `Switching to “${to}” when done` : `Switching to “${to}”`),
+    ac_form_pending_full: (to: string, busy: string) =>
       busy ? `Switching to “${to}” once ${busy} finish their current work` : `Switching to “${to}”`,
     ac_form_cancel_pending: "Cancel switch",
     ac_form_busy_confirm: (names: string) =>

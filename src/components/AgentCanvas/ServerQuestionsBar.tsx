@@ -70,8 +70,10 @@ export function ServerQuestionsBar({ projectId, agentName, active }: { projectId
 
   return (
     <>
-      <button type="button" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm ac-db-approvals-btn" data-testid="ac-questions" title={t.ac_ask_title} onClick={() => setOpen(true)}>
-        💬 {t.ac_ask_pending(rows.length)}
+      <button type="button" className="aiterm-btn aiterm-btn--primary aiterm-btn--sm ac-db-approvals-btn" data-testid="ac-questions" title={t.ac_ask_pending(rows.length)} aria-label={t.ac_ask_pending(rows.length)} onClick={() => setOpen(true)}>
+        {/* 頂列很擠時（≤1700px）只留數字，全文在 title。 */}
+        💬 <span className="ac-ask-short">{rows.length}</span>
+        <span className="ac-ask-long">{t.ac_ask_pending(rows.length)}</span>
       </button>
       {open && (
         <div className="task-dialog-backdrop">

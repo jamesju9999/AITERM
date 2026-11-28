@@ -965,6 +965,19 @@ button.ac-log-title:hover { color: var(--text-primary); }
   .ac-sr-long { display: none; }
   .ac-sr-short { display: inline; }
 }
+/* 頂列放不下時（共用專案有等待切換、待回答…）先把「專案簡介」「參考資料夾」收成只剩圖示（文字在 title），免得最右邊的按鈕被擠出視窗外。 */
+@media (max-width: 1700px) {
+  .ac-top-btn[data-testid="ac-brief"] .ac-top-label,
+  .ac-top-btn[data-testid="ac-references"] .ac-top-label { display: none; }
+  /* 還有等待切換的提示時，進度摘要也先讓出位置（進度仍看得到：每張 Agent 卡上都有）。 */
+  .ac-top:has(.ac-form-pending) > .ac-summary { display: none; }
+  .ac-ask-long { display: none; }
+  .ac-top-btn[data-testid="ac-pause-all"] .ac-top-label { display: none; }
+}
+.ac-ask-short { display: none; }
+@media (max-width: 1700px) {
+  .ac-ask-short { display: inline; }
+}
 /* 視窗窄時頂列與角色列的文字不換行（標題、標籤被擠成兩行很難看）；放不下的由狀態列自己縮短。 */
 .ac-top, .ac-pool { flex-wrap: nowrap; }
 .ac-top > *, .ac-pool > .ac-pool-label, .ac-pool > .ac-pool-item { flex: none; white-space: nowrap; }

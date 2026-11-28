@@ -95,7 +95,8 @@ describe("FormationMenu", () => {
 
   it("等待切換時說明在等誰，可以取消", () => {
     const h = view({ ...base, pending: "f2", busy: ["工程師1", "審核者"] });
-    expect(screen.getByTestId("ac-formation-pending").textContent).toContain("等 工程師1、審核者 做完目前的工作後切換到「轉換」");
+    expect(screen.getByTestId("ac-formation-pending").textContent).toContain("做完後切換到「轉換」");
+    expect(screen.getByTestId("ac-formation-pending")).toHaveAttribute("title", expect.stringContaining("等 工程師1、審核者 做完目前的工作後切換到「轉換」"));
     fireEvent.click(screen.getByRole("button", { name: "取消切換" }));
     expect(h.onCancelPending).toHaveBeenCalled();
   });

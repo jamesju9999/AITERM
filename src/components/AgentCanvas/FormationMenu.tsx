@@ -183,7 +183,7 @@ export function FormationMenu({
         )}
       </div>
       {pending && (
-        <span className="ac-form-pending" data-testid="ac-formation-pending">
+        <span className="ac-form-pending" data-testid="ac-formation-pending" title={t.ac_form_pending_full(pending.name, state.busy.join("、"))}>
           {t.ac_form_pending(pending.name, state.busy.join("、"))}
           <button className="aiterm-btn aiterm-btn--ghost aiterm-btn--sm" onClick={onCancelPending}>
             {t.ac_form_cancel_pending}
